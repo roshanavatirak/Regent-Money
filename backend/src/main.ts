@@ -1,6 +1,10 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { Logger } from '@nestjs/common';
+import * as dns from 'dns';
+
+// Force Node.js to prioritize IPv4 address resolution (fixes Render IPv6 connection failures)
+dns.setDefaultResultOrder('ipv4first');
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
