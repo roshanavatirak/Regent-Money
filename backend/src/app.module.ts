@@ -13,6 +13,21 @@ import { BudgetDeclaration } from './sync/entities/budget-declaration.entity';
 import { SavingsGoal } from './sync/entities/savings-goal.entity';
 import { NetWorthSnapshot } from './sync/entities/net-worth-snapshot.entity';
 import { IncomeRecord } from './sync/entities/income-record.entity';
+import * as dns from 'dns';
+
+// Helper to resolve host to IPv4 address programmatically
+const resolveHostToIPv4 = async (host: string): Promise<string> => {
+  return new Promise((resolve) => {
+    dns.lookup(host, { family: 4 }, (err, address) => {
+      if (err || !address) {
+        console.warn(`[DNS] Failed to resolve host ${host} to IPv4, falling back to host string:`, err?.message);
+        resolve(host);
+      } else {
+        resolve(address);
+      }
+    });
+  });
+};
 
 @Module({
   imports: [
@@ -21,15 +36,15 @@ import { IncomeRecord } from './sync/entities/income-record.entity';
       isGlobal: true,
     }),
 
-    // Configure TypeORM with Supabase PostgreSQL
+    // Configure TypeORM with Supabase PostgreSQL (forced IPv4 resolution)
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => {
+      useFactory: async (configService: ConfigService) => {
         const dbUrl = configService.get<string>('DATABASE_URL');
         const isSupabase = dbUrl?.includes('supabase');
-        return {
+
+        let connectionOptions: any = {
           type: 'postgres',
-          url: dbUrl,
           entities: [
             User,
             BankProfile,
@@ -42,6 +57,28 @@ import { IncomeRecord } from './sync/entities/income-record.entity';
           synchronize: false, // Set to false to avoid altering tables automatically, schemas exist
           ssl: isSupabase ? { rejectUnauthorized: false } : false,
         };
+
+        if (dbUrl) {
+          try {
+            const parsedUrl = new URL(dbUrl);
+            const resolvedIp = await resolveHostToIPv4(parsedUrl.hostname);
+            console.log(`[Database] Resolved ${parsedUrl.hostname} to IPv4: ${resolvedIp}`);
+
+            connectionOptions = {
+              ...connectionOptions,
+              host: resolvedIp,
+              port: parseInt(parsedUrl.port || '5432', 10),
+              username: parsedUrl.username,
+              password: decodeURIComponent(parsedUrl.password),
+              database: parsedUrl.pathname.substring(1),
+            };
+          } catch (e: any) {
+            console.warn('[Database] Failed to parse DATABASE_URL, falling back to direct URL connection:', e.message);
+            connectionOptions.url = dbUrl;
+          }
+        }
+
+        return connectionOptions;
       },
     }),
 
