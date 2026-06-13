@@ -11,6 +11,9 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_BACKEND_URL": "https://YOUR_RENDER_URL_HERE.onrender.com"
       }
     },
     "production": {}

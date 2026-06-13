@@ -34,6 +34,7 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
     // Load .env globally
     ConfigModule.forRoot({
       isGlobal: true,
+      ignoreEnvVars: true,
     }),
 
     // Configure TypeORM with Supabase PostgreSQL (forced IPv4 resolution)
@@ -59,6 +60,7 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
         };
 
         if (dbUrl) {
+          console.log(`[Database] DATABASE_URL raw value: "${dbUrl}"`);
           try {
             const parsedUrl = new URL(dbUrl);
             const resolvedIp = await resolveHostToIPv4(parsedUrl.hostname);
