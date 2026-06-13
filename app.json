@@ -32,7 +32,16 @@
     },
     "plugins": [
       "expo-font",
-      "./plugins/withExcludeSupport"
+      "./plugins/withExcludeSupport",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableProguardInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true
+          }
+        }
+      ]
     ]
   }
 }
