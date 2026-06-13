@@ -5,7 +5,7 @@ module.exports = function withExcludeSupport(config) {
     if (config.modResults.language === 'groovy') {
       config.modResults.contents += `
 configurations.all {
-    exclude group: 'com.android.support', module: 'versionedparcelable'
+    exclude group: 'com.android.support'
 }
 `;
     }
