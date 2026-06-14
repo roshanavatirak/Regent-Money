@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Req, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Body, Req, UseGuards, HttpCode, HttpStatus, Delete, Param } from '@nestjs/common';
 import { SyncService } from './sync.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
@@ -23,6 +23,16 @@ export class SyncController {
     return this.syncService.createBankProfile(userId, body);
   }
 
+  @Delete('bank-profile/:id')
+  @HttpCode(HttpStatus.OK)
+  async deleteBankProfile(
+    @Req() req: any,
+    @Param('id') id: string,
+  ) {
+    const userId = req.user.id;
+    return this.syncService.deleteBankProfile(userId, id);
+  }
+
   @Get('net-worth-snapshots')
   async getNetWorthSnapshots(@Req() req: any) {
     const userId = req.user.id;
@@ -40,5 +50,15 @@ export class SyncController {
   async injectMockData(@Req() req: any) {
     const userId = req.user.id;
     return this.syncService.injectMockData(userId);
+  }
+
+  @Post('verify-bank')
+  @HttpCode(HttpStatus.OK)
+  async verifyBankAccount(
+    @Req() req: any,
+    @Body() body: { bankCode: string; phoneNumber: string; simulateFailure?: boolean },
+  ) {
+    const userId = req.user.id;
+    return this.syncService.verifyBankAccount(userId, body);
   }
 }

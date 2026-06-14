@@ -13,7 +13,9 @@ import {
   Platform,
   KeyboardAvoidingView,
   RefreshControl,
-  Modal
+  Modal,
+  Image,
+  Alert
 } from 'react-native';
 import { NavigationContainer, useFocusEffect } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -30,10 +32,111 @@ import Animated, {
   FadeIn
 } from 'react-native-reanimated';
 import { CartesianChart, Area, PolarChart, Pie, Line } from 'victory-native';
-import { LinearGradient, vec } from '@shopify/react-native-skia';
+import { Canvas, ImageSVG, useSVG, LinearGradient, vec, Group } from '@shopify/react-native-skia';
 import Voice from '@react-native-voice/voice';
 
+import { mmkvStorage } from '../db/mmkv';
 import { useSyncDb } from '../services/useSyncDb';
+import bankNamesJson from './banknames.json';
+
+const POPULAR_BANKS = [
+  { code: 'SBIN', name: 'State Bank of India', short: 'SBI Bank' },
+  { code: 'BARB', name: 'Bank of Baroda', short: 'BOB Bank' },
+  { code: 'UBIN', name: 'Union Bank of India', short: 'Union BOI' },
+  { code: 'UTIB', name: 'Axis Bank', short: 'Axis Bank' },
+  { code: 'IDFB', name: 'IDFC FIRST Bank', short: 'IDFC Bank' },
+  { code: 'HDFC', name: 'HDFC Bank', short: 'HDFC Bank' },
+  { code: 'KKBK', name: 'Kotak Mahindra Bank', short: 'Kotak Bank' },
+  { code: 'ICIC', name: 'ICICI Bank', short: 'ICICI Bank' },
+  { code: 'PUNB', name: 'Punjab National Bank', short: 'PNB Bank' },
+  { code: 'IDIB', name: 'Indian Bank', short: 'Indian Bank' },
+  { code: 'CNRB', name: 'Canara Bank', short: 'Canara Bank' },
+  { code: 'BKID', name: 'Bank of India', short: 'Bank of India' },
+];
+
+const LOCAL_SVG_MAP: { [key: string]: any } = {
+  'BARB': require('../../assets/Banks logo/bob.svg'),
+  'BKID': require('../../assets/Banks logo/boi.svg'),
+  'CNRB': require('../../assets/Banks logo/cnrb.svg'),
+  'HDFC': require('../../assets/Banks logo/hdfc.svg'),
+  'ICIC': require('../../assets/Banks logo/icic.svg'),
+  'IDFB': require('../../assets/Banks logo/idfc.svg'),
+  'IDIB': require('../../assets/Banks logo/idib.svg'),
+  'JIOP': require('../../assets/Banks logo/jiop.svg'),
+  'KKBK': require('../../assets/Banks logo/kkbk.svg'),
+  'MAHB': require('../../assets/Banks logo/mahb.svg'),
+  'PUNB': require('../../assets/Banks logo/punb.svg'),
+  'SBIN': require('../../assets/Banks logo/sbi.svg'),
+  'UBIN': require('../../assets/Banks logo/ubin.svg'),
+  'YESB': require('../../assets/Banks logo/yesb.svg'),
+};
+
+const LocalSvgIcon = ({ source, size }: { source: any; size: number }) => {
+  const svg = useSVG(source);
+  if (!svg) {
+    return <View style={{ width: size * 0.75, height: size * 0.75 }} />;
+  }
+
+  const targetSize = size * 0.75;
+  const svgWidth = svg.width() > 0 ? svg.width() : targetSize;
+  const svgHeight = svg.height() > 0 ? svg.height() : targetSize;
+
+  const scale = Math.min(targetSize / svgWidth, targetSize / svgHeight);
+  const dx = (targetSize - svgWidth * scale) / 2;
+  const dy = (targetSize - svgHeight * scale) / 2;
+
+  return (
+    <Canvas style={{ width: targetSize, height: targetSize }}>
+      <Group transform={[{ translateX: dx }, { translateY: dy }, { scale: scale }]}>
+        <ImageSVG
+          svg={svg}
+          x={0}
+          y={0}
+          width={svgWidth}
+          height={svgHeight}
+        />
+      </Group>
+    </Canvas>
+  );
+};
+
+const BankIcon = ({ code, name, size = 38 }: { code: string; name: string; size?: number }) => {
+  const cleanCode = code ? code.toUpperCase() : '';
+  const localSource = LOCAL_SVG_MAP[cleanCode];
+
+  if (localSource) {
+    return (
+      <View style={{
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        backgroundColor: '#ffffff',
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'hidden'
+      }}>
+        <LocalSvgIcon source={localSource} size={size} />
+      </View>
+    );
+  }
+
+  // Consistent fallback logo for other banks: white background and symbols in green (#2dba4e)
+  return (
+    <View style={{
+      width: size,
+      height: size,
+      borderRadius: size / 2,
+      backgroundColor: '#ffffff',
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: 'rgba(45, 186, 78, 0.15)',
+    }}>
+      <MaterialCommunityIcons name="bank" size={size * 0.55} color="#2dba4e" />
+    </View>
+  );
+};
+
 import { 
   useTransactionStore, 
   useBudgetStore, 
@@ -101,22 +204,25 @@ const TypingIndicator = () => {
 // ----------------------------------------------------
 // 1. Dashboard Screen Component
 // ----------------------------------------------------
-const DashboardScreen = () => {
-  const { colors, isDark } = useTheme();
+
+
+
+// ----------------------------------------------------
+// Reusable Add Bank Modal (Paytm/UPI-Style Verification)
+// ----------------------------------------------------
+interface AddBankModalProps {
+  visible: boolean;
+  onClose: () => void;
+  onSuccess: () => void;
+}
+
+const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
+  const { colors } = useTheme();
   const styles = getStyles(colors);
   const navStyles = getNavStyles(colors);
-  const insets = useSafeAreaInsets();
-  const { sync } = useSyncDb();
-
   const user = useAuthStore((state) => state.user);
-  const [profileModalVisible, setProfileModalVisible] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
 
-  // Bank profile state management
-  const bankProfiles = useBankStore((state) => state.bankProfiles);
-  const [addBankModalVisible, setAddBankModalVisible] = useState(false);
-  const [banksList, setBanksList] = useState<{ [key: string]: string }>({});
-  const [loadingBanks, setLoadingBanks] = useState(false);
+  const [banksList, setBanksList] = useState<{ [key: string]: string }>(bankNamesJson as { [key: string]: string });
   const [selectedBank, setSelectedBank] = useState<{ code: string; name: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [accountSuffix, setAccountSuffix] = useState('');
@@ -125,51 +231,16 @@ const DashboardScreen = () => {
   const [formError, setFormError] = useState('');
   const [formStep, setFormStep] = useState(1);
 
-  // Slide Animation for Onboarding notification banner
-  const bannerY = useSharedValue(-100);
-  const bannerOpacity = useSharedValue(0);
-
-  useEffect(() => {
-    if (bankProfiles.length === 0) {
-      bannerY.value = withTiming(0, { duration: 500 });
-      bannerOpacity.value = withTiming(1, { duration: 500 });
-    } else {
-      bannerY.value = withTiming(-100, { duration: 300 });
-      bannerOpacity.value = withTiming(0, { duration: 300 });
-    }
-  }, [bankProfiles.length]);
-
-  const bannerAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: bannerY.value }],
-    opacity: bannerOpacity.value,
-  }));
-
-  const fetchBanksList = async () => {
-    setLoadingBanks(true);
-    try {
-      const response = await fetch('https://raw.githubusercontent.com/razorpay/ifsc/master/src/banknames.json');
-      const data = await response.json();
-      setBanksList(data);
-    } catch (e) {
-      console.error('Failed to load bank list registry:', e);
-    } finally {
-      setLoadingBanks(false);
-    }
-  };
-
-  const filteredBanks = useMemo(() => {
-    const list = Object.entries(banksList).map(([code, name]) => ({ code, name }));
-    if (!searchQuery.trim()) return list.slice(0, 15); // first 15 banks when search is empty
-    return list.filter(bank => 
-      bank.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-      bank.code.toLowerCase().includes(searchQuery.toLowerCase())
-    ).slice(0, 30);
-  }, [banksList, searchQuery]);
-
-  const handleOpenAddBank = () => {
-    setAddBankModalVisible(true);
-    fetchBanksList();
-  };
+  const [verifyingStep, setVerifyingStep] = useState(0);
+  const [verificationError, setVerificationError] = useState('');
+  const [discoveredAccount, setDiscoveredAccount] = useState<{
+    bankName: string;
+    accountNumberSuffix: string;
+    accountType: string;
+    holderName: string;
+    currentBalance: number;
+  } | null>(null);
+  const [simulateFailure, setSimulateFailure] = useState(false);
 
   const resetForm = () => {
     setSelectedBank(null);
@@ -178,43 +249,129 @@ const DashboardScreen = () => {
     setBalance('');
     setFormError('');
     setFormStep(1);
+    setVerifyingStep(0);
+    setVerificationError('');
+    setDiscoveredAccount(null);
+    setSimulateFailure(false);
   };
 
-  const getBankColor = (code: string) => {
-    const clean = code.toLowerCase();
-    if (clean.includes('hdfc')) return '#cf222e';
-    if (clean.includes('sbi') || clean.includes('sbin')) return '#00a9e0';
-    if (clean.includes('icic')) return '#ff8200';
-    if (clean.includes('utib') || clean.includes('axis')) return '#97144d';
-    if (clean.includes('kkbk') || clean.includes('kotak')) return '#e50914';
-    // Generate color from code string hash
-    let hash = 0;
-    for (let i = 0; i < code.length; i++) {
-      hash = code.charCodeAt(i) + ((hash << 5) - hash);
+  useEffect(() => {
+    if (!visible) {
+      resetForm();
     }
-    return `hsl(${Math.abs(hash) % 360}, 65%, 45%)`;
-  };
+  }, [visible]);
+
+  useEffect(() => {
+    if (formStep !== 2 || !visible) return;
+
+    if (verifyingStep === 1) {
+      const timer = setTimeout(() => {
+        setVerifyingStep(2);
+      }, 1200);
+      return () => clearTimeout(timer);
+    }
+
+    if (verifyingStep === 2) {
+      const timer = setTimeout(() => {
+        setVerifyingStep(3);
+      }, 1200);
+      return () => clearTimeout(timer);
+    }
+
+    if (verifyingStep === 3) {
+      const verify = async () => {
+        try {
+          const token = authService.getAccessToken();
+          const userObj = useAuthStore.getState().user;
+          
+          const response = await fetch(`${BACKEND_URL}/sync/verify-bank`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              bankCode: selectedBank?.name || 'Bank',
+              phoneNumber: userObj?.phone || '',
+              simulateFailure: simulateFailure,
+            }),
+          });
+
+          if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.message || 'Verification failed on server.');
+          }
+
+          const result = await response.json();
+          setDiscoveredAccount(result);
+          setAccountSuffix(result.accountNumberSuffix);
+          setBalance(String(result.currentBalance));
+          setVerifyingStep(4);
+        } catch (e: any) {
+          setVerificationError(e.message);
+          setVerifyingStep(-1);
+        }
+      };
+
+      const timer = setTimeout(() => {
+        verify();
+      }, 1200);
+      return () => clearTimeout(timer);
+    }
+  }, [verifyingStep, formStep, simulateFailure, selectedBank, visible]);
 
   const handleSelectBank = (bank: { code: string; name: string }) => {
     setSelectedBank(bank);
     setFormStep(2);
+    setVerifyingStep(1);
+    setVerificationError('');
+    setDiscoveredAccount(null);
   };
 
-  const getBankGradient = (bankName: string) => {
-    const name = bankName.toLowerCase();
-    if (name.includes('hdfc')) return ['#cf222e', '#f6f8fa']; // HDFC Red
-    if (name.includes('state bank') || name.includes('sbi')) return ['#00a9e0', '#0033a0']; // SBI Blue
-    if (name.includes('icici')) return ['#ff8200', '#8a1538']; // ICICI Orange/Maroon
-    if (name.includes('axis')) return ['#97144d', '#ae285d']; // Axis Burgundy
-    if (name.includes('kotak')) return ['#e50914', '#0033a0']; // Kotak Red/Blue
-    // Default dynamic linear gradient colors based on bank name hash
-    let hash = 0;
-    for (let i = 0; i < bankName.length; i++) {
-      hash = bankName.charCodeAt(i) + ((hash << 5) - hash);
+  const sortedAllBanks = useMemo(() => {
+    return Object.entries(banksList)
+      .map(([code, name]) => ({ code, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [banksList]);
+
+  const filteredBanks = useMemo(() => {
+    if (!searchQuery.trim()) {
+      return sortedAllBanks;
     }
-    const color1 = `hsl(${Math.abs(hash) % 360}, 70%, 45%)`;
-    const color2 = `hsl(${(Math.abs(hash) + 60) % 360}, 80%, 35%)`;
-    return [color1, color2];
+    const query = searchQuery.toLowerCase();
+    return sortedAllBanks.filter(bank => 
+      bank.name.toLowerCase().includes(query) || 
+      bank.code.toLowerCase().includes(query)
+    );
+  }, [sortedAllBanks, searchQuery]);
+
+  const renderPopularBanks = () => {
+    if (searchQuery.trim()) return null;
+    return (
+      <View style={styles.popularSection}>
+        <Text style={styles.sectionSubHeader}>Popular Banks</Text>
+        <View style={styles.popularGrid}>
+          {POPULAR_BANKS.map((bank) => {
+            return (
+              <TouchableOpacity
+                key={bank.code}
+                style={styles.popularItem}
+                onPress={() => handleSelectBank(bank)}
+                activeOpacity={0.7}
+              >
+                <View style={styles.popularBadge}>
+                  <BankIcon code={bank.code} name={bank.name} size={52} />
+                </View>
+                <Text style={styles.popularLabel} numberOfLines={2}>
+                  {bank.short}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        <Text style={[styles.sectionSubHeader, { marginTop: 20, marginBottom: 8 }]}>All Other Banks</Text>
+      </View>
+    );
   };
 
   const handleSubmitBank = async () => {
@@ -235,11 +392,6 @@ const DashboardScreen = () => {
     setSubmitting(true);
 
     try {
-      const user = useAuthStore.getState().user;
-      if (!user) {
-        throw new Error('No active user session');
-      }
-
       const token = authService.getAccessToken();
       if (!token) {
         throw new Error('No access token found');
@@ -265,15 +417,365 @@ const DashboardScreen = () => {
         throw new Error(errData.message || 'Failed to connect bank account on backend');
       }
 
-      setAddBankModalVisible(false);
-      resetForm();
-      await sync();
-      console.log('[BankCreation] Successfully created bank account on Supabase');
+      onSuccess();
     } catch (e: any) {
-      setFormError('Database save failed: ' + e.message);
+      setFormError(e.message || 'Database save failed.');
     } finally {
       setSubmitting(false);
     }
+  };
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={() => {
+        if (formStep === 2) {
+          setFormStep(1);
+        } else {
+          onClose();
+        }
+      }}
+    >
+      <View style={styles.modalOverlayFull}>
+        <View style={styles.modalCardFull}>
+          <View style={navStyles.modalHeader}>
+            <Text style={navStyles.modalTitle}>
+              {formStep === 1 ? 'Select Your Bank' : 'Bank Account Details'}
+            </Text>
+            <TouchableOpacity 
+              onPress={onClose} 
+              style={navStyles.closeBtn}
+            >
+              <Feather name="x" size={20} color="#8E8E9F" />
+            </TouchableOpacity>
+          </View>
+
+          {formStep === 1 ? (
+            <View style={{ flex: 1 }}>
+              <View style={styles.searchBarContainer}>
+                <Feather name="search" size={18} color="#8E8E9F" style={styles.searchIcon} />
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="Enter the bank name"
+                  placeholderTextColor="rgba(250, 251, 252, 0.4)"
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  autoCapitalize="none"
+                />
+              </View>
+
+              <FlatList
+                data={filteredBanks}
+                keyExtractor={(item, index) => item.code + '_' + index}
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ paddingBottom: 20 }}
+                ListHeaderComponent={renderPopularBanks}
+                initialNumToRender={50}
+                maxToRenderPerBatch={50}
+                windowSize={10}
+                removeClippedSubviews={true}
+                keyboardShouldPersistTaps="handled"
+                getItemLayout={(data, index) => (
+                  { length: 74, offset: 74 * index, index }
+                )}
+                ListEmptyComponent={
+                  <Text style={{ color: 'rgba(250, 251, 252, 0.5)', textAlign: 'center', marginTop: 30 }}>
+                    No banks found matching "{searchQuery}"
+                  </Text>
+                }
+                renderItem={({ item }) => {
+                  return (
+                    <TouchableOpacity
+                      style={styles.bankListItem}
+                      onPress={() => handleSelectBank(item)}
+                      activeOpacity={0.7}
+                    >
+                      <BankIcon code={item.code} name={item.name} size={38} />
+                      <View style={styles.bankMeta}>
+                        <Text style={styles.bankNameText} numberOfLines={1}>{item.name}</Text>
+                        <Text style={styles.bankCodeText}>{item.code}</Text>
+                      </View>
+                      <Feather name="chevron-right" size={16} color="#8E8E9F" />
+                    </TouchableOpacity>
+                  );
+                }}
+              />
+            </View>
+          ) : (
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
+              <TouchableOpacity 
+                style={styles.formBackBtn} 
+                onPress={() => {
+                  setFormStep(1);
+                  setFormError('');
+                }}
+              >
+                <Feather name="arrow-left" size={16} color="#2dba4e" />
+                <Text style={styles.formBackText}>Back to banks</Text>
+              </TouchableOpacity>
+
+              <View style={styles.bankFormHeader}>
+                <View style={{ marginBottom: 12 }}>
+                  <BankIcon code={selectedBank?.code || ''} name={selectedBank?.name || ''} size={56} />
+                </View>
+                <Text style={styles.bankFormTitle}>{selectedBank?.name}</Text>
+                <Text style={styles.bankFormSubtitle}>UPI Secure Verification</Text>
+              </View>
+
+              {verifyingStep >= 1 && verifyingStep <= 3 ? (
+                <View style={styles.verificationContainer}>
+                  <Text style={styles.verificationTitle}>Verifying Mobile Number</Text>
+                  <Text style={styles.verificationSubtitle}>
+                    Linking your bank account with +91 ******{user?.phone ? user.phone.slice(-4) : '9988'}
+                  </Text>
+
+                  {/* Step 1 */}
+                  <View style={styles.verifyStepRow}>
+                    {verifyingStep > 1 ? (
+                      <Feather name="check-circle" size={20} color="#2dba4e" />
+                    ) : verifyingStep === 1 ? (
+                      <ActivityIndicator size="small" color="#2dba4e" />
+                    ) : (
+                      <MaterialCommunityIcons name="circle-outline" size={20} color="#3a3f4b" />
+                    )}
+                    <Text style={[
+                      styles.verifyStepText,
+                      verifyingStep > 1 && styles.verifyStepTextSuccess,
+                      verifyingStep === 1 && { fontWeight: '700' }
+                    ]}>
+                      Verifying device and SIM binding...
+                    </Text>
+                  </View>
+
+                  {/* Step 2 */}
+                  <View style={styles.verifyStepRow}>
+                    {verifyingStep > 2 ? (
+                      <Feather name="check-circle" size={20} color="#2dba4e" />
+                    ) : verifyingStep === 2 ? (
+                      <ActivityIndicator size="small" color="#2dba4e" />
+                    ) : (
+                      <MaterialCommunityIcons name="circle-outline" size={20} color="#3a3f4b" />
+                    )}
+                    <Text style={[
+                      styles.verifyStepText,
+                      verifyingStep > 2 && styles.verifyStepTextSuccess,
+                      verifyingStep === 2 && { fontWeight: '700' }
+                    ]}>
+                      Sending secure SMS from SIM...
+                    </Text>
+                  </View>
+
+                  {/* Step 3 */}
+                  <View style={styles.verifyStepRow}>
+                    {verifyingStep > 3 ? (
+                      <Feather name="check-circle" size={20} color="#2dba4e" />
+                    ) : verifyingStep === 3 ? (
+                      <ActivityIndicator size="small" color="#2dba4e" />
+                    ) : (
+                      <MaterialCommunityIcons name="circle-outline" size={20} color="#3a3f4b" />
+                    )}
+                    <Text style={[
+                      styles.verifyStepText,
+                      verifyingStep === 3 && { fontWeight: '700' }
+                    ]}>
+                      Finding linked bank accounts...
+                    </Text>
+                  </View>
+
+                  {/* Live Simulation Controls */}
+                  <TouchableOpacity 
+                    style={styles.verificationFailureCheckbox}
+                    onPress={() => setSimulateFailure(!simulateFailure)}
+                    activeOpacity={0.7}
+                  >
+                    <Feather 
+                      name={simulateFailure ? "check-square" : "square"} 
+                      size={18} 
+                      color="#FF5252" 
+                    />
+                    <Text style={styles.verificationFailureText}>
+                      Simulate Verification Failure (Demo Mode)
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              ) : verifyingStep === -1 ? (
+                <View style={styles.verificationContainer}>
+                  <Text style={[styles.verificationTitle, { color: '#FF5252' }]}>Verification Failed</Text>
+                  <Text style={styles.verificationSubtitle}>
+                    Failed to link with +91 ******{user?.phone ? user.phone.slice(-4) : '9988'}
+                  </Text>
+
+                  {/* Show Steps with the failed step marked */}
+                  <View style={styles.verifyStepRow}>
+                    <Feather name="check-circle" size={20} color="#2dba4e" />
+                    <Text style={[styles.verifyStepText, styles.verifyStepTextSuccess]}>
+                      Verifying device and SIM binding...
+                    </Text>
+                  </View>
+
+                  <View style={styles.verifyStepRow}>
+                    <Feather name="check-circle" size={20} color="#2dba4e" />
+                    <Text style={[styles.verifyStepText, styles.verifyStepTextSuccess]}>
+                      Sending secure SMS from SIM...
+                    </Text>
+                  </View>
+
+                  <View style={styles.verifyStepRow}>
+                    <Feather name="x-circle" size={20} color="#FF5252" />
+                    <Text style={[styles.verifyStepText, styles.verifyStepTextFailed, { fontWeight: '700' }]}>
+                      Finding linked bank accounts...
+                    </Text>
+                  </View>
+
+                  <View style={[styles.errorContainer, { marginVertical: 16, width: '100%' }]}>
+                    <Feather name="alert-circle" size={16} color="#fafbfc" style={{ marginRight: 8 }} />
+                    <Text style={styles.errorTextInline}>{verificationError}</Text>
+                  </View>
+
+                  {/* Retry Controls */}
+                  <TouchableOpacity 
+                    style={styles.verificationFailureCheckbox}
+                    onPress={() => setSimulateFailure(!simulateFailure)}
+                    activeOpacity={0.7}
+                  >
+                    <Feather 
+                      name={simulateFailure ? "check-square" : "square"} 
+                      size={18} 
+                      color="#FF5252" 
+                    />
+                    <Text style={styles.verificationFailureText}>
+                      Simulate Verification Failure: {simulateFailure ? "ON" : "OFF"}
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity 
+                    style={styles.retryButton}
+                    onPress={() => {
+                      setVerifyingStep(1);
+                      setVerificationError('');
+                    }}
+                  >
+                    <Text style={styles.retryButtonText}>Retry Verification</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : verifyingStep === 4 && discoveredAccount ? (
+                <View style={styles.verificationContainer}>
+                  <Feather name="check-circle" size={48} color="#2dba4e" style={{ marginBottom: 12 }} />
+                  <Text style={styles.verificationTitle}>Account Discovered!</Text>
+                  <Text style={styles.verificationSubtitle}>
+                    Secure bank matching succeeded.
+                  </Text>
+
+                  {/* Discovered Account Card */}
+                  <View style={styles.discoveredCard}>
+                    <View style={styles.discoveredHeader}>
+                      <BankIcon code={selectedBank?.code || ''} name={selectedBank?.name || ''} size={42} />
+                      <View style={styles.discoveredTitleBlock}>
+                        <Text style={styles.discoveredBankName}>{discoveredAccount.bankName}</Text>
+                        <Text style={styles.discoveredAccountType}>{discoveredAccount.accountType}</Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.discoveredDetailRow}>
+                      <Text style={styles.discoveredDetailLabel}>Account Holder</Text>
+                      <Text style={styles.discoveredDetailValue}>{discoveredAccount.holderName}</Text>
+                    </View>
+
+                    <View style={styles.discoveredDetailRow}>
+                      <Text style={styles.discoveredDetailLabel}>Account Suffix</Text>
+                      <Text style={styles.discoveredDetailValue}>XXXX {discoveredAccount.accountNumberSuffix}</Text>
+                    </View>
+
+                    <View style={[styles.formFieldContainer, { marginTop: 14, marginBottom: 0 }]}>
+                      <Text style={[styles.formFieldLabel, { color: colors.textSecondary }]}>Set Starting Balance (INR)</Text>
+                      <View style={[styles.formInputGroup, { height: 44, marginTop: 4 }]}>
+                        <MaterialCommunityIcons name="currency-inr" size={16} color="#8E8E9F" style={styles.formInputIcon} />
+                        <TextInput
+                          style={[styles.formInputField, { height: 44, fontSize: 14 }]}
+                          placeholder="e.g. 25000"
+                          placeholderTextColor="#555"
+                          keyboardType="numeric"
+                          value={balance}
+                          onChangeText={setBalance}
+                        />
+                      </View>
+                    </View>
+                  </View>
+
+                  {formError ? (
+                    <View style={[styles.errorContainer, { marginVertical: 12, width: '100%' }]}>
+                      <Feather name="alert-circle" size={16} color="#fafbfc" style={{ marginRight: 8 }} />
+                      <Text style={styles.errorTextInline}>{formError}</Text>
+                    </View>
+                  ) : null}
+
+                  {submitting ? (
+                    <ActivityIndicator size="large" color="#2dba4e" style={{ marginTop: 24 }} />
+                  ) : (
+                    <TouchableOpacity
+                      style={[styles.submitBankBtn, { marginTop: 24, width: '100%' }]}
+                      onPress={handleSubmitBank}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.submitBankBtnText}>Link Bank Account</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              ) : null}
+            </ScrollView>
+          )}
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
+const DashboardScreen = () => {
+  const { colors, isDark } = useTheme();
+  const styles = getStyles(colors);
+  const navStyles = getNavStyles(colors);
+  const insets = useSafeAreaInsets();
+  const { sync } = useSyncDb();
+
+  const user = useAuthStore((state) => state.user);
+  const [profileModalVisible, setProfileModalVisible] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Bank profile state management
+  const bankProfiles = useBankStore((state) => state.bankProfiles);
+  const [addBankModalVisible, setAddBankModalVisible] = useState(false);
+
+  // Slide Animation for Onboarding notification banner
+  const bannerY = useSharedValue(-100);
+  const bannerOpacity = useSharedValue(0);
+
+  useEffect(() => {
+    if (bankProfiles.length === 0) {
+      bannerY.value = withTiming(0, { duration: 500 });
+      bannerOpacity.value = withTiming(1, { duration: 500 });
+    } else {
+      bannerY.value = withTiming(-100, { duration: 300 });
+      bannerOpacity.value = withTiming(0, { duration: 300 });
+    }
+  }, [bankProfiles.length]);
+
+  const bannerAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: bannerY.value }],
+    opacity: bannerOpacity.value,
+  }));
+
+  const handleOpenAddBank = () => {
+    if (bankProfiles.length >= 3) {
+      Alert.alert(
+        'Limit Reached',
+        'You can link a maximum of 3 bank accounts. Please remove an existing account first.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+    setAddBankModalVisible(true);
   };
 
   const onRefresh = useCallback(async () => {
@@ -420,18 +922,23 @@ const DashboardScreen = () => {
       >
         {/* Header */}
         <View style={styles.dashboardHeader}>
-          <View>
-            <Text style={styles.headerTitleSmall}>REGENT</Text>
-            <Text style={styles.headerTitle}>MONEY</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <View style={styles.headerLogoBadge}>
+              <Image 
+                source={require('../../assets/icon.png')} 
+                style={styles.headerLogoImage}
+              />
+            </View>
+            <View style={{ marginLeft: 10 }}>
+              <Text style={styles.headerTitleSmall}>REGENT</Text>
+              <Text style={styles.headerTitle}>MONEY</Text>
+            </View>
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             {bankProfiles.length === 0 && (
               <TouchableOpacity 
                 style={[styles.bankAlertBtn, { marginRight: 12 }]} 
-                onPress={() => {
-                  resetForm();
-                  setAddBankModalVisible(true);
-                }}
+                onPress={handleOpenAddBank}
                 activeOpacity={0.7}
               >
                 <Feather name="alert-circle" size={18} color="#FF5252" />
@@ -466,10 +973,7 @@ const DashboardScreen = () => {
             </View>
             <TouchableOpacity 
               style={styles.bannerActionBtn} 
-              onPress={() => {
-                resetForm();
-                setAddBankModalVisible(true);
-              }}
+              onPress={handleOpenAddBank}
               activeOpacity={0.8}
             >
               <Text style={styles.bannerActionText}>Add Bank</Text>
@@ -677,177 +1181,14 @@ const DashboardScreen = () => {
     </Modal>
 
     {/* Add Bank Modal Sheet */}
-    <Modal
+    <AddBankModal
       visible={addBankModalVisible}
-      transparent
-      animationType="slide"
-      onRequestClose={() => {
-        if (formStep === 2) {
-          setFormStep(1);
-        } else {
-          setAddBankModalVisible(false);
-          resetForm();
-        }
+      onClose={() => setAddBankModalVisible(false)}
+      onSuccess={async () => {
+        setAddBankModalVisible(false);
+        await sync();
       }}
-    >
-      <View style={styles.modalOverlayFull}>
-        <View style={styles.modalCardFull}>
-          <View style={navStyles.modalHeader}>
-            <Text style={navStyles.modalTitle}>
-              {formStep === 1 ? 'Select Your Bank' : 'Bank Account Details'}
-            </Text>
-            <TouchableOpacity 
-              onPress={() => {
-                setAddBankModalVisible(false);
-                resetForm();
-              }} 
-              style={navStyles.closeBtn}
-            >
-              <Feather name="x" size={20} color="#8E8E9F" />
-            </TouchableOpacity>
-          </View>
-
-          {formStep === 1 ? (
-            <View style={{ flex: 1 }}>
-              <TextInput
-                style={styles.bankSearchInput}
-                placeholder="Search Bank Name or Code..."
-                placeholderTextColor="#666"
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                autoCapitalize="none"
-              />
-
-              {loadingBanks ? (
-                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                  <ActivityIndicator size="large" color="#2dba4e" />
-                  <Text style={{ color: 'rgba(250, 251, 252, 0.6)', marginTop: 10, fontSize: 13 }}>
-                    Fetching banks from Razorpay...
-                  </Text>
-                </View>
-              ) : (
-                <FlatList
-                  data={filteredBanks}
-                  keyExtractor={(item, index) => item.code + '_' + index}
-                  showsVerticalScrollIndicator={false}
-                  contentContainerStyle={{ paddingBottom: 20 }}
-                  ListEmptyComponent={
-                    <Text style={{ color: 'rgba(250, 251, 252, 0.5)', textAlign: 'center', marginTop: 30 }}>
-                      No banks found matching "{searchQuery}"
-                    </Text>
-                  }
-                  renderItem={({ item }) => {
-                    const initials = item.code.substring(0, 2).toUpperCase();
-                    const bgColor = getBankColor(item.code);
-                    return (
-                      <TouchableOpacity
-                        style={styles.bankListItem}
-                        onPress={() => handleSelectBank(item)}
-                        activeOpacity={0.7}
-                      >
-                        <View style={[styles.bankLogoBadge, { backgroundColor: bgColor }]}>
-                          <Text style={styles.bankLogoText}>{initials}</Text>
-                        </View>
-                        <View style={styles.bankMeta}>
-                          <Text style={styles.bankNameText} numberOfLines={1}>{item.name}</Text>
-                          <Text style={styles.bankCodeText}>{item.code}</Text>
-                        </View>
-                        <Feather name="chevron-right" size={16} color="#8E8E9F" />
-                      </TouchableOpacity>
-                    );
-                  }}
-                />
-              )}
-            </View>
-          ) : (
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
-              <TouchableOpacity 
-                style={styles.formBackBtn} 
-                onPress={() => {
-                  setFormStep(1);
-                  setFormError('');
-                }}
-              >
-                <Feather name="arrow-left" size={16} color="#2dba4e" />
-                <Text style={styles.formBackText}>Back to banks</Text>
-              </TouchableOpacity>
-
-              <View style={styles.bankFormHeader}>
-                <View style={[styles.bankLogoBadge, { width: 50, height: 50, borderRadius: 25, backgroundColor: getBankColor(selectedBank?.code || '') }]}>
-                  <Text style={[styles.bankLogoText, { fontSize: 18 }]}>
-                    {selectedBank?.code.substring(0, 2).toUpperCase() || 'BK'}
-                  </Text>
-                </View>
-                <Text style={styles.bankFormTitle}>{selectedBank?.name}</Text>
-                <Text style={styles.bankFormSubtitle}>Enter your account details to connect</Text>
-              </View>
-
-              {formError ? (
-                <View style={[styles.errorContainer, { marginVertical: 12 }]}>
-                  <Feather name="alert-circle" size={16} color="#fafbfc" style={{ marginRight: 8 }} />
-                  <Text style={styles.errorTextInline}>{formError}</Text>
-                </View>
-              ) : null}
-
-              <View style={styles.formFieldContainer}>
-                <Text style={styles.formFieldLabel}>Bank Name</Text>
-                <View style={styles.formInputGroup}>
-                  <Feather name="briefcase" size={16} color="rgba(250, 251, 252, 0.4)" style={styles.formInputIcon} />
-                  <TextInput
-                    style={styles.formInputFieldDisabled}
-                    value={selectedBank?.name}
-                    editable={false}
-                  />
-                </View>
-              </View>
-
-              <View style={styles.formFieldContainer}>
-                <Text style={styles.formFieldLabel}>Account Suffix (Last 4 Digits)</Text>
-                <View style={styles.formInputGroup}>
-                  <Feather name="credit-card" size={16} color="#8E8E9F" style={styles.formInputIcon} />
-                  <TextInput
-                    style={styles.formInputField}
-                    placeholder="e.g. 9876"
-                    placeholderTextColor="#555"
-                    keyboardType="number-pad"
-                    maxLength={4}
-                    value={accountSuffix}
-                    onChangeText={setAccountSuffix}
-                  />
-                </View>
-              </View>
-
-              <View style={styles.formFieldContainer}>
-                <Text style={styles.formFieldLabel}>Current Balance (INR)</Text>
-                <View style={styles.formInputGroup}>
-                  <Feather name="dollar-sign" size={16} color="#8E8E9F" style={styles.formInputIcon} />
-                  <TextInput
-                    style={styles.formInputField}
-                    placeholder="e.g. 25000"
-                    placeholderTextColor="#555"
-                    keyboardType="numeric"
-                    value={balance}
-                    onChangeText={setBalance}
-                  />
-                </View>
-              </View>
-
-              {submitting ? (
-                <ActivityIndicator size="large" color="#2dba4e" style={{ marginTop: 20 }} />
-              ) : (
-                <TouchableOpacity
-                  style={styles.submitBankBtn}
-                  onPress={handleSubmitBank}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.submitBankBtnText}>Connect Account</Text>
-                </TouchableOpacity>
-              )}
-            </ScrollView>
-          )}
-        </View>
-      </View>
-    </Modal>
+    />
   </View>
   );
 };
@@ -1361,6 +1702,165 @@ const SettingsScreen = () => {
 };
 
 // ----------------------------------------------------
+// Connected Banks Screen
+// ----------------------------------------------------
+const BanksScreen = () => {
+  const { colors } = useTheme();
+  const styles = getStyles(colors);
+  const insets = useSafeAreaInsets();
+  const { sync } = useSyncDb();
+
+  const bankProfiles = useBankStore((state) => state.bankProfiles);
+  const [addBankModalVisible, setAddBankModalVisible] = useState(false);
+  const [removingId, setRemovingId] = useState<string | null>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      sync();
+    }, [sync])
+  );
+
+  const getBankCode = (bankName: string): string => {
+    const entry = Object.entries(bankNamesJson).find(
+      ([code, name]) => name.toLowerCase() === bankName.toLowerCase()
+    );
+    return entry ? entry[0] : '';
+  };
+
+  const handleOpenAddBank = () => {
+    if (bankProfiles.length >= 3) {
+      Alert.alert(
+        'Limit Reached',
+        'You can link a maximum of 3 bank accounts. Please remove an existing account first.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+    setAddBankModalVisible(true);
+  };
+
+  const handleRemoveBank = (id: string, bankName: string, suffix: string) => {
+    Alert.alert(
+      'Remove Bank Account',
+      `Are you sure you want to remove your ${bankName} account ending in ${suffix}? This will unlink it from your profile.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            setRemovingId(id);
+            try {
+              const token = authService.getAccessToken();
+              const response = await fetch(`${BACKEND_URL}/sync/bank-profile/${id}`, {
+                method: 'DELETE',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json',
+                },
+              });
+
+              if (!response.ok) {
+                const errData = await response.json();
+                throw new Error(errData.message || 'Failed to remove bank account on backend');
+              }
+
+              await sync();
+              Alert.alert('Success', `${bankName} account removed successfully.`);
+            } catch (e: any) {
+              Alert.alert('Error', e.message || 'Failed to remove bank account.');
+            } finally {
+              setRemovingId(null);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  return (
+    <View style={styles.container}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={[styles.contentContainer, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 20 }]}
+        showsVerticalScrollIndicator={false}
+      >
+        <Text style={styles.headerTitle}>My Banks</Text>
+        <Text style={styles.subtitle}>
+          {bankProfiles.length === 0
+            ? 'No bank accounts linked yet.'
+            : `Linked ${bankProfiles.length} of 3 maximum bank accounts.`
+          }
+        </Text>
+
+        {/* Bank List */}
+        <View style={{ marginTop: 15 }}>
+          {bankProfiles.map((bank) => (
+            <View key={bank.id} style={[styles.card, { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 16 }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                <BankIcon code={getBankCode(bank.bankName)} name={bank.bankName} size={42} />
+                <View style={{ marginLeft: 12, flex: 1 }}>
+                  <Text style={{ color: colors.text, fontSize: 16, fontWeight: '700' }} numberOfLines={1}>
+                    {bank.bankName}
+                  </Text>
+                  <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
+                    Savings Account •••• {bank.accountNumberSuffix}
+                  </Text>
+                  <Text style={{ color: colors.accent, fontSize: 14, fontWeight: '700', marginTop: 4 }}>
+                    ₹{bank.currentBalance.toLocaleString('en-IN')}
+                  </Text>
+                </View>
+              </View>
+
+              <TouchableOpacity
+                onPress={() => handleRemoveBank(bank.id, bank.bankName, bank.accountNumberSuffix)}
+                disabled={removingId !== null}
+                style={{ padding: 8 }}
+                activeOpacity={0.7}
+              >
+                {removingId === bank.id ? (
+                  <ActivityIndicator size="small" color="#FF5252" />
+                ) : (
+                  <Feather name="trash-2" size={20} color="#FF5252" />
+                )}
+              </TouchableOpacity>
+            </View>
+          ))}
+        </View>
+
+        {/* Add Bank Button */}
+        {bankProfiles.length < 3 ? (
+          <TouchableOpacity
+            style={[styles.submitBankBtn, { marginTop: 20, width: '100%' }]}
+            onPress={handleOpenAddBank}
+            activeOpacity={0.8}
+          >
+            <Feather name="plus-circle" size={16} color="#24292e" style={{ marginRight: 6 }} />
+            <Text style={styles.submitBankBtnText}>Link New Bank Account</Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={[styles.card, { borderStyle: 'dashed', borderColor: colors.border, borderWidth: 1, backgroundColor: 'transparent', alignItems: 'center', padding: 16, marginTop: 20 }]}>
+            <Feather name="info" size={20} color="#FFD700" style={{ marginBottom: 6 }} />
+            <Text style={{ color: colors.textSecondary, fontSize: 12, textAlign: 'center', lineHeight: 18 }}>
+              You have linked the maximum limit of 3 bank accounts. Remove an existing account to link a new one.
+            </Text>
+          </View>
+        )}
+      </ScrollView>
+
+      <AddBankModal
+        visible={addBankModalVisible}
+        onClose={() => setAddBankModalVisible(false)}
+        onSuccess={async () => {
+          setAddBankModalVisible(false);
+          await sync();
+        }}
+      />
+    </View>
+  );
+};
+
+// ----------------------------------------------------
 // Navigators & Navigation Container
 // ----------------------------------------------------
 const Tab = createBottomTabNavigator();
@@ -1388,6 +1888,11 @@ const TabIcon = ({ focused, activeIcon, inactiveIcon, size = 22 }: { focused: bo
 
 function TabNavigator() {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
+
+  const bottomPadding = insets.bottom > 0 ? insets.bottom : (Platform.OS === 'ios' ? 24 : 12);
+  const barHeight = (Platform.OS === 'ios' ? 66 : 60) + bottomPadding;
+
   return (
     <Tab.Navigator
       screenOptions={{
@@ -1397,8 +1902,8 @@ function TabNavigator() {
           borderTopWidth: 1,
           borderTopColor: colors.border,
           elevation: 12,
-          height: Platform.OS === 'ios' ? 90 : 70,
-          paddingBottom: Platform.OS === 'ios' ? 24 : 8,
+          height: barHeight,
+          paddingBottom: bottomPadding,
           paddingTop: 8,
           shadowColor: colors.shadowColor,
           shadowOffset: { width: 0, height: -4 },
@@ -1434,6 +1939,15 @@ function TabNavigator() {
         }}
       />
       <Tab.Screen 
+        name="Banks" 
+        component={BanksScreen} 
+        options={{
+          tabBarIcon: ({ focused }) => (
+            <TabIcon focused={focused} activeIcon="wallet" inactiveIcon="wallet-outline" />
+          )
+        }}
+      />
+      <Tab.Screen 
         name="AI Chat" 
         component={ChatScreen} 
         options={{
@@ -1461,14 +1975,37 @@ export default function AppNavigator() {
   const { colors, isDark } = useTheme();
 
   useEffect(() => {
-    authService.checkSession();
+    const initAndCheck = async () => {
+      await mmkvStorage.initialize();
+      await authService.checkSession();
+    };
+    initAndCheck();
   }, []);
 
   if (isLoading) {
     return (
       <View style={{ flex: 1, backgroundColor: colors.background, justifyContent: 'center', alignItems: 'center' }}>
         <StatusBar style={colors.statusBar} />
-        <ActivityIndicator size="large" color={colors.accent} />
+        <View style={{
+          width: 80,
+          height: 80,
+          borderRadius: 24,
+          borderWidth: 1,
+          borderColor: colors.border,
+          overflow: 'hidden',
+          marginBottom: 24,
+          shadowColor: colors.accent,
+          shadowOffset: { width: 0, height: 4 },
+          shadowOpacity: 0.15,
+          shadowRadius: 10,
+          elevation: 5,
+        }}>
+          <Image 
+            source={require('../../assets/icon.png')} 
+            style={{ width: '100%', height: '100%', borderRadius: 24 }}
+          />
+        </View>
+        <ActivityIndicator size="small" color={colors.accent} />
         <Text style={{ color: colors.textSecondary, marginTop: 18, fontSize: 11, fontWeight: '700', letterSpacing: 2 }}>
           SECURELY RETRIEVING SESSION...
         </Text>
@@ -1535,6 +2072,19 @@ const getStyles = (colors: any) => StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 20,
+  },
+  headerLogoBadge: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    overflow: 'hidden',
+  },
+  headerLogoImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 12,
   },
   headerTitle: {
     fontSize: 28,
@@ -2079,16 +2629,72 @@ const getStyles = (colors: any) => StyleSheet.create({
     padding: 24,
     height: '85%',
   },
-  bankSearchInput: {
+  searchBarContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: colors.inputBackground,
     borderWidth: 1,
     borderColor: colors.inputBorder,
     borderRadius: 12,
     height: 46,
     paddingHorizontal: 12,
+    marginBottom: 16,
+  },
+  searchIcon: {
+    marginRight: 8,
+  },
+  searchInput: {
+    flex: 1,
     color: colors.text,
     fontSize: 14,
-    marginBottom: 16,
+    height: '100%',
+  },
+  popularSection: {
+    paddingVertical: 10,
+    marginBottom: 10,
+  },
+  sectionSubHeader: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: colors.text,
+    marginBottom: 14,
+    letterSpacing: 0.5,
+  },
+  popularGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    marginHorizontal: -4,
+  },
+  popularItem: {
+    width: '23%',
+    alignItems: 'center',
+    marginVertical: 10,
+  },
+  popularBadge: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 6,
+    shadowColor: colors.shadowColor,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  popularBadgeText: {
+    color: '#fafbfc',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  popularLabel: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    fontWeight: '600',
+    lineHeight: 14,
   },
   bankListItem: {
     flexDirection: 'row',
@@ -2097,8 +2703,9 @@ const getStyles = (colors: any) => StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.inputBorder,
     borderRadius: 14,
-    padding: 12,
-    marginVertical: 6,
+    paddingHorizontal: 12,
+    height: 64,
+    marginVertical: 5,
   },
   bankLogoBadge: {
     width: 38,
@@ -2221,6 +2828,122 @@ const getStyles = (colors: any) => StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     flex: 1,
+  },
+  verificationContainer: {
+    padding: 20,
+    alignItems: 'center',
+  },
+  verificationTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.text,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  verificationSubtitle: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    marginBottom: 24,
+    textAlign: 'center',
+  },
+  verifyStepRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  verifyStepText: {
+    fontSize: 14,
+    color: colors.text,
+    marginLeft: 12,
+    flex: 1,
+  },
+  verifyStepTextPending: {
+    color: colors.textSecondary,
+  },
+  verifyStepTextSuccess: {
+    color: colors.accent,
+  },
+  verifyStepTextFailed: {
+    color: '#FF5252',
+  },
+  verificationFailureCheckbox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 20,
+    padding: 12,
+    backgroundColor: 'rgba(255, 82, 82, 0.05)',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 82, 82, 0.1)',
+    width: '100%',
+  },
+  verificationFailureText: {
+    color: '#FF5252',
+    fontSize: 13,
+    marginLeft: 8,
+  },
+  discoveredCard: {
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 16,
+    padding: 16,
+    width: '100%',
+    marginTop: 16,
+  },
+  discoveredHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  discoveredTitleBlock: {
+    marginLeft: 12,
+    flex: 1,
+  },
+  discoveredBankName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  discoveredAccountType: {
+    fontSize: 12,
+    color: colors.textSecondary,
+  },
+  discoveredDetailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 6,
+  },
+  discoveredDetailLabel: {
+    fontSize: 13,
+    color: colors.textSecondary,
+  },
+  discoveredDetailValue: {
+    fontSize: 13,
+    color: colors.text,
+    fontWeight: '600',
+  },
+  discoveredSuccessText: {
+    color: colors.accent,
+    fontSize: 15,
+    fontWeight: '700',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  retryButton: {
+    backgroundColor: colors.border,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 10,
+    marginTop: 20,
+  },
+  retryButtonText: {
+    color: colors.text,
+    fontWeight: '600',
+    fontSize: 14,
   },
 });
 

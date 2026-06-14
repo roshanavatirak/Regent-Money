@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { BankProfile } from './entities/bank-profile.entity';
@@ -7,6 +7,7 @@ import { BudgetDeclaration } from './entities/budget-declaration.entity';
 import { SavingsGoal } from './entities/savings-goal.entity';
 import { NetWorthSnapshot } from './entities/net-worth-snapshot.entity';
 import { IncomeRecord } from './entities/income-record.entity';
+import { User } from '../users/entities/user.entity';
 
 @Injectable()
 export class SyncService {
@@ -25,6 +26,8 @@ export class SyncService {
     private readonly netWorthSnapshotRepository: Repository<NetWorthSnapshot>,
     @InjectRepository(IncomeRecord)
     private readonly incomeRecordRepository: Repository<IncomeRecord>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
   ) {}
 
   async sync(userId: string) {
@@ -47,6 +50,14 @@ export class SyncService {
 
   async createBankProfile(userId: string, data: { id: string; bankName: string; accountNumberSuffix: string; currentBalance: number }) {
     this.logger.log(`Creating bank profile for user: ${userId}`);
+
+    const count = await this.bankProfileRepository.count({
+      where: { userId, isDeleted: false },
+    });
+    if (count >= 3) {
+      throw new BadRequestException('Maximum bank limit reached. You can only link up to 3 bank accounts.');
+    }
+
     const bankProfile = this.bankProfileRepository.create({
       id: data.id,
       userId,
@@ -58,6 +69,20 @@ export class SyncService {
       isDeleted: false,
     });
     return this.bankProfileRepository.save(bankProfile);
+  }
+
+  async deleteBankProfile(userId: string, id: string) {
+    this.logger.log(`Deleting bank profile: ${id} for user: ${userId}`);
+    const bankProfile = await this.bankProfileRepository.findOne({
+      where: { id, userId, isDeleted: false },
+    });
+    if (!bankProfile) {
+      throw new BadRequestException('Bank profile not found or already deleted.');
+    }
+    bankProfile.isDeleted = true;
+    bankProfile.updatedAt = Date.now();
+    await this.bankProfileRepository.save(bankProfile);
+    return { success: true, message: 'Bank account unlinked successfully.' };
   }
 
   async getNetWorthSnapshots(userId: string) {
@@ -246,5 +271,47 @@ export class SyncService {
     await this.transactionRepository.save(transactionsToSave);
 
     return { message: 'Mock data successfully injected!' };
+  }
+
+  async verifyBankAccount(
+    userId: string,
+    data: { bankCode: string; phoneNumber: string; simulateFailure?: boolean }
+  ) {
+    this.logger.log(`Verifying bank connection for user: ${userId}, bank: ${data.bankCode}`);
+
+    if (data.simulateFailure) {
+      throw new BadRequestException(`Phone number not registered with ${data.bankCode || 'bank'}`);
+    }
+
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new UnauthorizedException('User session not found.');
+    }
+
+    const cleanNumber = (num: string) => num.replace(/[\s\-\+]/g, '').slice(-10);
+    
+    const inputPhone = cleanNumber(data.phoneNumber);
+    const userPhone = user.phone ? cleanNumber(user.phone) : '';
+
+    if (!userPhone) {
+      throw new BadRequestException('Verification failed: No mobile number registered in your profile.');
+    }
+
+    if (inputPhone !== userPhone) {
+      throw new BadRequestException(`Phone number not registered with ${data.bankCode || 'bank'}`);
+    }
+
+    // Generate simulated account data dynamically
+    const suffix = Math.floor(1000 + Math.random() * 9000).toString();
+    const mockBalance = Math.floor(15000 + Math.random() * 85000);
+
+    return {
+      success: true,
+      bankName: data.bankCode,
+      accountNumberSuffix: suffix,
+      accountType: 'Savings Account',
+      holderName: user.name || 'Account Holder',
+      currentBalance: mockBalance,
+    };
   }
 }

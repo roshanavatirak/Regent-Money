@@ -9,6 +9,7 @@ import { SavingsGoal } from './entities/savings-goal.entity';
 import { NetWorthSnapshot } from './entities/net-worth-snapshot.entity';
 import { IncomeRecord } from './entities/income-record.entity';
 import { AuthModule } from '../auth/auth.module';
+import { User } from '../users/entities/user.entity';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { AuthModule } from '../auth/auth.module';
       SavingsGoal,
       NetWorthSnapshot,
       IncomeRecord,
+      User,
     ]),
     AuthModule,
   ],

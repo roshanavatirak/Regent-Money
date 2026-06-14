@@ -1,6 +1,7 @@
 import { mmkvStorage } from '../db/mmkv';
 import { useAuthStore, UserProfile } from '../store';
 import { syncService } from './syncService';
+import { getGoogleWebClientId } from './supabaseClient';
 
 const SESSION_KEY = 'auth_user_id';
 const USER_PROFILE_KEY = 'auth_user_profile';
@@ -36,8 +37,16 @@ export const authService = {
   async checkSession(): Promise<UserProfile | null> {
     const cachedProfile = mmkvStorage.getObject<UserProfile>(USER_PROFILE_KEY);
     const token = mmkvStorage.getString(TOKEN_KEY);
+    const rememberMe = mmkvStorage.getBoolean('auth_remember_me') !== false;
 
-    if (!cachedProfile || !token) {
+    // Google logins are always remembered by default. If it's a local/email login,
+    // we require rememberMe to be true.
+    const isGoogle = cachedProfile?.authProvider === 'google';
+
+    if (!cachedProfile || !token || (!rememberMe && !isGoogle)) {
+      if (cachedProfile || token) {
+        await this.logOut();
+      }
       useAuthStore.getState().setUser(null);
       useAuthStore.getState().setLoading(false);
       return null;
@@ -87,6 +96,7 @@ export const authService = {
       mmkvStorage.setString(SESSION_KEY, profile.id);
       mmkvStorage.setObject(USER_PROFILE_KEY, profile);
       mmkvStorage.setString(TOKEN_KEY, data.accessToken);
+      mmkvStorage.setBoolean('auth_remember_me', true); // Sign up auto-remembers
       useAuthStore.getState().setUser(profile);
 
       // Initial database push
@@ -99,7 +109,7 @@ export const authService = {
   /**
    * Log in online using NestJS Authentication.
    */
-  async logIn(emailOrMobile: string, password?: string): Promise<UserProfile> {
+  async logIn(emailOrMobile: string, password?: string, rememberMe: boolean = true): Promise<UserProfile> {
     const input = emailOrMobile.trim();
     const isMail = input.includes('@');
     const emailOrMobileFormatted = isMail ? input.toLowerCase() : formatPhoneNumber(input);
@@ -125,6 +135,7 @@ export const authService = {
     mmkvStorage.setString(SESSION_KEY, profile.id);
     mmkvStorage.setObject(USER_PROFILE_KEY, profile);
     mmkvStorage.setString(TOKEN_KEY, data.accessToken);
+    mmkvStorage.setBoolean('auth_remember_me', rememberMe);
     useAuthStore.getState().setUser(profile);
 
     // Initial database pull (downloads user transactions, budgets, goals)
@@ -137,7 +148,7 @@ export const authService = {
    * Native Google Login flow (stub or bridged verification via ID token)
    */
   async signInWithGoogleNative(): Promise<UserProfile> {
-    const webClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
+    const webClientId = getGoogleWebClientId();
     if (!webClientId) {
       throw new Error('Google Web Client ID is not configured.');
     }
@@ -251,6 +262,7 @@ export const authService = {
       mmkvStorage.delete(SESSION_KEY);
       mmkvStorage.delete(USER_PROFILE_KEY);
       mmkvStorage.delete(TOKEN_KEY);
+      mmkvStorage.delete('auth_remember_me');
     } catch (e: any) {
       console.error('[Auth] Failed to delete MMKV session keys:', e.message);
     }

@@ -6,6 +6,11 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1a1f26"
+    },
     "ios": {
       "supportsTablet": true
     },
@@ -20,7 +25,11 @@
         "android.permission.READ_EXTERNAL_STORAGE"
       ],
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.regentmoney"
+      "package": "com.anonymous.regentmoney",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#FFFFFF"
+      }
     },
     "web": {
       "favicon": "./assets/favicon.png"

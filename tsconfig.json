@@ -6,5 +6,11 @@
     "emitDecoratorMetadata": true,
     "useDefineForClassFields": false,
     "strictPropertyInitialization": false
-  }
+  },
+  "exclude": [
+    "node_modules",
+    "backend",
+    "babel.config.js",
+    "metro.config.js"
+  ]
 }

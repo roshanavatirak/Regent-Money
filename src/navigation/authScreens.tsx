@@ -10,7 +10,8 @@ import {
   Platform, 
   KeyboardAvoidingView, 
   Modal,
-  Dimensions
+  Dimensions,
+  Image
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
@@ -215,7 +216,10 @@ export const WelcomeScreen = ({ navigation }: { navigation: any }) => {
         {/* Branding Title */}
         <Animated.View entering={FadeIn.delay(100).duration(800)} style={styles.welcomeBranding}>
           <View style={styles.logoBadge}>
-            <Feather name="activity" size={32} color="#2dba4e" />
+            <Image 
+              source={require('../../assets/icon.png')} 
+              style={styles.logoImage}
+            />
           </View>
           <Text style={styles.welcomeHeaderSmall}>REGENT</Text>
           <Text style={styles.welcomeHeaderBig}>MONEY</Text>
@@ -293,6 +297,7 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
   const [emailOrMobile, setEmailOrMobile] = useState('');
   const [password, setPassword] = useState('');
   const [secureText, setSecureText] = useState(true);
+  const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -304,7 +309,7 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
     setError('');
     setLoading(true);
     try {
-      await authService.logIn(emailOrMobile, password);
+      await authService.logIn(emailOrMobile, password, rememberMe);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -326,6 +331,12 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
         </TouchableOpacity>
 
         <View style={styles.authHeaderSection}>
+          <View style={[styles.logoBadgeSmall, { alignSelf: 'flex-start' }]}>
+            <Image 
+              source={require('../../assets/icon.png')} 
+              style={styles.logoImageSmall}
+            />
+          </View>
           <Text style={styles.authHeaderTitle}>Welcome Back</Text>
           <Text style={styles.authHeaderDesc}>Enter your offline credentials to access Regent Money</Text>
         </View>
@@ -368,6 +379,17 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
               <Feather name={secureText ? "eye-off" : "eye"} size={16} color="#8E8E9F" />
             </TouchableOpacity>
           </View>
+
+          <TouchableOpacity 
+            style={styles.rememberMeRow} 
+            onPress={() => setRememberMe(!rememberMe)}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.checkbox, rememberMe && styles.checkboxChecked]}>
+              {rememberMe && <Feather name="check" size={12} color="#fafbfc" />}
+            </View>
+            <Text style={styles.rememberMeLabel}>Remember me for 30 days</Text>
+          </TouchableOpacity>
 
           {loading ? (
             <ActivityIndicator size="large" color="#2dba4e" style={{ marginTop: 24 }} />
@@ -464,6 +486,12 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
         </TouchableOpacity>
 
         <View style={styles.authHeaderSection}>
+          <View style={[styles.logoBadgeSmall, { alignSelf: 'flex-start' }]}>
+            <Image 
+              source={require('../../assets/icon.png')} 
+              style={styles.logoImageSmall}
+            />
+          </View>
           <Text style={styles.authHeaderTitle}>Create Account</Text>
           <Text style={styles.authHeaderDesc}>Start tracking and simulating offline wealth securely</Text>
         </View>
@@ -675,6 +703,34 @@ const getStyles = (colors: any) => StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 10,
     elevation: 3,
+    overflow: 'hidden',
+  },
+  logoImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 20,
+  },
+  logoBadgeSmall: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: colors.border,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+    overflow: 'hidden',
+    shadowColor: colors.accent,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  logoImageSmall: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 14,
   },
   welcomeHeaderSmall: {
     fontSize: 14,
@@ -1030,5 +1086,32 @@ const getStyles = (colors: any) => StyleSheet.create({
     fontWeight: '700',
     marginBottom: 12,
     textAlign: 'center',
+  },
+  rememberMeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 14,
+    marginBottom: 12,
+    alignSelf: 'flex-start',
+  },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+    backgroundColor: 'transparent',
+  },
+  checkboxChecked: {
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
+  },
+  rememberMeLabel: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '500',
   },
 });
