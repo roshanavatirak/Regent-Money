@@ -1,6 +1,8 @@
-import { Controller, Get, Post, Body, Req, UseGuards, HttpCode, HttpStatus, Delete, Param } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Req, UseGuards, HttpCode, HttpStatus, Delete, Param, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
 import { SyncService } from './sync.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { OcrSyncDto } from './dto/ocr-sync.dto';
+import { FileInterceptor } from '@nestjs/platform-express';
 
 @Controller('sync')
 @UseGuards(JwtAuthGuard)
@@ -17,7 +19,15 @@ export class SyncController {
   @HttpCode(HttpStatus.CREATED)
   async createBankProfile(
     @Req() req: any,
-    @Body() body: { id: string; bankName: string; accountNumberSuffix: string; currentBalance: number },
+    @Body() body: {
+      id: string;
+      bankName: string;
+      accountNumberSuffix: string;
+      currentBalance: number;
+      smsSenderId?: string;
+      upiId?: string;
+      customKeywords?: string;
+    },
   ) {
     const userId = req.user.id;
     return this.syncService.createBankProfile(userId, body);
@@ -60,5 +70,51 @@ export class SyncController {
   ) {
     const userId = req.user.id;
     return this.syncService.verifyBankAccount(userId, body);
+  }
+
+  @Patch('transaction/:id/category')
+  async updateCategory(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { category: string },
+  ) {
+    const userId = req.user.id;
+    return this.syncService.updateTransactionCategory(userId, id, body.category);
+  }
+
+  @Post('ocr-sync')
+  @HttpCode(HttpStatus.OK)
+  async syncOcrTransactions(
+    @Req() req: any,
+    @Body() body: OcrSyncDto,
+  ) {
+    const userId = req.user.id;
+    return this.syncService.syncOcrTransactions(userId, body);
+  }
+
+  @Post('upload-statement')
+  @UseInterceptors(FileInterceptor('file'))
+  @HttpCode(HttpStatus.OK)
+  async uploadStatementPdf(
+    @Req() req: any,
+    @Body('bankProfileId') bankProfileId: string,
+    @Body('password') password?: string,
+    @UploadedFile() file?: any,
+  ) {
+    const userId = req.user.id;
+    if (!file) {
+      throw new BadRequestException('Statement PDF file is required.');
+    }
+    return this.syncService.syncStatementPdf(userId, bankProfileId, file.buffer, password);
+  }
+
+  @Patch('bank-profile/:id/consent')
+  async toggleSmsConsent(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { smsConsent: boolean },
+  ) {
+    const userId = req.user.id;
+    return this.syncService.updateSmsConsent(userId, id, body.smsConsent);
   }
 }

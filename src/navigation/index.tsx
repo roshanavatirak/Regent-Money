@@ -145,13 +145,16 @@ import {
   useAuthStore,
   useBankStore,
   useThemeStore,
-  useTheme
+  useTheme,
+  useNotificationStore
 } from '../store';
 import { StatusBar } from 'expo-status-bar';
 import { authService } from '../services/authService';
+import { notificationService } from '../services/notificationService';
 const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:3000';
 import { WelcomeScreen, LoginScreen, SignupScreen } from './authScreens';
 import { syncService } from '../services/syncService';
+import { BankDetailsModal } from './BankDetailsModal';
 import { 
   askChatbot, 
   ChatMessage
@@ -210,6 +213,21 @@ const TypingIndicator = () => {
 // ----------------------------------------------------
 // Reusable Add Bank Modal (Paytm/UPI-Style Verification)
 // ----------------------------------------------------
+const BANK_DEFAULT_SMS_SENDER: { [key: string]: string } = {
+  'SBIN': 'SBIIN',
+  'BARB': 'BOBTXN',
+  'UBIN': 'UBININ',
+  'UTIB': 'AXISBK',
+  'IDFB': 'IDFCFB',
+  'HDFC': 'HDFCBK',
+  'KKBK': 'KOTAKB',
+  'ICIC': 'ICICIB',
+  'PUNB': 'PNBSMS',
+  'IDIB': 'INDIBK',
+  'CNRB': 'CNRBK',
+  'BKID': 'BOIND',
+};
+
 interface AddBankModalProps {
   visible: boolean;
   onClose: () => void;
@@ -225,34 +243,30 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
   const [banksList, setBanksList] = useState<{ [key: string]: string }>(bankNamesJson as { [key: string]: string });
   const [selectedBank, setSelectedBank] = useState<{ code: string; name: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  
+  // Form inputs
+  const [bankNameInput, setBankNameInput] = useState('');
   const [accountSuffix, setAccountSuffix] = useState('');
   const [balance, setBalance] = useState('');
+  const [smsSenderId, setSmsSenderId] = useState('');
+  const [upiId, setUpiId] = useState('');
+  const [customKeywords, setCustomKeywords] = useState('');
+
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
   const [formStep, setFormStep] = useState(1);
 
-  const [verifyingStep, setVerifyingStep] = useState(0);
-  const [verificationError, setVerificationError] = useState('');
-  const [discoveredAccount, setDiscoveredAccount] = useState<{
-    bankName: string;
-    accountNumberSuffix: string;
-    accountType: string;
-    holderName: string;
-    currentBalance: number;
-  } | null>(null);
-  const [simulateFailure, setSimulateFailure] = useState(false);
-
   const resetForm = () => {
     setSelectedBank(null);
     setSearchQuery('');
+    setBankNameInput('');
     setAccountSuffix('');
     setBalance('');
+    setSmsSenderId('');
+    setUpiId('');
+    setCustomKeywords('');
     setFormError('');
     setFormStep(1);
-    setVerifyingStep(0);
-    setVerificationError('');
-    setDiscoveredAccount(null);
-    setSimulateFailure(false);
   };
 
   useEffect(() => {
@@ -261,71 +275,15 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
     }
   }, [visible]);
 
-  useEffect(() => {
-    if (formStep !== 2 || !visible) return;
-
-    if (verifyingStep === 1) {
-      const timer = setTimeout(() => {
-        setVerifyingStep(2);
-      }, 1200);
-      return () => clearTimeout(timer);
-    }
-
-    if (verifyingStep === 2) {
-      const timer = setTimeout(() => {
-        setVerifyingStep(3);
-      }, 1200);
-      return () => clearTimeout(timer);
-    }
-
-    if (verifyingStep === 3) {
-      const verify = async () => {
-        try {
-          const token = authService.getAccessToken();
-          const userObj = useAuthStore.getState().user;
-          
-          const response = await fetch(`${BACKEND_URL}/sync/verify-bank`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              bankCode: selectedBank?.name || 'Bank',
-              phoneNumber: userObj?.phone || '',
-              simulateFailure: simulateFailure,
-            }),
-          });
-
-          if (!response.ok) {
-            const errData = await response.json();
-            throw new Error(errData.message || 'Verification failed on server.');
-          }
-
-          const result = await response.json();
-          setDiscoveredAccount(result);
-          setAccountSuffix(result.accountNumberSuffix);
-          setBalance(String(result.currentBalance));
-          setVerifyingStep(4);
-        } catch (e: any) {
-          setVerificationError(e.message);
-          setVerifyingStep(-1);
-        }
-      };
-
-      const timer = setTimeout(() => {
-        verify();
-      }, 1200);
-      return () => clearTimeout(timer);
-    }
-  }, [verifyingStep, formStep, simulateFailure, selectedBank, visible]);
-
   const handleSelectBank = (bank: { code: string; name: string }) => {
     setSelectedBank(bank);
+    setBankNameInput(bank.name);
+    
+    // Guess SMS Sender ID based on dictionary, fallback to bank.code + "BK"
+    const guessedSender = BANK_DEFAULT_SMS_SENDER[bank.code] || `${bank.code}BK`;
+    setSmsSenderId(guessedSender);
+    
     setFormStep(2);
-    setVerifyingStep(1);
-    setVerificationError('');
-    setDiscoveredAccount(null);
   };
 
   const sortedAllBanks = useMemo(() => {
@@ -375,7 +333,7 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
   };
 
   const handleSubmitBank = async () => {
-    if (!accountSuffix.trim() || !balance.trim()) {
+    if (!bankNameInput.trim() || !accountSuffix.trim() || !balance.trim()) {
       setFormError('Please fill in all fields.');
       return;
     }
@@ -406,9 +364,12 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
         },
         body: JSON.stringify({
           id: newId,
-          bankName: selectedBank?.name || 'Unknown Bank',
+          bankName: bankNameInput.trim(),
           accountNumberSuffix: accountSuffix.trim(),
           currentBalance: parseFloat(balance),
+          smsSenderId: smsSenderId.trim() || undefined,
+          upiId: upiId.trim() || undefined,
+          customKeywords: customKeywords.trim() || undefined,
         }),
       });
 
@@ -521,210 +482,692 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
                   <BankIcon code={selectedBank?.code || ''} name={selectedBank?.name || ''} size={56} />
                 </View>
                 <Text style={styles.bankFormTitle}>{selectedBank?.name}</Text>
-                <Text style={styles.bankFormSubtitle}>UPI Secure Verification</Text>
+                <Text style={styles.bankFormSubtitle}>Direct Mapping Setup</Text>
               </View>
 
-              {verifyingStep >= 1 && verifyingStep <= 3 ? (
-                <View style={styles.verificationContainer}>
-                  <Text style={styles.verificationTitle}>Verifying Mobile Number</Text>
-                  <Text style={styles.verificationSubtitle}>
-                    Linking your bank account with +91 ******{user?.phone ? user.phone.slice(-4) : '9988'}
-                  </Text>
-
-                  {/* Step 1 */}
-                  <View style={styles.verifyStepRow}>
-                    {verifyingStep > 1 ? (
-                      <Feather name="check-circle" size={20} color="#2dba4e" />
-                    ) : verifyingStep === 1 ? (
-                      <ActivityIndicator size="small" color="#2dba4e" />
-                    ) : (
-                      <MaterialCommunityIcons name="circle-outline" size={20} color="#3a3f4b" />
-                    )}
-                    <Text style={[
-                      styles.verifyStepText,
-                      verifyingStep > 1 && styles.verifyStepTextSuccess,
-                      verifyingStep === 1 && { fontWeight: '700' }
-                    ]}>
-                      Verifying device and SIM binding...
-                    </Text>
-                  </View>
-
-                  {/* Step 2 */}
-                  <View style={styles.verifyStepRow}>
-                    {verifyingStep > 2 ? (
-                      <Feather name="check-circle" size={20} color="#2dba4e" />
-                    ) : verifyingStep === 2 ? (
-                      <ActivityIndicator size="small" color="#2dba4e" />
-                    ) : (
-                      <MaterialCommunityIcons name="circle-outline" size={20} color="#3a3f4b" />
-                    )}
-                    <Text style={[
-                      styles.verifyStepText,
-                      verifyingStep > 2 && styles.verifyStepTextSuccess,
-                      verifyingStep === 2 && { fontWeight: '700' }
-                    ]}>
-                      Sending secure SMS from SIM...
-                    </Text>
-                  </View>
-
-                  {/* Step 3 */}
-                  <View style={styles.verifyStepRow}>
-                    {verifyingStep > 3 ? (
-                      <Feather name="check-circle" size={20} color="#2dba4e" />
-                    ) : verifyingStep === 3 ? (
-                      <ActivityIndicator size="small" color="#2dba4e" />
-                    ) : (
-                      <MaterialCommunityIcons name="circle-outline" size={20} color="#3a3f4b" />
-                    )}
-                    <Text style={[
-                      styles.verifyStepText,
-                      verifyingStep === 3 && { fontWeight: '700' }
-                    ]}>
-                      Finding linked bank accounts...
-                    </Text>
-                  </View>
-
-                  {/* Live Simulation Controls */}
-                  <TouchableOpacity 
-                    style={styles.verificationFailureCheckbox}
-                    onPress={() => setSimulateFailure(!simulateFailure)}
-                    activeOpacity={0.7}
-                  >
-                    <Feather 
-                      name={simulateFailure ? "check-square" : "square"} 
-                      size={18} 
-                      color="#FF5252" 
+              <View style={{ paddingHorizontal: 4 }}>
+                {/* Bank Name Input */}
+                <View style={styles.formFieldContainer}>
+                  <Text style={styles.formFieldLabel}>Bank Display Name</Text>
+                  <View style={styles.formInputGroup}>
+                    <Feather name="home" size={16} color="#8E8E9F" style={styles.formInputIcon} />
+                    <TextInput
+                      style={styles.formInputField}
+                      placeholder="e.g. HDFC Bank"
+                      placeholderTextColor="rgba(250, 251, 252, 0.4)"
+                      value={bankNameInput}
+                      onChangeText={setBankNameInput}
                     />
-                    <Text style={styles.verificationFailureText}>
-                      Simulate Verification Failure (Demo Mode)
-                    </Text>
-                  </TouchableOpacity>
+                  </View>
                 </View>
-              ) : verifyingStep === -1 ? (
-                <View style={styles.verificationContainer}>
-                  <Text style={[styles.verificationTitle, { color: '#FF5252' }]}>Verification Failed</Text>
-                  <Text style={styles.verificationSubtitle}>
-                    Failed to link with +91 ******{user?.phone ? user.phone.slice(-4) : '9988'}
-                  </Text>
 
-                  {/* Show Steps with the failed step marked */}
-                  <View style={styles.verifyStepRow}>
-                    <Feather name="check-circle" size={20} color="#2dba4e" />
-                    <Text style={[styles.verifyStepText, styles.verifyStepTextSuccess]}>
-                      Verifying device and SIM binding...
-                    </Text>
-                  </View>
-
-                  <View style={styles.verifyStepRow}>
-                    <Feather name="check-circle" size={20} color="#2dba4e" />
-                    <Text style={[styles.verifyStepText, styles.verifyStepTextSuccess]}>
-                      Sending secure SMS from SIM...
-                    </Text>
-                  </View>
-
-                  <View style={styles.verifyStepRow}>
-                    <Feather name="x-circle" size={20} color="#FF5252" />
-                    <Text style={[styles.verifyStepText, styles.verifyStepTextFailed, { fontWeight: '700' }]}>
-                      Finding linked bank accounts...
-                    </Text>
-                  </View>
-
-                  <View style={[styles.errorContainer, { marginVertical: 16, width: '100%' }]}>
-                    <Feather name="alert-circle" size={16} color="#fafbfc" style={{ marginRight: 8 }} />
-                    <Text style={styles.errorTextInline}>{verificationError}</Text>
-                  </View>
-
-                  {/* Retry Controls */}
-                  <TouchableOpacity 
-                    style={styles.verificationFailureCheckbox}
-                    onPress={() => setSimulateFailure(!simulateFailure)}
-                    activeOpacity={0.7}
-                  >
-                    <Feather 
-                      name={simulateFailure ? "check-square" : "square"} 
-                      size={18} 
-                      color="#FF5252" 
+                {/* Suffix Input */}
+                <View style={styles.formFieldContainer}>
+                  <Text style={styles.formFieldLabel}>Last 4 Digits of Account Number</Text>
+                  <View style={styles.formInputGroup}>
+                    <Feather name="hash" size={16} color="#8E8E9F" style={styles.formInputIcon} />
+                    <TextInput
+                      style={styles.formInputField}
+                      placeholder="e.g. 5678"
+                      placeholderTextColor="rgba(250, 251, 252, 0.4)"
+                      keyboardType="numeric"
+                      maxLength={4}
+                      value={accountSuffix}
+                      onChangeText={setAccountSuffix}
                     />
-                    <Text style={styles.verificationFailureText}>
-                      Simulate Verification Failure: {simulateFailure ? "ON" : "OFF"}
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity 
-                    style={styles.retryButton}
-                    onPress={() => {
-                      setVerifyingStep(1);
-                      setVerificationError('');
-                    }}
-                  >
-                    <Text style={styles.retryButtonText}>Retry Verification</Text>
-                  </TouchableOpacity>
-                </View>
-              ) : verifyingStep === 4 && discoveredAccount ? (
-                <View style={styles.verificationContainer}>
-                  <Feather name="check-circle" size={48} color="#2dba4e" style={{ marginBottom: 12 }} />
-                  <Text style={styles.verificationTitle}>Account Discovered!</Text>
-                  <Text style={styles.verificationSubtitle}>
-                    Secure bank matching succeeded.
-                  </Text>
-
-                  {/* Discovered Account Card */}
-                  <View style={styles.discoveredCard}>
-                    <View style={styles.discoveredHeader}>
-                      <BankIcon code={selectedBank?.code || ''} name={selectedBank?.name || ''} size={42} />
-                      <View style={styles.discoveredTitleBlock}>
-                        <Text style={styles.discoveredBankName}>{discoveredAccount.bankName}</Text>
-                        <Text style={styles.discoveredAccountType}>{discoveredAccount.accountType}</Text>
-                      </View>
-                    </View>
-
-                    <View style={styles.discoveredDetailRow}>
-                      <Text style={styles.discoveredDetailLabel}>Account Holder</Text>
-                      <Text style={styles.discoveredDetailValue}>{discoveredAccount.holderName}</Text>
-                    </View>
-
-                    <View style={styles.discoveredDetailRow}>
-                      <Text style={styles.discoveredDetailLabel}>Account Suffix</Text>
-                      <Text style={styles.discoveredDetailValue}>XXXX {discoveredAccount.accountNumberSuffix}</Text>
-                    </View>
-
-                    <View style={[styles.formFieldContainer, { marginTop: 14, marginBottom: 0 }]}>
-                      <Text style={[styles.formFieldLabel, { color: colors.textSecondary }]}>Set Starting Balance (INR)</Text>
-                      <View style={[styles.formInputGroup, { height: 44, marginTop: 4 }]}>
-                        <MaterialCommunityIcons name="currency-inr" size={16} color="#8E8E9F" style={styles.formInputIcon} />
-                        <TextInput
-                          style={[styles.formInputField, { height: 44, fontSize: 14 }]}
-                          placeholder="e.g. 25000"
-                          placeholderTextColor="#555"
-                          keyboardType="numeric"
-                          value={balance}
-                          onChangeText={setBalance}
-                        />
-                      </View>
-                    </View>
                   </View>
+                </View>
 
-                  {formError ? (
-                    <View style={[styles.errorContainer, { marginVertical: 12, width: '100%' }]}>
-                      <Feather name="alert-circle" size={16} color="#fafbfc" style={{ marginRight: 8 }} />
-                      <Text style={styles.errorTextInline}>{formError}</Text>
-                    </View>
-                  ) : null}
+                {/* Starting Balance Input */}
+                <View style={styles.formFieldContainer}>
+                  <Text style={styles.formFieldLabel}>Current / Starting Balance (INR)</Text>
+                  <View style={styles.formInputGroup}>
+                    <MaterialCommunityIcons name="currency-inr" size={16} color="#8E8E9F" style={styles.formInputIcon} />
+                    <TextInput
+                      style={styles.formInputField}
+                      placeholder="e.g. 75000"
+                      placeholderTextColor="rgba(250, 251, 252, 0.4)"
+                      keyboardType="numeric"
+                      value={balance}
+                      onChangeText={setBalance}
+                    />
+                  </View>
+                </View>
 
-                  {submitting ? (
-                    <ActivityIndicator size="large" color="#2dba4e" style={{ marginTop: 24 }} />
-                  ) : (
-                    <TouchableOpacity
-                      style={[styles.submitBankBtn, { marginTop: 24, width: '100%' }]}
-                      onPress={handleSubmitBank}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={styles.submitBankBtnText}>Link Bank Account</Text>
-                    </TouchableOpacity>
-                  )}
+                {/* SMS Sender ID Input */}
+                <View style={styles.formFieldContainer}>
+                  <Text style={styles.formFieldLabel}>SMS Sender ID / Header</Text>
+                  <View style={styles.formInputGroup}>
+                    <Feather name="message-square" size={16} color="#8E8E9F" style={styles.formInputIcon} />
+                    <TextInput
+                      style={styles.formInputField}
+                      placeholder="e.g. HDFCBK"
+                      placeholderTextColor="rgba(250, 251, 252, 0.4)"
+                      value={smsSenderId}
+                      onChangeText={setSmsSenderId}
+                      autoCapitalize="characters"
+                    />
+                  </View>
+                  <Text style={{ color: '#8E8E9F', fontSize: 11, marginTop: 4, lineHeight: 15 }}>
+                    The sender address of the SMS notification (e.g. AD-HDFCBK to HDFCBK).
+                  </Text>
+                </View>
+
+                {/* UPI ID Input */}
+                <View style={styles.formFieldContainer}>
+                  <Text style={styles.formFieldLabel}>Associated UPI ID (Optional)</Text>
+                  <View style={styles.formInputGroup}>
+                    <Feather name="at-sign" size={16} color="#8E8E9F" style={styles.formInputIcon} />
+                    <TextInput
+                      style={styles.formInputField}
+                      placeholder="e.g. success@okhdfcbank"
+                      placeholderTextColor="rgba(250, 251, 252, 0.4)"
+                      value={upiId}
+                      onChangeText={setUpiId}
+                      autoCapitalize="none"
+                    />
+                  </View>
+                  <Text style={{ color: '#8E8E9F', fontSize: 11, marginTop: 4, lineHeight: 15 }}>
+                    Used for mapping UPI payment transaction notifications.
+                  </Text>
+                </View>
+
+                {/* Custom Keywords Input */}
+                <View style={styles.formFieldContainer}>
+                  <Text style={styles.formFieldLabel}>Custom Matching Keywords (Optional)</Text>
+                  <View style={styles.formInputGroup}>
+                    <Feather name="key" size={16} color="#8E8E9F" style={styles.formInputIcon} />
+                    <TextInput
+                      style={styles.formInputField}
+                      placeholder="e.g. HDFC, credit card, salary"
+                      placeholderTextColor="rgba(250, 251, 252, 0.4)"
+                      value={customKeywords}
+                      onChangeText={setCustomKeywords}
+                    />
+                  </View>
+                  <Text style={{ color: '#8E8E9F', fontSize: 11, marginTop: 4, lineHeight: 15 }}>
+                    Comma-separated words that must appear in messages or screenshots for auto-matching.
+                  </Text>
+                </View>
+              </View>
+
+              {formError ? (
+                <View style={[styles.errorContainer, { marginVertical: 12, width: '100%' }]}>
+                  <Feather name="alert-circle" size={16} color="#fafbfc" style={{ marginRight: 8 }} />
+                  <Text style={styles.errorTextInline}>{formError}</Text>
                 </View>
               ) : null}
+
+              {submitting ? (
+                <ActivityIndicator size="large" color="#2dba4e" style={{ marginTop: 24 }} />
+              ) : (
+                <TouchableOpacity
+                  style={[styles.submitBankBtn, { marginTop: 24, width: '100%' }]}
+                  onPress={handleSubmitBank}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.submitBankBtnText}>Link Bank Account</Text>
+                </TouchableOpacity>
+              )}
             </ScrollView>
+          )}
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
+interface NetWorthDetailsModalProps {
+  visible: boolean;
+  onClose: () => void;
+  snapshots: any[];
+  liveNetWorth: number;
+  loading?: boolean;
+}
+
+const NetWorthDetailsModal = ({ visible, onClose, snapshots, liveNetWorth, loading = false }: NetWorthDetailsModalProps) => {
+  const { colors, isDark } = useTheme();
+  const styles = getStyles(colors);
+  const navStyles = getNavStyles(colors);
+  
+  const [range, setRange] = useState<'3M' | '6M' | '1Y'>('6M');
+
+  // Compute filtered snapshots and table list items
+  const { chartData, listItems, changeAmount, changePercent, isPositive } = useMemo(() => {
+    let monthsToKeep = 6;
+    if (range === '3M') monthsToKeep = 3;
+    if (range === '6M') monthsToKeep = 6;
+    if (range === '1Y') monthsToKeep = 12;
+
+    // Filter snapshots based on range
+    let filtered = [...snapshots];
+    filtered.sort((a, b) => b.timestamp - a.timestamp);
+    filtered = filtered.slice(0, monthsToKeep);
+    filtered.sort((a, b) => a.timestamp - b.timestamp);
+
+    // Compute month-end last days
+    const tableData = filtered.map((s) => {
+      const dateObj = new Date(s.timestamp);
+      const y = dateObj.getFullYear();
+      const m = dateObj.getMonth();
+      const lastDay = new Date(y, m + 1, 0); // last day of that month
+      return {
+        timestamp: s.timestamp,
+        netWorth: s.netWorth,
+        monthLabel: dateObj.toLocaleDateString('en-IN', { month: 'short' }),
+        lastDayLabel: `${lastDay.getDate()} ${lastDay.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })}`,
+        displayMonth: dateObj.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }),
+        isLive: false,
+      };
+    });
+
+    const currentLiveItem = {
+      timestamp: Date.now(),
+      netWorth: liveNetWorth,
+      monthLabel: new Date().toLocaleDateString('en-IN', { month: 'short' }),
+      lastDayLabel: 'Today (Live)',
+      displayMonth: new Date().toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }),
+      isLive: true,
+    };
+
+    // Newest first for list
+    const listItems = [currentLiveItem, ...[...tableData].reverse()];
+
+    // Chronological order for chart
+    const chartData = [
+      ...tableData,
+      {
+        timestamp: Date.now(),
+        netWorth: liveNetWorth,
+        monthLabel: new Date().toLocaleDateString('en-IN', { month: 'short' }),
+        isLive: true,
+      }
+    ];
+
+    // Compute trend metrics
+    const startVal = tableData.length > 0 ? tableData[0].netWorth : liveNetWorth;
+    const changeAmt = liveNetWorth - startVal;
+    const changePct = startVal > 0 ? (changeAmt / startVal) * 100 : 0;
+
+    return {
+      chartData,
+      listItems,
+      changeAmount: changeAmt,
+      changePercent: changePct,
+      isPositive: changeAmt >= 0,
+    };
+  }, [snapshots, liveNetWorth, range]);
+
+  const trendColor = isPositive ? '#2dba4e' : '#cf222e';
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <View style={styles.modalOverlayFull}>
+        <View style={[styles.modalCardFull, { height: '90%' }]}>
+          {/* Header */}
+          <View style={navStyles.modalHeader}>
+            <View>
+              <Text style={navStyles.modalTitle}>Net Worth Analytics</Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
+                Live wealth tracker & trends
+              </Text>
+            </View>
+            <TouchableOpacity 
+              onPress={onClose} 
+              style={navStyles.closeBtn}
+              activeOpacity={0.7}
+            >
+              <Feather name="x" size={20} color="#8E8E9F" />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 30 }}>
+            {/* Live Summary block */}
+            <View style={{ marginVertical: 10, alignItems: 'flex-start' }}>
+              <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                Current Net Worth
+              </Text>
+              <Text style={{ color: colors.text, fontSize: 32, fontWeight: '900', marginTop: 4 }}>
+                ₹{liveNetWorth.toLocaleString('en-IN')}
+              </Text>
+              
+              {/* Trend Badge */}
+              <View style={{ 
+                flexDirection: 'row', 
+                alignItems: 'center', 
+                backgroundColor: isPositive ? 'rgba(45, 186, 78, 0.12)' : 'rgba(207, 34, 46, 0.12)', 
+                paddingHorizontal: 8, 
+                paddingVertical: 4, 
+                borderRadius: 8, 
+                marginTop: 6 
+              }}>
+                <Feather 
+                  name={isPositive ? "arrow-up-right" : "arrow-down-left"} 
+                  size={14} 
+                  color={trendColor} 
+                  style={{ marginRight: 4 }} 
+                />
+                <Text style={{ color: trendColor, fontSize: 12, fontWeight: '800' }}>
+                  {isPositive ? '+' : ''}₹{Math.abs(changeAmount).toLocaleString('en-IN')} ({isPositive ? '+' : ''}{changePercent.toFixed(1)}%)
+                </Text>
+                <Text style={{ color: colors.textSecondary, fontSize: 11, marginLeft: 6 }}>
+                  last {range === '3M' ? '3 months' : range === '6M' ? '6 months' : '1 year'}
+                </Text>
+              </View>
+            </View>
+
+            {/* Timeframe selector */}
+            <View style={{ 
+              flexDirection: 'row', 
+              backgroundColor: colors.isDark ? '#1a1a24' : '#edf0f2', 
+              borderRadius: 12, 
+              padding: 4, 
+              marginVertical: 16 
+            }}>
+              {(['3M', '6M', '1Y'] as const).map((r) => {
+                const active = range === r;
+                return (
+                  <TouchableOpacity
+                    key={r}
+                    style={{
+                      flex: 1,
+                      paddingVertical: 10,
+                      alignItems: 'center',
+                      backgroundColor: active ? (colors.isDark ? '#2b2b3b' : '#ffffff') : 'transparent',
+                      borderRadius: 8,
+                      borderWidth: active ? 1 : 0,
+                      borderColor: active ? colors.border : 'transparent',
+                      shadowColor: active ? '#000000' : 'transparent',
+                      shadowOffset: { width: 0, height: 1 },
+                      shadowOpacity: 0.1,
+                      shadowRadius: 2,
+                      elevation: active ? 2 : 0,
+                    }}
+                    onPress={() => setRange(r)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={{ 
+                      color: active ? trendColor : colors.textSecondary, 
+                      fontWeight: '800', 
+                      fontSize: 13 
+                    }}>
+                      {r === '3M' ? '3 Months' : r === '6M' ? '6 Months' : '1 Year'}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {/* GPU Stock Chart */}
+            <View style={{ 
+              backgroundColor: colors.isDark ? '#12121a' : '#ffffff', 
+              borderWidth: 1, 
+              borderColor: colors.border, 
+              borderRadius: 16, 
+              padding: 12, 
+              height: 220,
+              marginBottom: 20,
+              shadowColor: colors.shadowColor,
+              shadowOffset: { width: 0, height: 4 },
+              shadowOpacity: 0.05,
+              shadowRadius: 8,
+              elevation: 2,
+            }}>
+              <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '700', marginBottom: 8, textTransform: 'uppercase' }}>
+                Wealth Performance Curve
+              </Text>
+              
+              {chartData.length > 1 ? (
+                <View style={{ flex: 1 }}>
+                  <CartesianChart
+                    data={chartData}
+                    xKey="monthLabel"
+                    yKeys={["netWorth"]}
+                  >
+                    {({ points, chartBounds }) => (
+                      <>
+                        <Area
+                          points={points.netWorth}
+                          y0={chartBounds.bottom}
+                          animate={{ type: "timing", duration: 300 }}
+                        >
+                          <LinearGradient
+                            start={vec(0, chartBounds.top)}
+                            end={vec(0, chartBounds.bottom)}
+                            colors={[trendColor, "rgba(45, 186, 78, 0)"]}
+                          />
+                        </Area>
+                        <Line
+                          points={points.netWorth}
+                          color={trendColor}
+                          strokeWidth={2.5}
+                          animate={{ type: "timing", duration: 300 }}
+                        />
+                      </>
+                    )}
+                  </CartesianChart>
+                </View>
+              ) : loading ? (
+                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                  <ActivityIndicator size="small" color={trendColor} />
+                </View>
+              ) : (
+                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 16 }}>
+                  <Feather name="bar-chart-2" size={24} color={colors.textTertiary} style={{ marginBottom: 6 }} />
+                  <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '600' }}>
+                    No historical trend data found
+                  </Text>
+                  <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 4, textAlign: 'center', lineHeight: 16 }}>
+                    Historical snapshots will record automatically as your bank balances change.
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            {/* Month-wise list header */}
+            <Text style={{ 
+              color: colors.text, 
+              fontSize: 14, 
+              fontWeight: '800', 
+              marginBottom: 10,
+              letterSpacing: 0.5,
+            }}>
+              Month-end History
+            </Text>
+
+            {/* Monthly record rows */}
+            {listItems.map((item, idx) => {
+              return (
+                <View 
+                  key={idx}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    backgroundColor: colors.inputBackground,
+                    borderWidth: 1,
+                    borderColor: item.isLive ? colors.accent : colors.border,
+                    borderRadius: 14,
+                    paddingHorizontal: 16,
+                    height: 64,
+                    marginVertical: 4,
+                    shadowColor: colors.shadowColor,
+                    shadowOffset: { width: 0, height: 2 },
+                    shadowOpacity: 0.03,
+                    shadowRadius: 4,
+                    elevation: 1,
+                  }}
+                >
+                  <View style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 18,
+                    backgroundColor: item.isLive ? colors.accentMuted : (colors.isDark ? '#1e1e2c' : '#f0f4f8'),
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    marginRight: 12,
+                  }}>
+                    {item.isLive ? (
+                      <Ionicons name="pulse" size={18} color={colors.accent} />
+                    ) : (
+                      <Feather name="calendar" size={16} color={colors.textSecondary} />
+                    )}
+                  </View>
+
+                  <View style={{ flex: 1 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <Text style={{ color: colors.text, fontSize: 14, fontWeight: '700' }}>
+                        {item.displayMonth}
+                      </Text>
+                      {item.isLive && (
+                        <View style={{ 
+                          backgroundColor: 'rgba(45, 186, 78, 0.12)', 
+                          paddingHorizontal: 6, 
+                          paddingVertical: 2, 
+                          borderRadius: 6, 
+                          marginLeft: 8 
+                        }}>
+                          <Text style={{ color: '#2dba4e', fontSize: 9, fontWeight: '900', letterSpacing: 0.5 }}>
+                            LIVE
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                    <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 2 }}>
+                      {item.lastDayLabel}
+                    </Text>
+                  </View>
+
+                  <Text style={{ color: colors.text, fontSize: 14, fontWeight: '800' }}>
+                    ₹{item.netWorth.toLocaleString('en-IN')}
+                  </Text>
+                </View>
+              );
+            })}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
+interface NotificationsModalProps {
+  visible: boolean;
+  onClose: () => void;
+}
+
+const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
+  const { colors, isDark } = useTheme();
+  const styles = getStyles(colors);
+  const navStyles = getNavStyles(colors);
+  
+  const notifications = useNotificationStore((state) => state.notifications);
+  const isLoading = useNotificationStore((state) => state.isLoading);
+  const unreadCount = useNotificationStore((state) => state.unreadCount);
+
+  const handleMarkAllRead = async () => {
+    const unread = notifications.filter(n => !n.readStatus);
+    for (const item of unread) {
+      notificationService.markAsRead(item.id);
+    }
+  };
+
+  const handleAction = async (notification: any, actionName: 'approve' | 'keep_old') => {
+    const payload = notification.payload;
+    if (!payload) return;
+
+    try {
+      const accessToken = authService.getAccessToken();
+      if (!accessToken) return;
+
+      if (payload.action === 'category_correction') {
+        const categoryToUse = actionName === 'approve' ? payload.suggestedCategory : payload.oldCategory;
+        
+        const response = await fetch(`${BACKEND_URL}/sync/transaction/${payload.transactionId}/category`, {
+          method: 'PATCH',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ category: categoryToUse }),
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to update category');
+        }
+
+        await syncService.sync();
+        Alert.alert('Success', `Transaction category set to "${categoryToUse}"`);
+      }
+
+      await notificationService.markAsRead(notification.id);
+    } catch (e: any) {
+      Alert.alert('Action Failed', e.message || 'Unable to complete action.');
+    }
+  };
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <View style={styles.modalOverlayFull}>
+        <View style={[styles.modalCardFull, { height: '85%' }]}>
+          {/* Header */}
+          <View style={navStyles.modalHeader}>
+            <View>
+              <Text style={navStyles.modalTitle}>Notifications</Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
+                AI agent briefs and anomalies
+              </Text>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              {unreadCount > 0 && (
+                <TouchableOpacity 
+                  onPress={handleMarkAllRead} 
+                  style={{ marginRight: 16, backgroundColor: colors.buttonSecondaryBackground, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: colors.border }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={{ color: colors.accent, fontSize: 11, fontWeight: '700' }}>Mark all read</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity 
+                onPress={onClose} 
+                style={navStyles.closeBtn}
+                activeOpacity={0.7}
+              >
+                <Feather name="x" size={20} color="#8E8E9F" />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {isLoading ? (
+            <ActivityIndicator size="large" color={colors.accent} style={{ marginTop: 40 }} />
+          ) : notifications.length === 0 ? (
+            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20 }}>
+              <Ionicons name="notifications-off-outline" size={48} color="#8E8E9F" style={{ marginBottom: 12 }} />
+              <Text style={{ color: colors.text, fontSize: 16, fontWeight: '700', textAlign: 'center' }}>All caught up!</Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 4, textAlign: 'center', lineHeight: 18 }}>
+                AI Agents are actively monitoring SMS logs and budget anomalies. You will be notified here when an action is required.
+              </Text>
+            </View>
+          ) : (
+            <FlatList
+              data={notifications}
+              keyExtractor={(item) => item.id}
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={{ paddingBottom: 20 }}
+              renderItem={({ item }) => {
+                const isUnread = !item.readStatus;
+                const isCorrection = item.payload?.action === 'category_correction';
+
+                return (
+                  <View 
+                    style={{
+                      backgroundColor: colors.inputBackground,
+                      borderWidth: 1,
+                      borderColor: isUnread ? colors.accent : colors.border,
+                      borderRadius: 14,
+                      padding: 16,
+                      marginVertical: 6,
+                      shadowColor: colors.shadowColor,
+                      shadowOffset: { width: 0, height: 2 },
+                      shadowOpacity: 0.03,
+                      shadowRadius: 4,
+                      elevation: 1,
+                    }}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+                      {/* Icon type */}
+                      <View style={{
+                        width: 32,
+                        height: 32,
+                        borderRadius: 16,
+                        backgroundColor: isUnread ? colors.accentMuted : (isDark ? '#1e1e2c' : '#f0f4f8'),
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        marginRight: 10,
+                        marginTop: 2,
+                      }}>
+                        <Ionicons 
+                          name={item.type === 'anomaly' || item.type === 'budget_alert' ? 'warning-outline' : 'chatbubble-ellipses-outline'} 
+                          size={16} 
+                          color={isUnread ? colors.accent : colors.textSecondary} 
+                        />
+                      </View>
+                      
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: colors.text, fontSize: 14, fontWeight: '700' }}>
+                          {item.title}
+                        </Text>
+                        <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 4, lineHeight: 18 }}>
+                          {item.body}
+                        </Text>
+
+                        {/* Category Correction Actions */}
+                        {isCorrection && isUnread && (
+                          <View style={{ flexDirection: 'row', marginTop: 12 }}>
+                            <TouchableOpacity
+                              style={{
+                                backgroundColor: colors.accent,
+                                paddingHorizontal: 12,
+                                paddingVertical: 6,
+                                borderRadius: 8,
+                                marginRight: 10,
+                              }}
+                              onPress={() => handleAction(item, 'approve')}
+                              activeOpacity={0.8}
+                            >
+                              <Text style={{ color: '#24292e', fontSize: 12, fontWeight: '800' }}>
+                                Approve {item.payload.suggestedCategory}
+                              </Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={{
+                                borderWidth: 1,
+                                borderColor: colors.border,
+                                paddingHorizontal: 12,
+                                paddingVertical: 6,
+                                borderRadius: 8,
+                              }}
+                              onPress={() => handleAction(item, 'keep_old')}
+                              activeOpacity={0.8}
+                            >
+                              <Text style={{ color: colors.text, fontSize: 12, fontWeight: '700' }}>
+                                Keep {item.payload.oldCategory}
+                              </Text>
+                            </TouchableOpacity>
+                          </View>
+                        )}
+                        
+                        {/* Relative time */}
+                        <Text style={{ color: colors.textTertiary, fontSize: 10, marginTop: 8 }}>
+                          {new Date(item.createdAt).toLocaleString('en-IN')}
+                        </Text>
+                      </View>
+                      
+                      {/* Read status dot */}
+                      {isUnread && (
+                        <View style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: 4,
+                          backgroundColor: colors.accent,
+                          marginLeft: 8,
+                          marginTop: 6,
+                        }} />
+                      )}
+                    </View>
+                  </View>
+                );
+              }}
+            />
           )}
         </View>
       </View>
@@ -741,11 +1184,16 @@ const DashboardScreen = () => {
 
   const user = useAuthStore((state) => state.user);
   const [profileModalVisible, setProfileModalVisible] = useState(false);
+  const [notificationsVisible, setNotificationsVisible] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+
+  const unreadCount = useNotificationStore((state) => state.unreadCount);
+  const notifications = useNotificationStore((state) => state.notifications);
 
   // Bank profile state management
   const bankProfiles = useBankStore((state) => state.bankProfiles);
   const [addBankModalVisible, setAddBankModalVisible] = useState(false);
+  const [netWorthModalVisible, setNetWorthModalVisible] = useState(false);
 
   // Slide Animation for Onboarding notification banner
   const bannerY = useSharedValue(-100);
@@ -796,6 +1244,7 @@ const DashboardScreen = () => {
   const setFilterCategory = useTransactionStore((state) => state.setFilterCategory);
 
   const [snapshots, setSnapshots] = useState<any[]>([]);
+  const [loadingSnapshots, setLoadingSnapshots] = useState(false);
   const [incomeCurrentMonth, setIncomeCurrentMonth] = useState(95000);
 
   // Fetch data on screen focus
@@ -808,6 +1257,7 @@ const DashboardScreen = () => {
   );
 
   const fetchSnapshots = async () => {
+    setLoadingSnapshots(true);
     try {
       const user = useAuthStore.getState().user;
       const token = authService.getAccessToken();
@@ -832,6 +1282,8 @@ const DashboardScreen = () => {
       })));
     } catch (e) {
       console.error('Error fetching snapshots:', e);
+    } finally {
+      setLoadingSnapshots(false);
     }
   };
 
@@ -864,12 +1316,15 @@ const DashboardScreen = () => {
   };
 
   // Dynamic calculations for cards
-  const latestNetWorth = useMemo(() => {
+  const liveNetWorth = useMemo(() => {
+    if (bankProfiles.length > 0) {
+      return bankProfiles.reduce((sum, bank) => sum + bank.currentBalance, 0);
+    }
     if (snapshots.length > 0) {
       return snapshots[snapshots.length - 1].netWorth;
     }
     return 184320; // fallback
-  }, [snapshots]);
+  }, [bankProfiles, snapshots]);
 
   const currentMonthExpenses = useMemo(() => {
     const now = new Date();
@@ -915,7 +1370,7 @@ const DashboardScreen = () => {
     <View style={styles.container}>
       <ScrollView 
         style={styles.container} 
-        contentContainerStyle={[styles.contentContainer, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 20 }]}
+        contentContainerStyle={[styles.contentContainer, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 100 }]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#2dba4e" colors={["#2dba4e"]} />
         }
@@ -945,6 +1400,20 @@ const DashboardScreen = () => {
                 <View style={styles.badgePulseDot} />
               </TouchableOpacity>
             )}
+            {/* Notifications Bell */}
+            <TouchableOpacity 
+              style={[styles.bellBtn, { marginRight: 12 }]} 
+              onPress={() => setNotificationsVisible(true)}
+              activeOpacity={0.7}
+            >
+              <Feather name="bell" size={20} color={colors.text} />
+              {unreadCount > 0 && (
+                <View style={styles.bellBadge}>
+                  <Text style={styles.bellBadgeText}>{unreadCount}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+
             <TouchableOpacity 
               style={styles.profileBtn} 
               onPress={() => setProfileModalVisible(true)}
@@ -982,11 +1451,15 @@ const DashboardScreen = () => {
         )}
 
       {/* Net Worth Card (Neon shadow style) */}
-      <View style={[styles.card, styles.neonCard]}>
+      <TouchableOpacity 
+        style={[styles.card, styles.neonCard]}
+        onPress={() => setNetWorthModalVisible(true)}
+        activeOpacity={0.8}
+      >
         <Text style={styles.cardTitle}>Total Net Worth</Text>
-        <Text style={styles.cardBigNumber}>₹{latestNetWorth.toLocaleString('en-IN')}</Text>
+        <Text style={styles.cardBigNumber}>₹{liveNetWorth.toLocaleString('en-IN')}</Text>
         <Text style={styles.cardFooter}>Active Wealth Compounder</Text>
-      </View>
+      </TouchableOpacity>
 
       {/* Net Worth Area Chart */}
       {snapshots.length > 1 && (
@@ -1189,6 +1662,21 @@ const DashboardScreen = () => {
         await sync();
       }}
     />
+
+    {/* Net Worth Details Modal */}
+    <NetWorthDetailsModal
+      visible={netWorthModalVisible}
+      onClose={() => setNetWorthModalVisible(false)}
+      snapshots={snapshots}
+      liveNetWorth={liveNetWorth}
+      loading={loadingSnapshots}
+    />
+
+    {/* Notifications Modal */}
+    <NotificationsModal
+      visible={notificationsVisible}
+      onClose={() => setNotificationsVisible(false)}
+    />
   </View>
   );
 };
@@ -1350,7 +1838,7 @@ const ChatScreen = () => {
           ref={flatListRef}
           data={chatHistory}
           keyExtractor={(_, index) => index.toString()}
-          contentContainerStyle={styles.chatList}
+          contentContainerStyle={[styles.chatList, { paddingBottom: 100 }]}
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
           renderItem={({ item }) => (
             <View style={[
@@ -1370,7 +1858,7 @@ const ChatScreen = () => {
 
       {isThinking && <TypingIndicator />}
 
-      <View style={[styles.inputArea, { paddingBottom: insets.bottom + 10 }]}>
+      <View style={[styles.inputArea, { paddingBottom: insets.bottom + 85 }]}>
         <TextInput
           style={styles.chatTextInput}
           placeholder={isListening ? "Listening..." : "Type a message..."}
@@ -1468,7 +1956,7 @@ const GoalsScreen = () => {
   return (
     <ScrollView 
       style={styles.container} 
-      contentContainerStyle={[styles.contentContainer, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 20 }]}
+      contentContainerStyle={[styles.contentContainer, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 100 }]}
     >
       <Text style={styles.headerTitle}>Savings Goals</Text>
       <Text style={styles.subtitle}>Grow your money automatically</Text>
@@ -1610,7 +2098,7 @@ const SettingsScreen = () => {
   return (
     <ScrollView 
       style={styles.container} 
-      contentContainerStyle={[styles.contentContainer, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 20 }]}
+      contentContainerStyle={[styles.contentContainer, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 100 }]}
       showsVerticalScrollIndicator={false}
     >
       <Text style={styles.headerTitle}>Settings</Text>
@@ -1713,6 +2201,8 @@ const BanksScreen = () => {
   const bankProfiles = useBankStore((state) => state.bankProfiles);
   const [addBankModalVisible, setAddBankModalVisible] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const [selectedBank, setSelectedBank] = useState<any | null>(null);
+  const [detailsVisible, setDetailsVisible] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -1782,7 +2272,7 @@ const BanksScreen = () => {
     <View style={styles.container}>
       <ScrollView
         style={styles.container}
-        contentContainerStyle={[styles.contentContainer, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 20 }]}
+        contentContainerStyle={[styles.contentContainer, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 100 }]}
         showsVerticalScrollIndicator={false}
       >
         <Text style={styles.headerTitle}>My Banks</Text>
@@ -1796,7 +2286,15 @@ const BanksScreen = () => {
         {/* Bank List */}
         <View style={{ marginTop: 15 }}>
           {bankProfiles.map((bank) => (
-            <View key={bank.id} style={[styles.card, { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 16 }]}>
+            <TouchableOpacity 
+              key={bank.id} 
+              style={[styles.card, { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 16 }]}
+              onPress={() => {
+                setSelectedBank(bank);
+                setDetailsVisible(true);
+              }}
+              activeOpacity={0.8}
+            >
               <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
                 <BankIcon code={getBankCode(bank.bankName)} name={bank.bankName} size={42} />
                 <View style={{ marginLeft: 12, flex: 1 }}>
@@ -1824,7 +2322,7 @@ const BanksScreen = () => {
                   <Feather name="trash-2" size={20} color="#FF5252" />
                 )}
               </TouchableOpacity>
-            </View>
+            </TouchableOpacity>
           ))}
         </View>
 
@@ -1856,6 +2354,12 @@ const BanksScreen = () => {
           await sync();
         }}
       />
+
+      <BankDetailsModal
+        visible={detailsVisible}
+        onClose={() => setDetailsVisible(false)}
+        bank={selectedBank ? bankProfiles.find((b) => b.id === selectedBank.id) || selectedBank : null}
+      />
     </View>
   );
 };
@@ -1866,66 +2370,117 @@ const BanksScreen = () => {
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
 
-const TabIcon = ({ focused, activeIcon, inactiveIcon, size = 22 }: { focused: boolean; activeIcon: any; inactiveIcon: any; size?: number }) => {
-  const { colors } = useTheme();
+const TabIcon = ({ 
+  focused, 
+  activeIcon, 
+  inactiveIcon, 
+  label, 
+  size = 20 
+}: { 
+  focused: boolean; 
+  activeIcon: any; 
+  inactiveIcon: any; 
+  label: string; 
+  size?: number 
+}) => {
+  const { colors, isDark } = useTheme();
+  
+  if (focused) {
+    return (
+      <View style={{
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: isDark ? 'rgba(45, 186, 78, 0.15)' : 'rgba(45, 186, 78, 0.08)',
+        paddingHorizontal: 16,
+        paddingVertical: 5,
+        borderRadius: 18,
+        borderWidth: 1,
+        borderColor: isDark ? 'rgba(45, 186, 78, 0.3)' : 'rgba(45, 186, 78, 0.2)',
+        minWidth: 56,
+      }}>
+        <Ionicons 
+          name={activeIcon} 
+          size={size} 
+          color="#2dba4e" 
+        />
+        <Text style={{
+          color: '#2dba4e',
+          fontSize: 9,
+          fontWeight: '800',
+          marginTop: 2,
+          letterSpacing: 0.3,
+        }}>
+          {label}
+        </Text>
+      </View>
+    );
+  }
+
   return (
     <View style={{
-      backgroundColor: focused ? colors.accentMuted : 'transparent',
-      width: 55,
-      height: 32,
-      borderRadius: 16,
       alignItems: 'center',
       justifyContent: 'center',
     }}>
       <Ionicons 
-        name={focused ? activeIcon : inactiveIcon} 
+        name={inactiveIcon} 
         size={size} 
-        color={focused ? colors.accent : colors.textTertiary} 
+        color={colors.textTertiary} 
       />
+      <Text style={{
+        color: colors.textTertiary,
+        fontSize: 9,
+        fontWeight: '600',
+        marginTop: 2,
+      }}>
+        {label}
+      </Text>
     </View>
   );
 };
 
 function TabNavigator() {
-  const { colors } = useTheme();
-  const insets = useSafeAreaInsets();
-
-  const bottomPadding = insets.bottom > 0 ? insets.bottom : (Platform.OS === 'ios' ? 24 : 12);
-  const barHeight = (Platform.OS === 'ios' ? 66 : 60) + bottomPadding;
+  const { colors, isDark } = useTheme();
 
   return (
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
+        tabBarShowLabel: false,
         tabBarStyle: {
-          backgroundColor: colors.card,
-          borderTopWidth: 1,
-          borderTopColor: colors.border,
-          elevation: 12,
-          height: barHeight,
-          paddingBottom: bottomPadding,
-          paddingTop: 8,
-          shadowColor: colors.shadowColor,
-          shadowOffset: { width: 0, height: -4 },
-          shadowOpacity: 0.15,
-          shadowRadius: 8,
+          position: 'absolute',
+          bottom: Platform.OS === 'ios' ? 34 : 18,
+          left: 180,
+          right: 180,
+          borderRadius: 30,
+          backgroundColor: isDark ? 'rgba(15, 15, 22, 0.97)' : 'rgba(255, 255, 255, 0.98)',
+          borderTopWidth: 0,
+          elevation: 16,
+          height: 64,
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 8 },
+          shadowOpacity: 0.18,
+          shadowRadius: 16,
+          paddingBottom: 0,
+          paddingTop: 0,
+          borderWidth: 1,
+          borderColor: isDark ? 'rgba(255, 255, 255, 0.07)' : 'rgba(0, 0, 0, 0.06)',
+          overflow: 'hidden',
         },
-        tabBarActiveTintColor: colors.accent,
-        tabBarInactiveTintColor: colors.textTertiary,
-        tabBarLabelStyle: {
-          fontSize: 10,
-          fontWeight: '800',
-          letterSpacing: 0.5,
-          marginTop: 4,
+        tabBarIconStyle: {
+          width: '100%',
+          height: '100%',
+          justifyContent: 'center',
+          alignItems: 'center',
         },
       }}
     >
       <Tab.Screen 
-        name="Dashboard" 
+        name="Home" 
         component={DashboardScreen} 
         options={{
           tabBarIcon: ({ focused }) => (
-            <TabIcon focused={focused} activeIcon="analytics" inactiveIcon="analytics-outline" />
+            <TabIcon focused={focused} activeIcon="home" inactiveIcon="home-outline" label="Home" />
           )
         }}
       />
@@ -1934,7 +2489,7 @@ function TabNavigator() {
         component={GoalsScreen} 
         options={{
           tabBarIcon: ({ focused }) => (
-            <TabIcon focused={focused} activeIcon="trophy" inactiveIcon="trophy-outline" size={20} />
+            <TabIcon focused={focused} activeIcon="trophy" inactiveIcon="trophy-outline" label="Goals" size={19} />
           )
         }}
       />
@@ -1943,7 +2498,7 @@ function TabNavigator() {
         component={BanksScreen} 
         options={{
           tabBarIcon: ({ focused }) => (
-            <TabIcon focused={focused} activeIcon="wallet" inactiveIcon="wallet-outline" />
+            <TabIcon focused={focused} activeIcon="wallet" inactiveIcon="wallet-outline" label="Banks" />
           )
         }}
       />
@@ -1952,7 +2507,7 @@ function TabNavigator() {
         component={ChatScreen} 
         options={{
           tabBarIcon: ({ focused }) => (
-            <TabIcon focused={focused} activeIcon="sparkles" inactiveIcon="sparkles-outline" />
+            <TabIcon focused={focused} activeIcon="sparkles" inactiveIcon="sparkles-outline" label="AI Chat" />
           )
         }}
       />
@@ -1961,7 +2516,7 @@ function TabNavigator() {
         component={SettingsScreen} 
         options={{
           tabBarIcon: ({ focused }) => (
-            <TabIcon focused={focused} activeIcon="options" inactiveIcon="options-outline" />
+            <TabIcon focused={focused} activeIcon="options" inactiveIcon="options-outline" label="Settings" />
           )
         }}
       />
@@ -1977,6 +2532,8 @@ export default function AppNavigator() {
   useEffect(() => {
     const initAndCheck = async () => {
       await mmkvStorage.initialize();
+      // Restore persisted theme after MMKV async fallback loads
+      await useThemeStore.getState().rehydrateTheme();
       await authService.checkSession();
     };
     initAndCheck();
@@ -2097,6 +2654,34 @@ const getStyles = (colors: any) => StyleSheet.create({
     fontWeight: '700',
     color: colors.accent,
     letterSpacing: 2,
+  },
+  bellBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  bellBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    backgroundColor: '#FF5252',
+    borderRadius: 8,
+    minWidth: 16,
+    height: 16,
+    paddingHorizontal: 4,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  bellBadgeText: {
+    color: '#ffffff',
+    fontSize: 9,
+    fontWeight: '800',
   },
   profileBtn: {
     width: 40,

@@ -46,4 +46,7 @@ export class User {
 
   @Column({ name: 'verification_token', type: 'text', nullable: true })
   verificationToken?: string | null;
+
+  @Column({ name: 'push_token', type: 'text', nullable: true })
+  pushToken?: string | null;
 }

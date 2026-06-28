@@ -133,6 +133,10 @@ export interface BankProfileType {
   accountNumberSuffix: string;
   currentBalance: number;
   lastSyncTimestamp: number;
+  smsSenderId?: string;
+  upiId?: string;
+  customKeywords?: string;
+  smsConsent: boolean;
 }
 
 export interface BankState {
@@ -153,19 +157,29 @@ export type ThemeMode = 'light' | 'dark' | 'system';
 export interface ThemeState {
   theme: ThemeMode;
   setTheme: (theme: ThemeMode) => void;
+  rehydrateTheme: () => Promise<void>;
 }
 
 export const useThemeStore = create<ThemeState>((set) => ({
+  // Try reading from MMKV synchronously (works when native MMKV is available)
   theme: (mmkvStorage.getString('appearance_theme') as ThemeMode) || 'system',
   setTheme: (theme) => {
     mmkvStorage.setString('appearance_theme', theme);
     set({ theme });
+  },
+  // Called after async MMKV fallback initializes — restores persisted value
+  rehydrateTheme: async () => {
+    const stored = mmkvStorage.getString('appearance_theme') as ThemeMode | undefined;
+    if (stored && ['light', 'dark', 'system'].includes(stored)) {
+      set({ theme: stored });
+    }
   },
 }));
 
 export const getThemeColors = (isDark: boolean) => {
   if (isDark) {
     return {
+      isDark: true,
       background: '#24292e',
       card: '#2b3137',
       text: '#ffffff',
@@ -188,6 +202,7 @@ export const getThemeColors = (isDark: boolean) => {
     };
   } else {
     return {
+      isDark: false,
       background: '#f6f8fa',
       card: '#ffffff',
       text: '#24292f',
@@ -211,6 +226,74 @@ export const getThemeColors = (isDark: boolean) => {
   }
 };
 
+// 8. Notification Store
+export interface NotificationType {
+  id: string;
+  userId: string;
+  agentId: string | null;
+  title: string;
+  body: string;
+  type: 'anomaly' | 'budget_alert' | 'recommendation' | 'info';
+  readStatus: boolean;
+  payload: any | null;
+  createdAt: number;
+}
+
+export interface NotificationState {
+  notifications: NotificationType[];
+  unreadCount: number;
+  isLoading: boolean;
+  setNotifications: (notifications: NotificationType[]) => void;
+  setLoading: (loading: boolean) => void;
+  addNotification: (notification: NotificationType) => void;
+  markAsReadState: (id: string) => void;
+  deleteNotificationState: (id: string) => void;
+}
+
+export const useNotificationStore = create<NotificationState>((set) => ({
+  notifications: [],
+  unreadCount: 0,
+  isLoading: false,
+  setNotifications: (notifications) => {
+    const unreadCount = notifications.filter((n) => !n.readStatus).length;
+    set({ notifications, unreadCount });
+  },
+  setLoading: (isLoading) => set({ isLoading }),
+  addNotification: (notification) =>
+    set((state) => {
+      const updated = [notification, ...state.notifications];
+      return {
+        notifications: updated,
+        unreadCount: state.unreadCount + (notification.readStatus ? 0 : 1),
+      };
+    }),
+  markAsReadState: (id) =>
+    set((state) => {
+      let isChanged = false;
+      const updated = state.notifications.map((n) => {
+        if (n.id === id && !n.readStatus) {
+          isChanged = true;
+          return { ...n, readStatus: true };
+        }
+        return n;
+      });
+      return {
+        notifications: updated,
+        unreadCount: isChanged ? Math.max(0, state.unreadCount - 1) : state.unreadCount,
+      };
+    }),
+  deleteNotificationState: (id) =>
+    set((state) => {
+      const target = state.notifications.find((n) => n.id === id);
+      const isUnread = target ? !target.readStatus : false;
+      const updated = state.notifications.filter((n) => n.id !== id);
+      return {
+        notifications: updated,
+        unreadCount: isUnread ? Math.max(0, state.unreadCount - 1) : state.unreadCount,
+      };
+    }),
+}));
+
 export const useTheme = () => {
   const theme = useThemeStore((state) => state.theme);
   const systemColorScheme = useColorScheme();
@@ -218,3 +301,4 @@ export const useTheme = () => {
   const colors = getThemeColors(isDark);
   return { theme, isDark, colors };
 };
+

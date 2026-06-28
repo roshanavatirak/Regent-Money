@@ -1,6 +1,6 @@
-import { Injectable, Logger, BadRequestException, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, UnauthorizedException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { BankProfile } from './entities/bank-profile.entity';
 import { Transaction } from './entities/transaction.entity';
 import { BudgetDeclaration } from './entities/budget-declaration.entity';
@@ -8,9 +8,11 @@ import { SavingsGoal } from './entities/savings-goal.entity';
 import { NetWorthSnapshot } from './entities/net-worth-snapshot.entity';
 import { IncomeRecord } from './entities/income-record.entity';
 import { User } from '../users/entities/user.entity';
+import { OcrSyncDto } from './dto/ocr-sync.dto';
+import { PDFExtract, PDFExtractOptions } from 'pdf.js-extract';
 
 @Injectable()
-export class SyncService {
+export class SyncService implements OnModuleInit {
   private readonly logger = new Logger(SyncService.name);
 
   constructor(
@@ -28,7 +30,32 @@ export class SyncService {
     private readonly incomeRecordRepository: Repository<IncomeRecord>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    private readonly dataSource: DataSource,
   ) {}
+
+  async onModuleInit() {
+    this.logger.log('Initializing BankProfile schema checks...');
+    try {
+      await this.dataSource.query(`
+        ALTER TABLE core.bank_profiles ADD COLUMN IF NOT EXISTS sms_sender_id TEXT;
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE core.bank_profiles ADD COLUMN IF NOT EXISTS upi_id TEXT;
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE core.bank_profiles ADD COLUMN IF NOT EXISTS custom_keywords TEXT;
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE core.bank_profiles ADD COLUMN IF NOT EXISTS statement_password TEXT;
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE core.bank_profiles ADD COLUMN IF NOT EXISTS sms_consent BOOLEAN DEFAULT FALSE;
+      `);
+      this.logger.log('BankProfile schema checks and updates completed successfully.');
+    } catch (e: any) {
+      this.logger.error(`Error checking/updating BankProfile schema: ${e.message}`, e.stack);
+    }
+  }
 
   async sync(userId: string) {
     this.logger.log(`Performing data synchronization for user: ${userId}`);
@@ -40,15 +67,35 @@ export class SyncService {
       this.bankProfileRepository.find({ where: { userId, isDeleted: false } }),
     ]);
 
+    const now = Date.now();
+    for (const bank of bankProfiles) {
+      bank.lastSyncTimestamp = now;
+    }
+    if (bankProfiles.length > 0) {
+      await this.bankProfileRepository.save(bankProfiles);
+    }
+
     return {
       transactions,
+      body: bankProfiles, // Keep matching controller structures if they expect specific returns
       budgets,
       goals,
       bankProfiles,
     };
   }
 
-  async createBankProfile(userId: string, data: { id: string; bankName: string; accountNumberSuffix: string; currentBalance: number }) {
+  async createBankProfile(
+    userId: string,
+    data: {
+      id: string;
+      bankName: string;
+      accountNumberSuffix: string;
+      currentBalance: number;
+      smsSenderId?: string;
+      upiId?: string;
+      customKeywords?: string;
+    },
+  ) {
     this.logger.log(`Creating bank profile for user: ${userId}`);
 
     const count = await this.bankProfileRepository.count({
@@ -64,6 +111,9 @@ export class SyncService {
       bankName: data.bankName,
       accountNumberSuffix: data.accountNumberSuffix,
       currentBalance: data.currentBalance,
+      smsSenderId: data.smsSenderId || null,
+      upiId: data.upiId || null,
+      customKeywords: data.customKeywords || null,
       lastSyncTimestamp: Date.now(),
       updatedAt: Date.now(),
       isDeleted: false,
@@ -189,7 +239,7 @@ export class SyncService {
 
     // 5. Insert Net Worth Snapshots
     const snapshots: NetWorthSnapshot[] = [];
-    const monthsBack = 6;
+    const monthsBack = 12;
     for (let i = monthsBack; i >= 0; i--) {
       const date = new Date();
       date.setMonth(date.getMonth() - i);
@@ -312,6 +362,234 @@ export class SyncService {
       accountType: 'Savings Account',
       holderName: user.name || 'Account Holder',
       currentBalance: mockBalance,
+    };
+  }
+
+  async updateTransactionCategory(userId: string, id: string, category: string) {
+    const tx = await this.transactionRepository.findOne({ where: { id, userId, isDeleted: false } });
+    if (!tx) {
+      throw new BadRequestException('Transaction not found or deleted.');
+    }
+    tx.category = category;
+    tx.updatedAt = Date.now();
+    return this.transactionRepository.save(tx);
+  }
+
+  async syncOcrTransactions(userId: string, data: OcrSyncDto) {
+    this.logger.log(`Syncing OCR transactions for user ${userId}, bank: ${data.bankProfileId}`);
+    
+    const bank = await this.bankProfileRepository.findOne({
+      where: { id: data.bankProfileId, userId, isDeleted: false },
+    });
+    if (!bank) {
+      throw new BadRequestException('Bank account profile not found.');
+    }
+
+    const [existingTxs, existingIncome] = await Promise.all([
+      this.transactionRepository.find({
+        where: { userId, bankProfileId: data.bankProfileId, isDeleted: false },
+      }),
+      this.incomeRecordRepository.find({
+        where: { userId, bankProfileId: data.bankProfileId, isDeleted: false },
+      }),
+    ]);
+
+    let addedTransactionsCount = 0;
+    let addedIncomeCount = 0;
+    let netBalanceChange = 0;
+
+    const newTransactions: Transaction[] = [];
+    const newIncomeRecords: IncomeRecord[] = [];
+
+    for (const item of data.transactions) {
+      const amount = parseFloat(String(item.amount));
+      if (isNaN(amount) || amount <= 0) continue;
+
+      const parsedDate = new Date(item.date);
+      if (isNaN(parsedDate.getTime())) continue;
+
+      const startOfDay = new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate(), 0, 0, 0, 0).getTime();
+      const endOfDay = new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate(), 23, 59, 59, 999).getTime();
+
+      if (item.type === 'debit') {
+        const isDuplicate = existingTxs.some((tx) => {
+          const txTime = Number(tx.timestamp);
+          return Math.abs(tx.amount - amount) < 0.01 && txTime >= startOfDay && txTime <= endOfDay;
+        }) || newTransactions.some((tx) => {
+          const txTime = Number(tx.timestamp);
+          return Math.abs(tx.amount - amount) < 0.01 && txTime >= startOfDay && txTime <= endOfDay;
+        });
+
+        if (!isDuplicate) {
+          const txId = 'tx_ocr_' + Math.random().toString(36).substr(2, 9);
+          const newTx = this.transactionRepository.create({
+            id: txId,
+            userId,
+            amount,
+            category: item.merchant ? this.classifyCategory(item.merchant) : 'shopping',
+            merchant: item.merchant || 'Merchant',
+            timestamp: parsedDate.getTime(),
+            bankProfileId: data.bankProfileId,
+            smsId: 'ocr_extracted',
+            isAnomaly: amount > 5000,
+            status: 'cleared',
+            updatedAt: Date.now(),
+            isDeleted: false,
+          });
+          newTransactions.push(newTx);
+          addedTransactionsCount++;
+          netBalanceChange -= amount;
+        }
+      } else if (item.type === 'credit') {
+        const isDuplicate = existingIncome.some((inc) => {
+          const incTime = Number(inc.timestamp);
+          return Math.abs(inc.amount - amount) < 0.01 && incTime >= startOfDay && incTime <= endOfDay;
+        }) || newIncomeRecords.some((inc) => {
+          const incTime = Number(inc.timestamp);
+          return Math.abs(inc.amount - amount) < 0.01 && incTime >= startOfDay && incTime <= endOfDay;
+        });
+
+        if (!isDuplicate) {
+          const incId = 'income_ocr_' + Math.random().toString(36).substr(2, 9);
+          const newInc = this.incomeRecordRepository.create({
+            id: incId,
+            userId,
+            amount,
+            source: item.merchant || 'Direct Credit',
+            timestamp: parsedDate.getTime(),
+            bankProfileId: data.bankProfileId,
+            updatedAt: Date.now(),
+            isDeleted: false,
+          });
+          newIncomeRecords.push(newInc);
+          addedIncomeCount++;
+          netBalanceChange += amount;
+        }
+      }
+    }
+
+    if (newTransactions.length > 0) {
+      await this.transactionRepository.save(newTransactions);
+    }
+    if (newIncomeRecords.length > 0) {
+      await this.incomeRecordRepository.save(newIncomeRecords);
+    }
+
+    if (addedTransactionsCount > 0 || addedIncomeCount > 0) {
+      bank.currentBalance = parseFloat(String(bank.currentBalance)) + netBalanceChange;
+      bank.lastSyncTimestamp = Date.now();
+      bank.updatedAt = Date.now();
+      await this.bankProfileRepository.save(bank);
+    }
+
+    return {
+      success: true,
+      addedTransactionsCount,
+      addedIncomeCount,
+      updatedBalance: bank.currentBalance,
+    };
+  }
+
+  private classifyCategory(merchantName: string): string {
+    const name = merchantName.toLowerCase();
+    if (name.includes('uber') || name.includes('ola') || name.includes('rapido') || name.includes('metro') || name.includes('fuel') || name.includes('petrol')) {
+      return 'transport';
+    }
+    if (name.includes('zomato') || name.includes('swiggy') || name.includes('restaurant') || name.includes('food') || name.includes('cafe') || name.includes('starbucks')) {
+      return 'food';
+    }
+    if (name.includes('amazon') || name.includes('flipkart') || name.includes('myntra') || name.includes('mall') || name.includes('store') || name.includes('clothing')) {
+      return 'shopping';
+    }
+    if (name.includes('netflix') || name.includes('spotify') || name.includes('cinema') || name.includes('movies') || name.includes('hotstar')) {
+      return 'entertainment';
+    }
+    if (name.includes('electricity') || name.includes('water') || name.includes('recharge') || name.includes('jio') || name.includes('airtel') || name.includes('bill')) {
+      return 'utilities';
+    }
+    return 'shopping';
+  }
+
+  async syncStatementPdf(userId: string, bankProfileId: string, fileBuffer: Buffer, password?: string) {
+    this.logger.log(`Processing bank statement PDF upload for user ${userId}, bank: ${bankProfileId}`);
+
+    const bank = await this.bankProfileRepository.findOne({
+      where: { id: bankProfileId, userId, isDeleted: false },
+    });
+    if (!bank) {
+      throw new BadRequestException('Bank account profile not found.');
+    }
+
+    let passwordToUse = password || bank.statementPassword || '';
+    let extractedText = '';
+
+    try {
+      extractedText = await this.extractTextFromPdfBuffer(fileBuffer, passwordToUse);
+    } catch (e: any) {
+      if (bank.statementPassword && !password) {
+        bank.statementPassword = null;
+        await this.bankProfileRepository.save(bank);
+      }
+      throw e;
+    }
+
+    if (password && password !== bank.statementPassword) {
+      bank.statementPassword = password;
+      await this.bankProfileRepository.save(bank);
+    }
+
+    return {
+      success: true,
+      text: extractedText,
+    };
+  }
+
+  private async extractTextFromPdfBuffer(buffer: Buffer, password?: string): Promise<string> {
+    const pdfExtract = new PDFExtract();
+    const options: PDFExtractOptions = { password };
+
+    return new Promise((resolve, reject) => {
+      pdfExtract.extractBuffer(buffer, options, (err, data) => {
+        if (err) {
+          const errMsg = err.message || '';
+          if (errMsg.includes('Password') || errMsg.includes('password') || errMsg.includes('decrypt') || errMsg.includes('Exception') || errMsg.includes('Incorrect') || errMsg.includes('Invalid')) {
+            return reject(new BadRequestException({
+              error: 'PASSWORD_REQUIRED',
+              message: 'Password is required or incorrect for this PDF statement.',
+            }));
+          }
+          return reject(new BadRequestException(`Failed to read PDF: ${errMsg}`));
+        }
+        if (!data || !data.pages) {
+          return reject(new Error('PDF extraction returned empty pages.'));
+        }
+
+        let text = '';
+        for (const page of data.pages) {
+          for (const content of page.content) {
+            text += content.str + ' ';
+          }
+          text += '\n';
+        }
+        resolve(text);
+      });
+    });
+  }
+
+  async updateSmsConsent(userId: string, id: string, smsConsent: boolean) {
+    const bank = await this.bankProfileRepository.findOne({
+      where: { id, userId, isDeleted: false },
+    });
+    if (!bank) {
+      throw new BadRequestException('Bank profile not found.');
+    }
+    bank.smsConsent = smsConsent;
+    bank.updatedAt = Date.now();
+    await this.bankProfileRepository.save(bank);
+    return {
+      success: true,
+      bankProfileId: bank.id,
+      smsConsent: bank.smsConsent,
     };
   }
 }

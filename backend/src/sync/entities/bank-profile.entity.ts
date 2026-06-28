@@ -26,6 +26,21 @@ export class BankProfile {
   }})
   lastSyncTimestamp: number;
 
+  @Column({ name: 'sms_sender_id', type: 'text', nullable: true })
+  smsSenderId: string | null;
+
+  @Column({ name: 'upi_id', type: 'text', nullable: true })
+  upiId: string | null;
+
+  @Column({ name: 'custom_keywords', type: 'text', nullable: true })
+  customKeywords: string | null;
+
+  @Column({ name: 'statement_password', type: 'text', nullable: true })
+  statementPassword: string | null;
+
+  @Column({ name: 'sms_consent', type: 'boolean', default: false })
+  smsConsent: boolean;
+
   @Column({ name: 'updated_at', type: 'bigint', transformer: {
     to: (value: number) => value ? String(value) : null,
     from: (value: string) => value ? Number(value) : null

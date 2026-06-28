@@ -13,6 +13,8 @@ import { BudgetDeclaration } from './sync/entities/budget-declaration.entity';
 import { SavingsGoal } from './sync/entities/savings-goal.entity';
 import { NetWorthSnapshot } from './sync/entities/net-worth-snapshot.entity';
 import { IncomeRecord } from './sync/entities/income-record.entity';
+import { Notification } from './notifications/entities/notification.entity';
+import { NotificationsModule } from './notifications/notifications.module';
 import * as dns from 'dns';
 
 // Helper to resolve host to IPv4 address programmatically
@@ -54,6 +56,7 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
             SavingsGoal,
             NetWorthSnapshot,
             IncomeRecord,
+            Notification,
           ],
           synchronize: false, // Set to false to avoid altering tables automatically, schemas exist
           ssl: isSupabase ? { rejectUnauthorized: false } : false,
@@ -110,6 +113,7 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
 
     AuthModule,
     SyncModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

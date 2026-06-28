@@ -88,6 +88,10 @@ export const syncService = {
         accountNumberSuffix: b.accountNumberSuffix ?? b.account_number_suffix,
         currentBalance: parseFloat(b.currentBalance ?? b.current_balance ?? 0),
         lastSyncTimestamp: Number(b.lastSyncTimestamp ?? b.last_sync_timestamp ?? 0),
+        smsSenderId: b.smsSenderId ?? b.sms_sender_id,
+        upiId: b.upiId ?? b.upi_id,
+        customKeywords: b.customKeywords ?? b.custom_keywords,
+        smsConsent: b.smsConsent ?? b.sms_consent ?? false,
       }));
       useBankStore.getState().setBankProfiles(mappedBanks);
 
