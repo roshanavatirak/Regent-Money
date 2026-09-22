@@ -5,6 +5,20 @@ import { parseSMS } from './src/services/smsParser';
 import { useBankStore } from './src/store';
 import { authService } from './src/services/authService';
 
+// Suppress unhandled promise rejections from web font observers
+if (Platform.OS === 'web' && typeof window !== 'undefined') {
+  window.addEventListener('unhandledrejection', (event) => {
+    const reason = event?.reason;
+    const msg = typeof reason === 'string' ? reason : (reason?.message || '');
+    if (msg.includes('12000ms timeout exceeded') || msg.includes('timeout exceeded')) {
+      event.preventDefault?.();
+      if (typeof (event as any).stopImmediatePropagation === 'function') {
+        (event as any).stopImmediatePropagation();
+      }
+    }
+  });
+}
+
 const SmsBackgroundSyncTask = async (taskData: any) => {
   console.log('[SMS Headless JS] Triggered task with data:', taskData);
   const { sender, body } = taskData;

@@ -71,9 +71,6 @@ export class SyncService implements OnModuleInit {
     for (const bank of bankProfiles) {
       bank.lastSyncTimestamp = now;
     }
-    if (bankProfiles.length > 0) {
-      await this.bankProfileRepository.save(bankProfiles);
-    }
 
     return {
       transactions,

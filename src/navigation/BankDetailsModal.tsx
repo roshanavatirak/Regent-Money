@@ -42,6 +42,8 @@ interface BankDetailsModalProps {
 }
 
 export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalProps) => {
+  if (!visible || !bank) return null;
+
   const { colors, isDark } = useTheme();
   const styles = getStyles(colors);
 

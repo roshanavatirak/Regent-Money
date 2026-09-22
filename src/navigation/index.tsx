@@ -15,10 +15,12 @@ import {
   RefreshControl,
   Modal,
   Image,
-  Alert
+  Alert,
+  Pressable,
+  useWindowDimensions
 } from 'react-native';
 import { NavigationContainer, useFocusEffect } from '@react-navigation/native';
-import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { createBottomTabNavigator, BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -29,6 +31,7 @@ import Animated, {
   withSequence, 
   withTiming, 
   withDelay,
+  withSpring,
   FadeIn
 } from 'react-native-reanimated';
 import { CartesianChart, Area, PolarChart, Pie, Line } from 'victory-native';
@@ -68,10 +71,11 @@ const LOCAL_SVG_MAP: { [key: string]: any } = {
   'PUNB': require('../../assets/Banks logo/punb.svg'),
   'SBIN': require('../../assets/Banks logo/sbi.svg'),
   'UBIN': require('../../assets/Banks logo/ubin.svg'),
+  'UTIB': require('../../assets/Banks logo/axis.svg'),
   'YESB': require('../../assets/Banks logo/yesb.svg'),
 };
 
-const LocalSvgIcon = ({ source, size }: { source: any; size: number }) => {
+const NativeSvgIcon = ({ source, size }: { source: any; size: number }) => {
   const svg = useSVG(source);
   if (!svg) {
     return <View style={{ width: size * 0.75, height: size * 0.75 }} />;
@@ -98,6 +102,37 @@ const LocalSvgIcon = ({ source, size }: { source: any; size: number }) => {
       </Group>
     </Canvas>
   );
+};
+
+const WebSvgIcon = ({ source, size }: { source: any; size: number }) => {
+  const [hasError, setHasError] = useState(false);
+  const targetSize = size * 0.75;
+
+  if (hasError) {
+    return (
+      <View style={{ width: targetSize, height: targetSize, alignItems: 'center', justifyContent: 'center' }}>
+        <MaterialCommunityIcons name="bank" size={size * 0.55} color="#2dba4e" />
+      </View>
+    );
+  }
+
+  const imageSource = typeof source === 'string' ? { uri: source } : (source?.default || source);
+
+  return (
+    <Image 
+      source={imageSource} 
+      style={{ width: targetSize, height: targetSize }} 
+      resizeMode="contain" 
+      onError={() => setHasError(true)}
+    />
+  );
+};
+
+const LocalSvgIcon = ({ source, size }: { source: any; size: number }) => {
+  if (Platform.OS === 'web') {
+    return <WebSvgIcon source={source} size={size} />;
+  }
+  return <NativeSvgIcon source={source} size={size} />;
 };
 
 const BankIcon = ({ code, name, size = 38 }: { code: string; name: string; size?: number }) => {
@@ -146,7 +181,9 @@ import {
   useBankStore,
   useThemeStore,
   useTheme,
-  useNotificationStore
+  useNotificationStore,
+  useAnalyticsStore,
+  rehydrateAllStores,
 } from '../store';
 import { StatusBar } from 'expo-status-bar';
 import { authService } from '../services/authService';
@@ -235,13 +272,20 @@ interface AddBankModalProps {
   onSuccess: () => void;
 }
 
+const ALL_BANKS_SORTED: { code: string; name: string }[] = Object.entries(
+  bankNamesJson as { [key: string]: string }
+)
+  .map(([code, name]) => ({ code, name }))
+  .sort((a, b) => a.name.localeCompare(b.name));
+
 const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
+  if (!visible) return null;
+
   const { colors } = useTheme();
   const styles = getStyles(colors);
   const navStyles = getNavStyles(colors);
   const user = useAuthStore((state) => state.user);
 
-  const [banksList, setBanksList] = useState<{ [key: string]: string }>(bankNamesJson as { [key: string]: string });
   const [selectedBank, setSelectedBank] = useState<{ code: string; name: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   
@@ -270,12 +314,6 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
     setFormStep(1);
   };
 
-  useEffect(() => {
-    if (!visible) {
-      resetForm();
-    }
-  }, [visible]);
-
   const handleSelectBank = (bank: { code: string; name: string }) => {
     setSelectedBank(bank);
     setBankNameInput(bank.name);
@@ -287,22 +325,16 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
     setFormStep(2);
   };
 
-  const sortedAllBanks = useMemo(() => {
-    return Object.entries(banksList)
-      .map(([code, name]) => ({ code, name }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [banksList]);
-
   const filteredBanks = useMemo(() => {
     if (!searchQuery.trim()) {
-      return sortedAllBanks;
+      return ALL_BANKS_SORTED;
     }
     const query = searchQuery.toLowerCase();
-    return sortedAllBanks.filter(bank => 
+    return ALL_BANKS_SORTED.filter(bank => 
       bank.name.toLowerCase().includes(query) || 
       bank.code.toLowerCase().includes(query)
     );
-  }, [sortedAllBanks, searchQuery]);
+  }, [searchQuery]);
 
   const renderPopularBanks = () => {
     if (searchQuery.trim()) return null;
@@ -618,6 +650,98 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
   );
 };
 
+// ----------------------------------------------------
+// Web-Safe Chart Fallbacks (Skia is not bundled on Web)
+// ----------------------------------------------------
+const WebNetWorthChart = ({ data, color = '#2dba4e' }: { data: any[]; color?: string }) => {
+  if (!data || data.length === 0) return null;
+  const values = data.map((d) => d.netWorth || 0);
+  const minVal = Math.min(...values);
+  const maxVal = Math.max(...values);
+  const range = maxVal - minVal || 1;
+
+  return (
+    <View style={{ flex: 1, justifyContent: 'flex-end', paddingBottom: 10, paddingTop: 10 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', height: 120 }}>
+        {data.map((item, idx) => {
+          const heightPct = Math.max(15, Math.round(((item.netWorth - minVal) / range) * 80 + 15));
+          return (
+            <View key={idx} style={{ flex: 1, alignItems: 'center', height: '100%', justifyContent: 'flex-end', paddingHorizontal: 3 }}>
+              <View 
+                style={{ 
+                  width: '70%', 
+                  maxWidth: 24, 
+                  height: `${heightPct}%`, 
+                  backgroundColor: color, 
+                  borderRadius: 6,
+                  opacity: idx === data.length - 1 ? 1 : 0.65,
+                }} 
+              />
+              <Text style={{ color: 'rgba(250, 251, 252, 0.5)', fontSize: 10, marginTop: 6 }} numberOfLines={1}>
+                {item.monthLabel}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
+};
+
+const WebProjectionChart = ({ data }: { data: any[] }) => {
+  if (!data || data.length === 0) return null;
+  const sampled = data.length > 8 
+    ? data.filter((_, i) => i === 0 || i === data.length - 1 || i % Math.ceil(data.length / 6) === 0)
+    : data;
+  const maxVal = Math.max(...data.map(d => Math.max(d.value || 0, d.invested || 0))) || 1;
+
+  return (
+    <View style={{ flex: 1, justifyContent: 'flex-end', paddingBottom: 6 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', height: 120 }}>
+        {sampled.map((item, idx) => {
+          const valuePct = Math.max(12, Math.round(((item.value || 0) / maxVal) * 100));
+          const investedPct = Math.max(10, Math.round(((item.invested || 0) / maxVal) * 100));
+          return (
+            <View key={idx} style={{ flex: 1, alignItems: 'center', height: '100%', justifyContent: 'flex-end', paddingHorizontal: 2 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: '85%', gap: 3 }}>
+                <View 
+                  style={{ 
+                    width: 8, 
+                    height: `${investedPct}%`, 
+                    backgroundColor: 'rgba(250, 251, 252, 0.4)', 
+                    borderRadius: 3 
+                  }} 
+                />
+                <View 
+                  style={{ 
+                    width: 8, 
+                    height: `${valuePct}%`, 
+                    backgroundColor: '#2dba4e', 
+                    borderRadius: 3 
+                  }} 
+                />
+              </View>
+              <Text style={{ color: 'rgba(250, 251, 252, 0.5)', fontSize: 9, marginTop: 4 }}>
+                Y{item.year}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
+};
+
+const WebDonutChart = ({ data }: { data: any[] }) => {
+  const total = data.reduce((sum, item) => sum + (item.value || 0), 0) || 1;
+  return (
+    <View style={{ width: 130, height: 130, borderRadius: 65, borderWidth: 14, borderColor: '#2dba4e', justifyContent: 'center', alignItems: 'center' }}>
+      <Text style={{ color: '#fafbfc', fontSize: 11, fontWeight: '800' }}>₹{total.toLocaleString('en-IN')}</Text>
+      <Text style={{ color: 'rgba(250, 251, 252, 0.5)', fontSize: 9 }}>Total</Text>
+    </View>
+  );
+};
+
 interface NetWorthDetailsModalProps {
   visible: boolean;
   onClose: () => void;
@@ -627,6 +751,8 @@ interface NetWorthDetailsModalProps {
 }
 
 const NetWorthDetailsModal = ({ visible, onClose, snapshots, liveNetWorth, loading = false }: NetWorthDetailsModalProps) => {
+  if (!visible) return null;
+
   const { colors, isDark } = useTheme();
   const styles = getStyles(colors);
   const navStyles = getNavStyles(colors);
@@ -825,33 +951,37 @@ const NetWorthDetailsModal = ({ visible, onClose, snapshots, liveNetWorth, loadi
               
               {chartData.length > 1 ? (
                 <View style={{ flex: 1 }}>
-                  <CartesianChart
-                    data={chartData}
-                    xKey="monthLabel"
-                    yKeys={["netWorth"]}
-                  >
-                    {({ points, chartBounds }) => (
-                      <>
-                        <Area
-                          points={points.netWorth}
-                          y0={chartBounds.bottom}
-                          animate={{ type: "timing", duration: 300 }}
-                        >
-                          <LinearGradient
-                            start={vec(0, chartBounds.top)}
-                            end={vec(0, chartBounds.bottom)}
-                            colors={[trendColor, "rgba(45, 186, 78, 0)"]}
+                  {Platform.OS !== 'web' ? (
+                    <CartesianChart
+                      data={chartData}
+                      xKey="monthLabel"
+                      yKeys={["netWorth"]}
+                    >
+                      {({ points, chartBounds }) => (
+                        <>
+                          <Area
+                            points={points.netWorth}
+                            y0={chartBounds.bottom}
+                            animate={{ type: "timing", duration: 300 }}
+                          >
+                            <LinearGradient
+                              start={vec(0, chartBounds.top)}
+                              end={vec(0, chartBounds.bottom)}
+                              colors={[trendColor, "rgba(45, 186, 78, 0)"]}
+                            />
+                          </Area>
+                          <Line
+                            points={points.netWorth}
+                            color={trendColor}
+                            strokeWidth={2.5}
+                            animate={{ type: "timing", duration: 300 }}
                           />
-                        </Area>
-                        <Line
-                          points={points.netWorth}
-                          color={trendColor}
-                          strokeWidth={2.5}
-                          animate={{ type: "timing", duration: 300 }}
-                        />
-                      </>
-                    )}
-                  </CartesianChart>
+                        </>
+                      )}
+                    </CartesianChart>
+                  ) : (
+                    <WebNetWorthChart data={chartData} color={trendColor} />
+                  )}
                 </View>
               ) : loading ? (
                 <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
@@ -962,6 +1092,8 @@ interface NotificationsModalProps {
 }
 
 const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
+  if (!visible) return null;
+
   const { colors, isDark } = useTheme();
   const styles = getStyles(colors);
   const navStyles = getNavStyles(colors);
@@ -1176,6 +1308,32 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
   );
 };
 
+const TransactionRowItem = React.memo(({ tx, styles }: { tx: any; styles: any }) => (
+  <View style={styles.txItem}>
+    <View style={styles.txLeft}>
+      <View style={styles.txIconBg}>
+        <Feather 
+          name={tx.category === 'food' ? 'coffee' : tx.category === 'transport' ? 'navigation' : 'tag'} 
+          size={16} 
+          color="#2dba4e" 
+        />
+      </View>
+      <View style={styles.txMeta}>
+        <Text style={styles.merchantName}>{tx.merchant}</Text>
+        <Text style={styles.txDate}>{new Date(tx.timestamp).toLocaleDateString('en-IN')}</Text>
+      </View>
+    </View>
+    <View style={styles.txRight}>
+      <Text style={styles.txAmount}>-₹{tx.amount}</Text>
+      {tx.isAnomaly && (
+        <View style={styles.anomalyBadge}>
+          <Text style={styles.anomalyText}>Anomaly</Text>
+        </View>
+      )}
+    </View>
+  </View>
+));
+
 const DashboardScreen = () => {
   const { colors, isDark } = useTheme();
   const styles = getStyles(colors);
@@ -1230,7 +1388,7 @@ const DashboardScreen = () => {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await syncService.sync();
+      await syncService.sync(true);
       await sync();
     } catch (e: any) {
       console.log('[Dashboard] Pull-to-refresh sync failed:', e.message);
@@ -1244,77 +1402,16 @@ const DashboardScreen = () => {
   const filterCategory = useTransactionStore((state) => state.filterCategory);
   const setFilterCategory = useTransactionStore((state) => state.setFilterCategory);
 
-  const [snapshots, setSnapshots] = useState<any[]>([]);
-  const [loadingSnapshots, setLoadingSnapshots] = useState(false);
-  const [incomeCurrentMonth, setIncomeCurrentMonth] = useState(95000);
+  const snapshots = useAnalyticsStore((state) => state.snapshots);
+  const incomeCurrentMonth = useAnalyticsStore((state) => state.incomeCurrentMonth);
 
-  // Fetch data on screen focus
+  // Fetch data on screen focus with cached SWR
   useFocusEffect(
     useCallback(() => {
       sync();
-      fetchSnapshots();
-      fetchIncome();
+      syncService.fetchAnalytics();
     }, [sync])
   );
-
-  const fetchSnapshots = async () => {
-    setLoadingSnapshots(true);
-    try {
-      const user = useAuthStore.getState().user;
-      const token = authService.getAccessToken();
-      if (!user || !token) return;
-      
-      const response = await fetch(`${BACKEND_URL}/sync/net-worth-snapshots`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) throw new Error('Sync API returned error status');
-      const data = await response.json();
-      
-      const sorted = [...(data || [])].sort((a: any, b: any) => Number(a.timestamp) - Number(b.timestamp));
-      setSnapshots(sorted.map((s: any) => ({
-        timestamp: Number(s.timestamp),
-        netWorth: parseFloat(s.netWorth ?? s.net_worth ?? 0),
-        monthLabel: new Date(Number(s.timestamp)).toLocaleDateString('en-IN', { month: 'short' }),
-      })));
-    } catch (e) {
-      console.error('Error fetching snapshots:', e);
-    } finally {
-      setLoadingSnapshots(false);
-    }
-  };
-
-  const fetchIncome = async () => {
-    try {
-      const user = useAuthStore.getState().user;
-      const token = authService.getAccessToken();
-      if (!user || !token) return;
-      
-      const response = await fetch(`${BACKEND_URL}/sync/income-records`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) throw new Error('Sync API returned error status');
-      const data = await response.json();
-      
-      const now = new Date();
-      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-      const currentMonthIncome = (data || [])
-        .filter((inc: any) => Number(inc.timestamp) >= startOfMonth)
-        .reduce((sum: number, inc: any) => sum + parseFloat(inc.amount || 0), 0);
-      setIncomeCurrentMonth(currentMonthIncome || 95000);
-    } catch (e) {
-      console.error(e);
-    }
-  };
 
   // Dynamic calculations for cards
   const liveNetWorth = useMemo(() => {
@@ -1467,25 +1564,29 @@ const DashboardScreen = () => {
         <View style={[styles.card, { height: 220 }]}>
           <Text style={styles.chartTitle}>Net Worth History (6 Months)</Text>
           <View style={{ flex: 1, marginTop: 10 }}>
-            <CartesianChart
-              data={snapshots}
-              xKey="monthLabel"
-              yKeys={["netWorth"]}
-            >
-              {({ points, chartBounds }) => (
-                <Area
-                  points={points.netWorth}
-                  y0={chartBounds.bottom}
-                  animate={{ type: "timing", duration: 350 }}
-                >
-                  <LinearGradient
-                    start={vec(0, chartBounds.top)}
-                    end={vec(0, chartBounds.bottom)}
-                    colors={["#2dba4e", "rgba(45, 186, 78, 0)"]}
-                  />
-                </Area>
-              )}
-            </CartesianChart>
+            {Platform.OS !== 'web' ? (
+              <CartesianChart
+                data={snapshots}
+                xKey="monthLabel"
+                yKeys={["netWorth"]}
+              >
+                {({ points, chartBounds }) => (
+                  <Area
+                    points={points.netWorth}
+                    y0={chartBounds.bottom}
+                    animate={{ type: "timing", duration: 350 }}
+                  >
+                    <LinearGradient
+                      start={vec(0, chartBounds.top)}
+                      end={vec(0, chartBounds.bottom)}
+                      colors={["#2dba4e", "rgba(45, 186, 78, 0)"]}
+                    />
+                  </Area>
+                )}
+              </CartesianChart>
+            ) : (
+              <WebNetWorthChart data={snapshots} />
+            )}
           </View>
         </View>
       )}
@@ -1537,15 +1638,19 @@ const DashboardScreen = () => {
             {filterCategory === null ? 'Spending breakdown' : `${filterCategory.toUpperCase()} breakdown`}
           </Text>
           <View style={styles.donutRow}>
-            <View style={{ width: 140, height: 140 }}>
-              <PolarChart
-                data={donutData}
-                labelKey="label"
-                valueKey="value"
-                colorKey="color"
-              >
-                <Pie.Chart innerRadius="65%" />
-              </PolarChart>
+            <View style={{ width: 140, height: 140, justifyContent: 'center', alignItems: 'center' }}>
+              {Platform.OS !== 'web' ? (
+                <PolarChart
+                  data={donutData}
+                  labelKey="label"
+                  valueKey="value"
+                  colorKey="color"
+                >
+                  <Pie.Chart innerRadius="65%" />
+                </PolarChart>
+              ) : (
+                <WebDonutChart data={donutData} />
+              )}
             </View>
             <View style={styles.donutLegend}>
               {donutData.slice(0, 4).map((item, index) => (
@@ -1564,35 +1669,13 @@ const DashboardScreen = () => {
       {/* Recent Transactions List */}
       <View style={[styles.card, { marginBottom: 30 }]}>
         <Text style={styles.chartTitle}>Recent Transactions</Text>
-        {isLoading ? (
+        {isLoading && transactions.length === 0 ? (
           <ActivityIndicator color="#2dba4e" style={{ marginTop: 20 }} />
         ) : recentTransactions.length === 0 ? (
           <Text style={styles.emptyText}>No transactions found for filter.</Text>
         ) : (
           recentTransactions.map((tx) => (
-            <View key={tx.id} style={styles.txItem}>
-              <View style={styles.txLeft}>
-                <View style={styles.txIconBg}>
-                  <Feather 
-                    name={tx.category === 'food' ? 'coffee' : tx.category === 'transport' ? 'navigation' : 'tag'} 
-                    size={16} 
-                    color="#2dba4e" 
-                  />
-                </View>
-                <View style={styles.txMeta}>
-                  <Text style={styles.merchantName}>{tx.merchant}</Text>
-                  <Text style={styles.txDate}>{new Date(tx.timestamp).toLocaleDateString('en-IN')}</Text>
-                </View>
-              </View>
-              <View style={styles.txRight}>
-                <Text style={styles.txAmount}>-₹{tx.amount}</Text>
-                {tx.isAnomaly && (
-                  <View style={styles.anomalyBadge}>
-                    <Text style={styles.anomalyText}>Anomaly</Text>
-                  </View>
-                )}
-              </View>
-            </View>
+            <TransactionRowItem key={tx.id} tx={tx} styles={styles} />
           ))
         )}
       </View>
@@ -1670,7 +1753,7 @@ const DashboardScreen = () => {
       onClose={() => setNetWorthModalVisible(false)}
       snapshots={snapshots}
       liveNetWorth={liveNetWorth}
-      loading={loadingSnapshots}
+      loading={false}
     />
 
     {/* Notifications Modal */}
@@ -1712,8 +1795,7 @@ const ChatScreen = () => {
 
   // Voice Event Listeners Setup
   useEffect(() => {
-    if (!Voice) {
-      console.warn('[Voice] Voice module is not available on this platform/device.');
+    if (Platform.OS === 'web' || !Voice || typeof Voice.onSpeechStart === 'undefined') {
       return;
     }
     
@@ -1730,9 +1812,9 @@ const ChatScreen = () => {
     };
 
     return () => {
-      if (Voice) {
+      if (Voice && typeof Voice.destroy === 'function') {
         Voice.destroy().then(Voice.removeAllListeners).catch((err: any) => 
-          console.log('[Voice] Cleanup error:', err.message)
+          console.log('[Voice] Cleanup error:', err?.message)
         );
       }
     };
@@ -2043,18 +2125,22 @@ const GoalsScreen = () => {
 
         {/* Projection Chart */}
         <View style={{ height: 160, marginTop: 20 }}>
-          <CartesianChart
-            data={projectionData}
-            xKey="year"
-            yKeys={["value", "invested"]}
-          >
-            {({ points }) => (
-              <>
-                 <Line points={points.value} color="#2dba4e" strokeWidth={3} animate={{ type: "timing", duration: 250 }} />
-                 <Line points={points.invested} color="rgba(250, 251, 252, 0.5)" strokeWidth={2} animate={{ type: "timing", duration: 250 }} />
-              </>
-            )}
-          </CartesianChart>
+          {Platform.OS !== 'web' ? (
+            <CartesianChart
+              data={projectionData}
+              xKey="year"
+              yKeys={["value", "invested"]}
+            >
+              {({ points }) => (
+                <>
+                   <Line points={points.value} color="#2dba4e" strokeWidth={3} animate={{ type: "timing", duration: 250 }} />
+                   <Line points={points.invested} color="rgba(250, 251, 252, 0.5)" strokeWidth={2} animate={{ type: "timing", duration: 250 }} />
+                </>
+              )}
+            </CartesianChart>
+          ) : (
+            <WebProjectionChart data={projectionData} />
+          )}
         </View>
 
         {/* Simulation Outputs */}
@@ -2371,158 +2457,330 @@ const BanksScreen = () => {
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
 
-const TabIcon = ({ 
-  focused, 
-  activeIcon, 
-  inactiveIcon, 
-  label, 
-  size = 20 
-}: { 
-  focused: boolean; 
-  activeIcon: any; 
-  inactiveIcon: any; 
-  label: string; 
-  size?: number 
+interface TabItemConfig {
+  label: string;
+  activeIcon: keyof typeof Ionicons.glyphMap;
+  inactiveIcon: keyof typeof Ionicons.glyphMap;
+  size?: number;
+}
+
+const TAB_CONFIG: { [key: string]: TabItemConfig } = {
+  Home: {
+    label: 'Home',
+    activeIcon: 'home',
+    inactiveIcon: 'home-outline',
+    size: 20,
+  },
+  Goals: {
+    label: 'Goals',
+    activeIcon: 'trophy',
+    inactiveIcon: 'trophy-outline',
+    size: 19,
+  },
+  Banks: {
+    label: 'Banks',
+    activeIcon: 'wallet',
+    inactiveIcon: 'wallet-outline',
+    size: 20,
+  },
+  'AI Chat': {
+    label: 'AI Chat',
+    activeIcon: 'sparkles',
+    inactiveIcon: 'sparkles-outline',
+    size: 20,
+  },
+  Settings: {
+    label: 'Settings',
+    activeIcon: 'options',
+    inactiveIcon: 'options-outline',
+    size: 20,
+  },
+};
+
+const CustomTabButton = ({
+  route,
+  isFocused,
+  onPress,
+  onLongPress,
+  isSmall,
+  isMedium,
+  isDark,
+  colors,
+}: {
+  route: any;
+  isFocused: boolean;
+  onPress: () => void;
+  onLongPress: () => void;
+  isSmall: boolean;
+  isMedium: boolean;
+  isDark: boolean;
+  colors: any;
 }) => {
-  const { colors, isDark } = useTheme();
-  
-  if (focused) {
-    return (
-      <View style={{
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: isDark ? 'rgba(45, 186, 78, 0.15)' : 'rgba(45, 186, 78, 0.08)',
-        paddingHorizontal: 16,
-        paddingVertical: 5,
-        borderRadius: 18,
-        borderWidth: 1,
-        borderColor: isDark ? 'rgba(45, 186, 78, 0.3)' : 'rgba(45, 186, 78, 0.2)',
-        minWidth: 56,
-      }}>
-        <Ionicons 
-          name={activeIcon} 
-          size={size} 
-          color="#2dba4e" 
-        />
-        <Text style={{
-          color: '#2dba4e',
-          fontSize: 9,
-          fontWeight: '800',
-          marginTop: 2,
-          letterSpacing: 0.3,
-        }}>
-          {label}
-        </Text>
-      </View>
-    );
-  }
+  const [isHovered, setIsHovered] = useState(false);
+  const scale = useSharedValue(1);
+
+  const config = TAB_CONFIG[route.name] || {
+    label: route.name,
+    activeIcon: 'apps' as const,
+    inactiveIcon: 'apps-outline' as const,
+    size: 20,
+  };
+
+  const iconSize = isSmall ? 18 : (config.size || 20);
+
+  const handlePressIn = () => {
+    scale.value = withSpring(0.92, { damping: 14, stiffness: 300 });
+  };
+
+  const handlePressOut = () => {
+    scale.value = withSpring(1, { damping: 14, stiffness: 300 });
+  };
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  const pillBgColor = isFocused
+    ? (isDark ? 'rgba(45, 186, 78, 0.16)' : 'rgba(45, 186, 78, 0.10)')
+    : isHovered
+      ? (isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)')
+      : 'transparent';
+
+  const pillBorderColor = isFocused
+    ? (isDark ? 'rgba(45, 186, 78, 0.35)' : 'rgba(45, 186, 78, 0.25)')
+    : isHovered
+      ? (isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)')
+      : 'transparent';
+
+  const iconColor = isFocused
+    ? '#2dba4e'
+    : isHovered
+      ? (isDark ? '#fafbfc' : '#111827')
+      : colors.textTertiary;
+
+  const textColor = isFocused
+    ? '#2dba4e'
+    : isHovered
+      ? (isDark ? '#e4e4e7' : '#374151')
+      : colors.textTertiary;
 
   return (
-    <View style={{
-      alignItems: 'center',
-      justifyContent: 'center',
-    }}>
-      <Ionicons 
-        name={inactiveIcon} 
-        size={size} 
-        color={colors.textTertiary} 
-      />
-      <Text style={{
-        color: colors.textTertiary,
-        fontSize: 9,
-        fontWeight: '600',
-        marginTop: 2,
-      }}>
-        {label}
-      </Text>
+    <Pressable
+      onPress={onPress}
+      onLongPress={onLongPress}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      onHoverIn={() => setIsHovered(true)}
+      onHoverOut={() => setIsHovered(false)}
+      style={[
+        {
+          flex: 1,
+          height: '100%',
+          alignItems: 'center',
+          justifyContent: 'center',
+          paddingHorizontal: 2,
+        },
+        Platform.OS === 'web' && ({ cursor: 'pointer', outlineStyle: 'none' } as any),
+      ]}
+      accessibilityRole="button"
+      accessibilityState={isFocused ? { selected: true } : {}}
+      accessibilityLabel={config.label}
+    >
+      <Animated.View
+        style={[
+          {
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            paddingHorizontal: isSmall ? 7 : (isMedium ? 10 : 14),
+            paddingVertical: 4.5,
+            borderRadius: 18,
+            borderWidth: 1,
+            borderColor: pillBorderColor,
+            backgroundColor: pillBgColor,
+            maxWidth: '96%',
+            minWidth: isSmall ? 44 : 50,
+          },
+          isFocused && {
+            shadowColor: '#2dba4e',
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: isDark ? 0.32 : 0.16,
+            shadowRadius: 5,
+            elevation: 2,
+          },
+          animatedStyle,
+        ]}
+      >
+        <Ionicons
+          name={isFocused ? config.activeIcon : config.inactiveIcon}
+          size={iconSize}
+          color={iconColor}
+        />
+        <Text
+          numberOfLines={1}
+          ellipsizeMode="tail"
+          style={{
+            color: textColor,
+            fontSize: isSmall ? 8.5 : 9.5,
+            fontWeight: isFocused ? '800' : '600',
+            marginTop: 2,
+            letterSpacing: isFocused ? 0.3 : 0.1,
+          }}
+        >
+          {config.label}
+        </Text>
+      </Animated.View>
+    </Pressable>
+  );
+};
+
+const CustomBottomTabBar = ({ state, descriptors, navigation, insets }: BottomTabBarProps) => {
+  const { colors, isDark } = useTheme();
+  const { width: windowWidth } = useWindowDimensions();
+
+  const isSmall = windowWidth < 380;
+  const isMedium = windowWidth >= 380 && windowWidth < 600;
+
+  // Responsive margins ensuring perfect clearance on all devices
+  const barMarginHorizontal = isSmall ? 10 : 16;
+  const maxBarWidth = 520;
+  const barWidth = Math.min(windowWidth - barMarginHorizontal * 2, maxBarWidth);
+
+  // Safe bottom offset considering home indicator and gesture navigation
+  const bottomOffset = Platform.OS === 'web' 
+    ? 18 
+    : Math.max(insets.bottom + (Platform.OS === 'ios' ? 4 : 8), 16);
+
+  return (
+    <View
+      pointerEvents="box-none"
+      style={{
+        position: 'absolute',
+        bottom: bottomOffset,
+        left: 0,
+        right: 0,
+        alignItems: 'center',
+        zIndex: 1000,
+      }}
+    >
+      <View
+        style={{
+          width: barWidth,
+          height: isSmall ? 58 : 64,
+          borderRadius: 32,
+          backgroundColor: isDark ? 'rgba(17, 19, 26, 0.96)' : 'rgba(255, 255, 255, 0.97)',
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          paddingHorizontal: isSmall ? 6 : 10,
+          paddingVertical: 4,
+          borderWidth: 1,
+          borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
+          shadowColor: '#000000',
+          shadowOffset: { width: 0, height: 8 },
+          shadowOpacity: isDark ? 0.42 : 0.14,
+          shadowRadius: 16,
+          elevation: 16,
+        }}
+      >
+        {state.routes.map((route, index) => {
+          const isFocused = state.index === index;
+
+          const onPress = () => {
+            const event = navigation.emit({
+              type: 'tabPress',
+              target: route.key,
+              canPreventDefault: true,
+            });
+
+            if (!isFocused && !event.defaultPrevented) {
+              navigation.navigate(route.name, route.params);
+            }
+          };
+
+          const onLongPress = () => {
+            navigation.emit({
+              type: 'tabLongPress',
+              target: route.key,
+            });
+          };
+
+          return (
+            <CustomTabButton
+              key={route.key}
+              route={route}
+              isFocused={isFocused}
+              onPress={onPress}
+              onLongPress={onLongPress}
+              isSmall={isSmall}
+              isMedium={isMedium}
+              isDark={isDark}
+              colors={colors}
+            />
+          );
+        })}
+      </View>
     </View>
   );
 };
 
 function TabNavigator() {
-  const { colors, isDark } = useTheme();
-
   return (
     <Tab.Navigator
+      tabBar={(props) => <CustomBottomTabBar {...props} />}
       screenOptions={{
         headerShown: false,
-        tabBarShowLabel: false,
-        tabBarStyle: {
-          position: 'absolute',
-          bottom: Platform.OS === 'ios' ? 34 : 18,
-          left: 180,
-          right: 180,
-          borderRadius: 30,
-          backgroundColor: isDark ? 'rgba(15, 15, 22, 0.97)' : 'rgba(255, 255, 255, 0.98)',
-          borderTopWidth: 0,
-          elevation: 16,
-          height: 64,
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 8 },
-          shadowOpacity: 0.18,
-          shadowRadius: 16,
-          paddingBottom: 0,
-          paddingTop: 0,
-          borderWidth: 1,
-          borderColor: isDark ? 'rgba(255, 255, 255, 0.07)' : 'rgba(0, 0, 0, 0.06)',
-          overflow: 'hidden',
-        },
-        tabBarIconStyle: {
-          width: '100%',
-          height: '100%',
-          justifyContent: 'center',
-          alignItems: 'center',
-        },
+        lazy: true,
       }}
     >
-      <Tab.Screen 
-        name="Home" 
-        component={DashboardScreen} 
-        options={{
-          tabBarIcon: ({ focused }) => (
-            <TabIcon focused={focused} activeIcon="home" inactiveIcon="home-outline" label="Home" />
-          )
-        }}
-      />
-      <Tab.Screen 
-        name="Goals" 
-        component={GoalsScreen} 
-        options={{
-          tabBarIcon: ({ focused }) => (
-            <TabIcon focused={focused} activeIcon="trophy" inactiveIcon="trophy-outline" label="Goals" size={19} />
-          )
-        }}
-      />
-      <Tab.Screen 
-        name="Banks" 
-        component={BanksScreen} 
-        options={{
-          tabBarIcon: ({ focused }) => (
-            <TabIcon focused={focused} activeIcon="wallet" inactiveIcon="wallet-outline" label="Banks" />
-          )
-        }}
-      />
-      <Tab.Screen 
-        name="AI Chat" 
-        component={ChatScreen} 
-        options={{
-          tabBarIcon: ({ focused }) => (
-            <TabIcon focused={focused} activeIcon="sparkles" inactiveIcon="sparkles-outline" label="AI Chat" />
-          )
-        }}
-      />
-      <Tab.Screen 
-        name="Settings" 
-        component={SettingsScreen} 
-        options={{
-          tabBarIcon: ({ focused }) => (
-            <TabIcon focused={focused} activeIcon="options" inactiveIcon="options-outline" label="Settings" />
-          )
-        }}
-      />
+      <Tab.Screen name="Home" component={DashboardScreen} />
+      <Tab.Screen name="Goals" component={GoalsScreen} />
+      <Tab.Screen name="Banks" component={BanksScreen} />
+      <Tab.Screen name="AI Chat" component={ChatScreen} />
+      <Tab.Screen name="Settings" component={SettingsScreen} />
     </Tab.Navigator>
   );
+}
+
+class ErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error: any }
+> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error('Uncaught error caught by ErrorBoundary:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={{ flex: 1, backgroundColor: '#0d1117', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <Feather name="alert-triangle" size={48} color="#f85149" style={{ marginBottom: 16 }} />
+          <Text style={{ color: '#fafbfc', fontSize: 18, fontWeight: '700', marginBottom: 8, textAlign: 'center' }}>
+            Something went wrong
+          </Text>
+          <Text style={{ color: 'rgba(250, 251, 252, 0.6)', fontSize: 12, textAlign: 'center', marginBottom: 20 }}>
+            {this.state.error?.message || 'An unexpected error occurred.'}
+          </Text>
+          <TouchableOpacity
+            style={{ backgroundColor: '#2dba4e', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 12 }}
+            onPress={() => this.setState({ hasError: false, error: null })}
+          >
+            <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 14 }}>Try Again</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 export default function AppNavigator() {
@@ -2533,6 +2791,7 @@ export default function AppNavigator() {
   useEffect(() => {
     const initAndCheck = async () => {
       await mmkvStorage.initialize();
+      await rehydrateAllStores();
       // Restore persisted theme after MMKV async fallback loads
       await useThemeStore.getState().rehydrateTheme();
       await authService.checkSession();
@@ -2592,19 +2851,21 @@ export default function AppNavigator() {
   return (
     <SafeAreaProvider>
       <StatusBar style={colors.statusBar} />
-      <NavigationContainer theme={navTheme}>
-        <Stack.Navigator screenOptions={{ headerShown: false }}>
-          {user === null ? (
-            <>
-              <Stack.Screen name="Welcome" component={WelcomeScreen} />
-              <Stack.Screen name="Login" component={LoginScreen} />
-              <Stack.Screen name="Signup" component={SignupScreen} />
-            </>
-          ) : (
-            <Stack.Screen name="Main" component={TabNavigator} />
-          )}
-        </Stack.Navigator>
-      </NavigationContainer>
+      <ErrorBoundary>
+        <NavigationContainer theme={navTheme}>
+          <Stack.Navigator screenOptions={{ headerShown: false }}>
+            {user === null ? (
+              <>
+                <Stack.Screen name="Welcome" component={WelcomeScreen} />
+                <Stack.Screen name="Login" component={LoginScreen} />
+                <Stack.Screen name="Signup" component={SignupScreen} />
+              </>
+            ) : (
+              <Stack.Screen name="Main" component={TabNavigator} />
+            )}
+          </Stack.Navigator>
+        </NavigationContainer>
+      </ErrorBoundary>
     </SafeAreaProvider>
   );
 }

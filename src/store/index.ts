@@ -3,6 +3,15 @@ import { ChatMessage } from '../services/aiService';
 import { mmkvStorage } from '../db/mmkv';
 import { useColorScheme } from 'react-native';
 
+function loadCached<T>(key: string, fallback: T): T {
+  try {
+    const data = mmkvStorage.getObject<T>(key);
+    return data !== null && data !== undefined ? data : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 // 1. Transaction Store
 export interface TransactionState {
   transactions: any[];
@@ -14,10 +23,13 @@ export interface TransactionState {
 }
 
 export const useTransactionStore = create<TransactionState>((set) => ({
-  transactions: [],
+  transactions: loadCached<any[]>('cache_transactions', []),
   isLoading: false,
   filterCategory: null,
-  setTransactions: (transactions) => set({ transactions }),
+  setTransactions: (transactions) => {
+    mmkvStorage.setObject('cache_transactions', transactions);
+    set({ transactions });
+  },
   setLoading: (isLoading) => set({ isLoading }),
   setFilterCategory: (filterCategory) => set({ filterCategory }),
 }));
@@ -38,14 +50,19 @@ export interface BudgetState {
 }
 
 export const useBudgetStore = create<BudgetState>((set) => ({
-  budgets: [],
-  setBudgets: (budgets) => set({ budgets }),
+  budgets: loadCached<BudgetCategory[]>('cache_budgets', []),
+  setBudgets: (budgets) => {
+    mmkvStorage.setObject('cache_budgets', budgets);
+    set({ budgets });
+  },
   updateSpent: (category, amount) =>
-    set((state) => ({
-      budgets: state.budgets.map((b) =>
+    set((state) => {
+      const updated = state.budgets.map((b) =>
         b.category === category ? { ...b, spentAmount: b.spentAmount + amount } : b
-      ),
-    })),
+      );
+      mmkvStorage.setObject('cache_budgets', updated);
+      return { budgets: updated };
+    }),
 }));
 
 // 3. Savings Goals Store
@@ -65,14 +82,19 @@ export interface GoalsState {
 }
 
 export const useGoalsStore = create<GoalsState>((set) => ({
-  goals: [],
-  setGoals: (goals) => set({ goals }),
+  goals: loadCached<Goal[]>('cache_goals', []),
+  setGoals: (goals) => {
+    mmkvStorage.setObject('cache_goals', goals);
+    set({ goals });
+  },
   contributeToGoal: (id, amount) =>
-    set((state) => ({
-      goals: state.goals.map((g) =>
+    set((state) => {
+      const updated = state.goals.map((g) =>
         g.id === id ? { ...g, currentAmount: g.currentAmount + amount } : g
-      ),
-    })),
+      );
+      mmkvStorage.setObject('cache_goals', updated);
+      return { goals: updated };
+    }),
 }));
 
 // 4. AI & Chat Store
@@ -146,9 +168,17 @@ export interface BankState {
 }
 
 export const useBankStore = create<BankState>((set) => ({
-  bankProfiles: [],
-  setBankProfiles: (bankProfiles) => set({ bankProfiles }),
-  addBankProfileState: (profile) => set((state) => ({ bankProfiles: [profile, ...state.bankProfiles] })),
+  bankProfiles: loadCached<BankProfileType[]>('cache_bank_profiles', []),
+  setBankProfiles: (bankProfiles) => {
+    mmkvStorage.setObject('cache_bank_profiles', bankProfiles);
+    set({ bankProfiles });
+  },
+  addBankProfileState: (profile) =>
+    set((state) => {
+      const updated = [profile, ...state.bankProfiles];
+      mmkvStorage.setObject('cache_bank_profiles', updated);
+      return { bankProfiles: updated };
+    }),
 }));
 
 // 7. Theme Store
@@ -301,4 +331,62 @@ export const useTheme = () => {
   const colors = getThemeColors(isDark);
   return { theme, isDark, colors };
 };
+
+// 9. Analytics & Net Worth Cache Store
+export interface NetWorthSnapshotType {
+  [key: string]: any;
+  timestamp: number;
+  netWorth: number;
+  monthLabel: string;
+}
+
+export interface AnalyticsState {
+  snapshots: NetWorthSnapshotType[];
+  incomeCurrentMonth: number;
+  lastFetchTime: number;
+  setSnapshots: (snapshots: NetWorthSnapshotType[]) => void;
+  setIncomeCurrentMonth: (amount: number) => void;
+  setLastFetchTime: (time: number) => void;
+}
+
+export const useAnalyticsStore = create<AnalyticsState>((set) => ({
+  snapshots: loadCached<NetWorthSnapshotType[]>('cache_net_worth_snapshots', []),
+  incomeCurrentMonth: mmkvStorage.getNumber('cache_monthly_income') || 95000,
+  lastFetchTime: 0,
+  setSnapshots: (snapshots) => {
+    mmkvStorage.setObject('cache_net_worth_snapshots', snapshots);
+    set({ snapshots });
+  },
+  setIncomeCurrentMonth: (incomeCurrentMonth) => {
+    mmkvStorage.setNumber('cache_monthly_income', incomeCurrentMonth);
+    set({ incomeCurrentMonth });
+  },
+  setLastFetchTime: (lastFetchTime) => set({ lastFetchTime }),
+}));
+
+// Rehydrate all stores synchronously/asynchronously after MMKV storage init
+export const rehydrateAllStores = async () => {
+  try {
+    const txs = mmkvStorage.getObject<any[]>('cache_transactions');
+    if (txs && txs.length > 0) useTransactionStore.getState().setTransactions(txs);
+
+    const budgets = mmkvStorage.getObject<BudgetCategory[]>('cache_budgets');
+    if (budgets && budgets.length > 0) useBudgetStore.getState().setBudgets(budgets);
+
+    const goals = mmkvStorage.getObject<Goal[]>('cache_goals');
+    if (goals && goals.length > 0) useGoalsStore.getState().setGoals(goals);
+
+    const banks = mmkvStorage.getObject<BankProfileType[]>('cache_bank_profiles');
+    if (banks && banks.length > 0) useBankStore.getState().setBankProfiles(banks);
+
+    const snaps = mmkvStorage.getObject<NetWorthSnapshotType[]>('cache_net_worth_snapshots');
+    if (snaps && snaps.length > 0) useAnalyticsStore.getState().setSnapshots(snaps);
+
+    const inc = mmkvStorage.getNumber('cache_monthly_income');
+    if (inc) useAnalyticsStore.getState().setIncomeCurrentMonth(inc);
+  } catch (e) {
+    console.error('[Store] Rehydration error:', e);
+  }
+};
+
 

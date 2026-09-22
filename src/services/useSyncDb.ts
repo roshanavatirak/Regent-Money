@@ -6,7 +6,7 @@ export const useSyncDb = () => {
     try {
       await syncService.sync();
     } catch (error) {
-      console.error('Error in useSyncDb wrapper calling syncService:', error);
+      console.warn('[useSyncDb] Offline sync notice:', error);
     }
   }, []);
 
