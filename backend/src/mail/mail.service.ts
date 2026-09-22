@@ -37,27 +37,16 @@ export class MailService {
 
     this.logger.log(`Generated verification link for ${email}: ${verificationLink}`);
 
-    try {
-      // Attempt to queue the email job asynchronously
-      const job = await this.mailQueue.add(
-        'sendVerification',
-        { email, name, token, verificationLink },
-        { removeOnComplete: true, removeOnFail: 100 },
-      );
-      this.logger.log(`Successfully queued verification email job (ID: ${job.id}) in Redis.`);
-      return verificationLink;
-    } catch (error: any) {
-      this.logger.warn(
-        `Failed to queue email job in Redis: ${error.message}. Falling back to synchronous direct sending...`,
-      );
-
-      // FALLBACK: Send email synchronously in the background thread
-      this.sendDirectEmail(email, name, verificationLink).catch((err) => {
-        this.logger.error(`Failed to send direct email fallback: ${err.message}`);
+    // Send email directly via Gmail SMTP
+    this.sendDirectEmail(email, name, verificationLink)
+      .then(() => {
+        this.logger.log(`Verification email dispatched successfully to ${email}.`);
+      })
+      .catch((err) => {
+        this.logger.error(`Failed to send direct email to ${email}: ${err.message}`);
       });
 
-      return verificationLink;
-    }
+    return verificationLink;
   }
 
   private async sendDirectEmail(email: string, name: string, link: string): Promise<void> {
