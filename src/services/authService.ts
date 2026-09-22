@@ -3,11 +3,13 @@ import { useAuthStore, UserProfile } from '../store';
 import { syncService } from './syncService';
 import { getGoogleWebClientId } from './supabaseClient';
 
+import { getBackendUrl } from '../config/api';
+
 const SESSION_KEY = 'auth_user_id';
 const USER_PROFILE_KEY = 'auth_user_profile';
 const TOKEN_KEY = 'auth_access_token';
 
-const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:3000';
+const BACKEND_URL = getBackendUrl();
 
 function formatPhoneNumber(phone: string): string {
   const clean = phone.replace(/\s+/g, '');

@@ -151,7 +151,8 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import { authService } from '../services/authService';
 import { notificationService } from '../services/notificationService';
-const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:3000';
+import { getBackendUrl } from '../config/api';
+const BACKEND_URL = getBackendUrl();
 import { WelcomeScreen, LoginScreen, SignupScreen } from './authScreens';
 import { syncService } from '../services/syncService';
 import { BankDetailsModal } from './BankDetailsModal';

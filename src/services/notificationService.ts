@@ -2,8 +2,9 @@ import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import { useNotificationStore, useAuthStore } from '../store';
 import { authService } from './authService';
+import { getBackendUrl } from '../config/api';
 
-const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:3000';
+const BACKEND_URL = getBackendUrl();
 
 // Set notification handler for foreground notifications
 Notifications.setNotificationHandler({

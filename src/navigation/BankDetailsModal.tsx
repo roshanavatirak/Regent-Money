@@ -24,8 +24,9 @@ import { useTransactionStore } from '../store';
 import { authService } from '../services/authService';
 import { parseStatementTextWithAI } from '../services/aiService';
 import { syncService } from '../services/syncService';
+import { getBackendUrl } from '../config/api';
 
-const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:3000';
+const BACKEND_URL = getBackendUrl();
 
 interface BankDetailsModalProps {
   visible: boolean;

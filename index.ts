@@ -25,7 +25,8 @@ const SmsBackgroundSyncTask = async (taskData: any) => {
       return;
     }
 
-    const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:3000';
+    const { getBackendUrl } = require('./src/config/api');
+    const BACKEND_URL = getBackendUrl();
 
     // 1. Fetch active bank profiles directly from backend database
     const syncRes = await fetch(`${BACKEND_URL}/sync`, {

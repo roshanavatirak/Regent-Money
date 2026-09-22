@@ -6,8 +6,9 @@ import {
   useBankStore 
 } from '../store';
 import { authService } from './authService';
+import { getBackendUrl } from '../config/api';
 
-const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:3000';
+const BACKEND_URL = getBackendUrl();
 
 export const syncService = {
   /**
