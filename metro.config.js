@@ -9,12 +9,4 @@ config.resolver.blockList = [
   /[\\/\\\\]\.git[\\/\\\\]/,
 ];
 
-// Ensure .native.js files are resolved before .js for React Native
-config.resolver.sourceExts = [
-  'native.js',
-  'native.ts',
-  'native.tsx',
-  ...config.resolver.sourceExts,
-];
-
 module.exports = config;

@@ -1,5 +1,5 @@
 import { registerRootComponent } from 'expo';
-import { AppRegistry } from 'react-native';
+import { AppRegistry, Platform } from 'react-native';
 import App from './App';
 import { parseSMS } from './src/services/smsParser';
 import { useBankStore } from './src/store';
@@ -92,6 +92,8 @@ const SmsBackgroundSyncTask = async (taskData: any) => {
   }
 };
 
-AppRegistry.registerHeadlessTask('SmsBackgroundSync', () => SmsBackgroundSyncTask);
+if (Platform.OS !== 'web') {
+  AppRegistry.registerHeadlessTask('SmsBackgroundSync', () => SmsBackgroundSyncTask);
+}
 
 registerRootComponent(App);

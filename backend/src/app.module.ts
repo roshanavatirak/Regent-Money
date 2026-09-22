@@ -64,22 +64,17 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
 
         if (dbUrl) {
           console.log(`[Database] DATABASE_URL raw value: "${dbUrl}"`);
-          try {
-            const parsedUrl = new URL(dbUrl);
-            const resolvedIp = await resolveHostToIPv4(parsedUrl.hostname);
-            console.log(`[Database] Resolved ${parsedUrl.hostname} to IPv4: ${resolvedIp}`);
-
-            connectionOptions = {
-              ...connectionOptions,
-              host: resolvedIp,
-              port: parseInt(parsedUrl.port || '5432', 10),
-              username: parsedUrl.username,
-              password: decodeURIComponent(parsedUrl.password),
-              database: parsedUrl.pathname.substring(1),
-            };
-          } catch (e: any) {
-            console.warn('[Database] Failed to parse DATABASE_URL, falling back to direct URL connection:', e.message);
-            connectionOptions.url = dbUrl;
+          connectionOptions.url = dbUrl;
+          if (isSupabase) {
+            try {
+              const parsedUrl = new URL(dbUrl);
+              connectionOptions.ssl = {
+                rejectUnauthorized: false,
+                servername: parsedUrl.hostname,
+              };
+            } catch {
+              connectionOptions.ssl = { rejectUnauthorized: false };
+            }
           }
         }
 
