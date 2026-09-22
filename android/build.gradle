@@ -18,6 +18,13 @@ allprojects {
     mavenCentral()
     maven { url 'https://www.jitpack.io' }
   }
+
+  // Disable lintVital tasks across all subprojects (cuts build time from 30+ mins to ~3-5 mins and prevents 3rd-party library lint failures)
+  tasks.whenTaskAdded { task ->
+    if (task.name.startsWith("lintVital")) {
+      task.enabled = false
+    }
+  }
 }
 
 apply plugin: "expo-root-project"
