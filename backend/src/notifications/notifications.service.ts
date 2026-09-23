@@ -3,8 +3,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { InjectQueue } from '@nestjs/bull';
 import type { Queue } from 'bull';
+import { Cron } from '@nestjs/schedule';
 import { Notification } from './entities/notification.entity';
 import { User } from '../users/entities/user.entity';
+import { getDailyHumorMessage, HumorousMessage } from './humorous-messages';
 import * as crypto from 'crypto';
 
 @Injectable()
@@ -174,5 +176,120 @@ export class NotificationsService implements OnModuleInit {
     }
 
     return savedNotification;
+  }
+
+  /**
+   * Built-in 9:00 AM IST Cron (03:30 UTC)
+   * Dispatches the daily morning humorous check-in notification to all active users.
+   */
+  @Cron('30 3 * * *')
+  async handleMorningDailyHumorCron() {
+    this.logger.log('[DailyCron] Triggering 9:00 AM Morning Humorous Notification broadcast...');
+    try {
+      await this.broadcastDailyHumor('morning');
+    } catch (e: any) {
+      this.logger.error(`[DailyCron] Morning broadcast error: ${e.message}`, e.stack);
+    }
+  }
+
+  /**
+   * Built-in 9:00 PM IST Cron (15:30 UTC)
+   * Dispatches the daily evening humorous check-in notification to all active users.
+   */
+  @Cron('30 15 * * *')
+  async handleEveningDailyHumorCron() {
+    this.logger.log('[DailyCron] Triggering 9:00 PM Evening Humorous Notification broadcast...');
+    try {
+      await this.broadcastDailyHumor('evening');
+    } catch (e: any) {
+      this.logger.error(`[DailyCron] Evening broadcast error: ${e.message}`, e.stack);
+    }
+  }
+
+  /**
+   * Broadcasts a non-repeating humorous notification to all active users.
+   * Also callable manually via API or external backup webhook.
+   */
+  async broadcastDailyHumor(
+    slot: 'morning' | 'evening',
+    customMessage?: HumorousMessage,
+  ): Promise<{
+    success: boolean;
+    slot: string;
+    message: HumorousMessage;
+    totalUsers: number;
+    pushQueued: number;
+  }> {
+    try {
+      const message = customMessage || getDailyHumorMessage(slot);
+      this.logger.log(`[Broadcast] Broadcasting "${message.title}" (${slot}) to all active users...`);
+
+      const users = await this.userRepository.find({
+        where: { isDeleted: false },
+      });
+
+    if (!users || users.length === 0) {
+      this.logger.warn('[Broadcast] No active users found to broadcast.');
+      return { success: true, slot, message, totalUsers: 0, pushQueued: 0 };
+    }
+
+    const now = Date.now();
+    let pushQueued = 0;
+
+    // 1. Bulk create notifications for in-app history
+    const notificationsToSave = users.map((user) =>
+      this.notificationRepository.create({
+        id: 'notif_' + crypto.randomBytes(8).toString('hex'),
+        userId: user.id,
+        agentId: 'daily_humor',
+        title: message.title,
+        body: message.body,
+        type: 'recommendation',
+        readStatus: false,
+        payload: { slot, broadcastTime: now },
+        createdAt: now,
+        updatedAt: now,
+        isDeleted: false,
+      }),
+    );
+
+    await this.notificationRepository.save(notificationsToSave);
+
+    // 2. Dispatch push notifications for users with registered push tokens
+    for (const user of users) {
+      if (user.pushToken) {
+        try {
+          await this.notificationQueue.add(
+            'sendPush',
+            {
+              token: user.pushToken,
+              title: message.title,
+              body: message.body,
+              payload: { slot, type: 'daily_humor' },
+            },
+            { removeOnComplete: true, removeOnFail: 50 },
+          );
+          pushQueued++;
+        } catch (e: any) {
+          this.logger.warn(`Failed to queue push for user ${user.id}: ${e.message}`);
+        }
+      }
+    }
+
+    this.logger.log(
+      `[Broadcast] Successfully broadcasted to ${users.length} users (${pushQueued} push notifications queued).`,
+    );
+
+    return {
+      success: true,
+      slot,
+      message,
+      totalUsers: users.length,
+      pushQueued,
+    };
+    } catch (err: any) {
+      this.logger.error(`[Broadcast] Error in broadcastDailyHumor: ${err.message}`, err.stack);
+      throw err;
+    }
   }
 }

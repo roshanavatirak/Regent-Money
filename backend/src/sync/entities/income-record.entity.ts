@@ -17,6 +17,9 @@ export class IncomeRecord {
   @Column({ type: 'text', nullable: true })
   source: string;
 
+  @Column({ type: 'text', nullable: true })
+  category: string;
+
   @Column({ type: 'bigint', nullable: true, transformer: {
     to: (value: number) => value ? String(value) : null,
     from: (value: string) => value ? Number(value) : null

@@ -18,6 +18,9 @@ export interface TransactionState {
   isLoading: boolean;
   filterCategory: string | null;
   setTransactions: (txs: any[]) => void;
+  addTransactionState: (tx: any) => void;
+  updateTransactionState: (id: string, updatedFields: any) => void;
+  removeTransactionState: (id: string) => void;
   setLoading: (loading: boolean) => void;
   setFilterCategory: (category: string | null) => void;
 }
@@ -30,6 +33,26 @@ export const useTransactionStore = create<TransactionState>((set) => ({
     mmkvStorage.setObject('cache_transactions', transactions);
     set({ transactions });
   },
+  addTransactionState: (tx) =>
+    set((state) => {
+      const updated = [tx, ...state.transactions];
+      mmkvStorage.setObject('cache_transactions', updated);
+      return { transactions: updated };
+    }),
+  updateTransactionState: (id, updatedFields) =>
+    set((state) => {
+      const updated = state.transactions.map((tx) =>
+        tx.id === id ? { ...tx, ...updatedFields } : tx
+      );
+      mmkvStorage.setObject('cache_transactions', updated);
+      return { transactions: updated };
+    }),
+  removeTransactionState: (id) =>
+    set((state) => {
+      const updated = state.transactions.filter((tx) => tx.id !== id);
+      mmkvStorage.setObject('cache_transactions', updated);
+      return { transactions: updated };
+    }),
   setLoading: (isLoading) => set({ isLoading }),
   setFilterCategory: (filterCategory) => set({ filterCategory }),
 }));
@@ -165,6 +188,8 @@ export interface BankState {
   bankProfiles: BankProfileType[];
   setBankProfiles: (profiles: BankProfileType[]) => void;
   addBankProfileState: (profile: BankProfileType) => void;
+  removeBankProfileState: (id: string) => void;
+  updateBankBalance: (id: string, newBalance: number) => void;
 }
 
 export const useBankStore = create<BankState>((set) => ({
@@ -176,6 +201,20 @@ export const useBankStore = create<BankState>((set) => ({
   addBankProfileState: (profile) =>
     set((state) => {
       const updated = [profile, ...state.bankProfiles];
+      mmkvStorage.setObject('cache_bank_profiles', updated);
+      return { bankProfiles: updated };
+    }),
+  removeBankProfileState: (id) =>
+    set((state) => {
+      const updated = state.bankProfiles.filter((b) => b.id !== id);
+      mmkvStorage.setObject('cache_bank_profiles', updated);
+      return { bankProfiles: updated };
+    }),
+  updateBankBalance: (id, newBalance) =>
+    set((state) => {
+      const updated = state.bankProfiles.map((b) =>
+        b.id === id ? { ...b, currentBalance: newBalance, lastSyncTimestamp: Date.now() } : b
+      );
       mmkvStorage.setObject('cache_bank_profiles', updated);
       return { bankProfiles: updated };
     }),
@@ -213,45 +252,45 @@ export const getThemeColors = (isDark: boolean) => {
       background: '#24292e',
       card: '#2b3137',
       text: '#ffffff',
-      textSecondary: 'rgba(250, 251, 252, 0.7)',
-      textTertiary: 'rgba(250, 251, 252, 0.45)',
-      border: 'rgba(250, 251, 252, 0.12)',
+      textSecondary: 'rgba(250, 251, 252, 0.75)',
+      textTertiary: 'rgba(250, 251, 252, 0.52)',
+      border: 'rgba(250, 251, 252, 0.14)',
       accent: '#2dba4e',
-      accentMuted: 'rgba(45, 186, 78, 0.12)',
-      inputBackground: '#24292e',
-      inputBorder: 'rgba(250, 251, 252, 0.15)',
-      buttonSecondaryBackground: 'rgba(250, 251, 252, 0.08)',
+      accentMuted: 'rgba(45, 186, 78, 0.14)',
+      inputBackground: '#1e2227',
+      inputBorder: 'rgba(250, 251, 252, 0.18)',
+      buttonSecondaryBackground: 'rgba(250, 251, 252, 0.10)',
       buttonSecondaryText: '#fafbfc',
       shadowColor: '#000000',
       chatSelfBubble: '#24292e',
-      chatBotBubble: 'rgba(45, 186, 78, 0.1)',
+      chatBotBubble: 'rgba(45, 186, 78, 0.12)',
       statusBar: 'light' as const,
-      danger: '#cf222e',
-      warning: '#d29922',
-      divider: 'rgba(250, 251, 252, 0.08)',
+      danger: '#ff5252',
+      warning: '#e3b341',
+      divider: 'rgba(250, 251, 252, 0.10)',
     };
   } else {
     return {
       isDark: false,
-      background: '#f6f8fa',
+      background: '#f8fafc',
       card: '#ffffff',
-      text: '#24292f',
-      textSecondary: 'rgba(87, 96, 106, 0.9)',
-      textTertiary: 'rgba(87, 96, 106, 0.6)',
-      border: 'rgba(27, 31, 35, 0.15)',
-      accent: '#2da44e',
-      accentMuted: 'rgba(45, 186, 78, 0.08)',
+      text: '#0f172a',
+      textSecondary: '#475569',
+      textTertiary: '#64748b',
+      border: '#e2e8f0',
+      accent: '#16a34a',
+      accentMuted: 'rgba(22, 163, 74, 0.10)',
       inputBackground: '#ffffff',
-      inputBorder: 'rgba(27, 31, 35, 0.15)',
-      buttonSecondaryBackground: 'rgba(27, 31, 35, 0.05)',
-      buttonSecondaryText: '#24292f',
-      shadowColor: 'rgba(27, 31, 35, 0.08)',
-      chatSelfBubble: '#f6f8fa',
-      chatBotBubble: 'rgba(45, 186, 78, 0.06)',
+      inputBorder: '#cbd5e1',
+      buttonSecondaryBackground: '#f1f5f9',
+      buttonSecondaryText: '#0f172a',
+      shadowColor: 'rgba(15, 23, 42, 0.10)',
+      chatSelfBubble: '#f1f5f9',
+      chatBotBubble: 'rgba(22, 163, 74, 0.08)',
       statusBar: 'dark' as const,
-      danger: '#cf222e',
-      warning: '#9a6700',
-      divider: 'rgba(27, 31, 35, 0.08)',
+      danger: '#dc2626',
+      warning: '#d97706',
+      divider: '#e2e8f0',
     };
   }
 };
@@ -387,6 +426,40 @@ export const rehydrateAllStores = async () => {
   } catch (e) {
     console.error('[Store] Rehydration error:', e);
   }
+};
+
+// 9. Global Custom Confirmation Dialog Store
+export interface ConfirmOptions {
+  title?: string;
+  message: string;
+  confirmText?: string;
+  cancelText?: string;
+  isDestructive?: boolean;
+  icon?: 'trash-2' | 'alert-triangle' | 'help-circle' | 'info' | 'log-out';
+  onConfirm: () => void | Promise<void>;
+  onCancel?: () => void;
+}
+
+export interface ConfirmState {
+  visible: boolean;
+  options: ConfirmOptions | null;
+  loading: boolean;
+  showConfirm: (options: ConfirmOptions) => void;
+  hideConfirm: () => void;
+  setLoading: (loading: boolean) => void;
+}
+
+export const useConfirmStore = create<ConfirmState>((set) => ({
+  visible: false,
+  options: null,
+  loading: false,
+  showConfirm: (options) => set({ visible: true, options, loading: false }),
+  hideConfirm: () => set({ visible: false, options: null, loading: false }),
+  setLoading: (loading) => set({ loading }),
+}));
+
+export const showGlobalConfirm = (options: ConfirmOptions) => {
+  useConfirmStore.getState().showConfirm(options);
 };
 
 

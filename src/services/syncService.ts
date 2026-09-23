@@ -6,7 +6,7 @@ import {
   useBankStore,
   useAnalyticsStore,
 } from '../store';
-import { authService } from './authService';
+import { mmkvStorage } from '../db/mmkv';
 import { getBackendUrl } from '../config/api';
 
 const BACKEND_URL = getBackendUrl();
@@ -26,7 +26,7 @@ export const syncService = {
     }
 
     const user = useAuthStore.getState().user;
-    const token = authService.getAccessToken();
+    const token = mmkvStorage.getString('auth_access_token') || null;
     if (!user || !token) return;
 
     const controller = new AbortController();
@@ -93,7 +93,7 @@ export const syncService = {
       return;
     }
 
-    const token = authService.getAccessToken();
+    const token = mmkvStorage.getString('auth_access_token') || null;
     if (!token) {
       return;
     }

@@ -4,6 +4,7 @@ import { BullModule } from '@nestjs/bull';
 import { NotificationsService } from './notifications.service';
 import { NotificationsController } from './notifications.controller';
 import { NotificationProcessor } from './notification.processor';
+import { KeepAliveService } from './keep-alive.service';
 import { Notification } from './entities/notification.entity';
 import { User } from '../users/entities/user.entity';
 import { AuthModule } from '../auth/auth.module';
@@ -16,7 +17,7 @@ import { AuthModule } from '../auth/auth.module';
     }),
     AuthModule,
   ],
-  providers: [NotificationsService, NotificationProcessor],
+  providers: [NotificationsService, NotificationProcessor, KeepAliveService],
   controllers: [NotificationsController],
   exports: [NotificationsService],
 })

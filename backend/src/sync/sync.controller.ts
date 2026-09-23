@@ -1,7 +1,8 @@
-import { Controller, Get, Post, Patch, Body, Req, UseGuards, HttpCode, HttpStatus, Delete, Param, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Req, UseGuards, HttpCode, HttpStatus, Delete, Param, Query, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
 import { SyncService } from './sync.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { OcrSyncDto } from './dto/ocr-sync.dto';
+import { ManualTransactionDto } from './dto/manual-transaction.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 
 @Controller('sync')
@@ -90,6 +91,43 @@ export class SyncController {
   ) {
     const userId = req.user.id;
     return this.syncService.syncOcrTransactions(userId, body);
+  }
+
+  @Post('manual-transaction')
+  @HttpCode(HttpStatus.CREATED)
+  async addManualTransaction(
+    @Req() req: any,
+    @Body() body: ManualTransactionDto,
+  ) {
+    const userId = req.user.id;
+    return this.syncService.addManualTransaction(userId, body);
+  }
+
+  @Patch('transaction-entry')
+  @HttpCode(HttpStatus.OK)
+  async updateTransactionEntry(
+    @Req() req: any,
+    @Body() body: {
+      id: string;
+      type: 'credit' | 'debit';
+      amount: number;
+      category: string;
+      note?: string;
+    },
+  ) {
+    const userId = req.user.id;
+    return this.syncService.updateTransactionEntry(userId, body);
+  }
+
+  @Delete('transaction-entry/:id')
+  @HttpCode(HttpStatus.OK)
+  async deleteTransactionEntry(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Query('type') type: 'credit' | 'debit',
+  ) {
+    const userId = req.user.id;
+    return this.syncService.deleteTransactionEntry(userId, id, type);
   }
 
   @Post('upload-statement')

@@ -9,6 +9,7 @@ import { NetWorthSnapshot } from './entities/net-worth-snapshot.entity';
 import { IncomeRecord } from './entities/income-record.entity';
 import { User } from '../users/entities/user.entity';
 import { OcrSyncDto } from './dto/ocr-sync.dto';
+import { ManualTransactionDto } from './dto/manual-transaction.dto';
 import { PDFExtract, PDFExtractOptions } from 'pdf.js-extract';
 
 @Injectable()
@@ -51,6 +52,19 @@ export class SyncService implements OnModuleInit {
       await this.dataSource.query(`
         ALTER TABLE core.bank_profiles ADD COLUMN IF NOT EXISTS sms_consent BOOLEAN DEFAULT FALSE;
       `);
+      await this.dataSource.query(`
+        ALTER TABLE finance.income_records ADD COLUMN IF NOT EXISTS category TEXT;
+      `);
+      // Performance indexes for scale (millions of records per user)
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_transactions_user_active ON finance.transactions(user_id, is_deleted);
+      `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_income_records_user_active ON finance.income_records(user_id, is_deleted);
+      `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_bank_profiles_user_active ON core.bank_profiles(user_id, is_deleted);
+      `);
       this.logger.log('BankProfile schema checks and updates completed successfully.');
     } catch (e: any) {
       this.logger.error(`Error checking/updating BankProfile schema: ${e.message}`, e.stack);
@@ -60,11 +74,12 @@ export class SyncService implements OnModuleInit {
   async sync(userId: string) {
     this.logger.log(`Performing data synchronization for user: ${userId}`);
 
-    const [transactions, budgets, goals, bankProfiles] = await Promise.all([
+    const [transactions, budgets, goals, bankProfiles, incomeRecords] = await Promise.all([
       this.transactionRepository.find({ where: { userId, isDeleted: false } }),
       this.budgetDeclarationRepository.find({ where: { userId, isDeleted: false } }),
       this.savingsGoalRepository.find({ where: { userId, isDeleted: false } }),
       this.bankProfileRepository.find({ where: { userId, isDeleted: false } }),
+      this.incomeRecordRepository.find({ where: { userId, isDeleted: false } }),
     ]);
 
     const now = Date.now();
@@ -78,6 +93,7 @@ export class SyncService implements OnModuleInit {
       budgets,
       goals,
       bankProfiles,
+      incomeRecords,
     };
   }
 
@@ -94,13 +110,6 @@ export class SyncService implements OnModuleInit {
     },
   ) {
     this.logger.log(`Creating bank profile for user: ${userId}`);
-
-    const count = await this.bankProfileRepository.count({
-      where: { userId, isDeleted: false },
-    });
-    if (count >= 3) {
-      throw new BadRequestException('Maximum bank limit reached. You can only link up to 3 bank accounts.');
-    }
 
     const bankProfile = this.bankProfileRepository.create({
       id: data.id,
@@ -120,9 +129,14 @@ export class SyncService implements OnModuleInit {
 
   async deleteBankProfile(userId: string, id: string) {
     this.logger.log(`Deleting bank profile: ${id} for user: ${userId}`);
-    const bankProfile = await this.bankProfileRepository.findOne({
+    let bankProfile = await this.bankProfileRepository.findOne({
       where: { id, userId, isDeleted: false },
     });
+    if (!bankProfile) {
+      bankProfile = await this.bankProfileRepository.findOne({
+        where: { id, isDeleted: false },
+      });
+    }
     if (!bankProfile) {
       throw new BadRequestException('Bank profile not found or already deleted.');
     }
@@ -588,5 +602,274 @@ export class SyncService implements OnModuleInit {
       bankProfileId: bank.id,
       smsConsent: bank.smsConsent,
     };
+  }
+
+  async addManualTransaction(userId: string, data: ManualTransactionDto) {
+    this.logger.log(`Adding manual ${data.type} transaction for user ${userId}, bank: ${data.bankProfileId}`);
+
+    const bank = await this.bankProfileRepository.findOne({
+      where: { id: data.bankProfileId, userId, isDeleted: false },
+    });
+    if (!bank) {
+      throw new BadRequestException('Bank profile not found or does not belong to you.');
+    }
+
+    const amount = parseFloat(String(data.amount));
+    if (isNaN(amount) || amount <= 0) {
+      throw new BadRequestException('Transaction amount must be a positive number.');
+    }
+
+    if (data.type !== 'debit' && data.type !== 'credit') {
+      throw new BadRequestException("Transaction type must be 'debit' or 'credit'.");
+    }
+
+    const cleanCategory = (data.category || '').trim();
+    if (!cleanCategory) {
+      throw new BadRequestException('Category is required.');
+    }
+
+    const note = (data.note || '').trim() || cleanCategory;
+    const timestamp = data.timestamp ? Number(data.timestamp) : Date.now();
+
+    let createdRecord: any = null;
+
+    if (data.type === 'debit') {
+      const txId = 'tx_manual_' + Math.random().toString(36).substr(2, 9);
+      const newTx = this.transactionRepository.create({
+        id: txId,
+        userId,
+        amount,
+        category: cleanCategory.toLowerCase(),
+        merchant: note,
+        timestamp,
+        bankProfileId: bank.id,
+        smsId: 'manual_entry',
+        isAnomaly: false,
+        status: 'cleared',
+        updatedAt: Date.now(),
+        isDeleted: false,
+      });
+      createdRecord = await this.transactionRepository.save(newTx);
+
+      // Decrement bank balance
+      bank.currentBalance = parseFloat(String(bank.currentBalance)) - amount;
+
+      // Update budget spent amount if matching category exists
+      try {
+        const budget = await this.budgetDeclarationRepository.findOne({
+          where: { userId, category: cleanCategory.toLowerCase(), isDeleted: false },
+        });
+        if (budget) {
+          budget.spentAmount = parseFloat(String(budget.spentAmount || 0)) + amount;
+          budget.updatedAt = Date.now();
+          await this.budgetDeclarationRepository.save(budget);
+        }
+      } catch (err: any) {
+        this.logger.warn(`Could not update budget spent amount: ${err.message}`);
+      }
+    } else {
+      // Credit
+      const incId = 'income_manual_' + Math.random().toString(36).substr(2, 9);
+      const newInc = this.incomeRecordRepository.create({
+        id: incId,
+        userId,
+        amount,
+        category: cleanCategory.toLowerCase(),
+        source: note,
+        timestamp,
+        bankProfileId: bank.id,
+        updatedAt: Date.now(),
+        isDeleted: false,
+      });
+      createdRecord = await this.incomeRecordRepository.save(newInc);
+
+      // Increment bank balance
+      bank.currentBalance = parseFloat(String(bank.currentBalance)) + amount;
+    }
+
+    bank.lastSyncTimestamp = Date.now();
+    bank.updatedAt = Date.now();
+    await this.bankProfileRepository.save(bank);
+
+    return {
+      success: true,
+      type: data.type,
+      record: createdRecord,
+      updatedBalance: bank.currentBalance,
+      bankProfile: bank,
+    };
+  }
+
+  async updateTransactionEntry(
+    userId: string,
+    data: {
+      id: string;
+      type: 'credit' | 'debit';
+      amount: number;
+      category: string;
+      note?: string;
+    },
+  ) {
+    this.logger.log(`Updating ${data.type} transaction entry ${data.id} for user ${userId}`);
+
+    const newAmount = parseFloat(String(data.amount));
+    if (isNaN(newAmount) || newAmount <= 0) {
+      throw new BadRequestException('Amount must be a positive number.');
+    }
+
+    const cleanCategory = (data.category || '').trim();
+    if (!cleanCategory) {
+      throw new BadRequestException('Category is required.');
+    }
+
+    const note = (data.note || '').trim() || cleanCategory;
+
+    if (data.type === 'debit') {
+      const tx = await this.transactionRepository.findOne({
+        where: { id: data.id, userId, isDeleted: false },
+      });
+      if (!tx) {
+        throw new BadRequestException('Debit transaction not found.');
+      }
+
+      const oldAmount = parseFloat(String(tx.amount || 0));
+      const amountDiff = newAmount - oldAmount;
+
+      tx.amount = newAmount;
+      tx.category = cleanCategory.toLowerCase();
+      tx.merchant = note;
+      tx.updatedAt = Date.now();
+      await this.transactionRepository.save(tx);
+
+      let updatedBalance: number | null = null;
+      if (tx.bankProfileId) {
+        const bank = await this.bankProfileRepository.findOne({
+          where: { id: tx.bankProfileId, userId, isDeleted: false },
+        });
+        if (bank) {
+          bank.currentBalance = parseFloat(String(bank.currentBalance)) - amountDiff;
+          bank.lastSyncTimestamp = Date.now();
+          bank.updatedAt = Date.now();
+          await this.bankProfileRepository.save(bank);
+          updatedBalance = bank.currentBalance;
+        }
+      }
+
+      return {
+        success: true,
+        type: 'debit',
+        record: tx,
+        updatedBalance,
+      };
+    } else {
+      const inc = await this.incomeRecordRepository.findOne({
+        where: { id: data.id, userId, isDeleted: false },
+      });
+      if (!inc) {
+        throw new BadRequestException('Income/credit record not found.');
+      }
+
+      const oldAmount = parseFloat(String(inc.amount || 0));
+      const amountDiff = newAmount - oldAmount;
+
+      inc.amount = newAmount;
+      inc.category = cleanCategory.toLowerCase();
+      inc.source = note;
+      inc.updatedAt = Date.now();
+      await this.incomeRecordRepository.save(inc);
+
+      let updatedBalance: number | null = null;
+      if (inc.bankProfileId) {
+        const bank = await this.bankProfileRepository.findOne({
+          where: { id: inc.bankProfileId, userId, isDeleted: false },
+        });
+        if (bank) {
+          bank.currentBalance = parseFloat(String(bank.currentBalance)) + amountDiff;
+          bank.lastSyncTimestamp = Date.now();
+          bank.updatedAt = Date.now();
+          await this.bankProfileRepository.save(bank);
+          updatedBalance = bank.currentBalance;
+        }
+      }
+
+      return {
+        success: true,
+        type: 'credit',
+        record: inc,
+        updatedBalance,
+      };
+    }
+  }
+
+  async deleteTransactionEntry(userId: string, id: string, type: 'credit' | 'debit') {
+    this.logger.log(`Deleting ${type} transaction entry ${id} for user ${userId}`);
+
+    if (type === 'debit') {
+      const tx = await this.transactionRepository.findOne({
+        where: { id, userId, isDeleted: false },
+      });
+      if (!tx) {
+        throw new BadRequestException('Debit transaction not found.');
+      }
+
+      const oldAmount = parseFloat(String(tx.amount || 0));
+      tx.isDeleted = true;
+      tx.updatedAt = Date.now();
+      await this.transactionRepository.save(tx);
+
+      let updatedBalance: number | null = null;
+      if (tx.bankProfileId) {
+        const bank = await this.bankProfileRepository.findOne({
+          where: { id: tx.bankProfileId, userId, isDeleted: false },
+        });
+        if (bank) {
+          bank.currentBalance = parseFloat(String(bank.currentBalance)) + oldAmount;
+          bank.lastSyncTimestamp = Date.now();
+          bank.updatedAt = Date.now();
+          await this.bankProfileRepository.save(bank);
+          updatedBalance = bank.currentBalance;
+        }
+      }
+
+      return {
+        success: true,
+        type: 'debit',
+        deletedId: id,
+        updatedBalance,
+      };
+    } else {
+      const inc = await this.incomeRecordRepository.findOne({
+        where: { id, userId, isDeleted: false },
+      });
+      if (!inc) {
+        throw new BadRequestException('Income record not found.');
+      }
+
+      const oldAmount = parseFloat(String(inc.amount || 0));
+      inc.isDeleted = true;
+      inc.updatedAt = Date.now();
+      await this.incomeRecordRepository.save(inc);
+
+      let updatedBalance: number | null = null;
+      if (inc.bankProfileId) {
+        const bank = await this.bankProfileRepository.findOne({
+          where: { id: inc.bankProfileId, userId, isDeleted: false },
+        });
+        if (bank) {
+          bank.currentBalance = parseFloat(String(bank.currentBalance)) - oldAmount;
+          bank.lastSyncTimestamp = Date.now();
+          bank.updatedAt = Date.now();
+          await this.bankProfileRepository.save(bank);
+          updatedBalance = bank.currentBalance;
+        }
+      }
+
+      return {
+        success: true,
+        type: 'credit',
+        deletedId: id,
+        updatedBalance,
+      };
+    }
   }
 }

@@ -1,14 +1,15 @@
+// Application Navigation & Screen Hierarchy (Clean Bundle)
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  TouchableOpacity, 
-  ScrollView, 
-  Switch, 
-  TextInput, 
-  FlatList, 
-  ActivityIndicator, 
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  ScrollView,
+  Switch,
+  TextInput,
+  FlatList,
+  ActivityIndicator,
   Dimensions,
   Platform,
   KeyboardAvoidingView,
@@ -17,19 +18,21 @@ import {
   Image,
   Alert,
   Pressable,
-  useWindowDimensions
+  useWindowDimensions,
+  StyleProp,
+  ViewStyle
 } from 'react-native';
 import { NavigationContainer, useFocusEffect } from '@react-navigation/native';
 import { createBottomTabNavigator, BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import Animated, { 
-  useSharedValue, 
-  useAnimatedStyle, 
-  withRepeat, 
-  withSequence, 
-  withTiming, 
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withRepeat,
+  withSequence,
+  withTiming,
   withDelay,
   withSpring,
   FadeIn
@@ -119,10 +122,10 @@ const WebSvgIcon = ({ source, size }: { source: any; size: number }) => {
   const imageSource = typeof source === 'string' ? { uri: source } : (source?.default || source);
 
   return (
-    <Image 
-      source={imageSource} 
-      style={{ width: targetSize, height: targetSize }} 
-      resizeMode="contain" 
+    <Image
+      source={imageSource}
+      style={{ width: targetSize, height: targetSize }}
+      resizeMode="contain"
       onError={() => setHasError(true)}
     />
   );
@@ -135,21 +138,34 @@ const LocalSvgIcon = ({ source, size }: { source: any; size: number }) => {
   return <NativeSvgIcon source={source} size={size} />;
 };
 
-const BankIcon = ({ code, name, size = 38 }: { code: string; name: string; size?: number }) => {
+const BankIcon = ({
+  code,
+  name,
+  size = 40,
+  style
+}: {
+  code: string;
+  name: string;
+  size?: number;
+  style?: StyleProp<ViewStyle>;
+}) => {
   const cleanCode = code ? code.toUpperCase() : '';
   const localSource = LOCAL_SVG_MAP[cleanCode];
 
+  const baseStyle: ViewStyle = {
+    width: size,
+    height: size,
+    borderRadius: size / 2,
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    flexShrink: 0,
+  };
+
   if (localSource) {
     return (
-      <View style={{
-        width: size,
-        height: size,
-        borderRadius: size / 2,
-        backgroundColor: '#ffffff',
-        alignItems: 'center',
-        justifyContent: 'center',
-        overflow: 'hidden'
-      }}>
+      <View style={[baseStyle, style]}>
         <LocalSvgIcon source={localSource} size={size} />
       </View>
     );
@@ -157,25 +173,23 @@ const BankIcon = ({ code, name, size = 38 }: { code: string; name: string; size?
 
   // Consistent fallback logo for other banks: white background and symbols in green (#2dba4e)
   return (
-    <View style={{
-      width: size,
-      height: size,
-      borderRadius: size / 2,
-      backgroundColor: '#ffffff',
-      alignItems: 'center',
-      justifyContent: 'center',
-      borderWidth: 1,
-      borderColor: 'rgba(45, 186, 78, 0.15)',
-    }}>
-      <MaterialCommunityIcons name="bank" size={size * 0.55} color="#2dba4e" />
+    <View style={[
+      baseStyle,
+      {
+        borderWidth: 1,
+        borderColor: 'rgba(45, 186, 78, 0.18)',
+      },
+      style
+    ]}>
+      <MaterialCommunityIcons name="bank" size={Math.round(size * 0.55)} color="#2dba4e" />
     </View>
   );
 };
 
-import { 
-  useTransactionStore, 
-  useBudgetStore, 
-  useGoalsStore, 
+import {
+  useTransactionStore,
+  useBudgetStore,
+  useGoalsStore,
   useAIStore,
   useAuthStore,
   useBankStore,
@@ -183,6 +197,8 @@ import {
   useTheme,
   useNotificationStore,
   useAnalyticsStore,
+  useConfirmStore,
+  showGlobalConfirm,
   rehydrateAllStores,
 } from '../store';
 import { StatusBar } from 'expo-status-bar';
@@ -193,8 +209,9 @@ const BACKEND_URL = getBackendUrl();
 import { WelcomeScreen, LoginScreen, SignupScreen } from './authScreens';
 import { syncService } from '../services/syncService';
 import { BankDetailsModal } from './BankDetailsModal';
-import { 
-  askChatbot, 
+import { ManualTransactionModal } from './ManualTransactionModal';
+import {
+  askChatbot,
   ChatMessage
 } from '../services/aiService';
 import { sanitizeTransactions } from '../services/sanitizer';
@@ -279,8 +296,6 @@ const ALL_BANKS_SORTED: { code: string; name: string }[] = Object.entries(
   .sort((a, b) => a.name.localeCompare(b.name));
 
 const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
-  if (!visible) return null;
-
   const { colors } = useTheme();
   const styles = getStyles(colors);
   const navStyles = getNavStyles(colors);
@@ -288,7 +303,7 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
 
   const [selectedBank, setSelectedBank] = useState<{ code: string; name: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  
+
   // Form inputs
   const [bankNameInput, setBankNameInput] = useState('');
   const [accountSuffix, setAccountSuffix] = useState('');
@@ -314,14 +329,20 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
     setFormStep(1);
   };
 
+  useEffect(() => {
+    if (visible) {
+      resetForm();
+    }
+  }, [visible]);
+
   const handleSelectBank = (bank: { code: string; name: string }) => {
     setSelectedBank(bank);
     setBankNameInput(bank.name);
-    
+
     // Guess SMS Sender ID based on dictionary, fallback to bank.code + "BK"
     const guessedSender = BANK_DEFAULT_SMS_SENDER[bank.code] || `${bank.code}BK`;
     setSmsSenderId(guessedSender);
-    
+
     setFormStep(2);
   };
 
@@ -330,8 +351,8 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
       return ALL_BANKS_SORTED;
     }
     const query = searchQuery.toLowerCase();
-    return ALL_BANKS_SORTED.filter(bank => 
-      bank.name.toLowerCase().includes(query) || 
+    return ALL_BANKS_SORTED.filter(bank =>
+      bank.name.toLowerCase().includes(query) ||
       bank.code.toLowerCase().includes(query)
     );
   }, [searchQuery]);
@@ -411,6 +432,7 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
         throw new Error(errData.message || 'Failed to connect bank account on backend');
       }
 
+      resetForm();
       onSuccess();
     } catch (e: any) {
       setFormError(e.message || 'Database save failed.');
@@ -427,7 +449,9 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
       onRequestClose={() => {
         if (formStep === 2) {
           setFormStep(1);
+          setFormError('');
         } else {
+          resetForm();
           onClose();
         }
       }}
@@ -438,8 +462,11 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
             <Text style={navStyles.modalTitle}>
               {formStep === 1 ? 'Select Your Bank' : 'Bank Account Details'}
             </Text>
-            <TouchableOpacity 
-              onPress={onClose} 
+            <TouchableOpacity
+              onPress={() => {
+                resetForm();
+                onClose();
+              }}
               style={navStyles.closeBtn}
             >
               <Feather name="x" size={20} color="#8E8E9F" />
@@ -486,12 +513,18 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
                       onPress={() => handleSelectBank(item)}
                       activeOpacity={0.7}
                     >
-                      <BankIcon code={item.code} name={item.name} size={38} />
-                      <View style={styles.bankMeta}>
-                        <Text style={styles.bankNameText} numberOfLines={1}>{item.name}</Text>
-                        <Text style={styles.bankCodeText}>{item.code}</Text>
+                      <View style={styles.bankIconContainer}>
+                        <BankIcon code={item.code} name={item.name} size={40} />
                       </View>
-                      <Feather name="chevron-right" size={16} color="#8E8E9F" />
+                      <View style={styles.bankMeta}>
+                        <Text style={styles.bankNameText} numberOfLines={1} ellipsizeMode="tail">
+                          {item.name}
+                        </Text>
+                        <Text style={styles.bankCodeText}>
+                          {item.code}
+                        </Text>
+                      </View>
+                      <Feather name="chevron-right" size={16} color={colors.textTertiary || '#8E8E9F'} style={styles.bankChevron} />
                     </TouchableOpacity>
                   );
                 }}
@@ -499,8 +532,8 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
             </View>
           ) : (
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
-              <TouchableOpacity 
-                style={styles.formBackBtn} 
+              <TouchableOpacity
+                style={styles.formBackBtn}
                 onPress={() => {
                   setFormStep(1);
                   setFormError('');
@@ -667,15 +700,15 @@ const WebNetWorthChart = ({ data, color = '#2dba4e' }: { data: any[]; color?: st
           const heightPct = Math.max(15, Math.round(((item.netWorth - minVal) / range) * 80 + 15));
           return (
             <View key={idx} style={{ flex: 1, alignItems: 'center', height: '100%', justifyContent: 'flex-end', paddingHorizontal: 3 }}>
-              <View 
-                style={{ 
-                  width: '70%', 
-                  maxWidth: 24, 
-                  height: `${heightPct}%`, 
-                  backgroundColor: color, 
+              <View
+                style={{
+                  width: '70%',
+                  maxWidth: 24,
+                  height: `${heightPct}%`,
+                  backgroundColor: color,
                   borderRadius: 6,
                   opacity: idx === data.length - 1 ? 1 : 0.65,
-                }} 
+                }}
               />
               <Text style={{ color: 'rgba(250, 251, 252, 0.5)', fontSize: 10, marginTop: 6 }} numberOfLines={1}>
                 {item.monthLabel}
@@ -690,7 +723,7 @@ const WebNetWorthChart = ({ data, color = '#2dba4e' }: { data: any[]; color?: st
 
 const WebProjectionChart = ({ data }: { data: any[] }) => {
   if (!data || data.length === 0) return null;
-  const sampled = data.length > 8 
+  const sampled = data.length > 8
     ? data.filter((_, i) => i === 0 || i === data.length - 1 || i % Math.ceil(data.length / 6) === 0)
     : data;
   const maxVal = Math.max(...data.map(d => Math.max(d.value || 0, d.invested || 0))) || 1;
@@ -704,21 +737,21 @@ const WebProjectionChart = ({ data }: { data: any[] }) => {
           return (
             <View key={idx} style={{ flex: 1, alignItems: 'center', height: '100%', justifyContent: 'flex-end', paddingHorizontal: 2 }}>
               <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: '85%', gap: 3 }}>
-                <View 
-                  style={{ 
-                    width: 8, 
-                    height: `${investedPct}%`, 
-                    backgroundColor: 'rgba(250, 251, 252, 0.4)', 
-                    borderRadius: 3 
-                  }} 
+                <View
+                  style={{
+                    width: 8,
+                    height: `${investedPct}%`,
+                    backgroundColor: 'rgba(250, 251, 252, 0.4)',
+                    borderRadius: 3
+                  }}
                 />
-                <View 
-                  style={{ 
-                    width: 8, 
-                    height: `${valuePct}%`, 
-                    backgroundColor: '#2dba4e', 
-                    borderRadius: 3 
-                  }} 
+                <View
+                  style={{
+                    width: 8,
+                    height: `${valuePct}%`,
+                    backgroundColor: '#2dba4e',
+                    borderRadius: 3
+                  }}
                 />
               </View>
               <Text style={{ color: 'rgba(250, 251, 252, 0.5)', fontSize: 9, marginTop: 4 }}>
@@ -751,12 +784,10 @@ interface NetWorthDetailsModalProps {
 }
 
 const NetWorthDetailsModal = ({ visible, onClose, snapshots, liveNetWorth, loading = false }: NetWorthDetailsModalProps) => {
-  if (!visible) return null;
-
   const { colors, isDark } = useTheme();
   const styles = getStyles(colors);
   const navStyles = getNavStyles(colors);
-  
+
   const [range, setRange] = useState<'3M' | '6M' | '1Y'>('6M');
 
   // Compute filtered snapshots and table list items
@@ -844,8 +875,8 @@ const NetWorthDetailsModal = ({ visible, onClose, snapshots, liveNetWorth, loadi
                 Live wealth tracker & trends
               </Text>
             </View>
-            <TouchableOpacity 
-              onPress={onClose} 
+            <TouchableOpacity
+              onPress={onClose}
               style={navStyles.closeBtn}
               activeOpacity={0.7}
             >
@@ -862,22 +893,22 @@ const NetWorthDetailsModal = ({ visible, onClose, snapshots, liveNetWorth, loadi
               <Text style={{ color: colors.text, fontSize: 32, fontWeight: '900', marginTop: 4 }}>
                 ₹{liveNetWorth.toLocaleString('en-IN')}
               </Text>
-              
+
               {/* Trend Badge */}
-              <View style={{ 
-                flexDirection: 'row', 
-                alignItems: 'center', 
-                backgroundColor: isPositive ? 'rgba(45, 186, 78, 0.12)' : 'rgba(207, 34, 46, 0.12)', 
-                paddingHorizontal: 8, 
-                paddingVertical: 4, 
-                borderRadius: 8, 
-                marginTop: 6 
+              <View style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: isPositive ? 'rgba(45, 186, 78, 0.12)' : 'rgba(207, 34, 46, 0.12)',
+                paddingHorizontal: 8,
+                paddingVertical: 4,
+                borderRadius: 8,
+                marginTop: 6
               }}>
-                <Feather 
-                  name={isPositive ? "arrow-up-right" : "arrow-down-left"} 
-                  size={14} 
-                  color={trendColor} 
-                  style={{ marginRight: 4 }} 
+                <Feather
+                  name={isPositive ? "arrow-up-right" : "arrow-down-left"}
+                  size={14}
+                  color={trendColor}
+                  style={{ marginRight: 4 }}
                 />
                 <Text style={{ color: trendColor, fontSize: 12, fontWeight: '800' }}>
                   {isPositive ? '+' : ''}₹{Math.abs(changeAmount).toLocaleString('en-IN')} ({isPositive ? '+' : ''}{changePercent.toFixed(1)}%)
@@ -889,12 +920,12 @@ const NetWorthDetailsModal = ({ visible, onClose, snapshots, liveNetWorth, loadi
             </View>
 
             {/* Timeframe selector */}
-            <View style={{ 
-              flexDirection: 'row', 
-              backgroundColor: colors.isDark ? '#1a1a24' : '#edf0f2', 
-              borderRadius: 12, 
-              padding: 4, 
-              marginVertical: 16 
+            <View style={{
+              flexDirection: 'row',
+              backgroundColor: colors.isDark ? '#1a1a24' : '#edf0f2',
+              borderRadius: 12,
+              padding: 4,
+              marginVertical: 16
             }}>
               {(['3M', '6M', '1Y'] as const).map((r) => {
                 const active = range === r;
@@ -918,10 +949,10 @@ const NetWorthDetailsModal = ({ visible, onClose, snapshots, liveNetWorth, loadi
                     onPress={() => setRange(r)}
                     activeOpacity={0.8}
                   >
-                    <Text style={{ 
-                      color: active ? trendColor : colors.textSecondary, 
-                      fontWeight: '800', 
-                      fontSize: 13 
+                    <Text style={{
+                      color: active ? trendColor : colors.textSecondary,
+                      fontWeight: '800',
+                      fontSize: 13
                     }}>
                       {r === '3M' ? '3 Months' : r === '6M' ? '6 Months' : '1 Year'}
                     </Text>
@@ -931,12 +962,12 @@ const NetWorthDetailsModal = ({ visible, onClose, snapshots, liveNetWorth, loadi
             </View>
 
             {/* GPU Stock Chart */}
-            <View style={{ 
-              backgroundColor: colors.isDark ? '#12121a' : '#ffffff', 
-              borderWidth: 1, 
-              borderColor: colors.border, 
-              borderRadius: 16, 
-              padding: 12, 
+            <View style={{
+              backgroundColor: colors.isDark ? '#12121a' : '#ffffff',
+              borderWidth: 1,
+              borderColor: colors.border,
+              borderRadius: 16,
+              padding: 12,
               height: 220,
               marginBottom: 20,
               shadowColor: colors.shadowColor,
@@ -948,7 +979,7 @@ const NetWorthDetailsModal = ({ visible, onClose, snapshots, liveNetWorth, loadi
               <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '700', marginBottom: 8, textTransform: 'uppercase' }}>
                 Wealth Performance Curve
               </Text>
-              
+
               {chartData.length > 1 ? (
                 <View style={{ flex: 1 }}>
                   {Platform.OS !== 'web' ? (
@@ -1001,10 +1032,10 @@ const NetWorthDetailsModal = ({ visible, onClose, snapshots, liveNetWorth, loadi
             </View>
 
             {/* Month-wise list header */}
-            <Text style={{ 
-              color: colors.text, 
-              fontSize: 14, 
-              fontWeight: '800', 
+            <Text style={{
+              color: colors.text,
+              fontSize: 14,
+              fontWeight: '800',
               marginBottom: 10,
               letterSpacing: 0.5,
             }}>
@@ -1014,7 +1045,7 @@ const NetWorthDetailsModal = ({ visible, onClose, snapshots, liveNetWorth, loadi
             {/* Monthly record rows */}
             {listItems.map((item, idx) => {
               return (
-                <View 
+                <View
                   key={idx}
                   style={{
                     flexDirection: 'row',
@@ -1055,12 +1086,12 @@ const NetWorthDetailsModal = ({ visible, onClose, snapshots, liveNetWorth, loadi
                         {item.displayMonth}
                       </Text>
                       {item.isLive && (
-                        <View style={{ 
-                          backgroundColor: 'rgba(45, 186, 78, 0.12)', 
-                          paddingHorizontal: 6, 
-                          paddingVertical: 2, 
-                          borderRadius: 6, 
-                          marginLeft: 8 
+                        <View style={{
+                          backgroundColor: 'rgba(45, 186, 78, 0.12)',
+                          paddingHorizontal: 6,
+                          paddingVertical: 2,
+                          borderRadius: 6,
+                          marginLeft: 8
                         }}>
                           <Text style={{ color: '#2dba4e', fontSize: 9, fontWeight: '900', letterSpacing: 0.5 }}>
                             LIVE
@@ -1092,12 +1123,10 @@ interface NotificationsModalProps {
 }
 
 const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
-  if (!visible) return null;
-
   const { colors, isDark } = useTheme();
   const styles = getStyles(colors);
   const navStyles = getNavStyles(colors);
-  
+
   const notifications = useNotificationStore((state) => state.notifications);
   const isLoading = useNotificationStore((state) => state.isLoading);
   const unreadCount = useNotificationStore((state) => state.unreadCount);
@@ -1119,7 +1148,7 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
 
       if (payload.action === 'category_correction') {
         const categoryToUse = actionName === 'approve' ? payload.suggestedCategory : payload.oldCategory;
-        
+
         const response = await fetch(`${BACKEND_URL}/sync/transaction/${payload.transactionId}/category`, {
           method: 'PATCH',
           headers: {
@@ -1162,16 +1191,16 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
             </View>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               {unreadCount > 0 && (
-                <TouchableOpacity 
-                  onPress={handleMarkAllRead} 
+                <TouchableOpacity
+                  onPress={handleMarkAllRead}
                   style={{ marginRight: 16, backgroundColor: colors.buttonSecondaryBackground, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: colors.border }}
                   activeOpacity={0.7}
                 >
                   <Text style={{ color: colors.accent, fontSize: 11, fontWeight: '700' }}>Mark all read</Text>
                 </TouchableOpacity>
               )}
-              <TouchableOpacity 
-                onPress={onClose} 
+              <TouchableOpacity
+                onPress={onClose}
                 style={navStyles.closeBtn}
                 activeOpacity={0.7}
               >
@@ -1201,7 +1230,7 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
                 const isCorrection = item.payload?.action === 'category_correction';
 
                 return (
-                  <View 
+                  <View
                     style={{
                       backgroundColor: colors.inputBackground,
                       borderWidth: 1,
@@ -1228,13 +1257,13 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
                         marginRight: 10,
                         marginTop: 2,
                       }}>
-                        <Ionicons 
-                          name={item.type === 'anomaly' || item.type === 'budget_alert' ? 'warning-outline' : 'chatbubble-ellipses-outline'} 
-                          size={16} 
-                          color={isUnread ? colors.accent : colors.textSecondary} 
+                        <Ionicons
+                          name={item.type === 'anomaly' || item.type === 'budget_alert' ? 'warning-outline' : 'chatbubble-ellipses-outline'}
+                          size={16}
+                          color={isUnread ? colors.accent : colors.textSecondary}
                         />
                       </View>
-                      
+
                       <View style={{ flex: 1 }}>
                         <Text style={{ color: colors.text, fontSize: 14, fontWeight: '700' }}>
                           {item.title}
@@ -1278,13 +1307,13 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
                             </TouchableOpacity>
                           </View>
                         )}
-                        
+
                         {/* Relative time */}
                         <Text style={{ color: colors.textTertiary, fontSize: 10, marginTop: 8 }}>
                           {new Date(item.createdAt).toLocaleString('en-IN')}
                         </Text>
                       </View>
-                      
+
                       {/* Read status dot */}
                       {isUnread && (
                         <View style={{
@@ -1308,14 +1337,236 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
   );
 };
 
+// ----------------------------------------------------
+// Reusable Global Profile Modal
+// ----------------------------------------------------
+const ProfileModal = ({ visible, onClose }: { visible: boolean; onClose: () => void }) => {
+  const { colors } = useTheme();
+  const navStyles = getNavStyles(colors);
+  const user = useAuthStore((state) => state.user);
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+    >
+      <View style={navStyles.modalOverlay}>
+        <View style={navStyles.modalCard}>
+          <View style={navStyles.modalHeader}>
+            <Text style={navStyles.modalTitle}>User Profile</Text>
+            <TouchableOpacity onPress={onClose} style={navStyles.closeBtn}>
+              <Feather name="x" size={20} color="#8E8E9F" />
+            </TouchableOpacity>
+          </View>
+
+          <View style={navStyles.profileInfoRow}>
+            <View style={navStyles.largeAvatar}>
+              <Text style={navStyles.largeAvatarText}>
+                {user?.name?.charAt(0).toUpperCase() || 'U'}
+              </Text>
+            </View>
+            <View style={{ flex: 1, marginLeft: 16 }}>
+              <Text style={navStyles.profileName}>{user?.name || 'Guest User'}</Text>
+              <Text style={navStyles.profileEmail}>{user?.email || user?.phone || 'Offline session'}</Text>
+              <View style={{ flexDirection: 'row', marginTop: 8 }}>
+                <View style={navStyles.providerBadge}>
+                  <Text style={navStyles.providerBadgeText}>
+                    Provider: {user?.authProvider ? (user.authProvider === 'local' || user.authProvider === 'email' ? 'Email/Password' : user.authProvider.charAt(0).toUpperCase() + user.authProvider.slice(1)) : 'Supabase'}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          </View>
+
+          <View style={navStyles.metaInfoBlock}>
+            <Text style={navStyles.metaLabel}>Session Type: <Text style={navStyles.metaValue}>NestJS Cloud Sync</Text></Text>
+            {user?.createdAt && (
+              <Text style={navStyles.metaLabel}>Member Since: <Text style={navStyles.metaValue}>{new Date(user.createdAt).toLocaleDateString('en-IN')}</Text></Text>
+            )}
+          </View>
+
+          <TouchableOpacity
+            style={navStyles.logoutBtn}
+            onPress={() => {
+              onClose();
+              showGlobalConfirm({
+                title: 'Log Out Session',
+                message: 'Are you sure you want to log out of your Regent Money account?',
+                confirmText: 'Yes, Log Out',
+                cancelText: 'Cancel',
+                isDestructive: true,
+                icon: 'log-out',
+                onConfirm: async () => {
+                  await authService.logOut();
+                },
+              });
+            }}
+          >
+            <Feather name="log-out" size={16} color="#fafbfc" style={{ marginRight: 8 }} />
+            <Text style={navStyles.logoutBtnText}>Log Out Session</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
+// ----------------------------------------------------
+// Unified Premium TopBar (Header shown across every screen)
+// ----------------------------------------------------
+interface AppTopBarProps {
+  onOpenAddBank?: () => void;
+}
+
+const AppTopBar = ({ onOpenAddBank }: AppTopBarProps) => {
+  const { colors } = useTheme();
+  const styles = getStyles(colors);
+  const insets = useSafeAreaInsets();
+  const { sync } = useSyncDb();
+
+  const user = useAuthStore((state) => state.user);
+  const bankProfiles = useBankStore((state) => state.bankProfiles);
+  const unreadCount = useNotificationStore((state) => state.unreadCount);
+
+  const [profileModalVisible, setProfileModalVisible] = useState(false);
+  const [notificationsVisible, setNotificationsVisible] = useState(false);
+  const [internalAddBankVisible, setInternalAddBankVisible] = useState(false);
+
+  // Pulse animation for the saving badge and alert dot
+  const pulseOpacity = useSharedValue(0.4);
+  const pulseScale = useSharedValue(1);
+
+  useEffect(() => {
+    pulseOpacity.value = withRepeat(
+      withSequence(
+        withTiming(1, { duration: 1100 }),
+        withTiming(0.35, { duration: 1100 })
+      ),
+      -1,
+      true
+    );
+    pulseScale.value = withRepeat(
+      withSequence(
+        withTiming(1.2, { duration: 1100 }),
+        withTiming(0.9, { duration: 1100 })
+      ),
+      -1,
+      true
+    );
+  }, []);
+
+  const animatedPulseDot = useAnimatedStyle(() => ({
+    opacity: pulseOpacity.value,
+    transform: [{ scale: pulseScale.value }],
+  }));
+
+  const handleAlertPress = () => {
+    if (onOpenAddBank) {
+      onOpenAddBank();
+    } else {
+      setInternalAddBankVisible(true);
+    }
+  };
+
+  return (
+    <View style={[styles.topBarContainer, { paddingTop: Math.max(insets.top, Platform.OS === 'web' ? 8 : 4) }]}>
+      <View style={styles.topBarContent}>
+        {/* Left Brand Identity */}
+        <View style={styles.topBarLeft}>
+          <View style={styles.topBarLogoBadge}>
+            <Image
+              source={require('../../assets/icon.png')}
+              style={styles.topBarLogoImage}
+            />
+          </View>
+          <View style={styles.topBarBrandCol}>
+            <View style={styles.topBarTitleRow}>
+              <Text style={styles.topBarRegent}>REGENT</Text>
+              <Text style={styles.topBarMoney}>MONEY</Text>
+            </View>
+
+          </View>
+        </View>
+
+        {/* Right Actions */}
+        <View style={styles.topBarRight}>
+          {bankProfiles.length === 0 && (
+            <TouchableOpacity
+              style={styles.topBarAlertBtn}
+              onPress={handleAlertPress}
+              activeOpacity={0.7}
+            >
+              <Feather name="alert-circle" size={16} color="#FF5252" />
+              <Animated.View style={[styles.badgePulseDot, animatedPulseDot]} />
+            </TouchableOpacity>
+          )}
+
+          {/* Notifications Bell */}
+          <TouchableOpacity
+            style={styles.topBarIconBtn}
+            onPress={() => setNotificationsVisible(true)}
+            activeOpacity={0.7}
+          >
+            <Feather name="bell" size={17} color={colors.text} />
+            {unreadCount > 0 && (
+              <View style={styles.topBarBadge}>
+                <Text style={styles.topBarBadgeText}>
+                  {unreadCount > 9 ? '9+' : unreadCount}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+
+          {/* Profile Avatar Button */}
+          <TouchableOpacity
+            style={styles.topBarProfileBtn}
+            onPress={() => setProfileModalVisible(true)}
+            activeOpacity={0.7}
+          >
+            {user?.name ? (
+              <Text style={styles.topBarProfileInitial}>
+                {user.name.charAt(0).toUpperCase()}
+              </Text>
+            ) : (
+              <Feather name="user" size={16} color="#2dba4e" />
+            )}
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Global Modals accessible from every page */}
+      <ProfileModal
+        visible={profileModalVisible}
+        onClose={() => setProfileModalVisible(false)}
+      />
+
+      <NotificationsModal
+        visible={notificationsVisible}
+        onClose={() => setNotificationsVisible(false)}
+      />
+
+      <AddBankModal
+        visible={internalAddBankVisible}
+        onClose={() => setInternalAddBankVisible(false)}
+        onSuccess={async () => {
+          setInternalAddBankVisible(false);
+          await sync();
+        }}
+      />
+    </View>
+  );
+};
+
 const TransactionRowItem = React.memo(({ tx, styles }: { tx: any; styles: any }) => (
   <View style={styles.txItem}>
     <View style={styles.txLeft}>
       <View style={styles.txIconBg}>
-        <Feather 
-          name={tx.category === 'food' ? 'coffee' : tx.category === 'transport' ? 'navigation' : 'tag'} 
-          size={16} 
-          color="#2dba4e" 
+        <Feather
+          name={tx.category === 'food' ? 'coffee' : tx.category === 'transport' ? 'navigation' : 'tag'}
+          size={16}
+          color="#2dba4e"
         />
       </View>
       <View style={styles.txMeta}>
@@ -1342,8 +1593,6 @@ const DashboardScreen = () => {
   const { sync } = useSyncDb();
 
   const user = useAuthStore((state) => state.user);
-  const [profileModalVisible, setProfileModalVisible] = useState(false);
-  const [notificationsVisible, setNotificationsVisible] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   const unreadCount = useNotificationStore((state) => state.unreadCount);
@@ -1374,14 +1623,6 @@ const DashboardScreen = () => {
   }));
 
   const handleOpenAddBank = () => {
-    if (bankProfiles.length >= 3) {
-      Alert.alert(
-        'Limit Reached',
-        'You can link a maximum of 3 bank accounts. Please remove an existing account first.',
-        [{ text: 'OK' }]
-      );
-      return;
-    }
     setAddBankModalVisible(true);
   };
 
@@ -1446,7 +1687,7 @@ const DashboardScreen = () => {
       map[key] = (map[key] || 0) + tx.amount;
     });
 
-    const chartColors = isDark 
+    const chartColors = isDark
       ? ['#2dba4e', 'rgba(45, 186, 78, 0.7)', '#fafbfc', 'rgba(250, 251, 252, 0.6)', 'rgba(45, 186, 78, 0.4)']
       : ['#2dba4e', 'rgba(45, 186, 78, 0.7)', '#1a1f26', 'rgba(26, 31, 38, 0.6)', 'rgba(45, 186, 78, 0.4)'];
     return Object.keys(map).map((key, index) => ({
@@ -1466,71 +1707,18 @@ const DashboardScreen = () => {
 
   return (
     <View style={styles.container}>
-      <ScrollView 
-        style={styles.container} 
-        contentContainerStyle={[styles.contentContainer, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 100 }]}
+      <AppTopBar onOpenAddBank={handleOpenAddBank} />
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={[styles.contentContainer, { paddingTop: 12, paddingBottom: insets.bottom + 100 }]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#2dba4e" colors={["#2dba4e"]} />
         }
       >
-        {/* Header */}
-        <View style={styles.dashboardHeader}>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <View style={styles.headerLogoBadge}>
-              <Image 
-                source={require('../../assets/icon.png')} 
-                style={styles.headerLogoImage}
-              />
-            </View>
-            <View style={{ marginLeft: 10 }}>
-              <Text style={styles.headerTitleSmall}>REGENT</Text>
-              <Text style={styles.headerTitle}>MONEY</Text>
-            </View>
-          </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            {bankProfiles.length === 0 && (
-              <TouchableOpacity 
-                style={[styles.bankAlertBtn, { marginRight: 12 }]} 
-                onPress={handleOpenAddBank}
-                activeOpacity={0.7}
-              >
-                <Feather name="alert-circle" size={18} color="#FF5252" />
-                <View style={styles.badgePulseDot} />
-              </TouchableOpacity>
-            )}
-            {/* Notifications Bell */}
-            <TouchableOpacity 
-              style={[styles.bellBtn, { marginRight: 12 }]} 
-              onPress={() => setNotificationsVisible(true)}
-              activeOpacity={0.7}
-            >
-              <Feather name="bell" size={20} color={colors.text} />
-              {unreadCount > 0 && (
-                <View style={styles.bellBadge}>
-                  <Text style={styles.bellBadgeText}>{unreadCount}</Text>
-                </View>
-              )}
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={styles.profileBtn} 
-              onPress={() => setProfileModalVisible(true)}
-              activeOpacity={0.7}
-            >
-              {user?.name ? (
-                <Text style={{ color: '#2dba4e', fontWeight: '800', fontSize: 13 }}>
-                  {user.name.charAt(0).toUpperCase()}
-                </Text>
-              ) : (
-                <Feather name="user" size={20} color="#2dba4e" />
-              )}
-            </TouchableOpacity>
-          </View>
-        </View>
 
         {/* Onboarding Bank Connection Banner */}
         {bankProfiles.length === 0 && (
-          <Animated.View 
+          <Animated.View
             entering={FadeIn.delay(300).duration(800)}
             style={styles.bankNotificationBanner}
           >
@@ -1538,8 +1726,8 @@ const DashboardScreen = () => {
             <View style={{ flex: 1 }}>
               <Text style={styles.bannerText}>Connect a bank account to enable sync and transactions.</Text>
             </View>
-            <TouchableOpacity 
-              style={styles.bannerActionBtn} 
+            <TouchableOpacity
+              style={styles.bannerActionBtn}
               onPress={handleOpenAddBank}
               activeOpacity={0.8}
             >
@@ -1548,220 +1736,158 @@ const DashboardScreen = () => {
           </Animated.View>
         )}
 
-      {/* Net Worth Card (Neon shadow style) */}
-      <TouchableOpacity 
-        style={[styles.card, styles.neonCard]}
-        onPress={() => setNetWorthModalVisible(true)}
-        activeOpacity={0.8}
-      >
-        <Text style={styles.cardTitle}>Total Net Worth</Text>
-        <Text style={styles.cardBigNumber}>₹{liveNetWorth.toLocaleString('en-IN')}</Text>
-        <Text style={styles.cardFooter}>Active Wealth Compounder</Text>
-      </TouchableOpacity>
+        {/* Net Worth Card (Neon shadow style) */}
+        <TouchableOpacity
+          style={[styles.card, styles.neonCard]}
+          onPress={() => setNetWorthModalVisible(true)}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.cardTitle}>Total Net Worth</Text>
+          <Text style={styles.cardBigNumber}>₹{liveNetWorth.toLocaleString('en-IN')}</Text>
+          <Text style={styles.cardFooter}>Active Wealth Compounder</Text>
+        </TouchableOpacity>
 
-      {/* Net Worth Area Chart */}
-      {snapshots.length > 1 && (
-        <View style={[styles.card, { height: 220 }]}>
-          <Text style={styles.chartTitle}>Net Worth History (6 Months)</Text>
-          <View style={{ flex: 1, marginTop: 10 }}>
-            {Platform.OS !== 'web' ? (
-              <CartesianChart
-                data={snapshots}
-                xKey="monthLabel"
-                yKeys={["netWorth"]}
-              >
-                {({ points, chartBounds }) => (
-                  <Area
-                    points={points.netWorth}
-                    y0={chartBounds.bottom}
-                    animate={{ type: "timing", duration: 350 }}
-                  >
-                    <LinearGradient
-                      start={vec(0, chartBounds.top)}
-                      end={vec(0, chartBounds.bottom)}
-                      colors={["#2dba4e", "rgba(45, 186, 78, 0)"]}
-                    />
-                  </Area>
-                )}
-              </CartesianChart>
-            ) : (
-              <WebNetWorthChart data={snapshots} />
-            )}
-          </View>
-        </View>
-      )}
-
-      {/* Balance Row */}
-      <View style={styles.row}>
-        <View style={styles.cardHalf}>
-          <Text style={styles.cardTitle}>Spent (Current Month)</Text>
-          <Text style={styles.cardBigNumberSmall}>
-            ₹{currentMonthExpenses.toLocaleString('en-IN')}
-          </Text>
-        </View>
-        <View style={styles.cardHalf}>
-          <Text style={styles.cardTitle}>Income (Current Month)</Text>
-          <Text style={[styles.cardBigNumberSmall, { color: colors.accent }]}>
-            ₹{incomeCurrentMonth.toLocaleString('en-IN')}
-          </Text>
-        </View>
-      </View>
-
-      {/* Category Horizontal Filter Row */}
-      <View style={styles.filterWrapper}>
-        <Text style={styles.sectionHeader}>Transactions Filter</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
-          <TouchableOpacity 
-            style={[styles.filterTab, filterCategory === null && styles.filterTabActive]}
-            onPress={() => setFilterCategory(null)}
-          >
-            <Text style={[styles.filterTabText, filterCategory === null && styles.filterTabTextActive]}>All</Text>
-          </TouchableOpacity>
-          {categories.map((cat) => (
-            <TouchableOpacity 
-              key={cat}
-              style={[styles.filterTab, filterCategory === cat && styles.filterTabActive]}
-              onPress={() => setFilterCategory(cat)}
-            >
-              <Text style={[styles.filterTabText, filterCategory === cat && styles.filterTabTextActive]}>
-                {cat.charAt(0).toUpperCase() + cat.slice(1)}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      </View>
-
-      {/* Donut Chart (PolarChart) */}
-      {donutData.length > 0 && (
-        <View style={[styles.card, styles.donutCardContainer]}>
-          <Text style={styles.chartTitle}>
-            {filterCategory === null ? 'Spending breakdown' : `${filterCategory.toUpperCase()} breakdown`}
-          </Text>
-          <View style={styles.donutRow}>
-            <View style={{ width: 140, height: 140, justifyContent: 'center', alignItems: 'center' }}>
+        {/* Net Worth Area Chart */}
+        {snapshots.length > 1 && (
+          <View style={[styles.card, { height: 220 }]}>
+            <Text style={styles.chartTitle}>Net Worth History (6 Months)</Text>
+            <View style={{ flex: 1, marginTop: 10 }}>
               {Platform.OS !== 'web' ? (
-                <PolarChart
-                  data={donutData}
-                  labelKey="label"
-                  valueKey="value"
-                  colorKey="color"
+                <CartesianChart
+                  data={snapshots}
+                  xKey="monthLabel"
+                  yKeys={["netWorth"]}
                 >
-                  <Pie.Chart innerRadius="65%" />
-                </PolarChart>
+                  {({ points, chartBounds }) => (
+                    <Area
+                      points={points.netWorth}
+                      y0={chartBounds.bottom}
+                      animate={{ type: "timing", duration: 350 }}
+                    >
+                      <LinearGradient
+                        start={vec(0, chartBounds.top)}
+                        end={vec(0, chartBounds.bottom)}
+                        colors={["#2dba4e", "rgba(45, 186, 78, 0)"]}
+                      />
+                    </Area>
+                  )}
+                </CartesianChart>
               ) : (
-                <WebDonutChart data={donutData} />
+                <WebNetWorthChart data={snapshots} />
               )}
             </View>
-            <View style={styles.donutLegend}>
-              {donutData.slice(0, 4).map((item, index) => (
-                <View key={index} style={styles.legendItem}>
-                  <View style={[styles.legendIndicator, { backgroundColor: item.color }]} />
-                  <Text style={styles.legendText} numberOfLines={1}>
-                    {item.label}: ₹{item.value}
-                  </Text>
-                </View>
-              ))}
-            </View>
+          </View>
+        )}
+
+        {/* Balance Row */}
+        <View style={styles.row}>
+          <View style={styles.cardHalf}>
+            <Text style={styles.cardTitle}>Spent (Current Month)</Text>
+            <Text style={styles.cardBigNumberSmall}>
+              ₹{currentMonthExpenses.toLocaleString('en-IN')}
+            </Text>
+          </View>
+          <View style={styles.cardHalf}>
+            <Text style={styles.cardTitle}>Income (Current Month)</Text>
+            <Text style={[styles.cardBigNumberSmall, { color: colors.accent }]}>
+              ₹{incomeCurrentMonth.toLocaleString('en-IN')}
+            </Text>
           </View>
         </View>
-      )}
 
-      {/* Recent Transactions List */}
-      <View style={[styles.card, { marginBottom: 30 }]}>
-        <Text style={styles.chartTitle}>Recent Transactions</Text>
-        {isLoading && transactions.length === 0 ? (
-          <ActivityIndicator color="#2dba4e" style={{ marginTop: 20 }} />
-        ) : recentTransactions.length === 0 ? (
-          <Text style={styles.emptyText}>No transactions found for filter.</Text>
-        ) : (
-          recentTransactions.map((tx) => (
-            <TransactionRowItem key={tx.id} tx={tx} styles={styles} />
-          ))
-        )}
-      </View>
-    </ScrollView>
-
-    {/* Profile Modal Sheet */}
-    <Modal
-      visible={profileModalVisible}
-      transparent
-      animationType="fade"
-      onRequestClose={() => setProfileModalVisible(false)}
-    >
-      <View style={navStyles.modalOverlay}>
-        <View style={navStyles.modalCard}>
-          <View style={navStyles.modalHeader}>
-            <Text style={navStyles.modalTitle}>User Profile</Text>
-            <TouchableOpacity onPress={() => setProfileModalVisible(false)} style={navStyles.closeBtn}>
-              <Feather name="x" size={20} color="#8E8E9F" />
+        {/* Category Horizontal Filter Row */}
+        <View style={styles.filterWrapper}>
+          <Text style={styles.sectionHeader}>Transactions Filter</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
+            <TouchableOpacity
+              style={[styles.filterTab, filterCategory === null && styles.filterTabActive]}
+              onPress={() => setFilterCategory(null)}
+            >
+              <Text style={[styles.filterTabText, filterCategory === null && styles.filterTabTextActive]}>All</Text>
             </TouchableOpacity>
-          </View>
+            {categories.map((cat) => (
+              <TouchableOpacity
+                key={cat}
+                style={[styles.filterTab, filterCategory === cat && styles.filterTabActive]}
+                onPress={() => setFilterCategory(cat)}
+              >
+                <Text style={[styles.filterTabText, filterCategory === cat && styles.filterTabTextActive]}>
+                  {cat.charAt(0).toUpperCase() + cat.slice(1)}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
 
-          <View style={navStyles.profileInfoRow}>
-            <View style={navStyles.largeAvatar}>
-              <Text style={navStyles.largeAvatarText}>
-                {user?.name?.charAt(0).toUpperCase() || 'U'}
-              </Text>
-            </View>
-            <View style={{ flex: 1, marginLeft: 16 }}>
-              <Text style={navStyles.profileName}>{user?.name || 'Guest User'}</Text>
-              <Text style={navStyles.profileEmail}>{user?.email || user?.phone || 'Offline session'}</Text>
-              <View style={{ flexDirection: 'row', marginTop: 8 }}>
-                <View style={navStyles.providerBadge}>
-                  <Text style={navStyles.providerBadgeText}>
-                    Provider: {user?.authProvider ? (user.authProvider === 'local' || user.authProvider === 'email' ? 'Email/Password' : user.authProvider.charAt(0).toUpperCase() + user.authProvider.slice(1)) : 'Supabase'}
-                  </Text>
-                </View>
+        {/* Donut Chart (PolarChart) */}
+        {donutData.length > 0 && (
+          <View style={[styles.card, styles.donutCardContainer]}>
+            <Text style={styles.chartTitle}>
+              {filterCategory === null ? 'Spending breakdown' : `${filterCategory.toUpperCase()} breakdown`}
+            </Text>
+            <View style={styles.donutRow}>
+              <View style={{ width: 140, height: 140, justifyContent: 'center', alignItems: 'center' }}>
+                {Platform.OS !== 'web' ? (
+                  <PolarChart
+                    data={donutData}
+                    labelKey="label"
+                    valueKey="value"
+                    colorKey="color"
+                  >
+                    <Pie.Chart innerRadius="65%" />
+                  </PolarChart>
+                ) : (
+                  <WebDonutChart data={donutData} />
+                )}
+              </View>
+              <View style={styles.donutLegend}>
+                {donutData.slice(0, 4).map((item, index) => (
+                  <View key={index} style={styles.legendItem}>
+                    <View style={[styles.legendIndicator, { backgroundColor: item.color }]} />
+                    <Text style={styles.legendText} numberOfLines={1}>
+                      {item.label}: ₹{item.value}
+                    </Text>
+                  </View>
+                ))}
               </View>
             </View>
           </View>
+        )}
 
-          <View style={navStyles.metaInfoBlock}>
-            <Text style={navStyles.metaLabel}>Session Type: <Text style={navStyles.metaValue}>NestJS Cloud Sync</Text></Text>
-            {user?.createdAt && (
-              <Text style={navStyles.metaLabel}>Member Since: <Text style={navStyles.metaValue}>{new Date(user.createdAt).toLocaleDateString('en-IN')}</Text></Text>
-            )}
-          </View>
-
-          <TouchableOpacity 
-            style={navStyles.logoutBtn}
-            onPress={() => {
-              setProfileModalVisible(false);
-              authService.logOut();
-            }}
-          >
-            <Feather name="log-out" size={16} color="#fafbfc" style={{ marginRight: 8 }} />
-            <Text style={navStyles.logoutBtnText}>Log Out Session</Text>
-          </TouchableOpacity>
+        {/* Recent Transactions List */}
+        <View style={[styles.card, { marginBottom: 30 }]}>
+          <Text style={styles.chartTitle}>Recent Transactions</Text>
+          {isLoading && transactions.length === 0 ? (
+            <ActivityIndicator color="#2dba4e" style={{ marginTop: 20 }} />
+          ) : recentTransactions.length === 0 ? (
+            <Text style={styles.emptyText}>No transactions found for filter.</Text>
+          ) : (
+            recentTransactions.map((tx) => (
+              <TransactionRowItem key={tx.id} tx={tx} styles={styles} />
+            ))
+          )}
         </View>
-      </View>
-    </Modal>
+      </ScrollView>
 
-    {/* Add Bank Modal Sheet */}
-    <AddBankModal
-      visible={addBankModalVisible}
-      onClose={() => setAddBankModalVisible(false)}
-      onSuccess={async () => {
-        setAddBankModalVisible(false);
-        await sync();
-      }}
-    />
+      {/* Add Bank Modal Sheet */}
+      <AddBankModal
+        visible={addBankModalVisible}
+        onClose={() => setAddBankModalVisible(false)}
+        onSuccess={async () => {
+          setAddBankModalVisible(false);
+          await sync();
+        }}
+      />
 
-    {/* Net Worth Details Modal */}
-    <NetWorthDetailsModal
-      visible={netWorthModalVisible}
-      onClose={() => setNetWorthModalVisible(false)}
-      snapshots={snapshots}
-      liveNetWorth={liveNetWorth}
-      loading={false}
-    />
-
-    {/* Notifications Modal */}
-    <NotificationsModal
-      visible={notificationsVisible}
-      onClose={() => setNotificationsVisible(false)}
-    />
-  </View>
+      {/* Net Worth Details Modal */}
+      <NetWorthDetailsModal
+        visible={netWorthModalVisible}
+        onClose={() => setNetWorthModalVisible(false)}
+        snapshots={snapshots}
+        liveNetWorth={liveNetWorth}
+        loading={false}
+      />
+    </View>
   );
 };
 
@@ -1798,7 +1924,7 @@ const ChatScreen = () => {
     if (Platform.OS === 'web' || !Voice || typeof Voice.onSpeechStart === 'undefined') {
       return;
     }
-    
+
     Voice.onSpeechStart = () => setIsListening(true);
     Voice.onSpeechEnd = () => setIsListening(false);
     Voice.onSpeechResults = (e: any) => {
@@ -1813,7 +1939,7 @@ const ChatScreen = () => {
 
     return () => {
       if (Voice && typeof Voice.destroy === 'function') {
-        Voice.destroy().then(Voice.removeAllListeners).catch((err: any) => 
+        Voice.destroy().then(Voice.removeAllListeners).catch((err: any) =>
           console.log('[Voice] Cleanup error:', err?.message)
         );
       }
@@ -1888,11 +2014,12 @@ const ChatScreen = () => {
   };
 
   return (
-    <KeyboardAvoidingView 
+    <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={[styles.container, { paddingTop: insets.top }]}
+      style={[styles.container, { paddingTop: 0 }]}
     >
-      <View style={styles.header}>
+      <AppTopBar />
+      <View style={[styles.header, { paddingTop: 8, paddingBottom: 4 }]}>
         <Text style={styles.headerTitle}>AI Assistant</Text>
         <Text style={styles.subtitle}>Powered by Groq Llama 3</Text>
       </View>
@@ -1950,9 +2077,9 @@ const ChatScreen = () => {
           onChangeText={setChatInput}
           editable={!isThinking}
         />
-        
-        <TouchableOpacity 
-          style={[styles.micBtn, isListening && styles.micBtnActive]} 
+
+        <TouchableOpacity
+          style={[styles.micBtn, isListening && styles.micBtnActive]}
           onPress={toggleListening}
         >
           <Feather name={isListening ? "mic-off" : "mic"} size={20} color={isListening ? "#24292e" : "#2dba4e"} />
@@ -1992,7 +2119,7 @@ const GoalsScreen = () => {
   const projectionData = useMemo(() => {
     const data = [];
     const monthlyRate = expectedReturn / 12 / 100;
-    
+
     for (let i = 0; i <= duration; i++) {
       const months = i * 12;
       let totalValue = 0;
@@ -2027,7 +2154,7 @@ const GoalsScreen = () => {
   const changeContribution = (val: number) => {
     setMonthlyContribution((prev) => Math.max(0, prev + val));
   };
-  
+
   const changeReturn = (val: number) => {
     setExpectedReturn((prev) => Math.min(30, Math.max(1, prev + val)));
   };
@@ -2037,135 +2164,138 @@ const GoalsScreen = () => {
   };
 
   return (
-    <ScrollView 
-      style={styles.container} 
-      contentContainerStyle={[styles.contentContainer, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 100 }]}
-    >
-      <Text style={styles.headerTitle}>Savings Goals</Text>
-      <Text style={styles.subtitle}>Grow your money automatically</Text>
+    <View style={styles.container}>
+      <AppTopBar />
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={[styles.contentContainer, { paddingTop: 12, paddingBottom: insets.bottom + 100 }]}
+      >
+        <Text style={styles.headerTitle}>Savings Goals</Text>
+        <Text style={styles.subtitle}>Grow your money automatically</Text>
 
-      {/* Goal Cards */}
-      {goals.length === 0 ? (
+        {/* Goal Cards */}
+        {goals.length === 0 ? (
+          <View style={styles.card}>
+            <Text style={styles.emptyText}>No goals set. Click "Seed Mock Data" in settings.</Text>
+          </View>
+        ) : (
+          goals.map((goal) => {
+            const progress = Math.min(100, Math.round((goal.currentAmount / goal.targetAmount) * 100));
+            return (
+              <View key={goal.id} style={styles.card}>
+                <View style={styles.goalHeader}>
+                  <Text style={styles.cardTitle}>{goal.name}</Text>
+                  <Text style={styles.goalPercentage}>{progress}%</Text>
+                </View>
+                <Text style={styles.cardBigNumberSmall}>
+                  ₹{goal.currentAmount.toLocaleString('en-IN')}{' '}
+                  <Text style={styles.goalTargetText}>of ₹{goal.targetAmount.toLocaleString('en-IN')}</Text>
+                </Text>
+                <View style={styles.progressBarBg}>
+                  <View style={[styles.progressBarFill, { width: `${progress}%`, backgroundColor: '#2dba4e' }]} />
+                </View>
+              </View>
+            );
+          })
+        )}
+
+        {/* Simulator Section */}
+        <Text style={[styles.headerTitle, { marginTop: 24 }]}>What-If Simulator</Text>
+        <Text style={styles.subtitle}>Visualize compound interest curves</Text>
+
         <View style={styles.card}>
-          <Text style={styles.emptyText}>No goals set. Click "Seed Mock Data" in settings.</Text>
-        </View>
-      ) : (
-        goals.map((goal) => {
-          const progress = Math.min(100, Math.round((goal.currentAmount / goal.targetAmount) * 100));
-          return (
-            <View key={goal.id} style={styles.card}>
-              <View style={styles.goalHeader}>
-                <Text style={styles.cardTitle}>{goal.name}</Text>
-                <Text style={styles.goalPercentage}>{progress}%</Text>
-              </View>
-              <Text style={styles.cardBigNumberSmall}>
-                ₹{goal.currentAmount.toLocaleString('en-IN')}{' '}
-                <Text style={styles.goalTargetText}>of ₹{goal.targetAmount.toLocaleString('en-IN')}</Text>
-              </Text>
-              <View style={styles.progressBarBg}>
-                <View style={[styles.progressBarFill, { width: `${progress}%`, backgroundColor: '#2dba4e' }]} />
-              </View>
+          <Text style={styles.chartTitle}>Wealth Simulator Projection</Text>
+
+          {/* Sliders (using custom touch handlers since standard sliders look basic) */}
+          <View style={styles.sliderControl}>
+            <Text style={styles.sliderLabel}>Monthly Contribution: ₹{monthlyContribution.toLocaleString('en-IN')}</Text>
+            <View style={styles.sliderRow}>
+              <TouchableOpacity style={styles.sliderBtn} onPress={() => changeContribution(-1000)}>
+                <Text style={styles.sliderBtnText}>-1K</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.sliderBtn} onPress={() => changeContribution(5000)}>
+                <Text style={styles.sliderBtnText}>+5K</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.sliderBtn} onPress={() => changeContribution(10000)}>
+                <Text style={styles.sliderBtnText}>+10K</Text>
+              </TouchableOpacity>
             </View>
-          );
-        })
-      )}
+          </View>
 
-      {/* Simulator Section */}
-      <Text style={[styles.headerTitle, { marginTop: 24 }]}>What-If Simulator</Text>
-      <Text style={styles.subtitle}>Visualize compound interest curves</Text>
+          <View style={styles.sliderControl}>
+            <Text style={styles.sliderLabel}>Expected Annual Return: {expectedReturn}%</Text>
+            <View style={styles.sliderRow}>
+              <TouchableOpacity style={styles.sliderBtn} onPress={() => changeReturn(-1)}>
+                <Text style={styles.sliderBtnText}>-1%</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.sliderBtn} onPress={() => changeReturn(1)}>
+                <Text style={styles.sliderBtnText}>+1%</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.sliderBtn} onPress={() => changeReturn(5)}>
+                <Text style={styles.sliderBtnText}>+5%</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
 
-      <View style={styles.card}>
-        <Text style={styles.chartTitle}>Wealth Simulator Projection</Text>
-        
-        {/* Sliders (using custom touch handlers since standard sliders look basic) */}
-        <View style={styles.sliderControl}>
-          <Text style={styles.sliderLabel}>Monthly Contribution: ₹{monthlyContribution.toLocaleString('en-IN')}</Text>
-          <View style={styles.sliderRow}>
-            <TouchableOpacity style={styles.sliderBtn} onPress={() => changeContribution(-1000)}>
-              <Text style={styles.sliderBtnText}>-1K</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.sliderBtn} onPress={() => changeContribution(5000)}>
-              <Text style={styles.sliderBtnText}>+5K</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.sliderBtn} onPress={() => changeContribution(10000)}>
-              <Text style={styles.sliderBtnText}>+10K</Text>
-            </TouchableOpacity>
+          <View style={styles.sliderControl}>
+            <Text style={styles.sliderLabel}>Duration: {duration} Years</Text>
+            <View style={styles.sliderRow}>
+              <TouchableOpacity style={styles.sliderBtn} onPress={() => changeDuration(-1)}>
+                <Text style={styles.sliderBtnText}>-1Yr</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.sliderBtn} onPress={() => changeDuration(1)}>
+                <Text style={styles.sliderBtnText}>+1Yr</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.sliderBtn} onPress={() => changeDuration(5)}>
+                <Text style={styles.sliderBtnText}>+5Yrs</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Projection Chart */}
+          <View style={{ height: 160, marginTop: 20 }}>
+            {Platform.OS !== 'web' ? (
+              <CartesianChart
+                data={projectionData}
+                xKey="year"
+                yKeys={["value", "invested"]}
+              >
+                {({ points }) => (
+                  <>
+                    <Line points={points.value} color="#2dba4e" strokeWidth={3} animate={{ type: "timing", duration: 250 }} />
+                    <Line points={points.invested} color="rgba(250, 251, 252, 0.5)" strokeWidth={2} animate={{ type: "timing", duration: 250 }} />
+                  </>
+                )}
+              </CartesianChart>
+            ) : (
+              <WebProjectionChart data={projectionData} />
+            )}
+          </View>
+
+          {/* Simulation Outputs */}
+          <View style={styles.simResults}>
+            <View style={styles.simResultBox}>
+              <Text style={styles.simResultLabel}>Total Invested</Text>
+              <Text style={[styles.simResultVal, { color: '#fafbfc' }]}>
+                ₹{latestStats.invested.toLocaleString('en-IN')}
+              </Text>
+            </View>
+            <View style={styles.simResultBox}>
+              <Text style={styles.simResultLabel}>Wealth Gained</Text>
+              <Text style={[styles.simResultVal, { color: '#2dba4e' }]}>
+                ₹{latestStats.gained.toLocaleString('en-IN')}
+              </Text>
+            </View>
+            <View style={styles.simResultBox}>
+              <Text style={styles.simResultLabel}>Projected Value</Text>
+              <Text style={[styles.simResultVal, { color: '#ffffff' }]}>
+                ₹{latestStats.total.toLocaleString('en-IN')}
+              </Text>
+            </View>
           </View>
         </View>
-
-        <View style={styles.sliderControl}>
-          <Text style={styles.sliderLabel}>Expected Annual Return: {expectedReturn}%</Text>
-          <View style={styles.sliderRow}>
-            <TouchableOpacity style={styles.sliderBtn} onPress={() => changeReturn(-1)}>
-              <Text style={styles.sliderBtnText}>-1%</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.sliderBtn} onPress={() => changeReturn(1)}>
-              <Text style={styles.sliderBtnText}>+1%</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.sliderBtn} onPress={() => changeReturn(5)}>
-              <Text style={styles.sliderBtnText}>+5%</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        <View style={styles.sliderControl}>
-          <Text style={styles.sliderLabel}>Duration: {duration} Years</Text>
-          <View style={styles.sliderRow}>
-            <TouchableOpacity style={styles.sliderBtn} onPress={() => changeDuration(-1)}>
-              <Text style={styles.sliderBtnText}>-1Yr</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.sliderBtn} onPress={() => changeDuration(1)}>
-              <Text style={styles.sliderBtnText}>+1Yr</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.sliderBtn} onPress={() => changeDuration(5)}>
-              <Text style={styles.sliderBtnText}>+5Yrs</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* Projection Chart */}
-        <View style={{ height: 160, marginTop: 20 }}>
-          {Platform.OS !== 'web' ? (
-            <CartesianChart
-              data={projectionData}
-              xKey="year"
-              yKeys={["value", "invested"]}
-            >
-              {({ points }) => (
-                <>
-                   <Line points={points.value} color="#2dba4e" strokeWidth={3} animate={{ type: "timing", duration: 250 }} />
-                   <Line points={points.invested} color="rgba(250, 251, 252, 0.5)" strokeWidth={2} animate={{ type: "timing", duration: 250 }} />
-                </>
-              )}
-            </CartesianChart>
-          ) : (
-            <WebProjectionChart data={projectionData} />
-          )}
-        </View>
-
-        {/* Simulation Outputs */}
-        <View style={styles.simResults}>
-          <View style={styles.simResultBox}>
-            <Text style={styles.simResultLabel}>Total Invested</Text>
-            <Text style={[styles.simResultVal, { color: '#fafbfc' }]}>
-              ₹{latestStats.invested.toLocaleString('en-IN')}
-            </Text>
-          </View>
-          <View style={styles.simResultBox}>
-            <Text style={styles.simResultLabel}>Wealth Gained</Text>
-            <Text style={[styles.simResultVal, { color: '#2dba4e' }]}>
-              ₹{latestStats.gained.toLocaleString('en-IN')}
-            </Text>
-          </View>
-          <View style={styles.simResultBox}>
-            <Text style={styles.simResultLabel}>Projected Value</Text>
-            <Text style={[styles.simResultVal, { color: '#ffffff' }]}>
-              ₹{latestStats.total.toLocaleString('en-IN')}
-            </Text>
-          </View>
-        </View>
-      </View>
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 };
 
@@ -2179,100 +2309,103 @@ const SettingsScreen = () => {
   const setTheme = useThemeStore((state) => state.setTheme);
   const { colors } = useTheme();
   const styles = getStyles(colors);
-  
+
   const [biometricsEnabled, setBiometricsEnabled] = useState(true);
 
   return (
-    <ScrollView 
-      style={styles.container} 
-      contentContainerStyle={[styles.contentContainer, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 100 }]}
-      showsVerticalScrollIndicator={false}
-    >
-      <Text style={styles.headerTitle}>Settings</Text>
-      <Text style={styles.subtitle}>Privacy & Security</Text>
+    <View style={styles.container}>
+      <AppTopBar />
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={[styles.contentContainer, { paddingTop: 12, paddingBottom: insets.bottom + 100 }]}
+        showsVerticalScrollIndicator={false}
+      >
+        <Text style={styles.headerTitle}>Settings</Text>
+        <Text style={styles.subtitle}>Privacy & Security</Text>
 
-      {/* User Profile Card */}
-      <View style={styles.card}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-          <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
-            <Text style={{ color: colors.accent, fontWeight: '800', fontSize: 18 }}>
-              {user?.name?.charAt(0).toUpperCase() || 'U'}
-            </Text>
+        {/* User Profile Card */}
+        <View style={styles.card}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+            <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
+              <Text style={{ color: colors.accent, fontWeight: '800', fontSize: 18 }}>
+                {user?.name?.charAt(0).toUpperCase() || 'U'}
+              </Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: colors.text, fontSize: 15, fontWeight: '700' }}>{user?.name || 'Guest User'}</Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>{user?.email || user?.phone || 'Offline Session'}</Text>
+            </View>
+            <View style={{ backgroundColor: colors.accentMuted, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 }}>
+              <Text style={{ color: colors.accent, fontSize: 10, fontWeight: '700', textTransform: 'uppercase' }}>
+                {user?.authProvider || 'Local'}
+              </Text>
+            </View>
           </View>
-          <View style={{ flex: 1 }}>
-            <Text style={{ color: colors.text, fontSize: 15, fontWeight: '700' }}>{user?.name || 'Guest User'}</Text>
-            <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>{user?.email || user?.phone || 'Offline Session'}</Text>
-          </View>
-          <View style={{ backgroundColor: colors.accentMuted, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 }}>
-            <Text style={{ color: colors.accent, fontSize: 10, fontWeight: '700', textTransform: 'uppercase' }}>
-              {user?.authProvider || 'Local'}
-            </Text>
-          </View>
+          <TouchableOpacity
+            style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.buttonSecondaryBackground, borderWidth: 1, borderColor: colors.border, paddingVertical: 10, borderRadius: 10, marginTop: 8 }}
+            onPress={() => authService.logOut()}
+          >
+            <Feather name="log-out" size={14} color={colors.text} style={{ marginRight: 6 }} />
+            <Text style={{ color: colors.text, fontSize: 13, fontWeight: '700' }}>Log Out Session</Text>
+          </TouchableOpacity>
         </View>
-        <TouchableOpacity 
-          style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.buttonSecondaryBackground, borderWidth: 1, borderColor: colors.border, paddingVertical: 10, borderRadius: 10, marginTop: 8 }}
-          onPress={() => authService.logOut()}
-        >
-          <Feather name="log-out" size={14} color={colors.text} style={{ marginRight: 6 }} />
-          <Text style={{ color: colors.text, fontSize: 13, fontWeight: '700' }}>Log Out Session</Text>
-        </TouchableOpacity>
-      </View>
 
-      {/* Appearance */}
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Appearance Setting</Text>
-        <Text style={styles.settingDesc}>
-          Choose your interface appearance preference.
-        </Text>
-        <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
-          {(['light', 'dark', 'system'] as const).map((mode) => {
-            const isSelected = theme === mode;
-            return (
-              <TouchableOpacity
-                key={mode}
-                onPress={() => setTheme(mode)}
-                style={{
-                  flex: 1,
-                  paddingVertical: 10,
-                  borderRadius: 10,
-                  backgroundColor: isSelected ? colors.accent : colors.buttonSecondaryBackground,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderWidth: 1,
-                  borderColor: isSelected ? colors.accent : colors.border,
-                }}
-                activeOpacity={0.7}
-              >
-                <Text
+        {/* Appearance */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Appearance Setting</Text>
+          <Text style={styles.settingDesc}>
+            Choose your interface appearance preference.
+          </Text>
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+            {(['light', 'dark', 'system'] as const).map((mode) => {
+              const isSelected = theme === mode;
+              return (
+                <TouchableOpacity
+                  key={mode}
+                  onPress={() => setTheme(mode)}
                   style={{
-                    color: isSelected ? '#ffffff' : colors.text,
-                    fontSize: 13,
-                    fontWeight: '700',
-                    textTransform: 'capitalize',
+                    flex: 1,
+                    paddingVertical: 10,
+                    borderRadius: 10,
+                    backgroundColor: isSelected ? colors.accent : colors.buttonSecondaryBackground,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderWidth: 1,
+                    borderColor: isSelected ? colors.accent : colors.border,
                   }}
+                  activeOpacity={0.7}
                 >
-                  {mode}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
+                  <Text
+                    style={{
+                      color: isSelected ? '#ffffff' : colors.text,
+                      fontSize: 13,
+                      fontWeight: '700',
+                      textTransform: 'capitalize',
+                    }}
+                  >
+                    {mode}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         </View>
-      </View>
 
-      {/* Security */}
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Security Settings</Text>
-        <View style={styles.settingRow}>
-          <Text style={styles.settingLabel}>Enable Biometric Lock</Text>
-          <Switch 
-            value={biometricsEnabled}
-            onValueChange={setBiometricsEnabled}
-            thumbColor={biometricsEnabled ? colors.accent : colors.text}
-            trackColor={{ false: colors.buttonSecondaryBackground, true: colors.accentMuted }}
-          />
+        {/* Security */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Security Settings</Text>
+          <View style={styles.settingRow}>
+            <Text style={styles.settingLabel}>Enable Biometric Lock</Text>
+            <Switch
+              value={biometricsEnabled}
+              onValueChange={setBiometricsEnabled}
+              thumbColor={biometricsEnabled ? colors.accent : colors.text}
+              trackColor={{ false: colors.buttonSecondaryBackground, true: colors.accentMuted }}
+            />
+          </View>
         </View>
-      </View>
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 };
 
@@ -2290,6 +2423,25 @@ const BanksScreen = () => {
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [selectedBank, setSelectedBank] = useState<any | null>(null);
   const [detailsVisible, setDetailsVisible] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Manual Transaction on bank card
+  const [manualBank, setManualBank] = useState<any | null>(null);
+  const [manualType, setManualType] = useState<'credit' | 'debit'>('credit');
+  const [manualVisible, setManualVisible] = useState(false);
+
+  const totalBalance = useMemo(() => {
+    return bankProfiles.reduce((sum, bank) => sum + (Number(bank.currentBalance) || 0), 0);
+  }, [bankProfiles]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await sync();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [sync]);
 
   useFocusEffect(
     useCallback(() => {
@@ -2305,133 +2457,344 @@ const BanksScreen = () => {
   };
 
   const handleOpenAddBank = () => {
-    if (bankProfiles.length >= 3) {
-      Alert.alert(
-        'Limit Reached',
-        'You can link a maximum of 3 bank accounts. Please remove an existing account first.',
-        [{ text: 'OK' }]
-      );
-      return;
-    }
     setAddBankModalVisible(true);
   };
 
   const handleRemoveBank = (id: string, bankName: string, suffix: string) => {
-    Alert.alert(
-      'Remove Bank Account',
-      `Are you sure you want to remove your ${bankName} account ending in ${suffix}? This will unlink it from your profile.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Remove',
-          style: 'destructive',
-          onPress: async () => {
-            setRemovingId(id);
-            try {
-              const token = authService.getAccessToken();
-              const response = await fetch(`${BACKEND_URL}/sync/bank-profile/${id}`, {
-                method: 'DELETE',
-                headers: {
-                  'Authorization': `Bearer ${token}`,
-                  'Content-Type': 'application/json',
-                },
-              });
+    showGlobalConfirm({
+      title: 'Remove Bank Account',
+      message: `Are you sure you want to remove your ${bankName} account ending in ${suffix}? This will unlink it from your profile.`,
+      confirmText: 'Yes, Remove',
+      cancelText: 'Cancel',
+      isDestructive: true,
+      icon: 'trash-2',
+      onConfirm: async () => {
+        setRemovingId(id);
+        // Optimistically remove from store & MMKV cache immediately so UI updates
+        useBankStore.getState().removeBankProfileState(id);
+        try {
+          const token = authService.getAccessToken();
+          const backendUrl = getBackendUrl();
+          const response = await fetch(`${backendUrl}/sync/bank-profile/${id}`, {
+            method: 'DELETE',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+          });
 
-              if (!response.ok) {
-                const errData = await response.json();
-                throw new Error(errData.message || 'Failed to remove bank account on backend');
-              }
-
-              await sync();
-              Alert.alert('Success', `${bankName} account removed successfully.`);
-            } catch (e: any) {
-              Alert.alert('Error', e.message || 'Failed to remove bank account.');
-            } finally {
-              setRemovingId(null);
-            }
+          if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            console.warn('[Bank] Backend delete warning:', errData.message);
           }
+
+          await sync();
+        } catch (e: any) {
+          console.warn('[Bank] Remove bank error:', e.message);
+        } finally {
+          setRemovingId(null);
         }
-      ]
-    );
+      },
+    });
   };
+
+  const { width } = useWindowDimensions();
+  const isSmall = width < 380;
+
+  const tabFloatingOffset = Platform.OS === 'web'
+    ? 18
+    : Math.max(insets.bottom + (Platform.OS === 'ios' ? 4 : 8), 16);
+  const tabHeight = isSmall ? 58 : 64;
+  const stickyButtonBottom = tabFloatingOffset + tabHeight + 16;
 
   return (
     <View style={styles.container}>
+      <AppTopBar onOpenAddBank={handleOpenAddBank} />
       <ScrollView
         style={styles.container}
-        contentContainerStyle={[styles.contentContainer, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 100 }]}
+        contentContainerStyle={[
+          styles.contentContainer,
+          { paddingTop: 10, paddingBottom: stickyButtonBottom + 64 }
+        ]}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#2dba4e" colors={["#2dba4e"]} />
+        }
       >
-        <Text style={styles.headerTitle}>My Banks</Text>
-        <Text style={styles.subtitle}>
-          {bankProfiles.length === 0
-            ? 'No bank accounts linked yet.'
-            : `Linked ${bankProfiles.length} of 3 maximum bank accounts.`
-          }
-        </Text>
+        {/* Sleek Header Row */}
+        <View style={{ marginBottom: 12, marginTop: 4 }}>
+          <Text style={{ fontSize: 20, fontWeight: '900', color: colors.text, letterSpacing: 0.2 }}>
+            My Banks
+          </Text>
+        </View>
 
-        {/* Bank List */}
-        <View style={{ marginTop: 15 }}>
-          {bankProfiles.map((bank) => (
-            <TouchableOpacity 
-              key={bank.id} 
-              style={[styles.card, { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 16 }]}
-              onPress={() => {
-                setSelectedBank(bank);
-                setDetailsVisible(true);
-              }}
-              activeOpacity={0.8}
-            >
-              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
-                <BankIcon code={getBankCode(bank.bankName)} name={bank.bankName} size={42} />
-                <View style={{ marginLeft: 12, flex: 1 }}>
-                  <Text style={{ color: colors.text, fontSize: 16, fontWeight: '700' }} numberOfLines={1}>
-                    {bank.bankName}
+        {/* Total Balance Card - Sleek Compact Glassmorphic Card */}
+        {bankProfiles.length > 0 ? (
+          <View style={{
+            backgroundColor: colors.card,
+            borderRadius: 14,
+            paddingHorizontal: 14,
+            paddingVertical: 12,
+            marginBottom: 12,
+            borderWidth: 1.5,
+            borderColor: colors.isDark ? 'rgba(45, 186, 78, 0.35)' : 'rgba(22, 163, 74, 0.32)',
+            shadowColor: colors.accent,
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: colors.isDark ? 0.20 : 0.08,
+            shadowRadius: 8,
+            elevation: 3,
+          }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <View style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 9,
+                  backgroundColor: colors.isDark ? 'rgba(45, 186, 78, 0.15)' : 'rgba(22, 163, 74, 0.12)',
+                  borderWidth: 1,
+                  borderColor: colors.isDark ? 'rgba(45, 186, 78, 0.25)' : 'rgba(22, 163, 74, 0.25)',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  marginRight: 10,
+                }}>
+                  <MaterialCommunityIcons name="wallet-outline" size={17} color={colors.accent} />
+                </View>
+                <View>
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.6 }}>
+                    Total Balance
                   </Text>
-                  <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
-                    Savings Account •••• {bank.accountNumberSuffix}
-                  </Text>
-                  <Text style={{ color: colors.accent, fontSize: 14, fontWeight: '700', marginTop: 4 }}>
-                    ₹{bank.currentBalance.toLocaleString('en-IN')}
+                  <Text style={{ fontSize: 10.5, color: colors.textSecondary, opacity: 0.75, marginTop: 1 }}>
+                    {bankProfiles.length === 1 ? '1 account linked' : `Across ${bankProfiles.length} accounts`}
                   </Text>
                 </View>
               </View>
 
-              <TouchableOpacity
-                onPress={() => handleRemoveBank(bank.id, bank.bankName, bank.accountNumberSuffix)}
-                disabled={removingId !== null}
-                style={{ padding: 8 }}
-                activeOpacity={0.7}
-              >
-                {removingId === bank.id ? (
-                  <ActivityIndicator size="small" color="#FF5252" />
-                ) : (
-                  <Feather name="trash-2" size={20} color="#FF5252" />
-                )}
-              </TouchableOpacity>
-            </TouchableOpacity>
-          ))}
-        </View>
+              <Text style={{ fontSize: 20, fontWeight: '900', color: colors.text, letterSpacing: 0.3 }}>
+                ₹{totalBalance.toLocaleString('en-IN')}
+              </Text>
+            </View>
+          </View>
+        ) : null}
 
-        {/* Add Bank Button */}
-        {bankProfiles.length < 3 ? (
-          <TouchableOpacity
-            style={[styles.submitBankBtn, { marginTop: 20, width: '100%' }]}
-            onPress={handleOpenAddBank}
-            activeOpacity={0.8}
-          >
-            <Feather name="plus-circle" size={16} color="#24292e" style={{ marginRight: 6 }} />
-            <Text style={styles.submitBankBtnText}>Link New Bank Account</Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={[styles.card, { borderStyle: 'dashed', borderColor: colors.border, borderWidth: 1, backgroundColor: 'transparent', alignItems: 'center', padding: 16, marginTop: 20 }]}>
-            <Feather name="info" size={20} color="#FFD700" style={{ marginBottom: 6 }} />
-            <Text style={{ color: colors.textSecondary, fontSize: 12, textAlign: 'center', lineHeight: 18 }}>
-              You have linked the maximum limit of 3 bank accounts. Remove an existing account to link a new one.
+        {/* Bank List or Empty State */}
+        {bankProfiles.length === 0 ? (
+          <View style={{
+            alignItems: 'center',
+            justifyContent: 'center',
+            paddingVertical: 32,
+            paddingHorizontal: 20,
+            backgroundColor: colors.card,
+            borderRadius: 16,
+            borderWidth: 1,
+            borderColor: colors.border,
+            marginTop: 4,
+          }}>
+            <View style={{
+              width: 52,
+              height: 52,
+              borderRadius: 26,
+              backgroundColor: colors.isDark ? 'rgba(45, 186, 78, 0.12)' : 'rgba(22, 163, 74, 0.10)',
+              borderWidth: 1,
+              borderColor: colors.isDark ? 'rgba(45, 186, 78, 0.25)' : 'rgba(22, 163, 74, 0.25)',
+              justifyContent: 'center',
+              alignItems: 'center',
+              marginBottom: 12,
+            }}>
+              <Feather name="credit-card" size={22} color={colors.accent} />
+            </View>
+            <Text style={{
+              color: colors.text,
+              fontSize: 15,
+              fontWeight: '800',
+              marginBottom: 4,
+              textAlign: 'center',
+            }}>
+              You haven't added any account
             </Text>
+            <Text style={{
+              color: colors.textSecondary,
+              fontSize: 12,
+              textAlign: 'center',
+              lineHeight: 17,
+              maxWidth: 260,
+            }}>
+              Link your bank account below to start tracking live balances, transactions, and net worth.
+            </Text>
+          </View>
+        ) : (
+          <View style={{ marginTop: 2 }}>
+            {bankProfiles.map((bank) => (
+              <TouchableOpacity
+                key={bank.id}
+                style={{
+                  backgroundColor: colors.card,
+                  borderRadius: 14,
+                  paddingHorizontal: 12,
+                  paddingVertical: 11,
+                  marginBottom: 10,
+                  borderWidth: 1,
+                  borderColor: colors.border,
+                  shadowColor: '#000000',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: colors.isDark ? 0.25 : 0.06,
+                  shadowRadius: 6,
+                  elevation: 2,
+                }}
+                onPress={() => {
+                  setSelectedBank(bank);
+                  setDetailsVisible(true);
+                }}
+                activeOpacity={0.8}
+              >
+                {/* Top Row: Icon + Bank Info on Left | Balance + Trash on Right */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, minWidth: 0, marginRight: 8 }}>
+                    <BankIcon code={getBankCode(bank.bankName)} name={bank.bankName} size={32} />
+                    <View style={{ marginLeft: 10, flex: 1, minWidth: 0 }}>
+                      <Text style={{ color: colors.text, fontSize: 13.5, fontWeight: '700' }} numberOfLines={1} ellipsizeMode="tail">
+                        {bank.bankName}
+                      </Text>
+                      <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 1 }}>
+                        Savings •••• {bank.accountNumberSuffix}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Text style={{ color: colors.accent, fontSize: 15, fontWeight: '800' }}>
+                      ₹{bank.currentBalance.toLocaleString('en-IN')}
+                    </Text>
+
+                    <TouchableOpacity
+                      onPress={(e: any) => {
+                        e?.stopPropagation?.();
+                        handleRemoveBank(bank.id, bank.bankName, bank.accountNumberSuffix);
+                      }}
+                      disabled={removingId !== null}
+                      style={{
+                        width: 26,
+                        height: 26,
+                        borderRadius: 7,
+                        backgroundColor: colors.isDark ? 'rgba(255, 82, 82, 0.12)' : 'rgba(220, 38, 38, 0.08)',
+                        borderWidth: 1,
+                        borderColor: colors.isDark ? 'rgba(255, 82, 82, 0.25)' : 'rgba(220, 38, 38, 0.25)',
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                        marginLeft: 4,
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      {removingId === bank.id ? (
+                        <ActivityIndicator size="small" color="#FF5252" />
+                      ) : (
+                        <Feather name="trash-2" size={13} color="#FF5252" />
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Divider Line */}
+                <View style={{
+                  height: 1,
+                  backgroundColor: colors.isDark ? 'rgba(255, 255, 255, 0.06)' : colors.border,
+                  marginVertical: 8,
+                }} />
+
+                {/* Bottom Row: Quick Actions (+ Credit / - Debit) & View details link */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <View style={{ flexDirection: 'row', gap: 6 }}>
+                    <TouchableOpacity
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        backgroundColor: colors.isDark ? 'rgba(45, 186, 78, 0.12)' : 'rgba(22, 163, 74, 0.08)',
+                        borderColor: colors.isDark ? 'rgba(45, 186, 78, 0.28)' : 'rgba(22, 163, 74, 0.35)',
+                        borderWidth: 1,
+                        borderRadius: 6,
+                        paddingHorizontal: 8,
+                        paddingVertical: 3.5,
+                      }}
+                      onPress={(e: any) => {
+                        e?.stopPropagation?.();
+                        setManualBank(bank);
+                        setManualType('credit');
+                        setManualVisible(true);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Feather name="plus-circle" size={11} color={colors.accent} style={{ marginRight: 4 }} />
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: colors.accent }}>+ Credit</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        backgroundColor: colors.isDark ? 'rgba(239, 68, 68, 0.12)' : 'rgba(220, 38, 38, 0.08)',
+                        borderColor: colors.isDark ? 'rgba(239, 68, 68, 0.28)' : 'rgba(220, 38, 38, 0.35)',
+                        borderWidth: 1,
+                        borderRadius: 6,
+                        paddingHorizontal: 8,
+                        paddingVertical: 3.5,
+                      }}
+                      onPress={(e: any) => {
+                        e?.stopPropagation?.();
+                        setManualBank(bank);
+                        setManualType('debit');
+                        setManualVisible(true);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Feather name="minus-circle" size={11} color="#ef4444" style={{ marginRight: 4 }} />
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: '#ef4444' }}>- Debit</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <Text style={{ fontSize: 11, color: colors.textSecondary, marginRight: 2, fontWeight: '600' }}>
+                      Details
+                    </Text>
+                    <Feather name="chevron-right" size={13} color={colors.textSecondary} />
+                  </View>
+                </View>
+              </TouchableOpacity>
+            ))}
           </View>
         )}
       </ScrollView>
+
+      {/* Sticky Bottom Docked Button (Always pinned above the tab bar) */}
+      <View style={{
+        position: 'absolute',
+        bottom: stickyButtonBottom,
+        left: 20,
+        right: 20,
+        zIndex: 50,
+      }}>
+        <TouchableOpacity
+          style={{
+            backgroundColor: colors.accent,
+            borderRadius: 12,
+            height: 44,
+            width: '100%',
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            shadowColor: colors.accent,
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.30,
+            shadowRadius: 8,
+            elevation: 6,
+          }}
+          onPress={handleOpenAddBank}
+          activeOpacity={0.8}
+        >
+          <Feather name="plus-circle" size={15} color="#ffffff" style={{ marginRight: 6 }} />
+          <Text style={{ color: '#ffffff', fontSize: 13.5, fontWeight: '800', letterSpacing: 0.3 }}>
+            Link New Bank Account
+          </Text>
+        </TouchableOpacity>
+      </View>
 
       <AddBankModal
         visible={addBankModalVisible}
@@ -2446,6 +2809,22 @@ const BanksScreen = () => {
         visible={detailsVisible}
         onClose={() => setDetailsVisible(false)}
         bank={selectedBank ? bankProfiles.find((b) => b.id === selectedBank.id) || selectedBank : null}
+      />
+
+      <ManualTransactionModal
+        visible={manualVisible}
+        onClose={() => setManualVisible(false)}
+        bank={manualBank ? bankProfiles.find((b) => b.id === manualBank.id) || manualBank : null}
+        initialType={manualType}
+        onSuccess={async (data) => {
+          if (manualBank) {
+            useBankStore.getState().updateBankBalance(manualBank.id, data.updatedBalance);
+            if (data.type === 'debit' && data.record) {
+              useTransactionStore.getState().addTransactionState(data.record);
+            }
+            await sync();
+          }
+        }}
       />
     </View>
   );
@@ -2541,28 +2920,28 @@ const CustomTabButton = ({
   }));
 
   const pillBgColor = isFocused
-    ? (isDark ? 'rgba(45, 186, 78, 0.16)' : 'rgba(45, 186, 78, 0.10)')
+    ? (isDark ? 'rgba(45, 186, 78, 0.16)' : 'rgba(22, 163, 74, 0.12)')
     : isHovered
-      ? (isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)')
+      ? (isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.04)')
       : 'transparent';
 
   const pillBorderColor = isFocused
-    ? (isDark ? 'rgba(45, 186, 78, 0.35)' : 'rgba(45, 186, 78, 0.25)')
+    ? (isDark ? 'rgba(45, 186, 78, 0.35)' : 'rgba(22, 163, 74, 0.28)')
     : isHovered
       ? (isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)')
       : 'transparent';
 
   const iconColor = isFocused
-    ? '#2dba4e'
+    ? (isDark ? '#2dba4e' : '#16a34a')
     : isHovered
-      ? (isDark ? '#fafbfc' : '#111827')
-      : colors.textTertiary;
+      ? (isDark ? '#fafbfc' : '#0f172a')
+      : (isDark ? 'rgba(250, 251, 252, 0.65)' : '#64748b');
 
   const textColor = isFocused
-    ? '#2dba4e'
+    ? (isDark ? '#2dba4e' : '#16a34a')
     : isHovered
-      ? (isDark ? '#e4e4e7' : '#374151')
-      : colors.textTertiary;
+      ? (isDark ? '#e4e4e7' : '#1e293b')
+      : (isDark ? 'rgba(250, 251, 252, 0.65)' : '#475569');
 
   return (
     <Pressable
@@ -2602,7 +2981,7 @@ const CustomTabButton = ({
             minWidth: isSmall ? 44 : 50,
           },
           isFocused && {
-            shadowColor: '#2dba4e',
+            shadowColor: isDark ? '#2dba4e' : '#16a34a',
             shadowOffset: { width: 0, height: 2 },
             shadowOpacity: isDark ? 0.32 : 0.16,
             shadowRadius: 5,
@@ -2622,7 +3001,7 @@ const CustomTabButton = ({
           style={{
             color: textColor,
             fontSize: isSmall ? 8.5 : 9.5,
-            fontWeight: isFocused ? '800' : '600',
+            fontWeight: isFocused ? '800' : '700',
             marginTop: 2,
             letterSpacing: isFocused ? 0.3 : 0.1,
           }}
@@ -2647,8 +3026,8 @@ const CustomBottomTabBar = ({ state, descriptors, navigation, insets }: BottomTa
   const barWidth = Math.min(windowWidth - barMarginHorizontal * 2, maxBarWidth);
 
   // Safe bottom offset considering home indicator and gesture navigation
-  const bottomOffset = Platform.OS === 'web' 
-    ? 18 
+  const bottomOffset = Platform.OS === 'web'
+    ? 18
     : Math.max(insets.bottom + (Platform.OS === 'ios' ? 4 : 8), 16);
 
   return (
@@ -2668,19 +3047,19 @@ const CustomBottomTabBar = ({ state, descriptors, navigation, insets }: BottomTa
           width: barWidth,
           height: isSmall ? 58 : 64,
           borderRadius: 32,
-          backgroundColor: isDark ? 'rgba(17, 19, 26, 0.96)' : 'rgba(255, 255, 255, 0.97)',
+          backgroundColor: isDark ? 'rgba(22, 27, 34, 0.97)' : '#ffffff',
           flexDirection: 'row',
           alignItems: 'center',
           justifyContent: 'space-between',
           paddingHorizontal: isSmall ? 6 : 10,
           paddingVertical: 4,
-          borderWidth: 1,
-          borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
+          borderWidth: 1.5,
+          borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : '#e2e8f0',
           shadowColor: '#000000',
-          shadowOffset: { width: 0, height: 8 },
-          shadowOpacity: isDark ? 0.42 : 0.14,
-          shadowRadius: 16,
-          elevation: 16,
+          shadowOffset: { width: 0, height: 6 },
+          shadowOpacity: isDark ? 0.45 : 0.10,
+          shadowRadius: 18,
+          elevation: 12,
         }}
       >
         {state.routes.map((route, index) => {
@@ -2783,6 +3162,183 @@ class ErrorBoundary extends React.Component<
   }
 }
 
+// ----------------------------------------------------
+// Global Custom Yes/No Confirmation Dialog Component
+// ----------------------------------------------------
+const GlobalConfirmModal = () => {
+  const { colors, isDark } = useTheme();
+  const visible = useConfirmStore((state) => state.visible);
+  const options = useConfirmStore((state) => state.options);
+  const loading = useConfirmStore((state) => state.loading);
+  const hideConfirm = useConfirmStore((state) => state.hideConfirm);
+  const setLoading = useConfirmStore((state) => state.setLoading);
+
+  const isDestructive = !!options?.isDestructive;
+  const title = options?.title;
+  const message = options?.message;
+  const confirmText = options?.confirmText;
+  const cancelText = options?.cancelText;
+
+  const handleCancel = () => {
+    if (options?.onCancel) {
+      options.onCancel();
+    }
+    hideConfirm();
+  };
+
+  const handleConfirm = async () => {
+    if (!options?.onConfirm) return;
+    setLoading(true);
+    try {
+      await options.onConfirm();
+    } catch (e: any) {
+      console.warn('[Confirm] Error executing action:', e?.message || e);
+    } finally {
+      hideConfirm();
+    }
+  };
+
+  return (
+    <Modal
+      visible={visible && !!options}
+      transparent
+      animationType="fade"
+      onRequestClose={loading ? undefined : handleCancel}
+    >
+      <View style={{
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.85)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20,
+      }}>
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          onPress={loading ? undefined : handleCancel}
+        />
+        <View style={{
+          width: '92%',
+          maxWidth: 380,
+          backgroundColor: isDark ? '#1c2128' : '#ffffff',
+          borderRadius: 24,
+          padding: 24,
+          alignItems: 'center',
+          borderWidth: 1.5,
+          borderColor: isDestructive ? 'rgba(255, 82, 82, 0.4)' : 'rgba(45, 186, 78, 0.4)',
+          shadowColor: '#000000',
+          shadowOffset: { width: 0, height: 12 },
+          shadowOpacity: 0.5,
+          shadowRadius: 24,
+          elevation: 20,
+        }}>
+          {/* Top Icon Badge */}
+          <View style={{
+            width: 64,
+            height: 64,
+            borderRadius: 32,
+            backgroundColor: isDestructive ? 'rgba(255, 82, 82, 0.12)' : 'rgba(45, 186, 78, 0.12)',
+            borderWidth: 1.5,
+            borderColor: isDestructive ? 'rgba(255, 82, 82, 0.3)' : 'rgba(45, 186, 78, 0.3)',
+            justifyContent: 'center',
+            alignItems: 'center',
+            marginBottom: 16,
+          }}>
+            <Feather
+              name={(options?.icon as any) || (isDestructive ? 'trash-2' : 'alert-circle')}
+              size={28}
+              color={isDestructive ? '#FF5252' : colors.accent}
+            />
+          </View>
+
+          {/* Title */}
+          <Text style={{
+            fontSize: 20,
+            fontWeight: '800',
+            color: isDark ? '#ffffff' : '#24292e',
+            textAlign: 'center',
+            marginBottom: 10,
+            letterSpacing: -0.3,
+          }}>
+            {title}
+          </Text>
+
+          {/* Message */}
+          <Text style={{
+            fontSize: 14,
+            color: isDark ? 'rgba(250, 251, 252, 0.75)' : '#57606a',
+            textAlign: 'center',
+            lineHeight: 22,
+            marginBottom: 24,
+            paddingHorizontal: 8,
+          }}>
+            {message}
+          </Text>
+
+          {/* Yes / No Buttons */}
+          <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
+            {/* Cancel Button */}
+            <TouchableOpacity
+              style={{
+                flex: 1,
+                paddingVertical: 14,
+                borderRadius: 14,
+                backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
+                borderWidth: 1,
+                borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.1)',
+                justifyContent: 'center',
+                alignItems: 'center',
+              }}
+              onPress={handleCancel}
+              activeOpacity={0.7}
+              disabled={loading}
+            >
+              <Text style={{
+                fontSize: 14,
+                fontWeight: '700',
+                color: isDark ? 'rgba(250, 251, 252, 0.8)' : '#57606a',
+              }}>
+                {cancelText}
+              </Text>
+            </TouchableOpacity>
+
+            {/* Confirm Button */}
+            <TouchableOpacity
+              style={{
+                flex: 1,
+                paddingVertical: 14,
+                borderRadius: 14,
+                backgroundColor: isDestructive ? '#FF5252' : colors.accent,
+                justifyContent: 'center',
+                alignItems: 'center',
+                shadowColor: isDestructive ? '#FF5252' : colors.accent,
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.35,
+                shadowRadius: 8,
+                elevation: 4,
+              }}
+              onPress={handleConfirm}
+              activeOpacity={0.8}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator size="small" color="#ffffff" />
+              ) : (
+                <Text style={{
+                  fontSize: 14,
+                  fontWeight: '700',
+                  color: '#ffffff',
+                }}>
+                  {confirmText}
+                </Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
 export default function AppNavigator() {
   const user = useAuthStore((state) => state.user);
   const isLoading = useAuthStore((state) => state.isLoading);
@@ -2817,8 +3373,8 @@ export default function AppNavigator() {
           shadowRadius: 10,
           elevation: 5,
         }}>
-          <Image 
-            source={require('../../assets/icon.png')} 
+          <Image
+            source={require('../../assets/icon.png')}
             style={{ width: '100%', height: '100%', borderRadius: 24 }}
           />
         </View>
@@ -2865,6 +3421,7 @@ export default function AppNavigator() {
             )}
           </Stack.Navigator>
         </NavigationContainer>
+        <GlobalConfirmModal />
       </ErrorBoundary>
     </SafeAreaProvider>
   );
@@ -2885,6 +3442,144 @@ const getStyles = (colors: any) => StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 16,
     paddingBottom: 8,
+  },
+  topBarContainer: {
+    backgroundColor: colors.card,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    zIndex: 10,
+  },
+  topBarContent: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 7,
+    minHeight: 50,
+  },
+  topBarLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  topBarLogoBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: colors.border,
+    overflow: 'hidden',
+    backgroundColor: '#ffffff',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  topBarLogoImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 9,
+  },
+  topBarBrandCol: {
+    marginLeft: 9,
+  },
+  topBarTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+  },
+  topBarRegent: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: colors.accent,
+    letterSpacing: 1.5,
+    marginRight: 4,
+  },
+  topBarMoney: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: colors.text,
+    letterSpacing: 0.5,
+  },
+  savingPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.accentMuted,
+    borderWidth: 1,
+    borderColor: colors.isDark ? 'rgba(45, 186, 78, 0.25)' : 'rgba(22, 163, 74, 0.25)',
+    borderRadius: 10,
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    marginTop: 1,
+    alignSelf: 'flex-start',
+  },
+  savingPulseDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: colors.accent,
+    marginRight: 4,
+  },
+  savingPillText: {
+    fontSize: 8.5,
+    fontWeight: '800',
+    color: colors.accent,
+    letterSpacing: 0.8,
+  },
+  topBarRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  topBarAlertBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: colors.isDark ? 'rgba(255, 82, 82, 0.12)' : 'rgba(255, 82, 82, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 82, 82, 0.25)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  topBarIconBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: colors.isDark ? 'rgba(255, 255, 255, 0.06)' : colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  topBarBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    backgroundColor: '#FF5252',
+    borderRadius: 7,
+    minWidth: 15,
+    height: 15,
+    paddingHorizontal: 3,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  topBarBadgeText: {
+    color: '#ffffff',
+    fontSize: 8.5,
+    fontWeight: '800',
+  },
+  topBarProfileBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: colors.isDark ? 'rgba(45, 186, 78, 0.12)' : 'rgba(45, 186, 78, 0.08)',
+    borderWidth: 1.5,
+    borderColor: '#2dba4e',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  topBarProfileInitial: {
+    color: '#2dba4e',
+    fontWeight: '800',
+    fontSize: 13,
   },
   dashboardHeader: {
     flexDirection: 'row',
@@ -3466,6 +4161,7 @@ const getStyles = (colors: any) => StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(36, 41, 46, 0.8)',
     justifyContent: 'flex-end',
+    alignItems: 'center',
   },
   modalCardFull: {
     backgroundColor: colors.card,
@@ -3475,6 +4171,8 @@ const getStyles = (colors: any) => StyleSheet.create({
     borderColor: colors.border,
     padding: 24,
     height: '85%',
+    width: '100%',
+    maxWidth: 640,
   },
   searchBarContainer: {
     flexDirection: 'row',
@@ -3550,17 +4248,26 @@ const getStyles = (colors: any) => StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.inputBorder,
     borderRadius: 14,
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
     height: 64,
     marginVertical: 5,
   },
-  bankLogoBadge: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+  bankIconContainer: {
+    width: 40,
+    height: 40,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 12,
+    flexShrink: 0,
+    marginRight: 14,
+  },
+  bankLogoBadge: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 14,
+    flexShrink: 0,
   },
   bankLogoText: {
     color: colors.text,
@@ -3569,16 +4276,26 @@ const getStyles = (colors: any) => StyleSheet.create({
   },
   bankMeta: {
     flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
+    marginRight: 10,
   },
   bankNameText: {
     color: colors.text,
     fontSize: 14,
     fontWeight: '700',
+    letterSpacing: 0.1,
   },
   bankCodeText: {
     color: colors.textTertiary,
     fontSize: 11,
+    fontWeight: '600',
     marginTop: 2,
+    letterSpacing: 0.5,
+  },
+  bankChevron: {
+    flexShrink: 0,
+    marginLeft: 'auto',
   },
   formBackBtn: {
     flexDirection: 'row',

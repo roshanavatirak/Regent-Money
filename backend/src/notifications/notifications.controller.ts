@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards, Req, Headers, UnauthorizedException } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { NotificationsService } from './notifications.service';
 
@@ -62,5 +62,24 @@ export class NotificationsController {
       type: body.type,
       payload: body.payload,
     });
+  }
+
+  // External Webhook or Manual Trigger for Daily Humor Broadcast
+  @Post('broadcast/daily-humor')
+  async triggerDailyHumor(
+    @Headers('x-broadcast-secret') secretHeader: string,
+    @Body() body?: { slot?: 'morning' | 'evening'; secret?: string; title?: string; body?: string },
+  ) {
+    const configuredSecret = process.env.BROADCAST_SECRET || 'regent_secret_daily_broadcast_2026';
+    const providedSecret = secretHeader || body?.secret;
+
+    if (providedSecret !== configuredSecret) {
+      throw new UnauthorizedException('Invalid broadcast secret.');
+    }
+
+    const slot = body?.slot || (new Date().getHours() < 14 ? 'morning' : 'evening');
+    const customMessage = body?.title && body?.body ? { title: body.title, body: body.body } : undefined;
+
+    return this.notificationsService.broadcastDailyHumor(slot, customMessage);
   }
 }

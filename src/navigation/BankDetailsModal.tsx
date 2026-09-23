@@ -19,12 +19,14 @@ import { Feather, Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import TextRecognition from '@react-native-ml-kit/text-recognition';
-import { useTheme } from '../store';
+import { useTheme, useBankStore } from '../store';
 import { useTransactionStore } from '../store';
 import { authService } from '../services/authService';
 import { parseStatementTextWithAI } from '../services/aiService';
 import { syncService } from '../services/syncService';
 import { getBackendUrl } from '../config/api';
+import { ManualTransactionModal } from './ManualTransactionModal';
+import { TransactionDetailModal } from './TransactionDetailModal';
 
 const BACKEND_URL = getBackendUrl();
 
@@ -42,8 +44,6 @@ interface BankDetailsModalProps {
 }
 
 export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalProps) => {
-  if (!visible || !bank) return null;
-
   const { colors, isDark } = useTheme();
   const styles = getStyles(colors);
 
@@ -64,6 +64,14 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
   // SMS Consent toggle states
   const [smsConsent, setSmsConsent] = useState(bank?.smsConsent || false);
   const [consentModalVisible, setConsentModalVisible] = useState(false);
+  const [optionsMenuVisible, setOptionsMenuVisible] = useState(false);
+
+  // Manual Transaction states
+  const [manualTxModalVisible, setManualTxModalVisible] = useState(false);
+  const [manualTxType, setManualTxType] = useState<'credit' | 'debit'>('credit');
+
+  // Selected Transaction for View/Edit/Delete
+  const [selectedTx, setSelectedTx] = useState<any | null>(null);
 
   useEffect(() => {
     if (bank) {
@@ -132,7 +140,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
         .map((inc: any) => ({
           id: inc.id,
           amount: parseFloat(inc.amount || 0),
-          category: 'income',
+          category: inc.category || 'income',
           merchant: inc.source || 'Income',
           timestamp: Number(inc.timestamp || Date.now()),
           type: 'credit',
@@ -143,6 +151,48 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
     } finally {
       setLoadingIncome(false);
     }
+  };
+
+  const handleManualTxSuccess = async (data: {
+    type: 'credit' | 'debit';
+    amount: number;
+    updatedBalance: number;
+    record: any;
+  }) => {
+    if (!bank) return;
+    useBankStore.getState().updateBankBalance(bank.id, data.updatedBalance);
+    if (data.type === 'debit' && data.record) {
+      useTransactionStore.getState().addTransactionState(data.record);
+    }
+    await fetchIncomeRecords();
+    syncService.sync();
+  };
+
+  const handleTxDetailSuccess = async (action: 'updated' | 'deleted', data: any) => {
+    if (!bank) return;
+
+    if (action === 'updated') {
+      if (data.type === 'debit') {
+        useTransactionStore.getState().updateTransactionState(data.id, {
+          amount: data.newAmount,
+          category: data.category,
+          merchant: data.merchant,
+        });
+      }
+      if (data.updatedBalance !== undefined && data.updatedBalance !== null) {
+        useBankStore.getState().updateBankBalance(bank.id, data.updatedBalance);
+      }
+    } else if (action === 'deleted') {
+      if (data.type === 'debit') {
+        useTransactionStore.getState().removeTransactionState(data.id);
+      }
+      if (data.updatedBalance !== undefined && data.updatedBalance !== null) {
+        useBankStore.getState().updateBankBalance(bank.id, data.updatedBalance);
+      }
+    }
+
+    await fetchIncomeRecords();
+    syncService.sync();
   };
 
   useEffect(() => {
@@ -420,6 +470,10 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
     }
   };
 
+  if (!visible || !bank) {
+    return null;
+  }
+
   return (
     <>
       <Modal
@@ -436,36 +490,61 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
                 <Text style={styles.title}>{bank.bankName}</Text>
                 <Text style={styles.subtitle}>A/c Suffix: **** {bank.accountNumberSuffix}</Text>
               </View>
-              <TouchableOpacity onPress={onClose} style={styles.closeBtn} activeOpacity={0.7}>
-                <Feather name="x" size={20} color="#8E8E9F" />
-              </TouchableOpacity>
-            </View>
-
-            {/* Balance card */}
-            <View style={styles.balanceCard}>
-              <Text style={styles.balanceLabel}>Current Balance</Text>
-              <Text style={styles.balanceValue}>₹{bank.currentBalance.toLocaleString('en-IN')}</Text>
-              {bank.lastSyncTimestamp && (
-                <Text style={styles.syncText}>
-                  Last Synced: {new Date(bank.lastSyncTimestamp).toLocaleTimeString('en-IN')}
-                </Text>
-              )}
-            </View>
-
-            {/* SMS Consent Row */}
-            <View style={styles.consentRow}>
-              <View style={{ flex: 1, marginRight: 10 }}>
-                <Text style={styles.consentTitle}>Background SMS Sync</Text>
-                <Text style={styles.consentDesc}>
-                  Securely scan incoming transaction alerts to update balance & records automatically in real-time.
-                </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <TouchableOpacity
+                  onPress={() => setOptionsMenuVisible(true)}
+                  style={styles.menuBtn}
+                  activeOpacity={0.7}
+                  accessibilityLabel="Account Options"
+                >
+                  <Feather name="more-vertical" size={18} color="#8E8E9F" />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={onClose} style={styles.closeBtn} activeOpacity={0.7}>
+                  <Feather name="x" size={18} color="#8E8E9F" />
+                </TouchableOpacity>
               </View>
-              <Switch
-                value={smsConsent}
-                onValueChange={handleToggleSmsConsent}
-                trackColor={{ false: '#2c2c35', true: '#2dba4e' }}
-                thumbColor={smsConsent ? '#ffffff' : '#8E8E9F'}
-              />
+            </View>
+
+            {/* Compact Balance Card with Inline Credit/Debit buttons */}
+            <View style={styles.balanceCard}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <View>
+                  <Text style={styles.balanceLabel}>Current Balance</Text>
+                  <Text style={styles.balanceValue}>₹{bank.currentBalance.toLocaleString('en-IN')}</Text>
+                  {bank.lastSyncTimestamp && (
+                    <Text style={styles.syncText}>
+                      Synced: {new Date(bank.lastSyncTimestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                    </Text>
+                  )}
+                </View>
+
+                {/* Compact Quick Actions */}
+                <View style={{ flexDirection: 'row', gap: 6 }}>
+                  <TouchableOpacity
+                    style={[styles.compactActionBtn, styles.compactCreditBtn]}
+                    onPress={() => {
+                      setManualTxType('credit');
+                      setManualTxModalVisible(true);
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Feather name="plus-circle" size={13} color="#2dba4e" style={{ marginRight: 4 }} />
+                    <Text style={styles.compactCreditText}>+ Credit</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.compactActionBtn, styles.compactDebitBtn]}
+                    onPress={() => {
+                      setManualTxType('debit');
+                      setManualTxModalVisible(true);
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Feather name="minus-circle" size={13} color="#ef4444" style={{ marginRight: 4 }} />
+                    <Text style={styles.compactDebitText}>- Debit</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
             </View>
 
             {/* Ingestion Action Buttons */}
@@ -541,7 +620,11 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
                 renderItem={({ item }) => {
                   const isDebit = item.type === 'debit';
                   return (
-                    <View style={styles.txRow}>
+                    <TouchableOpacity
+                      style={styles.txRow}
+                      onPress={() => setSelectedTx(item)}
+                      activeOpacity={0.7}
+                    >
                       <View style={styles.txLeft}>
                         <View style={[
                           styles.iconBadge, 
@@ -573,7 +656,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
                         </Text>
                         <Text style={styles.txCategory}>{item.category}</Text>
                       </View>
-                    </View>
+                    </TouchableOpacity>
                   );
                 }}
               />
@@ -713,6 +796,79 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
           </View>
         </View>
       </Modal>
+
+      {/* Three-Dot Options & Settings Menu Modal */}
+      <Modal
+        visible={optionsMenuVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setOptionsMenuVisible(false)}
+      >
+        <View style={styles.optionsMenuOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => setOptionsMenuVisible(false)}
+          />
+          <View style={styles.optionsMenuCard}>
+            <View style={styles.optionsMenuHeader}>
+              <View>
+                <Text style={styles.optionsMenuTitle}>Account Options</Text>
+                <Text style={styles.optionsMenuSubtitle}>
+                  {bank.bankName} (•••• {bank.accountNumberSuffix})
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setOptionsMenuVisible(false)}
+                style={styles.closeBtn}
+                activeOpacity={0.7}
+              >
+                <Feather name="x" size={16} color="#8E8E9F" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Background SMS Sync Row inside three dots */}
+            <View style={styles.menuItemRow}>
+              <View style={styles.menuItemIconWrap}>
+                <Feather name="message-square" size={18} color="#2dba4e" />
+              </View>
+              <View style={{ flex: 1, marginRight: 10 }}>
+                <Text style={styles.menuItemTitle}>Background SMS Sync</Text>
+                <Text style={styles.menuItemDesc}>
+                  Securely scan incoming bank transaction alerts to update balance & records automatically.
+                </Text>
+              </View>
+              <Switch
+                value={smsConsent}
+                onValueChange={(val) => {
+                  setOptionsMenuVisible(false);
+                  handleToggleSmsConsent(val);
+                }}
+                trackColor={{ false: '#2c2c35', true: '#2dba4e' }}
+                thumbColor={smsConsent ? '#ffffff' : '#8E8E9F'}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Manual Debit / Credit Transaction Modal */}
+      <ManualTransactionModal
+        visible={manualTxModalVisible}
+        onClose={() => setManualTxModalVisible(false)}
+        bank={bank}
+        initialType={manualTxType}
+        onSuccess={handleManualTxSuccess}
+      />
+
+      {/* Transaction Detail, Edit & Delete Modal */}
+      <TransactionDetailModal
+        visible={selectedTx !== null}
+        onClose={() => setSelectedTx(null)}
+        transaction={selectedTx}
+        bankName={bank?.bankName}
+        onSuccess={handleTxDetailSuccess}
+      />
     </>
   );
 };
@@ -754,41 +910,138 @@ const getStyles = (colors: any) => StyleSheet.create({
     borderRadius: 20,
     backgroundColor: colors.isDark ? '#1a1a24' : '#f0f2f5',
   },
+  menuBtn: {
+    padding: 6,
+    borderRadius: 20,
+    backgroundColor: colors.isDark ? '#1a1a24' : '#f0f2f5',
+  },
+  optionsMenuOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  optionsMenuCard: {
+    width: '100%',
+    maxWidth: 400,
+    backgroundColor: colors.isDark ? '#1a1d24' : '#ffffff',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: colors.isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.08)',
+    padding: 18,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 10,
+  },
+  optionsMenuHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
+    marginBottom: 14,
+  },
+  optionsMenuTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: colors.text,
+  },
+  optionsMenuSubtitle: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  menuItemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  menuItemIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: 'rgba(45, 186, 78, 0.12)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  menuItemTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  menuItemDesc: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    marginTop: 2,
+    lineHeight: 15,
+  },
   balanceCard: {
     backgroundColor: colors.isDark ? '#14141e' : '#f7f9fa',
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 16,
-    padding: 16,
-    marginTop: 16,
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginTop: 10,
   },
   balanceLabel: {
-    fontSize: 12,
+    fontSize: 10,
     color: colors.textSecondary,
     fontWeight: '700',
     textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   balanceValue: {
-    fontSize: 28,
+    fontSize: 22,
     fontWeight: '900',
     color: colors.text,
-    marginTop: 4,
+    marginTop: 2,
   },
   syncText: {
-    fontSize: 10,
+    fontSize: 9,
     color: colors.textTertiary,
-    marginTop: 6,
+    marginTop: 2,
+  },
+  compactActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  compactCreditBtn: {
+    backgroundColor: colors.isDark ? 'rgba(45, 186, 78, 0.12)' : 'rgba(45, 186, 78, 0.08)',
+    borderColor: 'rgba(45, 186, 78, 0.35)',
+  },
+  compactDebitBtn: {
+    backgroundColor: colors.isDark ? 'rgba(239, 68, 68, 0.12)' : 'rgba(239, 68, 68, 0.08)',
+    borderColor: 'rgba(239, 68, 68, 0.35)',
+  },
+  compactCreditText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#2dba4e',
+  },
+  compactDebitText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#ef4444',
   },
   ocrActionsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginVertical: 14,
+    marginVertical: 8,
   },
   actionBtn: {
     flex: 0.48,
     flexDirection: 'row',
-    height: 44,
-    borderRadius: 12,
+    height: 36,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.isDark ? '#12121a' : '#ffffff',
@@ -797,35 +1050,35 @@ const getStyles = (colors: any) => StyleSheet.create({
   },
   actionBtnText: {
     color: colors.text,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
   },
   searchContainer: {
     flexDirection: 'row',
-    height: 44,
+    height: 36,
     backgroundColor: colors.isDark ? '#14141e' : '#f0f2f5',
-    borderRadius: 12,
-    paddingHorizontal: 12,
+    borderRadius: 10,
+    paddingHorizontal: 10,
     alignItems: 'center',
-    marginBottom: 10,
+    marginBottom: 6,
   },
   searchInput: {
     flex: 1,
     color: colors.text,
-    fontSize: 13,
+    fontSize: 12,
   },
   tabContainer: {
     flexDirection: 'row',
     backgroundColor: colors.isDark ? '#12121a' : '#f0f2f5',
-    borderRadius: 10,
-    padding: 4,
-    marginBottom: 12,
+    borderRadius: 8,
+    padding: 2,
+    marginBottom: 8,
   },
   tabButton: {
     flex: 1,
-    paddingVertical: 8,
+    paddingVertical: 5,
     alignItems: 'center',
-    borderRadius: 8,
+    borderRadius: 6,
   },
   activeTabButton: {
     backgroundColor: colors.isDark ? '#2b2b3b' : '#ffffff',
@@ -836,7 +1089,7 @@ const getStyles = (colors: any) => StyleSheet.create({
     elevation: 2,
   },
   tabText: {
-    fontSize: 12,
+    fontSize: 11,
     color: colors.textSecondary,
     fontWeight: '600',
   },
