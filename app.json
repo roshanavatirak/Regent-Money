@@ -9,7 +9,7 @@
     "splash": {
       "image": "./assets/icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#1a1f26"
+      "backgroundColor": "#f8fafc"
     },
     "ios": {
       "supportsTablet": true
@@ -21,6 +21,7 @@
         "android.permission.RECEIVE_BOOT_COMPLETED",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT",
         "android.permission.CAMERA",
         "android.permission.READ_EXTERNAL_STORAGE"
       ],
@@ -30,7 +31,8 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#FFFFFF"
-      }
+      },
+      "softwareKeyboardLayoutMode": "resize"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -43,6 +45,12 @@
     "plugins": [
       "expo-font",
       "./plugins/withExcludeSupport",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Allow Regent Money to use Face ID for biometric authentication."
+        }
+      ],
       [
         "expo-build-properties",
         {

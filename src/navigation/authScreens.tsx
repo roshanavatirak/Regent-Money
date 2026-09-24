@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+// Auth Screens - Login, Signup & Welcome (Regent Money)
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   View, 
   Text, 
@@ -9,6 +10,7 @@ import {
   ActivityIndicator, 
   Platform, 
   KeyboardAvoidingView, 
+  Keyboard,
   Modal,
   Dimensions,
   Image
@@ -294,12 +296,29 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
   const { colors } = useTheme();
   const styles = getStyles(colors);
   const insets = useSafeAreaInsets();
+  const scrollViewRef = useRef<ScrollView>(null);
   const [emailOrMobile, setEmailOrMobile] = useState('');
   const [password, setPassword] = useState('');
   const [secureText, setSecureText] = useState(true);
   const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      () => setKeyboardVisible(true)
+    );
+    const hideSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => setKeyboardVisible(false)
+    );
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   const handleLogin = async () => {
     if (!emailOrMobile.trim() || !password) {
@@ -323,8 +342,17 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
       style={styles.container}
     >
       <ScrollView 
-        contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 20 }]}
+        ref={scrollViewRef}
+        contentContainerStyle={[
+          styles.formScrollContent, 
+          { 
+            paddingTop: insets.top + 20, 
+            paddingBottom: insets.bottom + (keyboardVisible ? 220 : 36) 
+          }
+        ]}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
       >
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
           <Feather name="arrow-left" size={22} color={colors.text} />
@@ -374,6 +402,11 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
               autoCapitalize="none"
               value={password}
               onChangeText={setPassword}
+              onFocus={() => {
+                setTimeout(() => {
+                  scrollViewRef.current?.scrollToEnd({ animated: true });
+                }, 120);
+              }}
             />
             <TouchableOpacity onPress={() => setSecureText(!secureText)} style={styles.eyeBtn}>
               <Feather name={secureText ? "eye-off" : "eye"} size={16} color="#8E8E9F" />
@@ -422,6 +455,7 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
   const { colors } = useTheme();
   const styles = getStyles(colors);
   const insets = useSafeAreaInsets();
+  const scrollViewRef = useRef<ScrollView>(null);
   
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -434,6 +468,22 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
   const [error, setError] = useState('');
   const [showVerifyModal, setShowVerifyModal] = useState(false);
   const [registeredEmail, setRegisteredEmail] = useState('');
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      () => setKeyboardVisible(true)
+    );
+    const hideSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => setKeyboardVisible(false)
+    );
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   const handleSignup = async () => {
     if (!name.trim() || !email.trim() || !phone.trim() || !password || !confirmPassword) {
@@ -478,8 +528,17 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
       style={styles.container}
     >
       <ScrollView 
-        contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 20 }]}
+        ref={scrollViewRef}
+        contentContainerStyle={[
+          styles.formScrollContent, 
+          { 
+            paddingTop: insets.top + 20, 
+            paddingBottom: insets.bottom + (keyboardVisible ? 240 : 36) 
+          }
+        ]}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
       >
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
           <Feather name="arrow-left" size={22} color={colors.text} />
@@ -555,6 +614,11 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
               autoCapitalize="none"
               value={password}
               onChangeText={setPassword}
+              onFocus={() => {
+                setTimeout(() => {
+                  scrollViewRef.current?.scrollToEnd({ animated: true });
+                }, 120);
+              }}
             />
             <TouchableOpacity onPress={() => setSecureText(!secureText)} style={styles.eyeBtn}>
               <Feather name={secureText ? "eye-off" : "eye"} size={16} color="#8E8E9F" />
@@ -572,6 +636,11 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
               autoCapitalize="none"
               value={confirmPassword}
               onChangeText={setConfirmPassword}
+              onFocus={() => {
+                setTimeout(() => {
+                  scrollViewRef.current?.scrollToEnd({ animated: true });
+                }, 120);
+              }}
             />
           </View>
 
@@ -672,6 +741,11 @@ const getStyles = (colors: any) => StyleSheet.create({
     paddingHorizontal: 24,
     justifyContent: 'center',
     flexGrow: 1,
+  },
+  formScrollContent: {
+    paddingHorizontal: 24,
+    flexGrow: 1,
+    justifyContent: 'flex-start',
   },
   neonGlow: {
     position: 'absolute',

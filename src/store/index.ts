@@ -153,14 +153,20 @@ export interface UserProfile {
   phone: string | null;
   name: string;
   authProvider: 'local' | 'google' | 'email';
-  avatarUrl?: string;
+  avatarUrl?: string | null;
   createdAt: number;
+  dob?: string | null;
+  gender?: string | null;
+  occupation?: string | null;
+  currentIncome?: number | null;
+  incomeSourcesCount?: number | null;
 }
 
 export interface AuthState {
   user: UserProfile | null;
   isLoading: boolean;
   setUser: (user: UserProfile | null) => void;
+  updateUser: (fields: Partial<UserProfile>) => void;
   setLoading: (loading: boolean) => void;
 }
 
@@ -168,6 +174,13 @@ export const useAuthStore = create<AuthState>((set) => ({
   user: null,
   isLoading: true,
   setUser: (user) => set({ user }),
+  updateUser: (fields) =>
+    set((state) => {
+      if (!state.user) return state;
+      const updated = { ...state.user, ...fields };
+      mmkvStorage.setObject('user_profile', updated);
+      return { user: updated };
+    }),
   setLoading: (isLoading) => set({ isLoading }),
 }));
 
@@ -231,7 +244,7 @@ export interface ThemeState {
 
 export const useThemeStore = create<ThemeState>((set) => ({
   // Try reading from MMKV synchronously (works when native MMKV is available)
-  theme: (mmkvStorage.getString('appearance_theme') as ThemeMode) || 'system',
+  theme: (mmkvStorage.getString('appearance_theme') as ThemeMode) || 'light',
   setTheme: (theme) => {
     mmkvStorage.setString('appearance_theme', theme);
     set({ theme });
@@ -284,7 +297,7 @@ export const getThemeColors = (isDark: boolean) => {
       inputBorder: '#cbd5e1',
       buttonSecondaryBackground: '#f1f5f9',
       buttonSecondaryText: '#0f172a',
-      shadowColor: 'rgba(15, 23, 42, 0.10)',
+      shadowColor: '#0f172a',
       chatSelfBubble: '#f1f5f9',
       chatBotBubble: 'rgba(22, 163, 74, 0.08)',
       statusBar: 'dark' as const,
@@ -423,6 +436,8 @@ export const rehydrateAllStores = async () => {
 
     const inc = mmkvStorage.getNumber('cache_monthly_income');
     if (inc) useAnalyticsStore.getState().setIncomeCurrentMonth(inc);
+
+    await useSecurityStore.getState().rehydrateSecurity();
   } catch (e) {
     console.error('[Store] Rehydration error:', e);
   }
@@ -461,5 +476,68 @@ export const useConfirmStore = create<ConfirmState>((set) => ({
 export const showGlobalConfirm = (options: ConfirmOptions) => {
   useConfirmStore.getState().showConfirm(options);
 };
+
+// 10. Security & Biometrics Store
+export type AutoLockTimeout = 1 | 5 | 10;
+
+export interface SecurityState {
+  biometricsEnabled: boolean;
+  autoLockTimeout: AutoLockTimeout;
+  isLocked: boolean;
+  lastBackgroundTimestamp: number | null;
+  setBiometricsEnabled: (enabled: boolean) => void;
+  setAutoLockTimeout: (timeout: AutoLockTimeout) => void;
+  setLocked: (locked: boolean) => void;
+  setLastBackgroundTimestamp: (timestamp: number | null) => void;
+  rehydrateSecurity: () => Promise<void>;
+}
+
+export const useSecurityStore = create<SecurityState>((set) => ({
+  biometricsEnabled: mmkvStorage.getBoolean('security_biometrics_enabled') ?? false,
+  autoLockTimeout: ((mmkvStorage.getNumber('security_auto_lock_timeout') as AutoLockTimeout) || 1),
+  isLocked: false,
+  lastBackgroundTimestamp: mmkvStorage.getNumber('security_last_bg_time') ?? null,
+
+  setBiometricsEnabled: (enabled) => {
+    mmkvStorage.setBoolean('security_biometrics_enabled', enabled);
+    set({ biometricsEnabled: enabled });
+  },
+
+  setAutoLockTimeout: (timeout) => {
+    mmkvStorage.setNumber('security_auto_lock_timeout', timeout);
+    set({ autoLockTimeout: timeout });
+  },
+
+  setLocked: (isLocked) => set({ isLocked }),
+  setLastBackgroundTimestamp: (timestamp) => {
+    if (timestamp) {
+      mmkvStorage.setNumber('security_last_bg_time', timestamp);
+    } else {
+      mmkvStorage.delete('security_last_bg_time');
+    }
+    set({ lastBackgroundTimestamp: timestamp });
+  },
+
+  rehydrateSecurity: async () => {
+    const enabled = mmkvStorage.getBoolean('security_biometrics_enabled') ?? false;
+    const timeout = ((mmkvStorage.getNumber('security_auto_lock_timeout') as AutoLockTimeout) || 1);
+    const lastBg = mmkvStorage.getNumber('security_last_bg_time');
+
+    let shouldLock = false;
+    if (enabled && lastBg) {
+      const elapsed = Date.now() - lastBg;
+      if (elapsed >= timeout * 60 * 1000) {
+        shouldLock = true;
+      }
+    }
+
+    set({
+      biometricsEnabled: enabled,
+      autoLockTimeout: timeout,
+      lastBackgroundTimestamp: lastBg ?? null,
+      isLocked: shouldLock,
+    });
+  },
+}));
 
 

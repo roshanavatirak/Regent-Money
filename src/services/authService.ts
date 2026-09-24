@@ -1,5 +1,5 @@
 import { mmkvStorage } from '../db/mmkv';
-import { useAuthStore, UserProfile } from '../store';
+import { useAuthStore, UserProfile, useSecurityStore, AutoLockTimeout } from '../store';
 import { syncService } from './syncService';
 import { getGoogleWebClientId } from './supabaseClient';
 
@@ -61,6 +61,17 @@ export const authService = {
     syncService.sync().catch((e) => 
       console.log('[Auth] Background sync on session check failed:', e.message)
     );
+
+    // Sync security settings from backend
+    this.fetchSecuritySettings().then((settings) => {
+      if (settings) {
+        useSecurityStore.getState().setBiometricsEnabled(settings.biometricsEnabled);
+        if ([1, 5, 10].includes(settings.autoLockTimeout)) {
+          useSecurityStore.getState().setAutoLockTimeout(settings.autoLockTimeout as AutoLockTimeout);
+        }
+      }
+    }).catch(() => {});
+
     return cachedProfile;
   },
 
@@ -243,6 +254,144 @@ export const authService = {
     // Initial database sync
     syncService.sync().catch((e) => console.error('[Auth] Google login sync failed:', e));
     return profile;
+  },
+
+  /**
+   * Sync security settings (biometricsEnabled, autoLockTimeout) with backend
+   */
+  async updateSecuritySettings(settings: { biometricsEnabled?: boolean; autoLockTimeout?: number }): Promise<void> {
+    const token = this.getAccessToken();
+    if (!token) return;
+
+    try {
+      await fetch(`${BACKEND_URL}/auth/security-settings`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(settings),
+      });
+    } catch (err) {
+      console.warn('[AuthService] Failed to sync security settings with backend:', err);
+    }
+  },
+
+  /**
+   * Fetch saved security settings from backend
+   */
+  async fetchSecuritySettings(): Promise<{ biometricsEnabled: boolean; autoLockTimeout: number } | null> {
+    const token = this.getAccessToken();
+    if (!token) return null;
+
+    try {
+      const res = await fetch(`${BACKEND_URL}/auth/security-settings`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (err) {
+      console.warn('[AuthService] Failed to fetch security settings:', err);
+    }
+    return null;
+  },
+
+  /**
+   * Fetch complete user profile from backend
+   */
+  async fetchProfile(): Promise<UserProfile | null> {
+    const token = this.getAccessToken();
+    if (!token) return null;
+
+    try {
+      const res = await fetch(`${BACKEND_URL}/auth/profile`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const profile = await res.json();
+        useAuthStore.getState().updateUser(profile);
+        return profile;
+      }
+    } catch (err) {
+      console.warn('[AuthService] Failed to fetch profile:', err);
+    }
+    return null;
+  },
+
+  /**
+   * Update user personal/financial profile
+   */
+  async updateProfile(fields: {
+    name?: string;
+    avatarUrl?: string;
+    dob?: string;
+    gender?: string;
+    occupation?: string;
+    currentIncome?: number;
+    incomeSourcesCount?: number;
+  }): Promise<UserProfile | null> {
+    const token = this.getAccessToken();
+    // Update local state immediately for snappy response
+    useAuthStore.getState().updateUser(fields);
+
+    if (!token) return null;
+
+    try {
+      const res = await fetch(`${BACKEND_URL}/auth/profile`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(fields),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        useAuthStore.getState().updateUser(updated);
+        return updated;
+      }
+    } catch (err) {
+      console.warn('[AuthService] Failed to sync profile with backend:', err);
+    }
+    return null;
+  },
+
+  /**
+   * Upload avatar to Cloudinary via backend
+   */
+  async uploadAvatar(fileData: string): Promise<string | null> {
+    const token = this.getAccessToken();
+    if (!token) {
+      useAuthStore.getState().updateUser({ avatarUrl: fileData });
+      return fileData;
+    }
+
+    try {
+      const res = await fetch(`${BACKEND_URL}/auth/upload-avatar`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ fileData }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.avatarUrl) {
+          useAuthStore.getState().updateUser({ avatarUrl: data.avatarUrl });
+          return data.avatarUrl;
+        }
+      }
+    } catch (err) {
+      console.warn('[AuthService] Upload avatar failed:', err);
+    }
+
+    // Fallback: save locally
+    useAuthStore.getState().updateUser({ avatarUrl: fileData });
+    return fileData;
   },
 
   /**

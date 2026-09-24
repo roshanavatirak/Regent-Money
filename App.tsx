@@ -1,5 +1,4 @@
 import React, { useEffect } from 'react';
-import { StatusBar } from 'expo-status-bar';
 import * as Font from 'expo-font';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import AppNavigator from './src/navigation';
@@ -16,10 +15,5 @@ export default function App() {
     });
   }, []);
 
-  return (
-    <>
-      <AppNavigator />
-      <StatusBar style="light" />
-    </>
-  );
+  return <AppNavigator />;
 }

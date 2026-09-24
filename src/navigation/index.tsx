@@ -20,7 +20,9 @@ import {
   Pressable,
   useWindowDimensions,
   StyleProp,
-  ViewStyle
+  ViewStyle,
+  AppState,
+  AppStateStatus,
 } from 'react-native';
 import { NavigationContainer, useFocusEffect } from '@react-navigation/native';
 import { createBottomTabNavigator, BottomTabBarProps } from '@react-navigation/bottom-tabs';
@@ -200,7 +202,11 @@ import {
   useConfirmStore,
   showGlobalConfirm,
   rehydrateAllStores,
+  useSecurityStore,
+  AutoLockTimeout,
 } from '../store';
+import { biometricService } from '../services/biometricService';
+import { BiometricLockOverlay } from '../components/BiometricLockOverlay';
 import { StatusBar } from 'expo-status-bar';
 import { authService } from '../services/authService';
 import { notificationService } from '../services/notificationService';
@@ -210,6 +216,7 @@ import { WelcomeScreen, LoginScreen, SignupScreen } from './authScreens';
 import { syncService } from '../services/syncService';
 import { BankDetailsModal } from './BankDetailsModal';
 import { ManualTransactionModal } from './ManualTransactionModal';
+import { ProfileScreen } from './ProfileScreen';
 import {
   askChatbot,
   ChatMessage
@@ -1518,21 +1525,6 @@ const AppTopBar = ({ onOpenAddBank }: AppTopBarProps) => {
               </View>
             )}
           </TouchableOpacity>
-
-          {/* Profile Avatar Button */}
-          <TouchableOpacity
-            style={styles.topBarProfileBtn}
-            onPress={() => setProfileModalVisible(true)}
-            activeOpacity={0.7}
-          >
-            {user?.name ? (
-              <Text style={styles.topBarProfileInitial}>
-                {user.name.charAt(0).toUpperCase()}
-              </Text>
-            ) : (
-              <Feather name="user" size={16} color="#2dba4e" />
-            )}
-          </TouchableOpacity>
         </View>
       </View>
 
@@ -1905,6 +1897,9 @@ const ChatScreen = () => {
   const isThinking = useAIStore((state) => state.isThinking);
   const setThinking = useAIStore((state) => state.setThinking);
 
+  const user = useAuthStore((state) => state.user);
+  const bankProfiles = useBankStore((state) => state.bankProfiles);
+  const goals = useGoalsStore((state) => state.goals);
   const transactions = useTransactionStore((state) => state.transactions);
   const budgets = useBudgetStore((state) => state.budgets);
 
@@ -1979,29 +1974,61 @@ const ChatScreen = () => {
     setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
 
     try {
-      // Gather sanitized Context
-      const rawRecentTxs = transactions.slice(0, 10).map((t) => ({
-        amount: t.amount,
+      // 1. User Profile Context
+      const userProfileContext = {
+        name: user?.name,
+        email: user?.email,
+        gender: user?.gender,
+        dob: user?.dob,
+        occupation: user?.occupation,
+        currentIncome: user?.currentIncome ? Number(user.currentIncome) : undefined,
+        incomeSourcesCount: user?.incomeSourcesCount,
+      };
+
+      // 2. Total Balance & Connected Accounts
+      const totalBalance = bankProfiles.reduce((sum, b) => sum + (Number(b.currentBalance) || 0), 0);
+      const accountsContext = bankProfiles.map((b) => ({
+        bankName: b.bankName,
+        accountType: 'Bank Account',
+        balance: Number(b.currentBalance) || 0,
+        accountNumberEnding: b.accountNumberSuffix || undefined,
+      }));
+
+      // 3. Savings Goals Context
+      const goalsContext = goals.map((g) => ({
+        name: g.name,
+        target: Number(g.targetAmount) || 0,
+        current: Number(g.currentAmount) || 0,
+        targetDate: g.targetDate ? new Date(g.targetDate).toLocaleDateString('en-IN') : undefined,
+      }));
+
+      // 4. Budgets
+      const budgetContext = budgets.map((b) => ({
+        category: b.category,
+        limit: Number(b.limitAmount) || 0,
+        spent: Number(b.spentAmount) || 0,
+      }));
+
+      // 5. Recent Transactions
+      const rawRecentTxs = transactions.slice(0, 15).map((t) => ({
+        amount: Number(t.amount) || 0,
         category: t.category,
         merchant: t.merchant,
         timestamp: t.timestamp,
-        type: 'debit' as const
+        type: (t.type === 'credit' ? 'credit' : 'debit') as 'credit' | 'debit',
       }));
-
       const recentTxs = sanitizeTransactions(rawRecentTxs);
 
-      const budgetContext = budgets.map((b) => ({
-        category: b.category,
-        limit: b.limitAmount,
-        spent: b.spentAmount
-      }));
-
       const context = {
+        user: userProfileContext,
+        totalBalance,
+        accounts: accountsContext,
+        savingsGoals: goalsContext,
         budgets: budgetContext,
-        recentTransactions: recentTxs
+        recentTransactions: recentTxs,
       };
 
-      // Call Groq
+      // Call Groq / Gemini with full live context
       const response = await askChatbot(query, chatHistory, context);
       addChatMessage({ role: 'assistant', content: response });
     } catch (e: any) {
@@ -2021,7 +2048,7 @@ const ChatScreen = () => {
       <AppTopBar />
       <View style={[styles.header, { paddingTop: 8, paddingBottom: 4 }]}>
         <Text style={styles.headerTitle}>AI Assistant</Text>
-        <Text style={styles.subtitle}>Powered by Groq Llama 3</Text>
+        <Text style={styles.subtitle}>Powered by Groq Ultra-Fast AI</Text>
       </View>
 
       {chatHistory.length === 0 ? (
@@ -2302,112 +2329,7 @@ const GoalsScreen = () => {
 // ----------------------------------------------------
 // 4. Settings Screen Component
 // ----------------------------------------------------
-const SettingsScreen = () => {
-  const insets = useSafeAreaInsets();
-  const user = useAuthStore((state) => state.user);
-  const theme = useThemeStore((state) => state.theme);
-  const setTheme = useThemeStore((state) => state.setTheme);
-  const { colors } = useTheme();
-  const styles = getStyles(colors);
-
-  const [biometricsEnabled, setBiometricsEnabled] = useState(true);
-
-  return (
-    <View style={styles.container}>
-      <AppTopBar />
-      <ScrollView
-        style={styles.container}
-        contentContainerStyle={[styles.contentContainer, { paddingTop: 12, paddingBottom: insets.bottom + 100 }]}
-        showsVerticalScrollIndicator={false}
-      >
-        <Text style={styles.headerTitle}>Settings</Text>
-        <Text style={styles.subtitle}>Privacy & Security</Text>
-
-        {/* User Profile Card */}
-        <View style={styles.card}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-            <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
-              <Text style={{ color: colors.accent, fontWeight: '800', fontSize: 18 }}>
-                {user?.name?.charAt(0).toUpperCase() || 'U'}
-              </Text>
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: colors.text, fontSize: 15, fontWeight: '700' }}>{user?.name || 'Guest User'}</Text>
-              <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>{user?.email || user?.phone || 'Offline Session'}</Text>
-            </View>
-            <View style={{ backgroundColor: colors.accentMuted, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 }}>
-              <Text style={{ color: colors.accent, fontSize: 10, fontWeight: '700', textTransform: 'uppercase' }}>
-                {user?.authProvider || 'Local'}
-              </Text>
-            </View>
-          </View>
-          <TouchableOpacity
-            style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.buttonSecondaryBackground, borderWidth: 1, borderColor: colors.border, paddingVertical: 10, borderRadius: 10, marginTop: 8 }}
-            onPress={() => authService.logOut()}
-          >
-            <Feather name="log-out" size={14} color={colors.text} style={{ marginRight: 6 }} />
-            <Text style={{ color: colors.text, fontSize: 13, fontWeight: '700' }}>Log Out Session</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Appearance */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Appearance Setting</Text>
-          <Text style={styles.settingDesc}>
-            Choose your interface appearance preference.
-          </Text>
-          <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
-            {(['light', 'dark', 'system'] as const).map((mode) => {
-              const isSelected = theme === mode;
-              return (
-                <TouchableOpacity
-                  key={mode}
-                  onPress={() => setTheme(mode)}
-                  style={{
-                    flex: 1,
-                    paddingVertical: 10,
-                    borderRadius: 10,
-                    backgroundColor: isSelected ? colors.accent : colors.buttonSecondaryBackground,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    borderWidth: 1,
-                    borderColor: isSelected ? colors.accent : colors.border,
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Text
-                    style={{
-                      color: isSelected ? '#ffffff' : colors.text,
-                      fontSize: 13,
-                      fontWeight: '700',
-                      textTransform: 'capitalize',
-                    }}
-                  >
-                    {mode}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
-
-        {/* Security */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Security Settings</Text>
-          <View style={styles.settingRow}>
-            <Text style={styles.settingLabel}>Enable Biometric Lock</Text>
-            <Switch
-              value={biometricsEnabled}
-              onValueChange={setBiometricsEnabled}
-              thumbColor={biometricsEnabled ? colors.accent : colors.text}
-              trackColor={{ false: colors.buttonSecondaryBackground, true: colors.accentMuted }}
-            />
-          </View>
-        </View>
-      </ScrollView>
-    </View>
-  );
-};
+const SettingsScreen = () => <ProfileScreen AppTopBarComponent={AppTopBar} />;
 
 // ----------------------------------------------------
 // Connected Banks Screen
@@ -2869,9 +2791,9 @@ const TAB_CONFIG: { [key: string]: TabItemConfig } = {
     size: 20,
   },
   Settings: {
-    label: 'Settings',
-    activeIcon: 'options',
-    inactiveIcon: 'options-outline',
+    label: 'Profile',
+    activeIcon: 'person',
+    inactiveIcon: 'person-outline',
     size: 20,
   },
 };
@@ -2895,6 +2817,7 @@ const CustomTabButton = ({
   isDark: boolean;
   colors: any;
 }) => {
+  const user = useAuthStore((state) => state.user);
   const [isHovered, setIsHovered] = useState(false);
   const scale = useSharedValue(1);
 
@@ -2990,11 +2913,38 @@ const CustomTabButton = ({
           animatedStyle,
         ]}
       >
-        <Ionicons
-          name={isFocused ? config.activeIcon : config.inactiveIcon}
-          size={iconSize}
-          color={iconColor}
-        />
+        {route.name === 'Settings' && user?.avatarUrl ? (
+          <View
+            style={{
+              width: iconSize + 3,
+              height: iconSize + 3,
+              borderRadius: (iconSize + 3) / 2,
+              borderWidth: 1.5,
+              borderColor: isFocused
+                ? (isDark ? '#2dba4e' : '#16a34a')
+                : (isDark ? 'rgba(255, 255, 255, 0.28)' : 'rgba(0, 0, 0, 0.22)'),
+              overflow: 'hidden',
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: isDark ? '#161b22' : '#f1f5f9',
+            }}
+          >
+            <Image
+              source={{ uri: user.avatarUrl }}
+              style={{
+                width: '100%',
+                height: '100%',
+                borderRadius: (iconSize + 3) / 2,
+              }}
+            />
+          </View>
+        ) : (
+          <Ionicons
+            name={isFocused ? config.activeIcon : config.inactiveIcon}
+            size={iconSize}
+            color={iconColor}
+          />
+        )}
         <Text
           numberOfLines={1}
           ellipsizeMode="tail"
@@ -3047,19 +2997,19 @@ const CustomBottomTabBar = ({ state, descriptors, navigation, insets }: BottomTa
           width: barWidth,
           height: isSmall ? 58 : 64,
           borderRadius: 32,
-          backgroundColor: isDark ? 'rgba(22, 27, 34, 0.97)' : '#ffffff',
+          backgroundColor: isDark ? 'rgba(22, 27, 34, 0.97)' : colors.card,
           flexDirection: 'row',
           alignItems: 'center',
           justifyContent: 'space-between',
           paddingHorizontal: isSmall ? 6 : 10,
           paddingVertical: 4,
-          borderWidth: 1.5,
-          borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : '#e2e8f0',
-          shadowColor: '#000000',
-          shadowOffset: { width: 0, height: 6 },
-          shadowOpacity: isDark ? 0.45 : 0.10,
-          shadowRadius: 18,
-          elevation: 12,
+          borderWidth: 1,
+          borderColor: colors.border,
+          shadowColor: isDark ? '#000000' : colors.shadowColor,
+          shadowOffset: { width: 0, height: isDark ? 6 : 3 },
+          shadowOpacity: isDark ? 0.45 : 0.08,
+          shadowRadius: isDark ? 16 : 10,
+          elevation: isDark ? 10 : 3,
         }}
       >
         {state.routes.map((route, index) => {
@@ -3274,32 +3224,34 @@ const GlobalConfirmModal = () => {
             {message}
           </Text>
 
-          {/* Yes / No Buttons */}
+          {/* Action Buttons */}
           <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
-            {/* Cancel Button */}
-            <TouchableOpacity
-              style={{
-                flex: 1,
-                paddingVertical: 14,
-                borderRadius: 14,
-                backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
-                borderWidth: 1,
-                borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.1)',
-                justifyContent: 'center',
-                alignItems: 'center',
-              }}
-              onPress={handleCancel}
-              activeOpacity={0.7}
-              disabled={loading}
-            >
-              <Text style={{
-                fontSize: 14,
-                fontWeight: '700',
-                color: isDark ? 'rgba(250, 251, 252, 0.8)' : '#57606a',
-              }}>
-                {cancelText}
-              </Text>
-            </TouchableOpacity>
+            {/* Cancel Button - only rendered when cancelText is specified */}
+            {!!cancelText && (
+              <TouchableOpacity
+                style={{
+                  flex: 1,
+                  paddingVertical: 14,
+                  borderRadius: 14,
+                  backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
+                  borderWidth: 1,
+                  borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.1)',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                }}
+                onPress={handleCancel}
+                activeOpacity={0.7}
+                disabled={loading}
+              >
+                <Text style={{
+                  fontSize: 14,
+                  fontWeight: '700',
+                  color: isDark ? 'rgba(250, 251, 252, 0.8)' : '#57606a',
+                }}>
+                  {cancelText}
+                </Text>
+              </TouchableOpacity>
+            )}
 
             {/* Confirm Button */}
             <TouchableOpacity
@@ -3328,7 +3280,7 @@ const GlobalConfirmModal = () => {
                   fontWeight: '700',
                   color: '#ffffff',
                 }}>
-                  {confirmText}
+                  {confirmText || 'OK'}
                 </Text>
               )}
             </TouchableOpacity>
@@ -3353,6 +3305,42 @@ export default function AppNavigator() {
       await authService.checkSession();
     };
     initAndCheck();
+  }, []);
+
+  useEffect(() => {
+    const handleAppStateChange = (nextAppState: AppStateStatus) => {
+      const {
+        biometricsEnabled,
+        autoLockTimeout,
+        lastBackgroundTimestamp,
+        setLastBackgroundTimestamp,
+        setLocked,
+        isLocked,
+      } = useSecurityStore.getState();
+
+      if (!biometricsEnabled) return;
+
+      if (nextAppState === 'background' || nextAppState === 'inactive') {
+        if (!lastBackgroundTimestamp) {
+          setLastBackgroundTimestamp(Date.now());
+        }
+      } else if (nextAppState === 'active') {
+        const storedLastBg = lastBackgroundTimestamp || mmkvStorage.getNumber('security_last_bg_time');
+        if (storedLastBg && !isLocked) {
+          const elapsedMs = Date.now() - storedLastBg;
+          const timeoutMs = autoLockTimeout * 60 * 1000;
+          if (elapsedMs >= timeoutMs) {
+            setLocked(true);
+          }
+        }
+        setLastBackgroundTimestamp(null);
+      }
+    };
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    return () => {
+      subscription.remove();
+    };
   }, []);
 
   if (isLoading) {
@@ -3422,6 +3410,7 @@ export default function AppNavigator() {
           </Stack.Navigator>
         </NavigationContainer>
         <GlobalConfirmModal />
+        <BiometricLockOverlay />
       </ErrorBoundary>
     </SafeAreaProvider>
   );

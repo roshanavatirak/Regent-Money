@@ -13,6 +13,7 @@ import {
   Platform,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme, showGlobalConfirm } from '../store';
 import { authService } from '../services/authService';
 import { getBackendUrl } from '../config/api';
@@ -70,6 +71,7 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
   onSuccess,
 }) => {
   const { colors, isDark } = useTheme();
+  const insets = useSafeAreaInsets();
   const styles = useMemo(() => getStyles(colors, isDark), [colors, isDark]);
 
   const [amountStr, setAmountStr] = useState('');
@@ -383,7 +385,7 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
           </ScrollView>
 
           {/* Action Buttons: Delete & Save */}
-          <View style={styles.footer}>
+          <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 16) + 12 }]}>
             <TouchableOpacity
               style={styles.deleteBtn}
               onPress={handleDelete}
@@ -585,8 +587,8 @@ const getStyles = (colors: any, isDark: boolean) =>
       flexDirection: 'row',
       gap: 10,
       paddingHorizontal: 16,
-      paddingTop: 8,
-      paddingBottom: Platform.OS === 'ios' ? 22 : 12,
+      paddingTop: 10,
+      paddingBottom: Platform.OS === 'ios' ? 24 : 18,
       borderTopWidth: 1,
       borderTopColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
     },

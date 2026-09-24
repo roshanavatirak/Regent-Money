@@ -13,10 +13,16 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://regent-money.onrender.com"
+        "EXPO_PUBLIC_BACKEND_URL": "https://regent-money.onrender.com",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://crwbdvenezmpnbsmpxhm.supabase.co"
       }
     },
-    "production": {}
+    "production": {
+      "env": {
+        "EXPO_PUBLIC_BACKEND_URL": "https://regent-money.onrender.com",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://crwbdvenezmpnbsmpxhm.supabase.co"
+      }
+    }
   },
   "submit": {
     "production": {}

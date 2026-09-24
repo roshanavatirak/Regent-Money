@@ -1,15 +1,16 @@
-import { Injectable, UnauthorizedException, BadRequestException, ConflictException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException, ConflictException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
+import { v2 as cloudinary } from 'cloudinary';
 import { User } from '../users/entities/user.entity';
 import { MailService } from '../mail/mail.service';
 
 @Injectable()
-export class AuthService {
+export class AuthService implements OnModuleInit {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
@@ -17,6 +18,48 @@ export class AuthService {
     private readonly mailService: MailService,
     private readonly configService: ConfigService,
   ) {}
+
+  async onModuleInit() {
+    try {
+      await this.userRepository.query(`
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS biometrics_enabled BOOLEAN DEFAULT FALSE;
+      `);
+      await this.userRepository.query(`
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS auto_lock_timeout INTEGER DEFAULT 1;
+      `);
+      await this.userRepository.query(`
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS dob TEXT;
+      `);
+      await this.userRepository.query(`
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS gender TEXT;
+      `);
+      await this.userRepository.query(`
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS occupation TEXT;
+      `);
+      await this.userRepository.query(`
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS current_income NUMERIC;
+      `);
+      await this.userRepository.query(`
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS income_sources_count INTEGER DEFAULT 1;
+      `);
+      console.log('[AuthService] Profile & security columns verified on core.users table.');
+    } catch (err: any) {
+      console.warn('[AuthService] Could not auto-migrate core.users columns:', err?.message || err);
+    }
+
+    const cloudName = this.configService.get<string>('CLOUDINARY_CLOUD_NAME');
+    const apiKey = this.configService.get<string>('CLOUDINARY_API_KEY') || '285736315229939';
+    const apiSecret = this.configService.get<string>('CLOUDINARY_API_SECRET') || 'LeyD3tf1pxkJO4oww6HFKw3OvBg';
+    if (cloudName && apiKey && apiSecret) {
+      cloudinary.config({
+        cloud_name: cloudName,
+        api_key: apiKey,
+        api_secret: apiSecret,
+        secure: true,
+      });
+      console.log(`[AuthService] Cloudinary configured for cloud: ${cloudName}`);
+    }
+  }
 
   async signUp(dto: { name: string; email: string; phone: string; password?: string }) {
     const email = dto.email.trim().toLowerCase();
@@ -231,5 +274,178 @@ export class AuthService {
     } catch (e) {
       return null;
     }
+  }
+
+  async getSecuritySettings(userId: string) {
+    try {
+      const user = await this.userRepository.findOne({
+        where: { id: userId, isDeleted: false },
+      });
+      if (!user) {
+        throw new UnauthorizedException('User not found.');
+      }
+      return {
+        biometricsEnabled: user.biometricsEnabled ?? false,
+        autoLockTimeout: user.autoLockTimeout ?? 1,
+      };
+    } catch (err: any) {
+      if (err?.message?.includes('biometrics_enabled')) {
+        try {
+          await this.userRepository.query(`ALTER TABLE core.users ADD COLUMN IF NOT EXISTS biometrics_enabled BOOLEAN DEFAULT FALSE;`);
+          await this.userRepository.query(`ALTER TABLE core.users ADD COLUMN IF NOT EXISTS auto_lock_timeout INTEGER DEFAULT 1;`);
+          const user = await this.userRepository.findOne({ where: { id: userId, isDeleted: false } });
+          return {
+            biometricsEnabled: user?.biometricsEnabled ?? false,
+            autoLockTimeout: user?.autoLockTimeout ?? 1,
+          };
+        } catch {
+          return { biometricsEnabled: false, autoLockTimeout: 1 };
+        }
+      }
+      throw err;
+    }
+  }
+
+  async updateSecuritySettings(
+    userId: string,
+    settings: { biometricsEnabled?: boolean; autoLockTimeout?: number },
+  ) {
+    try {
+      const user = await this.userRepository.findOne({
+        where: { id: userId, isDeleted: false },
+      });
+      if (!user) {
+        throw new UnauthorizedException('User not found.');
+      }
+
+      if (typeof settings.biometricsEnabled === 'boolean') {
+        user.biometricsEnabled = settings.biometricsEnabled;
+      }
+      if (typeof settings.autoLockTimeout === 'number') {
+        user.autoLockTimeout = settings.autoLockTimeout;
+      }
+      user.updatedAt = Date.now();
+
+      await this.userRepository.save(user);
+
+      return {
+        success: true,
+        biometricsEnabled: user.biometricsEnabled ?? false,
+        autoLockTimeout: user.autoLockTimeout ?? 1,
+      };
+    } catch (err: any) {
+      if (err?.message?.includes('biometrics_enabled')) {
+        await this.userRepository.query(`ALTER TABLE core.users ADD COLUMN IF NOT EXISTS biometrics_enabled BOOLEAN DEFAULT FALSE;`);
+        await this.userRepository.query(`ALTER TABLE core.users ADD COLUMN IF NOT EXISTS auto_lock_timeout INTEGER DEFAULT 1;`);
+        const user = await this.userRepository.findOne({ where: { id: userId, isDeleted: false } });
+        if (user) {
+          if (typeof settings.biometricsEnabled === 'boolean') user.biometricsEnabled = settings.biometricsEnabled;
+          if (typeof settings.autoLockTimeout === 'number') user.autoLockTimeout = settings.autoLockTimeout;
+          user.updatedAt = Date.now();
+          await this.userRepository.save(user);
+          return {
+            success: true,
+            biometricsEnabled: user.biometricsEnabled ?? false,
+            autoLockTimeout: user.autoLockTimeout ?? 1,
+          };
+        }
+      }
+      throw err;
+    }
+  }
+
+  async getProfile(userId: string) {
+    const user = await this.userRepository.findOne({
+      where: { id: userId, isDeleted: false },
+    });
+    if (!user) {
+      throw new UnauthorizedException('User not found.');
+    }
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      avatarUrl: user.avatarUrl,
+      dob: user.dob,
+      gender: user.gender,
+      occupation: user.occupation,
+      currentIncome: user.currentIncome ? Number(user.currentIncome) : null,
+      incomeSourcesCount: user.incomeSourcesCount ?? 1,
+      authProvider: user.authProvider,
+      biometricsEnabled: user.biometricsEnabled ?? false,
+      autoLockTimeout: user.autoLockTimeout ?? 1,
+    };
+  }
+
+  async updateProfile(
+    userId: string,
+    dto: {
+      name?: string;
+      avatarUrl?: string;
+      dob?: string;
+      gender?: string;
+      occupation?: string;
+      currentIncome?: number;
+      incomeSourcesCount?: number;
+    },
+  ) {
+    const user = await this.userRepository.findOne({
+      where: { id: userId, isDeleted: false },
+    });
+    if (!user) {
+      throw new UnauthorizedException('User not found.');
+    }
+
+    if (dto.name !== undefined) user.name = dto.name;
+    if (dto.avatarUrl !== undefined) user.avatarUrl = dto.avatarUrl;
+    if (dto.dob !== undefined) user.dob = dto.dob;
+    if (dto.gender !== undefined) user.gender = dto.gender;
+    if (dto.occupation !== undefined) user.occupation = dto.occupation;
+    if (dto.currentIncome !== undefined) user.currentIncome = dto.currentIncome;
+    if (dto.incomeSourcesCount !== undefined) user.incomeSourcesCount = dto.incomeSourcesCount;
+    user.updatedAt = Date.now();
+
+    await this.userRepository.save(user);
+    return this.getProfile(userId);
+  }
+
+  async uploadAvatar(userId: string, fileData: string) {
+    const user = await this.userRepository.findOne({
+      where: { id: userId, isDeleted: false },
+    });
+    if (!user) {
+      throw new UnauthorizedException('User not found.');
+    }
+
+    const cloudName = this.configService.get<string>('CLOUDINARY_CLOUD_NAME');
+    const apiKey = this.configService.get<string>('CLOUDINARY_API_KEY') || '285736315229939';
+    const apiSecret = this.configService.get<string>('CLOUDINARY_API_SECRET') || 'LeyD3tf1pxkJO4oww6HFKw3OvBg';
+    if (cloudName) {
+      try {
+        cloudinary.config({
+          cloud_name: cloudName,
+          api_key: apiKey,
+          api_secret: apiSecret,
+          secure: true,
+        });
+        const uploadRes = await cloudinary.uploader.upload(fileData, {
+          folder: 'regent_avatars',
+          transformation: [{ width: 300, height: 300, crop: 'fill', gravity: 'face' }],
+        });
+        user.avatarUrl = uploadRes.secure_url;
+        user.updatedAt = Date.now();
+        await this.userRepository.save(user);
+        return { avatarUrl: uploadRes.secure_url };
+      } catch (uploadErr: any) {
+        console.warn('[Cloudinary] Upload failed, falling back:', uploadErr?.message || uploadErr);
+      }
+    }
+
+    // Direct URL fallback if Cloudinary is not yet configured or for remote links
+    user.avatarUrl = fileData;
+    user.updatedAt = Date.now();
+    await this.userRepository.save(user);
+    return { avatarUrl: fileData };
   }
 }

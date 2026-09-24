@@ -49,4 +49,25 @@ export class User {
 
   @Column({ name: 'push_token', type: 'text', nullable: true })
   pushToken?: string | null;
+
+  @Column({ name: 'biometrics_enabled', type: 'boolean', default: false, nullable: true })
+  biometricsEnabled?: boolean;
+
+  @Column({ name: 'auto_lock_timeout', type: 'int', default: 1, nullable: true })
+  autoLockTimeout?: number;
+
+  @Column({ name: 'dob', type: 'text', nullable: true })
+  dob?: string | null;
+
+  @Column({ name: 'gender', type: 'text', nullable: true })
+  gender?: string | null;
+
+  @Column({ name: 'occupation', type: 'text', nullable: true })
+  occupation?: string | null;
+
+  @Column({ name: 'current_income', type: 'numeric', nullable: true })
+  currentIncome?: number | null;
+
+  @Column({ name: 'income_sources_count', type: 'int', default: 1, nullable: true })
+  incomeSourcesCount?: number | null;
 }

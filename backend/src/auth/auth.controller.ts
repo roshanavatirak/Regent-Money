@@ -1,6 +1,7 @@
-import { Controller, Post, Get, Body, Query, Res, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Get, Patch, Body, Query, Res, Req, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { AuthService } from './auth.service';
+import { JwtAuthGuard } from './jwt-auth.guard';
 
 @Controller('auth')
 export class AuthController {
@@ -22,6 +23,54 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async googleAuth(@Body() body: { email: string; name: string; avatarUrl?: string }) {
     return this.authService.googleAuth(body);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('security-settings')
+  async getSecuritySettings(@Req() req: any) {
+    return this.authService.getSecuritySettings(req.user.id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('security-settings')
+  @HttpCode(HttpStatus.OK)
+  async updateSecuritySettings(
+    @Req() req: any,
+    @Body() body: { biometricsEnabled?: boolean; autoLockTimeout?: number },
+  ) {
+    return this.authService.updateSecuritySettings(req.user.id, body);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('profile')
+  async getProfile(@Req() req: any) {
+    return this.authService.getProfile(req.user.id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('profile')
+  @HttpCode(HttpStatus.OK)
+  async updateProfile(
+    @Req() req: any,
+    @Body()
+    body: {
+      name?: string;
+      avatarUrl?: string;
+      dob?: string;
+      gender?: string;
+      occupation?: string;
+      currentIncome?: number;
+      incomeSourcesCount?: number;
+    },
+  ) {
+    return this.authService.updateProfile(req.user.id, body);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('upload-avatar')
+  @HttpCode(HttpStatus.OK)
+  async uploadAvatar(@Req() req: any, @Body() body: { fileData: string }) {
+    return this.authService.uploadAvatar(req.user.id, body.fileData);
   }
 
   @Get('verify')

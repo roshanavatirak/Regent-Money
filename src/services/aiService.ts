@@ -8,8 +8,12 @@ const GROQ_API_KEY_KEY = 'settings_groq_api_key';
 export const getGeminiKey = () => mmkvStorage.getString(GEMINI_API_KEY_KEY) || '';
 export const setGeminiKey = (key: string) => mmkvStorage.setString(GEMINI_API_KEY_KEY, key);
 
-export const getGroqKey = () => mmkvStorage.getString(GROQ_API_KEY_KEY) || process.env.EXPO_PUBLIC_GROQ_API_KEY || '';
-export const setGroqKey = (key: string) => mmkvStorage.setString(GROQ_API_KEY_KEY, key);
+export const getGroqKey = () => {
+  const envKey = (process.env.EXPO_PUBLIC_GROQ_API_KEY || '').trim();
+  const stored = (mmkvStorage.getString(GROQ_API_KEY_KEY) || '').trim();
+  return envKey || stored;
+};
+export const setGroqKey = (key: string) => mmkvStorage.setString(GROQ_API_KEY_KEY, key.trim());
 
 // 1. Gemini 2.5 Flash - For Weekly Briefings and Deep Analysis
 export const generateWeeklyBriefing = async (
@@ -81,13 +85,37 @@ export interface ChatMessage {
   content: string;
 }
 
+export interface ChatContext {
+  user?: {
+    name?: string | null;
+    email?: string | null;
+    gender?: string | null;
+    dob?: string | null;
+    occupation?: string | null;
+    currentIncome?: number | null;
+    incomeSourcesCount?: number | null;
+  };
+  totalBalance?: number;
+  accounts?: Array<{
+    bankName: string;
+    accountType: string;
+    balance: number;
+    accountNumberEnding?: string;
+  }>;
+  savingsGoals?: Array<{
+    name: string;
+    target: number;
+    current: number;
+    targetDate?: string | number;
+  }>;
+  budgets?: Array<{ category: string; limit: number; spent: number }>;
+  recentTransactions?: SanitizedTransaction[];
+}
+
 export const askChatbot = async (
   question: string,
   history: ChatMessage[],
-  currentContext: {
-    budgets: Array<{ category: string; limit: number; spent: number }>;
-    recentTransactions: SanitizedTransaction[];
-  }
+  currentContext: ChatContext
 ): Promise<string> => {
   const geminiKey = getGeminiKey();
   const groqKey = getGroqKey();
@@ -96,19 +124,53 @@ export const askChatbot = async (
     return 'Please enter your Google Gemini API Key or Groq API Key in Settings to chat with the AI assistant.';
   }
 
+  const accountsSummary = (currentContext.accounts && currentContext.accounts.length > 0)
+    ? currentContext.accounts.map((a) => `  * ${a.bankName} (${a.accountType}): ₹${Number(a.balance || 0).toLocaleString('en-IN')}${a.accountNumberEnding ? ` [Account ending ${a.accountNumberEnding}]` : ''}`).join('\n')
+    : '  * No bank accounts linked yet.';
+
+  const goalsSummary = (currentContext.savingsGoals && currentContext.savingsGoals.length > 0)
+    ? currentContext.savingsGoals.map((g) => `  * ${g.name}: ₹${Number(g.current || 0).toLocaleString('en-IN')} saved of ₹${Number(g.target || 0).toLocaleString('en-IN')} (${Math.round(((g.current || 0) / (g.target || 1)) * 100)}%)${g.targetDate ? ` target by ${g.targetDate}` : ''}`).join('\n')
+    : '  * No savings goals set.';
+
+  const budgetsSummary = (currentContext.budgets && currentContext.budgets.length > 0)
+    ? currentContext.budgets.map((b) => `  * ${b.category}: Spent ₹${Number(b.spent || 0).toLocaleString('en-IN')} of ₹${Number(b.limit || 0).toLocaleString('en-IN')}`).join('\n')
+    : '  * No category budgets configured.';
+
+  const txsSummary = (currentContext.recentTransactions && currentContext.recentTransactions.length > 0)
+    ? currentContext.recentTransactions.slice(0, 15).map((t) => `  * [${t.type.toUpperCase()}] ${t.amountRange} on ${t.category} (${t.merchantType}) - ${t.relativeDate}`).join('\n')
+    : '  * No recent transactions recorded.';
+
   const systemPrompt = `
-You are Regent Money AI, an expert, instant financial chatbot. You have access to the user's current budgets and recent sanitized transaction history.
-Your responses should be fast, highly precise, and custom-tailored to Indian financial concepts (like UPI, mutual funds, taxation 80C/80D, HRA).
+You are Regent Money AI, the private personal wealth assistant and financial advisor for ${currentContext.user?.name || 'the user'}.
+You have direct, real-time access to the user's financial database, bank accounts, balances, goals, and profile in Regent Money.
 
-User's Financial Context:
-Budgets: ${JSON.stringify(currentContext.budgets)}
-Recent Transactions: ${JSON.stringify(currentContext.recentTransactions)}
+### USER PROFILE & IDENTITY
+- Name: ${currentContext.user?.name || 'User'}
+- Gender: ${currentContext.user?.gender || 'Not specified'}
+- Date of Birth: ${currentContext.user?.dob || 'Not set'}
+- Occupation: ${currentContext.user?.occupation || 'Not specified'}
+- Stated Income: ₹${currentContext.user?.currentIncome ? Number(currentContext.user.currentIncome).toLocaleString('en-IN') : 'Not specified'}
+- Income Streams Count: ${currentContext.user?.incomeSourcesCount || 1}
 
-Guidelines:
-- Keep answers under 3-4 sentences unless explaining a complex tax query.
-- Offer actionable advice. Never mention raw account numbers.
-- Be friendly, premium, and professional.
-- Refer to the user's context only when relevant to their question.
+### CURRENT LIQUID BALANCE & ACCOUNTS
+- Total Current Balance Across Banks: ₹${Number(currentContext.totalBalance || 0).toLocaleString('en-IN')}
+- Bank Accounts:
+${accountsSummary}
+
+### SAVINGS GOALS
+${goalsSummary}
+
+### BUDGETS & SPENDING
+${budgetsSummary}
+
+### RECENT TRANSACTIONS
+${txsSummary}
+
+### INSTRUCTIONS:
+1. When asked about balance or bank accounts, answer IMMEDIATELY and DIRECTLY with their total balance (₹${Number(currentContext.totalBalance || 0).toLocaleString('en-IN')}) and individual account breakdown. NEVER state that you don't have balance information.
+2. When asked about savings goals, income, occupation, gender, or personal profile, cite the exact real-time values from the profile and goals above.
+3. Tailor insights to Indian wealth practices (UPI, Emergency Funds, SIPs, ELSS, 80C/80D).
+4. Be accurate, polite, executive, and encouraging.
 `;
 
   // 1. Google Gemini 2.5 Flash Chat
@@ -166,10 +228,10 @@ Guidelines:
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${groqKey}`,
+          Authorization: `Bearer ${groqKey.trim()}`,
         },
         body: JSON.stringify({
-          model: 'llama3-8b-8192',
+          model: 'openai/gpt-oss-120b',
           messages: messages.map((m) => ({ role: m.role, content: m.content })),
           temperature: 0.7,
           max_tokens: 500,
@@ -259,10 +321,10 @@ Extract all transactions now:
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${groqKey}`,
+          Authorization: `Bearer ${groqKey.trim()}`,
         },
         body: JSON.stringify({
-          model: 'llama3-8b-8192',
+          model: 'openai/gpt-oss-120b',
           messages: [
             { role: 'system', content: systemInstruction },
             { role: 'user', content: prompt }
