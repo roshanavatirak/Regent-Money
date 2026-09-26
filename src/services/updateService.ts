@@ -20,7 +20,7 @@ export interface UpdateInfo {
  * On native builds, Application.nativeApplicationVersion reads the native binary's versionName.
  * Otherwise, falls back to Constants.expoConfig?.version or app.json directly.
  */
-export const BASE_APP_VERSION = (appConfig?.expo?.version || '1.0.15').replace(/^v/, '').trim();
+export const BASE_APP_VERSION = (appConfig?.expo?.version || '1.0.16').replace(/^v/, '').trim();
 
 export const getAppCurrentVersion = (): string => {
   // On native Android / iOS standalone APK, read the installed binary version

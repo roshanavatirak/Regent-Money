@@ -50,6 +50,7 @@ import { mmkvStorage } from '../db/mmkv';
 import { useSyncDb } from '../services/useSyncDb';
 import { GoalsScreen } from './GoalsScreen';
 import { UpdateModal } from './UpdateModal';
+import { AppSplashScreen } from '../components/AppSplashScreen';
 import { updateService, UpdateInfo } from '../services/updateService';
 import bankNamesJson from './banknames.json';
 
@@ -3171,6 +3172,8 @@ export default function AppNavigator() {
   const isLoading = useAuthStore((state) => state.isLoading);
   const { colors, isDark } = useTheme();
 
+  const [splashFinished, setSplashFinished] = useState(false);
+
   const updateInfo = useAppUpdateStore((state) => state.updateInfo);
   const updateModalVisible = useAppUpdateStore((state) => state.updateModalVisible);
   const setUpdateInfo = useAppUpdateStore((state) => state.setUpdateInfo);
@@ -3243,33 +3246,11 @@ export default function AppNavigator() {
     };
   }, []);
 
-  if (isLoading) {
+  if (isLoading && splashFinished) {
     return (
       <View style={{ flex: 1, backgroundColor: colors.background, justifyContent: 'center', alignItems: 'center' }}>
         <StatusBar style={colors.statusBar} />
-        <View style={{
-          width: 80,
-          height: 80,
-          borderRadius: 24,
-          borderWidth: 1,
-          borderColor: colors.border,
-          overflow: 'hidden',
-          marginBottom: 24,
-          shadowColor: colors.accent,
-          shadowOffset: { width: 0, height: 4 },
-          shadowOpacity: 0.15,
-          shadowRadius: 10,
-          elevation: 5,
-        }}>
-          <Image
-            source={require('../../assets/icon.png')}
-            style={{ width: '100%', height: '100%', borderRadius: 24 }}
-          />
-        </View>
         <ActivityIndicator size="small" color={colors.accent} />
-        <Text style={{ color: colors.textSecondary, marginTop: 18, fontSize: 11, fontWeight: '700', letterSpacing: 2 }}>
-          SECURELY RETRIEVING SESSION...
-        </Text>
       </View>
     );
   }
@@ -3296,19 +3277,21 @@ export default function AppNavigator() {
     <SafeAreaProvider>
       <StatusBar style={colors.statusBar} />
       <ErrorBoundary>
-        <NavigationContainer ref={navigationRef} theme={navTheme}>
-          <Stack.Navigator screenOptions={{ headerShown: false }}>
-            {user === null ? (
-              <>
-                <Stack.Screen name="Welcome" component={WelcomeScreen} />
-                <Stack.Screen name="Login" component={LoginScreen} />
-                <Stack.Screen name="Signup" component={SignupScreen} />
-              </>
-            ) : (
-              <Stack.Screen name="Main" component={TabNavigator} />
-            )}
-          </Stack.Navigator>
-        </NavigationContainer>
+        {!isLoading && (
+          <NavigationContainer ref={navigationRef} theme={navTheme}>
+            <Stack.Navigator screenOptions={{ headerShown: false }}>
+              {user === null ? (
+                <>
+                  <Stack.Screen name="Welcome" component={WelcomeScreen} />
+                  <Stack.Screen name="Login" component={LoginScreen} />
+                  <Stack.Screen name="Signup" component={SignupScreen} />
+                </>
+              ) : (
+                <Stack.Screen name="Main" component={TabNavigator} />
+              )}
+            </Stack.Navigator>
+          </NavigationContainer>
+        )}
         <GlobalConfirmModal />
         <BiometricLockOverlay />
         <AppSidebarDrawer />
@@ -3317,6 +3300,9 @@ export default function AppNavigator() {
           visible={updateModalVisible}
           onDismiss={() => setUpdateModalVisible(false)}
         />
+        {!splashFinished && (
+          <AppSplashScreen onFinish={() => setSplashFinished(true)} />
+        )}
       </ErrorBoundary>
     </SafeAreaProvider>
   );
