@@ -7,9 +7,8 @@
     "icon": "./assets/appicon.png",
     "userInterfaceStyle": "light",
     "splash": {
-      "image": "./assets/appicon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#f8fafc"
+      "backgroundColor": "#0B0E14"
     },
     "ios": {
       "supportsTablet": true

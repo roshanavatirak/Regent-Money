@@ -11,6 +11,8 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { syncService } from '../services/syncService';
+
 interface AppSplashScreenProps {
   onFinish: () => void;
 }
@@ -21,11 +23,12 @@ let hasAppColdStarted = false;
 export const AppSplashScreen: React.FC<AppSplashScreenProps> = ({ onFinish }) => {
   const insets = useSafeAreaInsets();
 
-  const logoScale = useRef(new Animated.Value(0.75)).current;
+  const logoScale = useRef(new Animated.Value(0.72)).current;
   const logoOpacity = useRef(new Animated.Value(0)).current;
   const contentOpacity = useRef(new Animated.Value(0)).current;
   const footerOpacity = useRef(new Animated.Value(0)).current;
   const containerOpacity = useRef(new Animated.Value(1)).current;
+  const pulseScale = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
     // If app already launched in this session, skip splash entirely
@@ -35,48 +38,77 @@ export const AppSplashScreen: React.FC<AppSplashScreenProps> = ({ onFinish }) =>
     }
     hasAppColdStarted = true;
 
-    // Sequence of animations: LinkedIn / Luxury style opening
+    // Preload & sync all financial records, accounts, and server data in the background during the 4-second splash
+    try {
+      syncService.sync().catch((err) => {
+        console.warn('[SplashScreen] Background sync error during splash preload:', err);
+      });
+    } catch (e) {
+      // Continue without blocking splash
+    }
+
+    // Sequence of animations: Luxury / Elite financial opening
     Animated.parallel([
       // 1. Logo scale up and fade in
       Animated.spring(logoScale, {
         toValue: 1,
-        friction: 6,
-        tension: 40,
+        friction: 6.5,
+        tension: 38,
         useNativeDriver: true,
       }),
       Animated.timing(logoOpacity, {
         toValue: 1,
-        duration: 450,
+        duration: 650,
         useNativeDriver: true,
       }),
       // 2. Brand name subtitle fade in
       Animated.timing(contentOpacity, {
         toValue: 1,
-        duration: 500,
-        delay: 200,
+        duration: 700,
+        delay: 350,
         useNativeDriver: true,
       }),
       // 3. Footer "RAO Dev Studios" fade in
       Animated.timing(footerOpacity, {
         toValue: 1,
-        duration: 600,
-        delay: 350,
+        duration: 800,
+        delay: 600,
         useNativeDriver: true,
       }),
     ]).start();
 
-    // After 1.9s, smoothly fade out the entire splash screen
+    // Subtle luxury breathing pulse on the emblem during loading (1.2s to 3.4s)
+    const pulseTimer = setTimeout(() => {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseScale, {
+            toValue: 1.04,
+            duration: 900,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseScale, {
+            toValue: 1.0,
+            duration: 900,
+            useNativeDriver: true,
+          }),
+        ]),
+        { iterations: 2 }
+      ).start();
+    }, 1100);
+
+    // After 3.45s, smoothly fade out the entire splash screen so app fully opens at exactly 4 seconds
     const dismissTimer = setTimeout(() => {
       Animated.timing(containerOpacity, {
         toValue: 0,
-        duration: 350,
+        duration: 550,
         useNativeDriver: true,
       }).start(() => {
         onFinish();
       });
-    }, 1900);
+    }, 3450);
 
     return () => {
+      clearTimeout(pulseTimer);
       clearTimeout(dismissTimer);
     };
   }, [onFinish]);
@@ -99,7 +131,7 @@ export const AppSplashScreen: React.FC<AppSplashScreenProps> = ({ onFinish }) =>
           style={[
             styles.logoContainer,
             {
-              transform: [{ scale: logoScale }],
+              transform: [{ scale: Animated.multiply(logoScale, pulseScale) }],
               opacity: logoOpacity,
             },
           ]}
