@@ -83,7 +83,8 @@ export class AppService {
       }
     }
 
-    let latestTag = fallbackLatest;
+    // Strict priority: If LATEST_APP_VERSION is defined in .env, it rules.
+    let latestTag = process.env.LATEST_APP_VERSION?.trim() || (releaseData?.tag_name ? releaseData.tag_name.replace(/^v/, '').trim() : '1.0.0');
     let apkDownloadUrl = directApkUrl;
     let notes: string[] = [
       'New Wealth Roadmap & Goal milestones',
@@ -93,7 +94,9 @@ export class AppService {
     let publishedAt: string | undefined = undefined;
 
     if (releaseData && releaseData.tag_name) {
-      latestTag = releaseData.tag_name.replace(/^v/, '');
+      if (!process.env.LATEST_APP_VERSION?.trim()) {
+        latestTag = releaseData.tag_name.replace(/^v/, '').trim();
+      }
       publishedAt = releaseData.published_at;
 
       // Extract specific apk asset url if present

@@ -38,6 +38,11 @@ class UpdateService {
    * with fallback to GitHub Releases API if backend is unavailable.
    */
   async checkForUpdates(): Promise<UpdateInfo | null> {
+    // Web clients already run the latest bundle directly in browser; APK installer is for native Android
+    if (Platform.OS === 'web') {
+      return null;
+    }
+
     try {
       // 1. Primary: Try dedicated backend endpoint
       const controller = new AbortController();
@@ -98,7 +103,7 @@ class UpdateService {
 
         return {
           isUpdateAvailable,
-          forceUpdate: isUpdateAvailable,
+          forceUpdate: false,
           currentVersion: APP_CURRENT_VERSION,
           latestVersion,
           downloadUrl,
