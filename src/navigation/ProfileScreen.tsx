@@ -456,9 +456,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
       {/* ============================================================ */}
       {/* 1. Avatar Selection Modal */}
       {/* ============================================================ */}
-      <Modal visible={avatarModalVisible} transparent animationType="fade" statusBarTranslucent={true} onRequestClose={() => setAvatarModalVisible(false)}>
+      <Modal visible={avatarModalVisible} transparent animationType="fade" onRequestClose={() => setAvatarModalVisible(false)}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={{ flex: 1 }}
         >
           <View style={styles.modalBackdrop}>
@@ -539,9 +539,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
       {/* ============================================================ */}
       {/* 2. Edit Profile Details Modal */}
       {/* ============================================================ */}
-      <Modal visible={editDetailsVisible} transparent animationType="slide" statusBarTranslucent={true} onRequestClose={() => setEditDetailsVisible(false)}>
+      <Modal visible={editDetailsVisible} transparent animationType="slide" onRequestClose={() => setEditDetailsVisible(false)}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={{ flex: 1 }}
         >
           <View style={styles.modalBackdrop}>

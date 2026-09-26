@@ -202,11 +202,10 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
       visible={visible}
       transparent
       animationType="slide"
-      statusBarTranslucent={true}
       onRequestClose={onClose}
     >
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.modalOverlay}
       >
         <View style={styles.modalBackdrop}>

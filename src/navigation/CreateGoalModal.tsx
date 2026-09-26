@@ -126,9 +126,9 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
   const subTextColor = colors.textSecondary;
 
   return (
-    <Modal visible={visible} animationType="slide" transparent statusBarTranslucent={true} onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{ flex: 1 }}
       >
         <View style={styles.modalOverlay}>

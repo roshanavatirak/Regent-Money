@@ -463,7 +463,6 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
       visible={visible}
       transparent
       animationType="slide"
-      statusBarTranslucent={true}
       onRequestClose={() => {
         if (formStep === 2) {
           setFormStep(1);
@@ -475,7 +474,7 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
       }}
     >
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{ flex: 1 }}
       >
         <View style={styles.modalOverlayFull}>
@@ -2087,7 +2086,7 @@ const ChatScreen = () => {
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       style={[styles.container, { paddingTop: 0 }]}
     >
       <AppTopBar />
@@ -2146,7 +2145,7 @@ const ChatScreen = () => {
           styles.inputArea,
           {
             paddingBottom: isKeyboardVisible
-              ? (Platform.OS === 'ios' ? 8 : Math.max(8, insets.bottom))
+              ? (Platform.OS === 'ios' ? 8 : 12)
               : (insets.bottom + 85),
           },
         ]}
@@ -2839,10 +2838,6 @@ const CustomBottomTabBar = ({ state, descriptors, navigation, insets }: BottomTa
     };
   }, []);
 
-  if (isKeyboardVisible) {
-    return null;
-  }
-
   const isSmall = windowWidth < 380;
   const isMedium = windowWidth >= 380 && windowWidth < 600;
 
@@ -2858,7 +2853,7 @@ const CustomBottomTabBar = ({ state, descriptors, navigation, insets }: BottomTa
 
   return (
     <View
-      pointerEvents="box-none"
+      pointerEvents={isKeyboardVisible ? 'none' : 'box-none'}
       style={{
         position: 'absolute',
         bottom: bottomOffset,
@@ -2866,6 +2861,8 @@ const CustomBottomTabBar = ({ state, descriptors, navigation, insets }: BottomTa
         right: 0,
         alignItems: 'center',
         zIndex: 1000,
+        opacity: isKeyboardVisible ? 0 : 1,
+        transform: [{ translateY: isKeyboardVisible ? 120 : 0 }],
       }}
     >
       <View

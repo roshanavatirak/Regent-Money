@@ -481,7 +481,6 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
         visible={visible}
         transparent
         animationType="slide"
-        statusBarTranslucent={true}
         onRequestClose={onClose}
       >
         <View style={styles.overlay}>
@@ -680,11 +679,10 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
         visible={passwordModalVisible}
         transparent
         animationType="fade"
-        statusBarTranslucent={true}
         onRequestClose={() => setPasswordModalVisible(false)}
       >
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={{ flex: 1 }}
         >
           <View style={styles.pwdOverlay}>
