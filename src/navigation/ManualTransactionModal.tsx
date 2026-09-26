@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   Modal,
   View,
@@ -10,6 +10,7 @@ import {
   Alert,
   StyleSheet,
   KeyboardAvoidingView,
+  Keyboard,
   Platform,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
@@ -81,6 +82,23 @@ export const ManualTransactionModal: React.FC<ManualTransactionModalProps> = ({
   const [selectedCategory, setSelectedCategory] = useState<string>('salary');
   const [note, setNote] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const scrollViewRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      () => setIsKeyboardVisible(true)
+    );
+    const hideSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => setIsKeyboardVisible(false)
+    );
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   useEffect(() => {
     if (visible) {
@@ -180,14 +198,14 @@ export const ManualTransactionModal: React.FC<ManualTransactionModalProps> = ({
       onRequestClose={onClose}
     >
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.modalOverlay}
       >
         <View style={styles.modalBackdrop}>
           <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={onClose} />
         </View>
 
-        <View style={styles.modalCard}>
+        <View style={[styles.modalCard, isKeyboardVisible && { maxHeight: Platform.OS === 'ios' ? '70%' : '100%' }]}>
           {/* Header (Super compact) */}
           <View style={styles.headerRow}>
             <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
@@ -226,10 +244,11 @@ export const ManualTransactionModal: React.FC<ManualTransactionModalProps> = ({
           </View>
 
           <ScrollView
+            ref={scrollViewRef}
             showsVerticalScrollIndicator={false}
             bounces={false}
             keyboardShouldPersistTaps="handled"
-            contentContainerStyle={styles.scrollContent}
+            contentContainerStyle={[styles.scrollContent, isKeyboardVisible && { paddingBottom: 24 }]}
           >
             {/* Type Switcher Tabs (Compact) */}
             <View style={styles.typeSwitcherContainer}>
@@ -320,6 +339,9 @@ export const ManualTransactionModal: React.FC<ManualTransactionModalProps> = ({
                   keyboardType="numeric"
                   value={amountStr}
                   onChangeText={(text) => setAmountStr(text.replace(/[^0-9.]/g, ''))}
+                  onFocus={() => {
+                    setTimeout(() => scrollViewRef.current?.scrollTo({ y: 0, animated: true }), 150);
+                  }}
                 />
               </View>
             </View>
@@ -396,6 +418,9 @@ export const ManualTransactionModal: React.FC<ManualTransactionModalProps> = ({
                   value={note}
                   onChangeText={setNote}
                   maxLength={50}
+                  onFocus={() => {
+                    setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 150);
+                  }}
                 />
               </View>
             </View>
@@ -431,7 +456,7 @@ export const ManualTransactionModal: React.FC<ManualTransactionModalProps> = ({
           </ScrollView>
 
           {/* Submit Button (Compact) */}
-          <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 16) + 12 }]}>
+          <View style={[styles.footer, { paddingBottom: isKeyboardVisible ? 10 : Math.max(insets.bottom, 16) + 12 }]}>
             <TouchableOpacity
               style={[
                 styles.submitBtn,

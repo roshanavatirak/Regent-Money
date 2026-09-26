@@ -29,12 +29,17 @@ export const syncService = {
     const token = mmkvStorage.getString('auth_access_token') || null;
     if (!user || !token) return;
 
+    const baseUrl = getBackendUrl();
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const timeoutId = setTimeout(() => {
+      try {
+        controller.abort();
+      } catch {}
+    }, 12000);
 
     try {
       const [snapshotsRes, incomeRes] = await Promise.all([
-        fetch(`${BACKEND_URL}/sync/net-worth-snapshots`, {
+        fetch(`${baseUrl}/sync/net-worth-snapshots`, {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -42,7 +47,7 @@ export const syncService = {
           },
           signal: controller.signal,
         }),
-        fetch(`${BACKEND_URL}/sync/income-records`, {
+        fetch(`${baseUrl}/sync/income-records`, {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -77,7 +82,9 @@ export const syncService = {
       useAnalyticsStore.getState().setLastFetchTime(now);
     } catch (e: any) {
       clearTimeout(timeoutId);
-      console.warn('[Sync] Analytics offline fallback:', e?.message || e);
+      if (e?.name !== 'AbortError' && !e?.message?.includes?.('abort')) {
+        console.warn('[Sync] Analytics offline fallback:', e?.message || e);
+      }
     }
   },
 
@@ -106,14 +113,19 @@ export const syncService = {
       useTransactionStore.getState().setLoading(true);
     }
 
+    const baseUrl = getBackendUrl();
     const syncController = new AbortController();
-    const syncTimeoutId = setTimeout(() => syncController.abort(), 8000);
+    const syncTimeoutId = setTimeout(() => {
+      try {
+        syncController.abort();
+      } catch {}
+    }, 12000);
 
     try {
       // Trigger analytics fetch concurrently
       this.fetchAnalytics(force).catch(() => {});
 
-      const response = await fetch(`${BACKEND_URL}/sync`, {
+      const response = await fetch(`${baseUrl}/sync`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -180,7 +192,9 @@ export const syncService = {
       useBankStore.getState().setBankProfiles(mappedBanks);
     } catch (err: any) {
       clearTimeout(syncTimeoutId);
-      console.warn('[Sync] Server currently unreachable, keeping offline cache active:', err?.message || err);
+      if (err?.name !== 'AbortError' && !err?.message?.includes?.('abort')) {
+        console.warn('[Sync] Server currently unreachable, keeping offline cache active:', err?.message || err);
+      }
     } finally {
       isSyncing = false;
       if (shouldShowLoader) {

@@ -17,11 +17,10 @@ interface AppSplashScreenProps {
   onFinish: () => void;
 }
 
-// Module-level guard: guarantees the splash animation ONLY plays on cold start launch
-let hasAppColdStarted = false;
-
 export const AppSplashScreen: React.FC<AppSplashScreenProps> = ({ onFinish }) => {
   const insets = useSafeAreaInsets();
+  const onFinishRef = useRef(onFinish);
+  onFinishRef.current = onFinish;
 
   const logoScale = useRef(new Animated.Value(0.72)).current;
   const logoOpacity = useRef(new Animated.Value(0)).current;
@@ -31,14 +30,7 @@ export const AppSplashScreen: React.FC<AppSplashScreenProps> = ({ onFinish }) =>
   const pulseScale = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
-    // If app already launched in this session, skip splash entirely
-    if (hasAppColdStarted) {
-      onFinish();
-      return;
-    }
-    hasAppColdStarted = true;
-
-    // Preload & sync all financial records, accounts, and server data in the background during the 4-second splash
+    // Preload & sync all financial records in the background during the 4-second splash
     try {
       syncService.sync().catch((err) => {
         console.warn('[SplashScreen] Background sync error during splash preload:', err);
@@ -47,6 +39,8 @@ export const AppSplashScreen: React.FC<AppSplashScreenProps> = ({ onFinish }) =>
       // Continue without blocking splash
     }
 
+    const useNative = Platform.OS !== 'web';
+
     // Sequence of animations: Luxury / Elite financial opening
     Animated.parallel([
       // 1. Logo scale up and fade in
@@ -54,64 +48,66 @@ export const AppSplashScreen: React.FC<AppSplashScreenProps> = ({ onFinish }) =>
         toValue: 1,
         friction: 6.5,
         tension: 38,
-        useNativeDriver: true,
+        useNativeDriver: useNative,
       }),
       Animated.timing(logoOpacity, {
         toValue: 1,
         duration: 650,
-        useNativeDriver: true,
+        useNativeDriver: useNative,
       }),
       // 2. Brand name subtitle fade in
       Animated.timing(contentOpacity, {
         toValue: 1,
         duration: 700,
         delay: 350,
-        useNativeDriver: true,
+        useNativeDriver: useNative,
       }),
       // 3. Footer "RAO Dev Studios" fade in
       Animated.timing(footerOpacity, {
         toValue: 1,
         duration: 800,
         delay: 600,
-        useNativeDriver: true,
+        useNativeDriver: useNative,
       }),
     ]).start();
 
-    // Subtle luxury breathing pulse on the emblem during loading (1.2s to 3.4s)
-    const pulseTimer = setTimeout(() => {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulseScale, {
-            toValue: 1.04,
-            duration: 900,
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulseScale, {
-            toValue: 1.0,
-            duration: 900,
-            useNativeDriver: true,
-          }),
-        ]),
-        { iterations: 2 }
-      ).start();
-    }, 1100);
+    // Subtle luxury breathing pulse on the emblem during loading (1.0s to 4.0s)
+    const pulseLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseScale, {
+          toValue: 1.05,
+          duration: 900,
+          useNativeDriver: useNative,
+        }),
+        Animated.timing(pulseScale, {
+          toValue: 1.0,
+          duration: 900,
+          useNativeDriver: useNative,
+        }),
+      ])
+    );
 
-    // After 3.45s, smoothly fade out the entire splash screen so app fully opens at exactly 4 seconds
+    const pulseTimer = setTimeout(() => {
+      pulseLoop.start();
+    }, 1000);
+
+    // Keep all elements proudly displayed for the full 4 seconds, then smoothly fade out
     const dismissTimer = setTimeout(() => {
       Animated.timing(containerOpacity, {
         toValue: 0,
-        duration: 550,
-        useNativeDriver: true,
+        duration: 450,
+        useNativeDriver: useNative,
       }).start(() => {
-        onFinish();
+        onFinishRef.current();
       });
-    }, 3450);
+    }, 4000);
 
     return () => {
       clearTimeout(pulseTimer);
       clearTimeout(dismissTimer);
+      pulseLoop.stop();
     };
-  }, [onFinish]);
+  }, []);
 
   return (
     <Animated.View
@@ -119,9 +115,9 @@ export const AppSplashScreen: React.FC<AppSplashScreenProps> = ({ onFinish }) =>
         styles.container,
         {
           opacity: containerOpacity,
+          pointerEvents: 'none' as any,
         },
       ]}
-      pointerEvents="none"
     >
       <StatusBar barStyle="light-content" backgroundColor="#0B0E14" translucent />
 

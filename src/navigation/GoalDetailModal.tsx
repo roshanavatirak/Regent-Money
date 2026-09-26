@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,7 @@ import {
   TextInput,
   ScrollView,
   KeyboardAvoidingView,
+  Keyboard,
   Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -38,37 +39,64 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
   const [depositAmount, setDepositAmount] = useState('');
   const [isDepositing, setIsDepositing] = useState(false);
   const [showDepositBox, setShowDepositBox] = useState(false);
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const scrollViewRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      () => setIsKeyboardVisible(true)
+    );
+    const hideSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => setIsKeyboardVisible(false)
+    );
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   // Live levers for simulator
   const [extraMonthly, setExtraMonthly] = useState(0);
   const [extraRate, setExtraRate] = useState(0);
   const [extraMonths, setExtraMonths] = useState(0);
 
-  if (!goal) return null;
-
-  const pacing = getGoalPacing(goal);
-  const goalColor = goal.color || '#2dba4e';
-  const progressPercent = pacing.progressPercent;
+  const pacing = useMemo(() => {
+    if (!goal) return null;
+    return getGoalPacing(goal);
+  }, [goal]);
 
   // Compounding numbers
-  const baseMonthly = goal.monthlyContribution || Math.max(1000, Math.round((goal.targetAmount - goal.currentAmount) / Math.max(1, pacing.monthsLeft)));
+  const baseMonthly = useMemo(() => {
+    if (!goal || !pacing) return 0;
+    return goal.monthlyContribution || Math.max(1000, Math.round((goal.targetAmount - goal.currentAmount) / Math.max(1, pacing.monthsLeft)));
+  }, [goal, pacing]);
+
   const effectiveMonthly = Math.max(0, baseMonthly + extraMonthly);
-  const effectiveRate = Math.max(1, (goal.expectedReturnRate || 10) + extraRate);
-  const effectiveDuration = Math.max(1, pacing.monthsLeft + extraMonths);
+  const effectiveRate = Math.max(1, ((goal?.expectedReturnRate || 10) + extraRate));
+  const effectiveDuration = Math.max(1, (pacing?.monthsLeft || 1) + extraMonths);
 
   // Strategy recommendation
-  const strategy = getStrategyRecommendation(effectiveDuration);
+  const strategy = useMemo(() => {
+    return getStrategyRecommendation(effectiveDuration);
+  }, [effectiveDuration]);
 
   // Projection curve points
   const projection = useMemo(() => {
+    if (!goal) return [];
     return generateProjectionCurve(
       goal.currentAmount,
       effectiveMonthly,
       effectiveRate,
       effectiveDuration,
     );
-  }, [goal.currentAmount, effectiveMonthly, effectiveRate, effectiveDuration]);
+  }, [goal?.currentAmount, effectiveMonthly, effectiveRate, effectiveDuration]);
 
+  if (!goal || !pacing) return null;
+
+  const goalColor = goal.color || '#2dba4e';
+  const progressPercent = pacing.progressPercent;
   const finalProjected = projection[projection.length - 1] || { balance: goal.currentAmount, invested: goal.currentAmount, gains: 0 };
 
   const handleDeposit = async (amt?: number) => {
@@ -122,11 +150,11 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={{ flex: 1 }}
       >
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: bgModal, borderColor }]}>
+          <View style={[styles.modalContent, { backgroundColor: bgModal, borderColor }, isKeyboardVisible && { maxHeight: Platform.OS === 'ios' ? '70%' : '100%' }]}>
             {/* Header */}
             <View style={styles.modalHeader}>
               <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
@@ -161,10 +189,11 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
             </View>
 
             <ScrollView 
+              ref={scrollViewRef}
               style={styles.scrollBody} 
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
-              contentContainerStyle={{ paddingBottom: 60 }}
+              contentContainerStyle={{ paddingBottom: isKeyboardVisible ? 120 : 60 }}
             >
             {/* Progress Big Ring & Summary */}
             <View style={[styles.heroSummaryCard, { backgroundColor: cardBg, borderColor }]}>
@@ -264,6 +293,9 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
                     keyboardType="numeric"
                     placeholder="Enter custom amount..."
                     placeholderTextColor={subTextColor}
+                    onFocus={() => {
+                      setTimeout(() => scrollViewRef.current?.scrollTo({ y: 180, animated: true }), 150);
+                    }}
                   />
                   <TouchableOpacity
                     onPress={() => handleDeposit()}

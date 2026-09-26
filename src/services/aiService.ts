@@ -264,7 +264,7 @@ ${txsSummary}
           Authorization: `Bearer ${groqKey.trim()}`,
         },
         body: JSON.stringify({
-          model: 'openai/gpt-oss-120b',
+          model: 'llama-3.3-70b-versatile',
           messages: messages.map((m) => ({ role: m.role, content: m.content })),
           temperature: 0.7,
           max_tokens: 500,
@@ -357,7 +357,7 @@ Extract all transactions now:
           Authorization: `Bearer ${groqKey.trim()}`,
         },
         body: JSON.stringify({
-          model: 'openai/gpt-oss-120b',
+          model: 'llama-3.3-70b-versatile',
           messages: [
             { role: 'system', content: systemInstruction },
             { role: 'user', content: prompt }

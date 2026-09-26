@@ -37,17 +37,18 @@ export const AppSidebarDrawer: React.FC = () => {
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
+    const useNative = Platform.OS !== 'web';
     if (isOpen) {
       Animated.parallel([
         Animated.timing(slideAnim, {
           toValue: 0,
           duration: 250,
-          useNativeDriver: true,
+          useNativeDriver: useNative,
         }),
         Animated.timing(fadeAnim, {
           toValue: 1,
           duration: 250,
-          useNativeDriver: true,
+          useNativeDriver: useNative,
         }),
       ]).start();
     } else {
@@ -55,12 +56,12 @@ export const AppSidebarDrawer: React.FC = () => {
         Animated.timing(slideAnim, {
           toValue: -DRAWER_WIDTH,
           duration: 220,
-          useNativeDriver: true,
+          useNativeDriver: useNative,
         }),
         Animated.timing(fadeAnim, {
           toValue: 0,
           duration: 220,
-          useNativeDriver: true,
+          useNativeDriver: useNative,
         }),
       ]).start();
     }

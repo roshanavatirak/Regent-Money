@@ -44,7 +44,6 @@ import Animated, {
 } from 'react-native-reanimated';
 import { CartesianChart, Area, PolarChart, Pie, Line } from 'victory-native';
 import { Canvas, ImageSVG, useSVG, LinearGradient, vec, Group } from '@shopify/react-native-skia';
-import Voice from '@react-native-voice/voice';
 
 import { mmkvStorage } from '../db/mmkv';
 import { useSyncDb } from '../services/useSyncDb';
@@ -1914,6 +1913,14 @@ const ChatScreen = () => {
   const styles = getStyles(colors);
   const insets = useSafeAreaInsets();
   const { sync } = useSyncDb();
+  const { width: windowWidth } = useWindowDimensions();
+
+  const isSmall = windowWidth < 380;
+  const navBarHeight = isSmall ? 58 : 64;
+  const bottomOffset = Platform.OS === 'web'
+    ? 18
+    : Math.max(insets.bottom + (Platform.OS === 'ios' ? 4 : 8), 16);
+  const navBarClearance = bottomOffset + navBarHeight;
 
   const chatHistory = useAIStore((state) => state.chatHistory);
   const addChatMessage = useAIStore((state) => state.addChatMessage);
@@ -1927,7 +1934,6 @@ const ChatScreen = () => {
   const budgets = useBudgetStore((state) => state.budgets);
 
   const [chatInput, setChatInput] = useState('');
-  const [isListening, setIsListening] = useState(false);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const flatListRef = React.useRef<FlatList>(null);
 
@@ -1958,51 +1964,6 @@ const ChatScreen = () => {
     }, [sync])
   );
 
-  // Voice Event Listeners Setup
-  useEffect(() => {
-    if (Platform.OS === 'web' || !Voice || typeof Voice.onSpeechStart === 'undefined') {
-      return;
-    }
-
-    Voice.onSpeechStart = () => setIsListening(true);
-    Voice.onSpeechEnd = () => setIsListening(false);
-    Voice.onSpeechResults = (e: any) => {
-      if (e.value && e.value[0]) {
-        setChatInput(e.value[0]);
-      }
-    };
-    Voice.onSpeechError = (e: any) => {
-      console.error('Speech recognition error:', e);
-      setIsListening(false);
-    };
-
-    return () => {
-      if (Voice && typeof Voice.destroy === 'function') {
-        Voice.destroy().then(Voice.removeAllListeners).catch((err: any) =>
-          console.log('[Voice] Cleanup error:', err?.message)
-        );
-      }
-    };
-  }, []);
-
-  const toggleListening = async () => {
-    if (!Voice) {
-      alert('Voice recognition is not supported on this platform/device.');
-      return;
-    }
-    try {
-      if (isListening) {
-        await Voice.stop();
-        setIsListening(false);
-      } else {
-        setChatInput('');
-        await Voice.start('en-IN');
-        setIsListening(true);
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
 
   const handleSendMessage = async () => {
     if (!chatInput.trim()) return;
@@ -2086,8 +2047,8 @@ const ChatScreen = () => {
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      enabled={Platform.OS === 'ios'}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      enabled={Platform.OS !== 'web'}
       style={[styles.container, { paddingTop: 0 }]}
     >
       <AppTopBar />
@@ -2120,7 +2081,10 @@ const ChatScreen = () => {
           ref={flatListRef}
           data={chatHistory}
           keyExtractor={(_, index) => index.toString()}
-          contentContainerStyle={[styles.chatList, { paddingBottom: isKeyboardVisible ? 20 : 80 }]}
+          contentContainerStyle={[
+            styles.chatList,
+            { paddingBottom: isKeyboardVisible ? 20 : navBarClearance + 80 },
+          ]}
           keyboardShouldPersistTaps="handled"
           onScrollBeginDrag={Keyboard.dismiss}
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
@@ -2148,25 +2112,21 @@ const ChatScreen = () => {
           {
             paddingBottom: isKeyboardVisible
               ? (Platform.OS === 'ios' ? 8 : 10)
-              : Math.max(insets.bottom + 65, 75),
+              : navBarClearance + 16,
           },
         ]}
       >
         <TextInput
           style={styles.chatTextInput}
-          placeholder={isListening ? "Listening..." : "Type a message..."}
+          placeholder="Type a message..."
           placeholderTextColor="#8E8E9F"
           value={chatInput}
           onChangeText={setChatInput}
           editable={!isThinking}
+          onFocus={() => {
+            setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 150);
+          }}
         />
-
-        <TouchableOpacity
-          style={[styles.micBtn, isListening && styles.micBtnActive]}
-          onPress={toggleListening}
-        >
-          <Feather name={isListening ? "mic-off" : "mic"} size={20} color={isListening ? "#24292e" : "#2dba4e"} />
-        </TouchableOpacity>
 
         <TouchableOpacity style={styles.sendBtn} onPress={handleSendMessage} disabled={isThinking}>
           <Feather name="send" size={18} color="#24292e" />
@@ -2855,8 +2815,8 @@ const CustomBottomTabBar = ({ state, descriptors, navigation, insets }: BottomTa
 
   return (
     <View
-      pointerEvents={isKeyboardVisible ? 'none' : 'box-none'}
       style={{
+        pointerEvents: isKeyboardVisible ? 'none' : 'box-none',
         position: 'absolute',
         bottom: bottomOffset,
         left: 0,

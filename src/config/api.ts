@@ -19,14 +19,16 @@ export const getBackendUrl = (): string => {
   }
 
   // In Web Browser: NEVER use 10.0.2.2 (10.0.2.2 is Android emulator only)
+  // Also avoid 'localhost' on Windows which resolves to IPv6 ::1 first and times out
   if (Platform.OS === 'web') {
     if (envUrl && !envUrl.includes('10.0.2.2')) {
-      return envUrl.replace(/\/+$/, '');
+      return envUrl.replace('localhost', '127.0.0.1').replace(/\/+$/, '');
     }
     if (typeof window !== 'undefined' && window.location && window.location.hostname) {
-      return `${window.location.protocol}//${window.location.hostname}:3000`;
+      const hostname = window.location.hostname === 'localhost' ? '127.0.0.1' : window.location.hostname;
+      return `${window.location.protocol}//${hostname}:3000`;
     }
-    return 'http://localhost:3000';
+    return 'http://127.0.0.1:3000';
   }
 
   // In Native (Android / iOS):

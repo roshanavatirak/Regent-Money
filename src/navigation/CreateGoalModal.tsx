@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,7 @@ import {
   TextInput,
   ScrollView,
   KeyboardAvoidingView,
+  Keyboard,
   Platform,
   Dimensions,
 } from 'react-native';
@@ -52,6 +53,23 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
   const [solverMode, setSolverMode] = useState<'by_date' | 'by_monthly'>('by_date');
   const [priority, setPriority] = useState<'high' | 'medium' | 'low'>('medium');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const scrollViewRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      () => setIsKeyboardVisible(true)
+    );
+    const hideSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => setIsKeyboardVisible(false)
+    );
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   // Category selection handler
   const handleSelectCategory = (cat: GoalCategoryOption) => {
@@ -128,11 +146,11 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={{ flex: 1 }}
       >
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: bgModal, borderColor }]}>
+          <View style={[styles.modalContent, { backgroundColor: bgModal, borderColor }, isKeyboardVisible && { maxHeight: Platform.OS === 'ios' ? '70%' : '100%' }]}>
             {/* Header */}
             <View style={styles.modalHeader}>
               <View>
@@ -161,10 +179,11 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
             </View>
 
             <ScrollView 
-              style={styles.scrollBody} 
+              ref={scrollViewRef}
+              style={[styles.scrollBody, isKeyboardVisible && { maxHeight: 260 }]} 
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
-              contentContainerStyle={{ paddingBottom: 60 }}
+              contentContainerStyle={{ paddingBottom: isKeyboardVisible ? 100 : 60 }}
             >
             {/* STEP 1: CATEGORY SELECTION */}
             {step === 1 && (
@@ -217,6 +236,9 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
                   onChangeText={setName}
                   placeholder="e.g., Royal Enfield Hunter 350"
                   placeholderTextColor={subTextColor}
+                  onFocus={() => {
+                    setTimeout(() => scrollViewRef.current?.scrollTo({ y: 0, animated: true }), 150);
+                  }}
                 />
 
                 {/* Target Amount */}
@@ -230,6 +252,9 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
                     keyboardType="numeric"
                     placeholder="0"
                     placeholderTextColor={subTextColor}
+                    onFocus={() => {
+                      setTimeout(() => scrollViewRef.current?.scrollTo({ y: 60, animated: true }), 150);
+                    }}
                   />
                 </View>
 
@@ -262,6 +287,9 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
                     keyboardType="numeric"
                     placeholder="0 (starting fresh)"
                     placeholderTextColor={subTextColor}
+                    onFocus={() => {
+                      setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 150);
+                    }}
                   />
                 </View>
               </View>
@@ -358,6 +386,9 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
                         keyboardType="numeric"
                         placeholder={solvedMonthly.toString()}
                         placeholderTextColor={subTextColor}
+                        onFocus={() => {
+                          setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 150);
+                        }}
                       />
                     </View>
 
@@ -417,7 +448,7 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
           </ScrollView>
 
           {/* Footer Buttons */}
-          <View style={[styles.footerRow, { borderTopColor: borderColor }]}>
+          <View style={[styles.footerRow, { borderTopColor: borderColor }, isKeyboardVisible && { paddingVertical: 8 }]}>
             {step > 1 && (
               <TouchableOpacity
                 onPress={() => setStep((s) => (s - 1) as any)}
