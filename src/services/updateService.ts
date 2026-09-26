@@ -120,13 +120,41 @@ class UpdateService {
    * then launches the native Android installer dialog directly.
    * The user never leaves the app or visits any website.
    */
+  /**
+   * Directly triggers the Android Package Installer for an APK already saved locally.
+   */
+  async installApk(fileUri: string): Promise<boolean> {
+    try {
+      if (Platform.OS !== 'android') return false;
+
+      // Convert file URI to Android content URI via FileProvider
+      const contentUri = await FileSystem.getContentUriAsync(fileUri);
+
+      // Flags: FLAG_GRANT_READ_URI_PERMISSION (1) | FLAG_ACTIVITY_NEW_TASK (268435456)
+      await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+        data: contentUri,
+        flags: 1 | 268435456,
+        type: 'application/vnd.android.package-archive',
+      });
+      return true;
+    } catch (err) {
+      console.warn('[UpdateService] Failed to launch package installer for URI:', fileUri, err);
+      return false;
+    }
+  }
+
+  /**
+   * Downloads APK silently inside the app with a live progress bar,
+   * then launches the native Android installer dialog directly.
+   */
   async downloadAndInstallApk(
     downloadUrl: string,
     onProgress: (percent: number, loadedMB: string, totalMB: string) => void
-  ): Promise<boolean> {
+  ): Promise<{ success: boolean; fileUri?: string; installerLaunched: boolean; error?: string }> {
     try {
       if (Platform.OS !== 'android') {
-        return this.startInstall(downloadUrl);
+        const opened = await this.startInstall(downloadUrl);
+        return { success: opened, installerLaunched: opened };
       }
 
       const fileUri = `${FileSystem.documentDirectory}regent-money-update.apk`;
@@ -160,34 +188,34 @@ class UpdateService {
         throw new Error('Download failed to produce APK file.');
       }
 
-      // Convert file URI to Android content URI
-      const contentUri = await FileSystem.getContentUriAsync(downloadResult.uri);
+      // Report 100% progress
+      onProgress(100, '', '');
 
       // Trigger native Android package installer
-      await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
-        data: contentUri,
-        flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
-        type: 'application/vnd.android.package-archive',
-      });
+      const installerLaunched = await this.installApk(downloadResult.uri);
 
-      return true;
-    } catch (err) {
-      console.warn('[UpdateService] In-app install error, falling back to direct browser download:', err);
-      return this.startInstall(downloadUrl);
+      return {
+        success: true,
+        fileUri: downloadResult.uri,
+        installerLaunched,
+      };
+    } catch (err: any) {
+      console.warn('[UpdateService] In-app install error:', err);
+      return {
+        success: false,
+        installerLaunched: false,
+        error: err?.message || 'Download error',
+      };
     }
   }
 
   /**
-   * Fallback direct download launcher
+   * Fallback direct download launcher via system browser / download manager
    */
   async startInstall(downloadUrl: string): Promise<boolean> {
     try {
-      const supported = await Linking.canOpenURL(downloadUrl);
-      if (supported) {
-        await Linking.openURL(downloadUrl);
-        return true;
-      }
-      return false;
+      await Linking.openURL(downloadUrl);
+      return true;
     } catch (err) {
       console.error('[UpdateService] Error launching download URL:', err);
       return false;

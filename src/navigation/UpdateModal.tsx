@@ -25,7 +25,8 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
   onDismiss,
 }) => {
   const { colors, isDark } = useTheme();
-  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadState, setDownloadState] = useState<'idle' | 'downloading' | 'ready_to_install' | 'failed'>('idle');
+  const [downloadedFileUri, setDownloadedFileUri] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [loadedMB, setLoadedMB] = useState('0');
   const [totalMB, setTotalMB] = useState('...');
@@ -46,32 +47,63 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
   if (!updateInfo || !visible) return null;
 
   const handleUpdate = async () => {
-    setIsDownloading(true);
+    setDownloadState('downloading');
     setDownloadProgress(0);
     setStatusMessage('Connecting to download server...');
 
     try {
-      await updateService.downloadAndInstallApk(
+      const result = await updateService.downloadAndInstallApk(
         updateInfo.downloadUrl,
         (percent, loaded, total) => {
           setDownloadProgress(percent);
-          setLoadedMB(loaded);
-          setTotalMB(total);
-          setStatusMessage(percent >= 100 ? 'Opening native installer...' : 'Downloading update in-app...');
+          if (loaded) setLoadedMB(loaded);
+          if (total) setTotalMB(total);
+          if (percent >= 100) {
+            setStatusMessage('Opening package installer...');
+          } else {
+            setStatusMessage(`Downloading update (${percent}%)...`);
+          }
         }
       );
-    } catch (err) {
-      console.warn('In-app install failed, attempting direct install link:', err);
-      await updateService.startInstall(updateInfo.downloadUrl);
-    } finally {
-      // Keep loader briefly so user sees completion
-      setTimeout(() => {
-        setIsDownloading(false);
-      }, 3000);
+
+      if (result.success && result.fileUri) {
+        setDownloadedFileUri(result.fileUri);
+        setDownloadState('ready_to_install');
+        if (result.installerLaunched) {
+          setStatusMessage('Installer opened! Tap Install Now if dialog was missed.');
+        } else {
+          setStatusMessage('Download complete! Tap Install Now below.');
+        }
+      } else {
+        setDownloadState('failed');
+        setStatusMessage(result.error || 'Download could not complete.');
+      }
+    } catch (err: any) {
+      console.warn('[UpdateModal] Download failed:', err);
+      setDownloadState('failed');
+      setStatusMessage(err?.message || 'Download encountered an unexpected issue.');
     }
   };
 
+  const handleManualInstall = async () => {
+    if (downloadedFileUri) {
+      setStatusMessage('Launching package installer...');
+      const launched = await updateService.installApk(downloadedFileUri);
+      if (!launched) {
+        // Fallback to browser if installer cannot launch
+        await updateService.startInstall(updateInfo.downloadUrl);
+      }
+    } else {
+      await updateService.startInstall(updateInfo.downloadUrl);
+    }
+  };
+
+  const handleBrowserFallback = async () => {
+    await updateService.startInstall(updateInfo.downloadUrl);
+  };
+
   const isMandatory = updateInfo.forceUpdate;
+  const isDownloading = downloadState === 'downloading';
 
   return (
     <Modal
@@ -108,31 +140,39 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
 
           {/* Heading */}
           <Text style={[styles.title, { color: colors.text }]}>
-            {isMandatory ? 'Mandatory Update Required' : 'New Version Available'}
+            {downloadState === 'ready_to_install'
+              ? 'Update Ready to Install'
+              : isMandatory
+              ? 'Mandatory Update Required'
+              : 'New Version Available'}
           </Text>
           <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-            {isMandatory
+            {downloadState === 'ready_to_install'
+              ? 'The update package has been downloaded to your device and is ready to install.'
+              : isMandatory
               ? 'Please update Regent Money to the latest release to continue securely using your account.'
               : 'A newer, faster version of Regent Money is ready with performance and UI upgrades.'}
           </Text>
 
-          {/* What's New Section */}
-          <View style={[styles.notesBox, { backgroundColor: isDark ? 'rgba(0,0,0,0.18)' : '#f8fafc', borderColor: colors.border }]}>
-            <View style={styles.notesHeader}>
-              <Ionicons name="list-outline" size={12} color={colors.accent} style={{ marginRight: 5 }} />
-              <Text style={[styles.notesTitle, { color: colors.textSecondary }]}>WHAT'S NEW</Text>
-            </View>
-
-            {updateInfo.releaseNotes.map((note, idx) => (
-              <View key={idx} style={styles.noteItem}>
-                <Ionicons name="checkmark-circle-outline" size={13} color={colors.accent} style={{ marginRight: 6, marginTop: 1 }} />
-                <Text style={[styles.noteText, { color: colors.text }]}>{note}</Text>
+          {/* What's New Section (hide when ready to install to save space) */}
+          {downloadState !== 'ready_to_install' && (
+            <View style={[styles.notesBox, { backgroundColor: isDark ? 'rgba(0,0,0,0.18)' : '#f8fafc', borderColor: colors.border }]}>
+              <View style={styles.notesHeader}>
+                <Ionicons name="list-outline" size={12} color={colors.accent} style={{ marginRight: 5 }} />
+                <Text style={[styles.notesTitle, { color: colors.textSecondary }]}>WHAT'S NEW</Text>
               </View>
-            ))}
-          </View>
 
-          {/* In-App Live Download Progress Box */}
-          {isDownloading ? (
+              {updateInfo.releaseNotes.map((note, idx) => (
+                <View key={idx} style={styles.noteItem}>
+                  <Ionicons name="checkmark-circle-outline" size={13} color={colors.accent} style={{ marginRight: 6, marginTop: 1 }} />
+                  <Text style={[styles.noteText, { color: colors.text }]}>{note}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+
+          {/* Live Download Progress Box */}
+          {isDownloading && (
             <View style={[styles.downloadBox, { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#f1f5f9', borderColor: colors.border }]}>
               <View style={styles.downloadMetaRow}>
                 <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -163,48 +203,134 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
                 </Text>
               </View>
             </View>
-          ) : (
-            <>
-              {/* Security Notice for Forced Updates */}
-              {isMandatory && (
-                <View style={styles.mandatoryNoticeRow}>
-                  <Ionicons name="shield-checkmark-outline" size={13} color="#f59e0b" style={{ marginRight: 5 }} />
-                  <Text style={styles.mandatoryNoticeText}>
-                    Required build for encrypted sync & transaction security.
-                  </Text>
+          )}
+
+          {/* Ready To Install View */}
+          {downloadState === 'ready_to_install' && (
+            <View style={[styles.downloadBox, { backgroundColor: isDark ? 'rgba(16, 185, 129, 0.08)' : '#f0fdf4', borderColor: '#10b981', marginBottom: 14 }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
+                <Ionicons name="checkmark-circle" size={18} color="#10b981" style={{ marginRight: 6 }} />
+                <Text style={[styles.downloadStatusText, { color: colors.text, fontWeight: '700' }]}>
+                  Download 100% Complete
+                </Text>
+              </View>
+              <Text style={{ fontSize: 11, color: colors.textSecondary, lineHeight: 16 }}>
+                If Android didn't show the install dialog, tap "Install Now" below or open in browser.
+              </Text>
+            </View>
+          )}
+
+          {/* Failed Error View */}
+          {downloadState === 'failed' && (
+            <View style={[styles.downloadBox, { backgroundColor: isDark ? 'rgba(239, 68, 68, 0.08)' : '#fef2f2', borderColor: '#ef4444', marginBottom: 14 }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                <Ionicons name="alert-circle" size={18} color="#ef4444" style={{ marginRight: 6 }} />
+                <Text style={[styles.downloadStatusText, { color: '#ef4444', fontWeight: '700' }]}>
+                  Installation Notice
+                </Text>
+              </View>
+              <Text style={{ fontSize: 11, color: colors.textSecondary, lineHeight: 16 }}>
+                {statusMessage}
+              </Text>
+            </View>
+          )}
+
+          {/* Security Notice for Forced Updates */}
+          {!isDownloading && isMandatory && downloadState !== 'ready_to_install' && (
+            <View style={styles.mandatoryNoticeRow}>
+              <Ionicons name="shield-checkmark-outline" size={13} color="#f59e0b" style={{ marginRight: 5 }} />
+              <Text style={styles.mandatoryNoticeText}>
+                Required build for encrypted sync & transaction security.
+              </Text>
+            </View>
+          )}
+
+          {/* Action Buttons */}
+          {!isDownloading && (
+            <View style={{ marginTop: 4 }}>
+              {downloadState === 'ready_to_install' ? (
+                <>
+                  <TouchableOpacity
+                    onPress={handleManualInstall}
+                    activeOpacity={0.85}
+                    style={[styles.updateBtn, { backgroundColor: colors.accent, marginBottom: 8 }]}
+                  >
+                    <Ionicons name="checkmark-done-circle-outline" size={17} color="#ffffff" style={{ marginRight: 6 }} />
+                    <Text style={styles.updateBtnText}>Install Now</Text>
+                  </TouchableOpacity>
+
+                  <View style={styles.actionRow}>
+                    <TouchableOpacity
+                      onPress={handleBrowserFallback}
+                      activeOpacity={0.7}
+                      style={[styles.laterBtn, { borderColor: colors.border }]}
+                    >
+                      <Ionicons name="globe-outline" size={13} color={colors.textSecondary} style={{ marginRight: 4 }} />
+                      <Text style={[styles.laterBtnText, { color: colors.textSecondary }]}>Open in Browser</Text>
+                    </TouchableOpacity>
+
+                    {!isMandatory && onDismiss && (
+                      <TouchableOpacity
+                        onPress={onDismiss}
+                        activeOpacity={0.7}
+                        style={[styles.laterBtn, { borderColor: colors.border }]}
+                      >
+                        <Text style={[styles.laterBtnText, { color: colors.textSecondary }]}>Dismiss</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </>
+              ) : downloadState === 'failed' ? (
+                <View style={styles.actionRow}>
+                  <TouchableOpacity
+                    onPress={handleUpdate}
+                    activeOpacity={0.85}
+                    style={[styles.updateBtn, { backgroundColor: colors.accent, flex: 1 }]}
+                  >
+                    <Ionicons name="refresh-outline" size={15} color="#ffffff" style={{ marginRight: 5 }} />
+                    <Text style={styles.updateBtnText}>Retry</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    onPress={handleBrowserFallback}
+                    activeOpacity={0.7}
+                    style={[styles.laterBtn, { borderColor: colors.border, flex: 1.2 }]}
+                  >
+                    <Ionicons name="globe-outline" size={13} color={colors.textSecondary} style={{ marginRight: 4 }} />
+                    <Text style={[styles.laterBtnText, { color: colors.textSecondary }]}>Browser Download</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <View style={styles.actionRow}>
+                  {!isMandatory && onDismiss && (
+                    <TouchableOpacity
+                      onPress={onDismiss}
+                      activeOpacity={0.7}
+                      style={[styles.laterBtn, { borderColor: colors.border }]}
+                    >
+                      <Text style={[styles.laterBtnText, { color: colors.textSecondary }]}>Later</Text>
+                    </TouchableOpacity>
+                  )}
+
+                  <TouchableOpacity
+                    onPress={handleUpdate}
+                    activeOpacity={0.85}
+                    style={[
+                      styles.updateBtn,
+                      { backgroundColor: colors.accent, flex: isMandatory ? 1 : 1.3 },
+                    ]}
+                  >
+                    <Ionicons
+                      name="download-outline"
+                      size={15}
+                      color="#ffffff"
+                      style={{ marginRight: 5 }}
+                    />
+                    <Text style={styles.updateBtnText}>Download & Update</Text>
+                  </TouchableOpacity>
                 </View>
               )}
-
-              {/* Action Buttons */}
-              <View style={styles.actionRow}>
-                {!isMandatory && (
-                  <TouchableOpacity
-                    onPress={onDismiss}
-                    activeOpacity={0.7}
-                    style={[styles.laterBtn, { borderColor: colors.border }]}
-                  >
-                    <Text style={[styles.laterBtnText, { color: colors.textSecondary }]}>Later</Text>
-                  </TouchableOpacity>
-                )}
-
-                <TouchableOpacity
-                  onPress={handleUpdate}
-                  activeOpacity={0.85}
-                  style={[
-                    styles.updateBtn,
-                    { backgroundColor: colors.accent, flex: isMandatory ? 1 : 1.3 },
-                  ]}
-                >
-                  <Ionicons
-                    name="download-outline"
-                    size={15}
-                    color="#ffffff"
-                    style={{ marginRight: 5 }}
-                  />
-                  <Text style={styles.updateBtnText}>Download & Update</Text>
-                </TouchableOpacity>
-              </View>
-            </>
+            </View>
           )}
         </View>
       </View>
