@@ -7,17 +7,11 @@ export interface AppVersionResponse {
   latestVersion: string;
   downloadUrl: string;
   releaseNotes: string[];
-  publishedAt?: string;
 }
 
 @Injectable()
 export class AppService {
   private readonly logger = new Logger(AppService.name);
-
-  // In-memory cache to prevent GitHub API rate limiting
-  private cachedRelease: any = null;
-  private lastFetchTime = 0;
-  private readonly CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes
 
   getHello(): string {
     return 'Regent Money Backend API';
@@ -44,102 +38,49 @@ export class AppService {
     return 0;
   }
 
+  /**
+   * App version check - Controlled SOLELY by Render Environment Variables:
+   * - LATEST_APP_VERSION: Target latest version (e.g. "1.0.0")
+   * - MIN_SUPPORTED_VERSION: Below this, forceUpdate is true (e.g. "1.0.0")
+   * - APK_DOWNLOAD_URL: Optional direct download URL override
+   */
   async checkAppVersion(
     platform: string = 'android',
-    currentVersion: string = '1.0.0',
+    currentVersion: string = '',
   ): Promise<AppVersionResponse> {
-    const now = Date.now();
-    const repoOwner = 'roshanavatirak';
-    const repoName = 'Regent-Money';
-    const fallbackLatest = process.env.LATEST_APP_VERSION || '1.0.0';
-    const minSupported = process.env.MIN_SUPPORTED_VERSION || '1.0.0';
-    const directApkUrl = `https://github.com/${repoOwner}/${repoName}/releases/latest/download/regent-money.apk`;
+    const safeCurrentVersion = (currentVersion || '').trim();
 
-    let releaseData = this.cachedRelease;
+    // Render environment variables are the sole single source of truth
+    const latestVersion = (process.env.LATEST_APP_VERSION || safeCurrentVersion).replace(/^v/, '').trim();
+    const minSupported = (process.env.MIN_SUPPORTED_VERSION || safeCurrentVersion).replace(/^v/, '').trim();
+    const downloadUrl =
+      process.env.APK_DOWNLOAD_URL ||
+      'https://github.com/roshanavatirak/Regent-Money/releases/latest/download/regent-money.apk';
 
-    if (!releaseData || now - this.lastFetchTime > this.CACHE_TTL_MS) {
-      try {
-        const res = await fetch(
-          `https://api.github.com/repos/${repoOwner}/${repoName}/releases/latest`,
-          {
-            headers: {
-              'User-Agent': 'Regent-Money-Updater',
-              Accept: 'application/vnd.github.v3+json',
-            },
-          },
-        );
-
-        if (res.ok) {
-          releaseData = await res.json();
-          this.cachedRelease = releaseData;
-          this.lastFetchTime = now;
-        } else {
-          this.logger.warn(
-            `GitHub release fetch returned ${res.status}: ${res.statusText}`,
-          );
-        }
-      } catch (err: any) {
-        this.logger.warn(`Failed to fetch GitHub release: ${err?.message || err}`);
-      }
-    }
-
-    // Strict priority: If LATEST_APP_VERSION is defined in .env, it rules.
-    let latestTag = process.env.LATEST_APP_VERSION?.trim() || (releaseData?.tag_name ? releaseData.tag_name.replace(/^v/, '').trim() : '1.0.0');
-    let apkDownloadUrl = directApkUrl;
-    let notes: string[] = [
+    const releaseNotes = [
       'New Wealth Roadmap & Goal milestones',
       'Unified top navigation bar',
       'Design & performance refinements',
     ];
-    let publishedAt: string | undefined = undefined;
 
-    if (releaseData && releaseData.tag_name) {
-      if (!process.env.LATEST_APP_VERSION?.trim()) {
-        latestTag = releaseData.tag_name.replace(/^v/, '').trim();
-      }
-      publishedAt = releaseData.published_at;
+    const isUpdateAvailable =
+      !!latestVersion &&
+      !!safeCurrentVersion &&
+      this.compareVersions(latestVersion, safeCurrentVersion) > 0;
 
-      // Extract specific apk asset url if present
-      if (Array.isArray(releaseData.assets)) {
-        const apkAsset = releaseData.assets.find((a: any) =>
-          a.name?.endsWith('.apk'),
-        );
-        if (apkAsset && apkAsset.browser_download_url) {
-          apkDownloadUrl = apkAsset.browser_download_url;
-        }
-      }
-
-      // Parse release notes from markdown body
-      if (releaseData.body && typeof releaseData.body === 'string') {
-        const lines = releaseData.body
-          .split('\n')
-          .map((l) => l.trim().replace(/^[-*•]\s*/, ''))
-          .filter(
-            (l) =>
-              l.length > 2 &&
-              !l.startsWith('#') &&
-              !l.startsWith('[') &&
-              !l.startsWith('http'),
-          );
-        if (lines.length > 0) {
-          notes = lines.slice(0, 4);
-        }
-      }
-    }
-
-    const isUpdateAvailable = this.compareVersions(latestTag, currentVersion) > 0;
     const forceUpdate =
       isUpdateAvailable &&
-      this.compareVersions(minSupported, currentVersion) > 0;
+      !!minSupported &&
+      this.compareVersions(minSupported, safeCurrentVersion) > 0;
 
     return {
       isUpdateAvailable,
       forceUpdate,
-      currentVersion,
-      latestVersion: latestTag,
-      downloadUrl: apkDownloadUrl,
-      releaseNotes: notes,
-      publishedAt,
+      currentVersion: safeCurrentVersion,
+      latestVersion,
+      downloadUrl,
+      releaseNotes,
     };
   }
 }
+

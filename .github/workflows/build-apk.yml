@@ -54,16 +54,28 @@ jobs:
       - name: Make Gradlew Executable
         run: chmod +x android/gradlew
 
+      - name: Read App Version from app.json
+        run: |
+          VERSION=$(node -p "require('./app.json').expo.version")
+          VERSION_CODE=$(node -e "
+            const j = require('./app.json');
+            const manualCode = j.expo.android?.versionCode;
+            const parts = (j.expo.version || '1.0.0').replace(/^v/, '').split('.').map(p => parseInt(p, 10) || 0);
+            const autoCode = (parts[0] || 1) * 10000 + (parts[1] || 0) * 100 + (parts[2] || 0);
+            console.log(manualCode && manualCode > autoCode ? manualCode : autoCode);
+          ")
+          echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
+          echo "APP_VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
+          echo "Building Regent Money Version: $VERSION (Auto VersionCode: $VERSION_CODE)"
+
       - name: Build Android Release APK
         env:
           EXPO_PUBLIC_BACKEND_URL: ${{ secrets.EXPO_PUBLIC_BACKEND_URL || 'https://regent-money.onrender.com' }}
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m"
         run: |
           cd android
-          VERSION_CODE=$(( 100 + ${{ github.run_number }} ))
-          VERSION_NAME="1.0.${{ github.run_number }}"
-          echo "Building Regent Money with versionCode: $VERSION_CODE, versionName: $VERSION_NAME"
-          ./gradlew assembleRelease -PversionCode=$VERSION_CODE -PversionName=$VERSION_NAME --no-daemon -x lint -x lintVitalRelease -x lintVitalAnalyzeRelease
+          echo "Building Regent Money with versionCode: $APP_VERSION_CODE, versionName: $APP_VERSION"
+          ./gradlew assembleRelease -PversionCode=$APP_VERSION_CODE -PversionName=$APP_VERSION --no-daemon -x lint -x lintVitalRelease -x lintVitalAnalyzeRelease
 
       - name: Prepare Direct APK for Release
         run: |
@@ -75,7 +87,7 @@ jobs:
           fi
           echo "Found APK at: $APK_PATH"
           cp "$APK_PATH" release-dist/regent-money.apk
-          cp "$APK_PATH" "release-dist/regent-money-v1.0.${{ github.run_number }}.apk"
+          cp "$APK_PATH" "release-dist/regent-money-v${APP_VERSION}.apk"
           ls -la release-dist/
 
       - name: Upload Workflow Artifact
@@ -89,11 +101,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/master')
         with:
-          tag_name: "v1.0.${{ github.run_number }}"
-          name: "Regent Money v1.0.${{ github.run_number }}"
+          tag_name: "v${{ env.APP_VERSION }}"
+          name: "Regent Money v${{ env.APP_VERSION }}"
           body: |
-            ### Regent Money Android Release v1.0.${{ github.run_number }}
-            - Direct APK Download: [regent-money.apk](https://github.com/roshanavatirak/Regent-Money/releases/download/v1.0.${{ github.run_number }}/regent-money.apk)
+            ### Regent Money Android Release v${{ env.APP_VERSION }}
+            - Direct APK Download: [regent-money.apk](https://github.com/roshanavatirak/Regent-Money/releases/download/v${{ env.APP_VERSION }}/regent-money.apk)
             - Automated build from commit `${{ github.sha }}`
           files: release-dist/*.apk
           draft: false

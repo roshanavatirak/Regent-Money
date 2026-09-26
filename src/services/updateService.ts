@@ -2,6 +2,8 @@ import { Platform, Linking } from 'react-native';
 import Constants from 'expo-constants';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as IntentLauncher from 'expo-intent-launcher';
+import * as Application from 'expo-application';
+import appConfig from '../../app.json';
 import { BACKEND_URL } from '../config/api';
 
 export interface UpdateInfo {
@@ -13,7 +15,28 @@ export interface UpdateInfo {
   releaseNotes: string[];
 }
 
-export const APP_CURRENT_VERSION = Constants.expoConfig?.version || '1.0.0';
+/**
+ * Single source of truth for the application version is app.json.
+ * On native builds, Application.nativeApplicationVersion reads the native binary's versionName.
+ * Otherwise, falls back to Constants.expoConfig?.version or app.json directly.
+ */
+export const BASE_APP_VERSION = (appConfig?.expo?.version || '').replace(/^v/, '').trim();
+
+export const getAppCurrentVersion = (): string => {
+  const nativeVer = Application.nativeApplicationVersion;
+  if (nativeVer && typeof nativeVer === 'string' && nativeVer.trim().length > 0) {
+    return nativeVer.replace(/^v/, '').trim();
+  }
+
+  const expoVer = Constants.expoConfig?.version;
+  if (expoVer && typeof expoVer === 'string' && expoVer.trim().length > 0) {
+    return expoVer.replace(/^v/, '').trim();
+  }
+
+  return BASE_APP_VERSION;
+};
+
+export const APP_CURRENT_VERSION = getAppCurrentVersion();
 
 class UpdateService {
   private compareVersions(v1: string, v2: string): number {
@@ -43,75 +66,42 @@ class UpdateService {
       return null;
     }
 
+    const currentVersion = getAppCurrentVersion();
+
     try {
-      // 1. Primary: Try dedicated backend endpoint
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 6000);
 
-      try {
-        const url = `${BACKEND_URL}/app/version-check?platform=${Platform.OS}&currentVersion=${APP_CURRENT_VERSION}`;
-        const res = await fetch(url, { signal: controller.signal });
-        clearTimeout(timeoutId);
+      const url = `${BACKEND_URL}/app/version-check?platform=${Platform.OS}&currentVersion=${encodeURIComponent(currentVersion)}`;
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeoutId);
 
-        if (res.ok) {
-          const data = await res.json();
-          return {
-            isUpdateAvailable: !!data.isUpdateAvailable,
-            forceUpdate: !!data.forceUpdate,
-            currentVersion: APP_CURRENT_VERSION,
-            latestVersion: data.latestVersion || APP_CURRENT_VERSION,
-            downloadUrl:
-              data.downloadUrl ||
-              'https://github.com/roshanavatirak/Regent-Money/releases/latest/download/regent-money.apk',
-            releaseNotes: Array.isArray(data.releaseNotes) && data.releaseNotes.length > 0
-              ? data.releaseNotes
-              : [
-                  'New Wealth Roadmap & Goal milestones',
-                  'Unified top navigation bar',
-                  'Design and speed enhancements',
-                ],
-          };
-        }
-      } catch (backendErr) {
-        // Fallback to GitHub directly if backend timed out
-        clearTimeout(timeoutId);
-      }
+      if (res.ok) {
+        const data = await res.json();
+        const latestVersion = (data.latestVersion || currentVersion).replace(/^v/, '').trim();
+        // Always verify with client-side semantic comparison to eliminate infinite loops
+        const isUpdateAvailable = this.compareVersions(latestVersion, currentVersion) > 0;
+        const forceUpdate = isUpdateAvailable && !!data.forceUpdate;
 
-      // 2. Direct GitHub Fallback
-      const ghRes = await fetch(
-        'https://api.github.com/repos/roshanavatirak/Regent-Money/releases/latest',
-        {
-          headers: {
-            Accept: 'application/vnd.github.v3+json',
-            'User-Agent': 'Regent-Money-App',
-          },
-        }
-      );
-
-      if (ghRes.ok) {
-        const ghData = await ghRes.json();
-        const latestVersion = (ghData.tag_name || '1.0.0').replace(/^v/, '');
-        const isUpdateAvailable = this.compareVersions(latestVersion, APP_CURRENT_VERSION) > 0;
-
-        let downloadUrl = 'https://github.com/roshanavatirak/Regent-Money/releases/latest/download/regent-money.apk';
-        if (Array.isArray(ghData.assets)) {
-          const apk = ghData.assets.find((a: any) => a.name?.endsWith('.apk'));
-          if (apk && apk.browser_download_url) {
-            downloadUrl = apk.browser_download_url;
-          }
+        if (!isUpdateAvailable) {
+          return null;
         }
 
         return {
           isUpdateAvailable,
-          forceUpdate: false,
-          currentVersion: APP_CURRENT_VERSION,
+          forceUpdate,
+          currentVersion,
           latestVersion,
-          downloadUrl,
-          releaseNotes: [
-            'New Wealth Roadmap & Goal Simulator',
-            'Sleek unified top navigation bar',
-            'Security and stability improvements',
-          ],
+          downloadUrl:
+            data.downloadUrl ||
+            'https://github.com/roshanavatirak/Regent-Money/releases/latest/download/regent-money.apk',
+          releaseNotes: Array.isArray(data.releaseNotes) && data.releaseNotes.length > 0
+            ? data.releaseNotes
+            : [
+                'New Wealth Roadmap & Goal milestones',
+                'Unified top navigation bar',
+                'Design and speed enhancements',
+              ],
         };
       }
 
