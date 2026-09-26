@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Image,
   Modal,
+  KeyboardAvoidingView,
   Platform,
   Pressable,
 } from 'react-native';
@@ -455,10 +456,14 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
       {/* ============================================================ */}
       {/* 1. Avatar Selection Modal */}
       {/* ============================================================ */}
-      <Modal visible={avatarModalVisible} transparent animationType="fade" onRequestClose={() => setAvatarModalVisible(false)}>
-        <View style={styles.modalBackdrop}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setAvatarModalVisible(false)} />
-          <View style={styles.modalCard}>
+      <Modal visible={avatarModalVisible} transparent animationType="fade" statusBarTranslucent={true} onRequestClose={() => setAvatarModalVisible(false)}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ flex: 1 }}
+        >
+          <View style={styles.modalBackdrop}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={() => setAvatarModalVisible(false)} />
+            <View style={styles.modalCard}>
             <View style={styles.modalHeaderRow}>
               <View>
                 <Text style={styles.modalTitle}>Update Profile Photo</Text>
@@ -528,26 +533,35 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
             </View>
           </View>
         </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* ============================================================ */}
       {/* 2. Edit Profile Details Modal */}
       {/* ============================================================ */}
-      <Modal visible={editDetailsVisible} transparent animationType="slide" onRequestClose={() => setEditDetailsVisible(false)}>
-        <View style={styles.modalBackdrop}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setEditDetailsVisible(false)} />
-          <View style={[styles.modalCard, { maxHeight: '88%' }]}>
-            <View style={styles.modalHeaderRow}>
-              <View>
-                <Text style={styles.modalTitle}>Edit Profile Information</Text>
-                <Text style={styles.modalSubtitle}>Customize your personal and financial attributes</Text>
+      <Modal visible={editDetailsVisible} transparent animationType="slide" statusBarTranslucent={true} onRequestClose={() => setEditDetailsVisible(false)}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ flex: 1 }}
+        >
+          <View style={styles.modalBackdrop}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={() => setEditDetailsVisible(false)} />
+            <View style={[styles.modalCard, { maxHeight: '88%' }]}>
+              <View style={styles.modalHeaderRow}>
+                <View>
+                  <Text style={styles.modalTitle}>Edit Profile Information</Text>
+                  <Text style={styles.modalSubtitle}>Customize your personal and financial attributes</Text>
+                </View>
+                <TouchableOpacity onPress={() => setEditDetailsVisible(false)} style={styles.modalCloseBtn}>
+                  <Feather name="x" size={18} color={colors.textSecondary} />
+                </TouchableOpacity>
               </View>
-              <TouchableOpacity onPress={() => setEditDetailsVisible(false)} style={styles.modalCloseBtn}>
-                <Feather name="x" size={18} color={colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
 
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
+              <ScrollView 
+                showsVerticalScrollIndicator={false} 
+                keyboardShouldPersistTaps="handled"
+                contentContainerStyle={{ paddingBottom: 100 }}
+              >
               {/* Full Name */}
               <Text style={styles.formFieldLabel}>FULL NAME</Text>
               <TextInput
@@ -651,6 +665,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
             </ScrollView>
           </View>
         </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );

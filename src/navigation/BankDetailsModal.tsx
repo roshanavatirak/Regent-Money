@@ -11,6 +11,7 @@ import {
   StyleSheet, 
   FlatList,
   Switch,
+  KeyboardAvoidingView,
   Platform,
   PermissionsAndroid,
   Linking
@@ -480,6 +481,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
         visible={visible}
         transparent
         animationType="slide"
+        statusBarTranslucent={true}
         onRequestClose={onClose}
       >
         <View style={styles.overlay}>
@@ -678,49 +680,55 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
         visible={passwordModalVisible}
         transparent
         animationType="fade"
+        statusBarTranslucent={true}
         onRequestClose={() => setPasswordModalVisible(false)}
       >
-        <View style={styles.pwdOverlay}>
-          <View style={styles.pwdCard}>
-            <View style={styles.pwdHeader}>
-              <Feather name="lock" size={24} color="#FFD700" style={{ marginBottom: 10 }} />
-              <Text style={styles.pwdTitle}>Statement is Locked</Text>
-              <Text style={styles.pwdSubtitle}>
-                Please enter the PDF password to open and extract transaction records.
-              </Text>
-            </View>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ flex: 1 }}
+        >
+          <View style={styles.pwdOverlay}>
+            <View style={styles.pwdCard}>
+              <View style={styles.pwdHeader}>
+                <Feather name="lock" size={24} color="#FFD700" style={{ marginBottom: 10 }} />
+                <Text style={styles.pwdTitle}>Statement is Locked</Text>
+                <Text style={styles.pwdSubtitle}>
+                  Please enter the PDF password to open and extract transaction records.
+                </Text>
+              </View>
 
-            <TextInput
-              style={styles.pwdInput}
-              placeholder="Enter PDF password"
-              placeholderTextColor={colors.textTertiary}
-              secureTextEntry
-              value={pdfPassword}
-              onChangeText={setPdfPassword}
-              autoFocus
-            />
+              <TextInput
+                style={styles.pwdInput}
+                placeholder="Enter PDF password"
+                placeholderTextColor={colors.textTertiary}
+                secureTextEntry
+                value={pdfPassword}
+                onChangeText={setPdfPassword}
+                autoFocus
+              />
 
-            <View style={styles.pwdButtons}>
-              <TouchableOpacity 
-                style={[styles.pwdBtn, styles.pwdCancelBtn]} 
-                onPress={() => {
-                  setPasswordModalVisible(false);
-                  setPendingPdf(null);
-                  setPdfPassword('');
-                }}
-              >
-                <Text style={styles.pwdCancelText}>Cancel</Text>
-              </TouchableOpacity>
+              <View style={styles.pwdButtons}>
+                <TouchableOpacity 
+                  style={[styles.pwdBtn, styles.pwdCancelBtn]} 
+                  onPress={() => {
+                    setPasswordModalVisible(false);
+                    setPendingPdf(null);
+                    setPdfPassword('');
+                  }}
+                >
+                  <Text style={styles.pwdCancelText}>Cancel</Text>
+                </TouchableOpacity>
 
-              <TouchableOpacity 
-                style={[styles.pwdBtn, styles.pwdSubmitBtn]} 
-                onPress={handlePasswordSubmit}
-              >
-                <Text style={styles.pwdSubmitText}>Decrypt</Text>
-              </TouchableOpacity>
+                <TouchableOpacity 
+                  style={[styles.pwdBtn, styles.pwdSubmitBtn]} 
+                  onPress={handlePasswordSubmit}
+                >
+                  <Text style={styles.pwdSubmitText}>Decrypt</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Custom SMS Consent Modal */}

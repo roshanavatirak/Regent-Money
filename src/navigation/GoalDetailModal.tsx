@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   TextInput,
   ScrollView,
+  KeyboardAvoidingView,
   Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -119,43 +120,52 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
   const subTextColor = colors.textSecondary;
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={styles.modalOverlay}>
-        <View style={[styles.modalContent, { backgroundColor: bgModal, borderColor }]}>
-          {/* Header */}
-          <View style={styles.modalHeader}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
-              <View style={[styles.goalIconWrap, { backgroundColor: `${goalColor}20` }]}>
-                <Ionicons name={(goal.icon as any) || 'trophy'} size={24} color={goalColor} />
-              </View>
-              <View style={{ marginLeft: 12, flex: 1 }}>
-                <Text style={[styles.goalTitle, { color: textColor }]} numberOfLines={1}>
-                  {goal.name}
-                </Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 3 }}>
-                  <Text style={[styles.statusBadge, { backgroundColor: `${pacing.statusColor}20`, color: pacing.statusColor }]}>
-                    {pacing.statusText}
+    <Modal visible={visible} animationType="slide" transparent statusBarTranslucent={true} onRequestClose={onClose}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={{ flex: 1 }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: bgModal, borderColor }]}>
+            {/* Header */}
+            <View style={styles.modalHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                <View style={[styles.goalIconWrap, { backgroundColor: `${goalColor}20` }]}>
+                  <Ionicons name={(goal.icon as any) || 'trophy'} size={24} color={goalColor} />
+                </View>
+                <View style={{ marginLeft: 12, flex: 1 }}>
+                  <Text style={[styles.goalTitle, { color: textColor }]} numberOfLines={1}>
+                    {goal.name}
                   </Text>
-                  {goal.priority && (
-                    <Text style={[styles.priorityBadge, { backgroundColor: cardBg, color: subTextColor, borderColor }]}>
-                      {goal.priority.toUpperCase()} PRIORITY
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 3 }}>
+                    <Text style={[styles.statusBadge, { backgroundColor: `${pacing.statusColor}20`, color: pacing.statusColor }]}>
+                      {pacing.statusText}
                     </Text>
-                  )}
+                    {goal.priority && (
+                      <Text style={[styles.priorityBadge, { backgroundColor: cardBg, color: subTextColor, borderColor }]}>
+                        {goal.priority.toUpperCase()} PRIORITY
+                      </Text>
+                    )}
+                  </View>
                 </View>
               </View>
+
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <TouchableOpacity onPress={handleDelete} style={[styles.actionIconBtn, { backgroundColor: cardBg }]}>
+                  <Ionicons name="trash-outline" size={18} color="#f43f5e" />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={onClose} style={[styles.actionIconBtn, { backgroundColor: cardBg }]}>
+                  <Ionicons name="close" size={20} color={textColor} />
+                </TouchableOpacity>
+              </View>
             </View>
 
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <TouchableOpacity onPress={handleDelete} style={[styles.actionIconBtn, { backgroundColor: cardBg }]}>
-                <Ionicons name="trash-outline" size={18} color="#f43f5e" />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={onClose} style={[styles.actionIconBtn, { backgroundColor: cardBg }]}>
-                <Ionicons name="close" size={20} color={textColor} />
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          <ScrollView style={styles.scrollBody} showsVerticalScrollIndicator={false}>
+            <ScrollView 
+              style={styles.scrollBody} 
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ paddingBottom: 60 }}
+            >
             {/* Progress Big Ring & Summary */}
             <View style={[styles.heroSummaryCard, { backgroundColor: cardBg, borderColor }]}>
               <View style={styles.heroRow}>
@@ -372,6 +382,7 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
           </View>
         </View>
       </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 };

@@ -202,10 +202,11 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
       visible={visible}
       transparent
       animationType="slide"
+      statusBarTranslucent={true}
       onRequestClose={onClose}
     >
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.modalOverlay}
       >
         <View style={styles.modalBackdrop}>
@@ -256,6 +257,7 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
           <ScrollView
             showsVerticalScrollIndicator={false}
             bounces={false}
+            keyboardShouldPersistTaps="handled"
             contentContainerStyle={styles.scrollContent}
           >
             {/* Type Indicator Banner */}
@@ -448,6 +450,7 @@ const getStyles = (colors: any, isDark: boolean) =>
       borderTopWidth: 1,
       borderColor: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.08)',
       paddingTop: 10,
+      maxHeight: '90%',
       shadowColor: '#000',
       shadowOffset: { width: 0, height: -4 },
       shadowOpacity: 0.35,
@@ -492,7 +495,7 @@ const getStyles = (colors: any, isDark: boolean) =>
     scrollContent: {
       paddingHorizontal: 16,
       paddingTop: 10,
-      paddingBottom: 6,
+      paddingBottom: 50,
     },
     typeBanner: {
       paddingVertical: 5,

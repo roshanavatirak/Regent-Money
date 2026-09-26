@@ -13,6 +13,7 @@ import {
   Dimensions,
   Platform,
   KeyboardAvoidingView,
+  Keyboard,
   RefreshControl,
   Modal,
   Image,
@@ -461,6 +462,7 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
       visible={visible}
       transparent
       animationType="slide"
+      statusBarTranslucent={true}
       onRequestClose={() => {
         if (formStep === 2) {
           setFormStep(1);
@@ -471,8 +473,12 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
         }
       }}
     >
-      <View style={styles.modalOverlayFull}>
-        <View style={styles.modalCardFull}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={{ flex: 1 }}
+      >
+        <View style={styles.modalOverlayFull}>
+          <View style={styles.modalCardFull}>
           <View style={navStyles.modalHeader}>
             <Text style={navStyles.modalTitle}>
               {formStep === 1 ? 'Select Your Bank' : 'Bank Account Details'}
@@ -546,7 +552,11 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
               />
             </View>
           ) : (
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ paddingBottom: 120 }}
+            >
               <TouchableOpacity
                 style={styles.formBackBtn}
                 onPress={() => {
@@ -694,6 +704,7 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
           )}
         </View>
       </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 };
@@ -1917,7 +1928,28 @@ const ChatScreen = () => {
 
   const [chatInput, setChatInput] = useState('');
   const [isListening, setIsListening] = useState(false);
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const flatListRef = React.useRef<FlatList>(null);
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      () => {
+        setIsKeyboardVisible(true);
+        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+      }
+    );
+    const hideSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => {
+        setIsKeyboardVisible(false);
+      }
+    );
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   // Sync DB on screen focus
   useFocusEffect(
@@ -2054,7 +2086,7 @@ const ChatScreen = () => {
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={[styles.container, { paddingTop: 0 }]}
     >
       <AppTopBar />
@@ -2087,7 +2119,8 @@ const ChatScreen = () => {
           ref={flatListRef}
           data={chatHistory}
           keyExtractor={(_, index) => index.toString()}
-          contentContainerStyle={[styles.chatList, { paddingBottom: 100 }]}
+          contentContainerStyle={[styles.chatList, { paddingBottom: isKeyboardVisible ? 20 : 100 }]}
+          keyboardShouldPersistTaps="handled"
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
           renderItem={({ item }) => (
             <View style={[
@@ -2107,7 +2140,16 @@ const ChatScreen = () => {
 
       {isThinking && <TypingIndicator />}
 
-      <View style={[styles.inputArea, { paddingBottom: insets.bottom + 85 }]}>
+      <View
+        style={[
+          styles.inputArea,
+          {
+            paddingBottom: isKeyboardVisible
+              ? (Platform.OS === 'ios' ? 8 : Math.max(8, insets.bottom))
+              : (insets.bottom + 85),
+          },
+        ]}
+      >
         <TextInput
           style={styles.chatTextInput}
           placeholder={isListening ? "Listening..." : "Type a message..."}
@@ -2779,6 +2821,26 @@ const CustomTabButton = ({
 const CustomBottomTabBar = ({ state, descriptors, navigation, insets }: BottomTabBarProps) => {
   const { colors, isDark } = useTheme();
   const { width: windowWidth } = useWindowDimensions();
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      () => setIsKeyboardVisible(true)
+    );
+    const hideSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => setIsKeyboardVisible(false)
+    );
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
+  if (isKeyboardVisible) {
+    return null;
+  }
 
   const isSmall = windowWidth < 380;
   const isMedium = windowWidth >= 380 && windowWidth < 600;

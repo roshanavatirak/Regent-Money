@@ -177,10 +177,11 @@ export const ManualTransactionModal: React.FC<ManualTransactionModalProps> = ({
       visible={visible}
       transparent
       animationType="slide"
+      statusBarTranslucent={true}
       onRequestClose={onClose}
     >
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.modalOverlay}
       >
         <View style={styles.modalBackdrop}>
@@ -228,6 +229,7 @@ export const ManualTransactionModal: React.FC<ManualTransactionModalProps> = ({
           <ScrollView
             showsVerticalScrollIndicator={false}
             bounces={false}
+            keyboardShouldPersistTaps="handled"
             contentContainerStyle={styles.scrollContent}
           >
             {/* Type Switcher Tabs (Compact) */}
@@ -488,6 +490,7 @@ const getStyles = (colors: any, isDark: boolean) =>
       borderTopWidth: 1,
       borderColor: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.08)',
       paddingTop: 10,
+      maxHeight: '90%',
       shadowColor: '#000',
       shadowOffset: { width: 0, height: -4 },
       shadowOpacity: 0.35,
@@ -532,7 +535,7 @@ const getStyles = (colors: any, isDark: boolean) =>
     scrollContent: {
       paddingHorizontal: 16,
       paddingTop: 10,
-      paddingBottom: 6,
+      paddingBottom: 50,
     },
     typeSwitcherContainer: {
       flexDirection: 'row',

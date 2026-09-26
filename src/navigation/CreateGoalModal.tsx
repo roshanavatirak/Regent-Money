@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   TextInput,
   ScrollView,
+  KeyboardAvoidingView,
   Platform,
   Dimensions,
 } from 'react-native';
@@ -125,37 +126,46 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
   const subTextColor = colors.textSecondary;
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={styles.modalOverlay}>
-        <View style={[styles.modalContent, { backgroundColor: bgModal, borderColor }]}>
-          {/* Header */}
-          <View style={styles.modalHeader}>
-            <View>
-              <Text style={[styles.modalTitle, { color: textColor }]}>
-                {step === 1 && 'Choose Goal Type'}
-                {step === 2 && 'Target & Starting Fund'}
-                {step === 3 && 'Roadmap & Strategy'}
-              </Text>
-              <Text style={[styles.modalSub, { color: subTextColor }]}>
-                Step {step} of 3 • {step === 1 ? 'Select a category' : selectedCat.name}
-              </Text>
+    <Modal visible={visible} animationType="slide" transparent statusBarTranslucent={true} onRequestClose={onClose}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={{ flex: 1 }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: bgModal, borderColor }]}>
+            {/* Header */}
+            <View style={styles.modalHeader}>
+              <View>
+                <Text style={[styles.modalTitle, { color: textColor }]}>
+                  {step === 1 && 'Choose Goal Type'}
+                  {step === 2 && 'Target & Starting Fund'}
+                  {step === 3 && 'Roadmap & Strategy'}
+                </Text>
+                <Text style={[styles.modalSub, { color: subTextColor }]}>
+                  Step {step} of 3 • {step === 1 ? 'Select a category' : selectedCat.name}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={onClose} style={[styles.closeBtn, { backgroundColor: cardBg }]}>
+                <Ionicons name="close" size={20} color={textColor} />
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity onPress={onClose} style={[styles.closeBtn, { backgroundColor: cardBg }]}>
-              <Ionicons name="close" size={20} color={textColor} />
-            </TouchableOpacity>
-          </View>
 
-          {/* Stepper Progress Bar */}
-          <View style={styles.stepperTrack}>
-            <View
-              style={[
-                styles.stepperFill,
-                { width: `${(step / 3) * 100}%`, backgroundColor: selectedCat.color || '#2dba4e' },
-              ]}
-            />
-          </View>
+            {/* Stepper Progress Bar */}
+            <View style={styles.stepperTrack}>
+              <View
+                style={[
+                  styles.stepperFill,
+                  { width: `${(step / 3) * 100}%`, backgroundColor: selectedCat.color || '#2dba4e' },
+                ]}
+              />
+            </View>
 
-          <ScrollView style={styles.scrollBody} showsVerticalScrollIndicator={false}>
+            <ScrollView 
+              style={styles.scrollBody} 
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ paddingBottom: 60 }}
+            >
             {/* STEP 1: CATEGORY SELECTION */}
             {step === 1 && (
               <View style={styles.stepContainer}>
@@ -438,6 +448,7 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
           </View>
         </View>
       </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 };
