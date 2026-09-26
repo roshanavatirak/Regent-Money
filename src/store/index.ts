@@ -585,4 +585,38 @@ export const useSecurityStore = create<SecurityState>((set) => ({
   },
 }));
 
+// 11. Sidebar Navigation Store
+export interface SidebarState {
+  isOpen: boolean;
+  openSidebar: () => void;
+  closeSidebar: () => void;
+  toggleSidebar: () => void;
+}
+
+export const useSidebarStore = create<SidebarState>((set) => ({
+  isOpen: false,
+  openSidebar: () => set({ isOpen: true }),
+  closeSidebar: () => set({ isOpen: false }),
+  toggleSidebar: () => set((state) => ({ isOpen: !state.isOpen })),
+}));
+
+// 12. Global App Update Store
+export interface AppUpdateStoreState {
+  updateInfo: any | null;
+  updateModalVisible: boolean;
+  setUpdateInfo: (updateInfo: any | null) => void;
+  setUpdateModalVisible: (visible: boolean) => void;
+  openUpdateModal: () => void;
+  closeUpdateModal: () => void;
+}
+
+export const useAppUpdateStore = create<AppUpdateStoreState>((set) => ({
+  updateInfo: null,
+  updateModalVisible: false,
+  setUpdateInfo: (updateInfo) => set({ updateInfo }),
+  setUpdateModalVisible: (updateModalVisible) => set({ updateModalVisible }),
+  openUpdateModal: () => set({ updateModalVisible: true }),
+  closeUpdateModal: () => set({ updateModalVisible: false }),
+}));
+
 

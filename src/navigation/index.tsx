@@ -24,8 +24,10 @@ import {
   AppState,
   AppStateStatus,
 } from 'react-native';
-import { NavigationContainer, useFocusEffect } from '@react-navigation/native';
+import { NavigationContainer, useFocusEffect, createNavigationContainerRef } from '@react-navigation/native';
 import { createBottomTabNavigator, BottomTabBarProps } from '@react-navigation/bottom-tabs';
+
+export const navigationRef = createNavigationContainerRef<any>();
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -207,9 +209,12 @@ import {
   rehydrateAllStores,
   useSecurityStore,
   AutoLockTimeout,
+  useSidebarStore,
+  useAppUpdateStore,
 } from '../store';
 import { biometricService } from '../services/biometricService';
 import { BiometricLockOverlay } from '../components/BiometricLockOverlay';
+import { AppSidebarDrawer } from '../components/AppSidebarDrawer';
 import { StatusBar } from 'expo-status-bar';
 import { authService } from '../services/authService';
 import { notificationService } from '../services/notificationService';
@@ -1483,12 +1488,17 @@ const AppTopBar = ({ onOpenAddBank }: AppTopBarProps) => {
   return (
     <View style={[styles.topBarContainer, { paddingTop: Math.max(insets.top, Platform.OS === 'web' ? 8 : 4) }]}>
       <View style={styles.topBarContent}>
-        {/* Left Brand Identity */}
-        <View style={styles.topBarLeft}>
+        {/* Left Brand Identity - Tap to open Sidebar Drawer */}
+        <TouchableOpacity
+          style={styles.topBarLeft}
+          onPress={() => useSidebarStore.getState().openSidebar()}
+          activeOpacity={0.7}
+        >
           <View style={styles.topBarLogoBadge}>
             <Image
-              source={require('../../assets/icon.png')}
+              source={require('../../assets/insideicon.png')}
               style={styles.topBarLogoImage}
+              resizeMode="contain"
             />
           </View>
           <View style={styles.topBarBrandCol}>
@@ -1496,9 +1506,8 @@ const AppTopBar = ({ onOpenAddBank }: AppTopBarProps) => {
               <Text style={styles.topBarRegent}>REGENT</Text>
               <Text style={styles.topBarMoney}>MONEY</Text>
             </View>
-
           </View>
-        </View>
+        </TouchableOpacity>
 
         {/* Right Actions */}
         <View style={styles.topBarRight}>
@@ -3100,8 +3109,10 @@ export default function AppNavigator() {
   const isLoading = useAuthStore((state) => state.isLoading);
   const { colors, isDark } = useTheme();
 
-  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
-  const [updateModalVisible, setUpdateModalVisible] = useState(false);
+  const updateInfo = useAppUpdateStore((state) => state.updateInfo);
+  const updateModalVisible = useAppUpdateStore((state) => state.updateModalVisible);
+  const setUpdateInfo = useAppUpdateStore((state) => state.setUpdateInfo);
+  const setUpdateModalVisible = useAppUpdateStore((state) => state.setUpdateModalVisible);
 
   useEffect(() => {
     let isMounted = true;
@@ -3223,7 +3234,7 @@ export default function AppNavigator() {
     <SafeAreaProvider>
       <StatusBar style={colors.statusBar} />
       <ErrorBoundary>
-        <NavigationContainer theme={navTheme}>
+        <NavigationContainer ref={navigationRef} theme={navTheme}>
           <Stack.Navigator screenOptions={{ headerShown: false }}>
             {user === null ? (
               <>
@@ -3238,6 +3249,7 @@ export default function AppNavigator() {
         </NavigationContainer>
         <GlobalConfirmModal />
         <BiometricLockOverlay />
+        <AppSidebarDrawer />
         <UpdateModal
           updateInfo={updateInfo}
           visible={updateModalVisible}
@@ -3285,13 +3297,11 @@ const getStyles = (colors: any) => StyleSheet.create({
   topBarLogoBadge: {
     width: 32,
     height: 32,
-    borderRadius: 9,
-    borderWidth: 1,
-    borderColor: colors.border,
+    borderRadius: 8,
     overflow: 'hidden',
-    backgroundColor: '#ffffff',
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: 'transparent',
   },
   topBarLogoImage: {
     width: '100%',

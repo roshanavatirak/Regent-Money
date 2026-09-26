@@ -10,6 +10,15 @@ export class AppController {
     return this.appService.getHello();
   }
 
+  @Get('health')
+  getHealth() {
+    return {
+      status: 'ok',
+      uptime: process.uptime(),
+      timestamp: new Date().toISOString(),
+    };
+  }
+
   @Get('app/version-check')
   async checkAppVersion(
     @Query('platform') platform?: string,
