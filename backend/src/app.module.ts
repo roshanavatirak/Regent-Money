@@ -16,6 +16,7 @@ import { NetWorthSnapshot } from './sync/entities/net-worth-snapshot.entity';
 import { IncomeRecord } from './sync/entities/income-record.entity';
 import { Notification } from './notifications/entities/notification.entity';
 import { NotificationsModule } from './notifications/notifications.module';
+import { AiModule } from './ai/ai.module';
 import * as dns from 'dns';
 
 // Helper to resolve host to IPv4 address programmatically
@@ -34,10 +35,10 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
 
 @Module({
   imports: [
-    // Load .env globally
+    // Load .env globally and allow system environment variables (Render/Docker)
     ConfigModule.forRoot({
       isGlobal: true,
-      ignoreEnvVars: true,
+      ignoreEnvVars: false,
     }),
 
     // Configure TypeORM with Supabase PostgreSQL (forced IPv4 resolution)
@@ -110,6 +111,7 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
     AuthModule,
     SyncModule,
     NotificationsModule,
+    AiModule,
     ScheduleModule.forRoot(),
   ],
   controllers: [AppController],

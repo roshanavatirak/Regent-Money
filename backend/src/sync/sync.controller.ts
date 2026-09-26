@@ -155,4 +155,32 @@ export class SyncController {
     const userId = req.user.id;
     return this.syncService.updateSmsConsent(userId, id, body.smsConsent);
   }
+
+  @Post('goal')
+  @HttpCode(HttpStatus.CREATED)
+  async createGoal(@Req() req: any, @Body() body: any) {
+    const userId = req.user.id;
+    return this.syncService.createGoal(userId, body);
+  }
+
+  @Patch('goal/:id')
+  @HttpCode(HttpStatus.OK)
+  async updateGoal(@Req() req: any, @Param('id') id: string, @Body() body: any) {
+    const userId = req.user.id;
+    return this.syncService.updateGoal(userId, id, body);
+  }
+
+  @Post('goal/:id/contribute')
+  @HttpCode(HttpStatus.OK)
+  async contributeToGoal(@Req() req: any, @Param('id') id: string, @Body('amount') amount: number) {
+    const userId = req.user.id;
+    return this.syncService.contributeToGoal(userId, id, amount);
+  }
+
+  @Delete('goal/:id')
+  @HttpCode(HttpStatus.OK)
+  async deleteGoal(@Req() req: any, @Param('id') id: string) {
+    const userId = req.user.id;
+    return this.syncService.deleteGoal(userId, id);
+  }
 }

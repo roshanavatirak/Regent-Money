@@ -45,6 +45,9 @@ import Voice from '@react-native-voice/voice';
 
 import { mmkvStorage } from '../db/mmkv';
 import { useSyncDb } from '../services/useSyncDb';
+import { GoalsScreen } from './GoalsScreen';
+import { UpdateModal } from './UpdateModal';
+import { updateService, UpdateInfo } from '../services/updateService';
 import bankNamesJson from './banknames.json';
 
 const POPULAR_BANKS = [
@@ -2121,210 +2124,10 @@ const ChatScreen = () => {
 };
 
 // ----------------------------------------------------
-// 3. Goals Screen & Compound Interest Simulator
+// 3. Goals Screen Component
 // ----------------------------------------------------
-const GoalsScreen = () => {
-  const { colors } = useTheme();
-  const styles = getStyles(colors);
-  const insets = useSafeAreaInsets();
-  const { sync } = useSyncDb();
+const GoalsTabScreen = () => <GoalsScreen AppTopBarComponent={AppTopBar} />;
 
-  const goals = useGoalsStore((state) => state.goals);
-
-  // Simulator values
-  const [monthlyContribution, setMonthlyContribution] = useState(5000);
-  const [expectedReturn, setExpectedReturn] = useState(12); // in %
-  const [duration, setDuration] = useState(15); // in years
-
-  useFocusEffect(
-    useCallback(() => {
-      sync();
-    }, [sync])
-  );
-
-  // Generate Compound Interest projection points for Line Chart
-  const projectionData = useMemo(() => {
-    const data = [];
-    const monthlyRate = expectedReturn / 12 / 100;
-
-    for (let i = 0; i <= duration; i++) {
-      const months = i * 12;
-      let totalValue = 0;
-      if (monthlyRate > 0 && months > 0) {
-        totalValue = monthlyContribution * ((Math.pow(1 + monthlyRate, months) - 1) / monthlyRate);
-      } else if (months > 0) {
-        totalValue = monthlyContribution * months;
-      }
-      const totalInvested = monthlyContribution * months;
-      data.push({
-        year: i,
-        value: Math.round(totalValue),
-        invested: totalInvested,
-      });
-    }
-    return data;
-  }, [monthlyContribution, expectedReturn, duration]);
-
-  const latestStats = useMemo(() => {
-    const last = projectionData[projectionData.length - 1];
-    if (last) {
-      return {
-        total: last.value,
-        invested: last.invested,
-        gained: Math.max(0, last.value - last.invested),
-      };
-    }
-    return { total: 0, invested: 0, gained: 0 };
-  }, [projectionData]);
-
-  // Adjust sliders
-  const changeContribution = (val: number) => {
-    setMonthlyContribution((prev) => Math.max(0, prev + val));
-  };
-
-  const changeReturn = (val: number) => {
-    setExpectedReturn((prev) => Math.min(30, Math.max(1, prev + val)));
-  };
-
-  const changeDuration = (val: number) => {
-    setDuration((prev) => Math.min(40, Math.max(1, prev + val)));
-  };
-
-  return (
-    <View style={styles.container}>
-      <AppTopBar />
-      <ScrollView
-        style={styles.container}
-        contentContainerStyle={[styles.contentContainer, { paddingTop: 12, paddingBottom: insets.bottom + 100 }]}
-      >
-        <Text style={styles.headerTitle}>Savings Goals</Text>
-        <Text style={styles.subtitle}>Grow your money automatically</Text>
-
-        {/* Goal Cards */}
-        {goals.length === 0 ? (
-          <View style={styles.card}>
-            <Text style={styles.emptyText}>No goals set. Click "Seed Mock Data" in settings.</Text>
-          </View>
-        ) : (
-          goals.map((goal) => {
-            const progress = Math.min(100, Math.round((goal.currentAmount / goal.targetAmount) * 100));
-            return (
-              <View key={goal.id} style={styles.card}>
-                <View style={styles.goalHeader}>
-                  <Text style={styles.cardTitle}>{goal.name}</Text>
-                  <Text style={styles.goalPercentage}>{progress}%</Text>
-                </View>
-                <Text style={styles.cardBigNumberSmall}>
-                  ₹{goal.currentAmount.toLocaleString('en-IN')}{' '}
-                  <Text style={styles.goalTargetText}>of ₹{goal.targetAmount.toLocaleString('en-IN')}</Text>
-                </Text>
-                <View style={styles.progressBarBg}>
-                  <View style={[styles.progressBarFill, { width: `${progress}%`, backgroundColor: '#2dba4e' }]} />
-                </View>
-              </View>
-            );
-          })
-        )}
-
-        {/* Simulator Section */}
-        <Text style={[styles.headerTitle, { marginTop: 24 }]}>What-If Simulator</Text>
-        <Text style={styles.subtitle}>Visualize compound interest curves</Text>
-
-        <View style={styles.card}>
-          <Text style={styles.chartTitle}>Wealth Simulator Projection</Text>
-
-          {/* Sliders (using custom touch handlers since standard sliders look basic) */}
-          <View style={styles.sliderControl}>
-            <Text style={styles.sliderLabel}>Monthly Contribution: ₹{monthlyContribution.toLocaleString('en-IN')}</Text>
-            <View style={styles.sliderRow}>
-              <TouchableOpacity style={styles.sliderBtn} onPress={() => changeContribution(-1000)}>
-                <Text style={styles.sliderBtnText}>-1K</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.sliderBtn} onPress={() => changeContribution(5000)}>
-                <Text style={styles.sliderBtnText}>+5K</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.sliderBtn} onPress={() => changeContribution(10000)}>
-                <Text style={styles.sliderBtnText}>+10K</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          <View style={styles.sliderControl}>
-            <Text style={styles.sliderLabel}>Expected Annual Return: {expectedReturn}%</Text>
-            <View style={styles.sliderRow}>
-              <TouchableOpacity style={styles.sliderBtn} onPress={() => changeReturn(-1)}>
-                <Text style={styles.sliderBtnText}>-1%</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.sliderBtn} onPress={() => changeReturn(1)}>
-                <Text style={styles.sliderBtnText}>+1%</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.sliderBtn} onPress={() => changeReturn(5)}>
-                <Text style={styles.sliderBtnText}>+5%</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          <View style={styles.sliderControl}>
-            <Text style={styles.sliderLabel}>Duration: {duration} Years</Text>
-            <View style={styles.sliderRow}>
-              <TouchableOpacity style={styles.sliderBtn} onPress={() => changeDuration(-1)}>
-                <Text style={styles.sliderBtnText}>-1Yr</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.sliderBtn} onPress={() => changeDuration(1)}>
-                <Text style={styles.sliderBtnText}>+1Yr</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.sliderBtn} onPress={() => changeDuration(5)}>
-                <Text style={styles.sliderBtnText}>+5Yrs</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {/* Projection Chart */}
-          <View style={{ height: 160, marginTop: 20 }}>
-            {Platform.OS !== 'web' ? (
-              <CartesianChart
-                data={projectionData}
-                xKey="year"
-                yKeys={["value", "invested"]}
-              >
-                {({ points }) => (
-                  <>
-                    <Line points={points.value} color="#2dba4e" strokeWidth={3} animate={{ type: "timing", duration: 250 }} />
-                    <Line points={points.invested} color="rgba(250, 251, 252, 0.5)" strokeWidth={2} animate={{ type: "timing", duration: 250 }} />
-                  </>
-                )}
-              </CartesianChart>
-            ) : (
-              <WebProjectionChart data={projectionData} />
-            )}
-          </View>
-
-          {/* Simulation Outputs */}
-          <View style={styles.simResults}>
-            <View style={styles.simResultBox}>
-              <Text style={styles.simResultLabel}>Total Invested</Text>
-              <Text style={[styles.simResultVal, { color: '#fafbfc' }]}>
-                ₹{latestStats.invested.toLocaleString('en-IN')}
-              </Text>
-            </View>
-            <View style={styles.simResultBox}>
-              <Text style={styles.simResultLabel}>Wealth Gained</Text>
-              <Text style={[styles.simResultVal, { color: '#2dba4e' }]}>
-                ₹{latestStats.gained.toLocaleString('en-IN')}
-              </Text>
-            </View>
-            <View style={styles.simResultBox}>
-              <Text style={styles.simResultLabel}>Projected Value</Text>
-              <Text style={[styles.simResultVal, { color: '#ffffff' }]}>
-                ₹{latestStats.total.toLocaleString('en-IN')}
-              </Text>
-            </View>
-          </View>
-        </View>
-      </ScrollView>
-    </View>
-  );
-};
 
 // ----------------------------------------------------
 // 4. Settings Screen Component
@@ -2913,12 +2716,12 @@ const CustomTabButton = ({
           animatedStyle,
         ]}
       >
-        {route.name === 'Settings' && user?.avatarUrl ? (
+        {route.name === 'Settings' && !!user?.avatarUrl ? (
           <View
             style={{
-              width: iconSize + 3,
-              height: iconSize + 3,
-              borderRadius: (iconSize + 3) / 2,
+              width: iconSize + 4,
+              height: iconSize + 4,
+              borderRadius: (iconSize + 4) / 2,
               borderWidth: 1.5,
               borderColor: isFocused
                 ? (isDark ? '#2dba4e' : '#16a34a')
@@ -2932,10 +2735,11 @@ const CustomTabButton = ({
             <Image
               source={{ uri: user.avatarUrl }}
               style={{
-                width: '100%',
-                height: '100%',
-                borderRadius: (iconSize + 3) / 2,
+                width: iconSize + 4,
+                height: iconSize + 4,
+                borderRadius: (iconSize + 4) / 2,
               }}
+              resizeMode="cover"
             />
           </View>
         ) : (
@@ -3063,7 +2867,7 @@ function TabNavigator() {
       }}
     >
       <Tab.Screen name="Home" component={DashboardScreen} />
-      <Tab.Screen name="Goals" component={GoalsScreen} />
+      <Tab.Screen name="Goals" component={GoalsTabScreen} />
       <Tab.Screen name="Banks" component={BanksScreen} />
       <Tab.Screen name="AI Chat" component={ChatScreen} />
       <Tab.Screen name="Settings" component={SettingsScreen} />
@@ -3296,6 +3100,29 @@ export default function AppNavigator() {
   const isLoading = useAuthStore((state) => state.isLoading);
   const { colors, isDark } = useTheme();
 
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [updateModalVisible, setUpdateModalVisible] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    const checkUpdates = async () => {
+      try {
+        const info = await updateService.checkForUpdates();
+        if (isMounted && info && info.isUpdateAvailable) {
+          setUpdateInfo(info);
+          setUpdateModalVisible(true);
+        }
+      } catch (e) {
+        // Silent fail
+      }
+    };
+    const timer = setTimeout(checkUpdates, 2000);
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, []);
+
   useEffect(() => {
     const initAndCheck = async () => {
       await mmkvStorage.initialize();
@@ -3411,6 +3238,11 @@ export default function AppNavigator() {
         </NavigationContainer>
         <GlobalConfirmModal />
         <BiometricLockOverlay />
+        <UpdateModal
+          updateInfo={updateInfo}
+          visible={updateModalVisible}
+          onDismiss={() => setUpdateModalVisible(false)}
+        />
       </ErrorBoundary>
     </SafeAreaProvider>
   );

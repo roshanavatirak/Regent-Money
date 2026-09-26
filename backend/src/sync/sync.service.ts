@@ -55,6 +55,31 @@ export class SyncService implements OnModuleInit {
       await this.dataSource.query(`
         ALTER TABLE finance.income_records ADD COLUMN IF NOT EXISTS category TEXT;
       `);
+      // Savings Goal enrichments
+      await this.dataSource.query(`
+        ALTER TABLE wealth.savings_goals ADD COLUMN IF NOT EXISTS category TEXT;
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE wealth.savings_goals ADD COLUMN IF NOT EXISTS monthly_contribution NUMERIC;
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE wealth.savings_goals ADD COLUMN IF NOT EXISTS expected_return_rate NUMERIC;
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE wealth.savings_goals ADD COLUMN IF NOT EXISTS priority TEXT;
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE wealth.savings_goals ADD COLUMN IF NOT EXISTS color TEXT;
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE wealth.savings_goals ADD COLUMN IF NOT EXISTS icon TEXT;
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE wealth.savings_goals ADD COLUMN IF NOT EXISTS strategy TEXT;
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE wealth.savings_goals ADD COLUMN IF NOT EXISTS streak_months INTEGER DEFAULT 0;
+      `);
       // Performance indexes for scale (millions of records per user)
       await this.dataSource.query(`
         CREATE INDEX IF NOT EXISTS idx_transactions_user_active ON finance.transactions(user_id, is_deleted);
@@ -65,9 +90,12 @@ export class SyncService implements OnModuleInit {
       await this.dataSource.query(`
         CREATE INDEX IF NOT EXISTS idx_bank_profiles_user_active ON core.bank_profiles(user_id, is_deleted);
       `);
-      this.logger.log('BankProfile schema checks and updates completed successfully.');
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_savings_goals_user_active ON wealth.savings_goals(user_id, is_deleted);
+      `);
+      this.logger.log('BankProfile & SavingsGoal schema checks completed successfully.');
     } catch (e: any) {
-      this.logger.error(`Error checking/updating BankProfile schema: ${e.message}`, e.stack);
+      this.logger.error(`Error checking/updating schema: ${e.message}`, e.stack);
     }
   }
 
@@ -871,5 +899,136 @@ export class SyncService implements OnModuleInit {
         updatedBalance,
       };
     }
+  }
+
+  /**
+   * Create a new wealth goal
+   */
+  async createGoal(
+    userId: string,
+    dto: {
+      id?: string;
+      name: string;
+      category?: string;
+      targetAmount: number;
+      currentAmount?: number;
+      monthlyContribution?: number;
+      expectedReturnRate?: number;
+      targetDate?: number;
+      priority?: string;
+      color?: string;
+      icon?: string;
+      strategy?: string;
+    },
+  ) {
+    const goal = this.savingsGoalRepository.create({
+      id: dto.id || 'goal_' + Math.random().toString(36).substr(2, 9),
+      userId,
+      name: dto.name,
+      category: dto.category || 'custom',
+      targetAmount: parseFloat(String(dto.targetAmount || 0)),
+      currentAmount: parseFloat(String(dto.currentAmount || 0)),
+      monthlyContribution: parseFloat(String(dto.monthlyContribution || 0)),
+      expectedReturnRate: parseFloat(String(dto.expectedReturnRate || 10)),
+      targetDate: dto.targetDate || Date.now() + 365 * 24 * 60 * 60 * 1000,
+      priority: dto.priority || 'medium',
+      color: dto.color || '#2dba4e',
+      icon: dto.icon || 'trophy',
+      strategy: dto.strategy || 'equity_sip',
+      streakMonths: 0,
+      status: 'active',
+      updatedAt: Date.now(),
+      isDeleted: false,
+    });
+
+    const saved = await this.savingsGoalRepository.save(goal);
+    return saved;
+  }
+
+  /**
+   * Update an existing wealth goal
+   */
+  async updateGoal(
+    userId: string,
+    id: string,
+    dto: Partial<{
+      name: string;
+      category: string;
+      targetAmount: number;
+      currentAmount: number;
+      monthlyContribution: number;
+      expectedReturnRate: number;
+      targetDate: number;
+      priority: string;
+      color: string;
+      icon: string;
+      strategy: string;
+      status: string;
+    }>,
+  ) {
+    const goal = await this.savingsGoalRepository.findOne({
+      where: { id, userId, isDeleted: false },
+    });
+    if (!goal) {
+      throw new BadRequestException('Goal not found.');
+    }
+
+    if (dto.name !== undefined) goal.name = dto.name;
+    if (dto.category !== undefined) goal.category = dto.category;
+    if (dto.targetAmount !== undefined) goal.targetAmount = parseFloat(String(dto.targetAmount));
+    if (dto.currentAmount !== undefined) goal.currentAmount = parseFloat(String(dto.currentAmount));
+    if (dto.monthlyContribution !== undefined) goal.monthlyContribution = parseFloat(String(dto.monthlyContribution));
+    if (dto.expectedReturnRate !== undefined) goal.expectedReturnRate = parseFloat(String(dto.expectedReturnRate));
+    if (dto.targetDate !== undefined) goal.targetDate = dto.targetDate;
+    if (dto.priority !== undefined) goal.priority = dto.priority;
+    if (dto.color !== undefined) goal.color = dto.color;
+    if (dto.icon !== undefined) goal.icon = dto.icon;
+    if (dto.strategy !== undefined) goal.strategy = dto.strategy;
+    if (dto.status !== undefined) goal.status = dto.status;
+    goal.updatedAt = Date.now();
+
+    const saved = await this.savingsGoalRepository.save(goal);
+    return saved;
+  }
+
+  /**
+   * Add contribution / funds to a goal
+   */
+  async contributeToGoal(userId: string, id: string, amount: number) {
+    const goal = await this.savingsGoalRepository.findOne({
+      where: { id, userId, isDeleted: false },
+    });
+    if (!goal) {
+      throw new BadRequestException('Goal not found.');
+    }
+
+    const cur = parseFloat(String(goal.currentAmount || 0));
+    const add = parseFloat(String(amount || 0));
+    goal.currentAmount = cur + add;
+    goal.streakMonths = (goal.streakMonths || 0) + 1;
+    if (goal.currentAmount >= parseFloat(String(goal.targetAmount))) {
+      goal.status = 'achieved';
+    }
+    goal.updatedAt = Date.now();
+
+    const saved = await this.savingsGoalRepository.save(goal);
+    return saved;
+  }
+
+  /**
+   * Delete a wealth goal (soft delete)
+   */
+  async deleteGoal(userId: string, id: string) {
+    const goal = await this.savingsGoalRepository.findOne({
+      where: { id, userId, isDeleted: false },
+    });
+    if (!goal) {
+      throw new BadRequestException('Goal not found.');
+    }
+
+    goal.isDeleted = true;
+    goal.updatedAt = Date.now();
+    await this.savingsGoalRepository.save(goal);
+    return { success: true, deletedId: id };
   }
 }

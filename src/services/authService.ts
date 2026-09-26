@@ -3,13 +3,11 @@ import { useAuthStore, UserProfile, useSecurityStore, AutoLockTimeout } from '..
 import { syncService } from './syncService';
 import { getGoogleWebClientId } from './supabaseClient';
 
-import { getBackendUrl } from '../config/api';
+import { BACKEND_URL } from '../config/api';
 
 const SESSION_KEY = 'auth_user_id';
 const USER_PROFILE_KEY = 'auth_user_profile';
 const TOKEN_KEY = 'auth_access_token';
-
-const BACKEND_URL = getBackendUrl();
 
 function formatPhoneNumber(phone: string): string {
   const clean = phone.replace(/\s+/g, '');
@@ -37,30 +35,28 @@ export const authService = {
    * and triggers a background database sync with the NestJS backend in the background.
    */
   async checkSession(): Promise<UserProfile | null> {
-    const cachedProfile = mmkvStorage.getObject<UserProfile>(USER_PROFILE_KEY);
+    const cachedProfile =
+      mmkvStorage.getObject<UserProfile>(USER_PROFILE_KEY) ||
+      mmkvStorage.getObject<UserProfile>('user_profile');
     const token = mmkvStorage.getString(TOKEN_KEY);
-    const rememberMe = mmkvStorage.getBoolean('auth_remember_me') !== false;
 
-    // Google logins are always remembered by default. If it's a local/email login,
-    // we require rememberMe to be true.
-    const isGoogle = cachedProfile?.authProvider === 'google';
-
-    if (!cachedProfile || !token || (!rememberMe && !isGoogle)) {
-      if (cachedProfile || token) {
-        await this.logOut();
-      }
+    if (!cachedProfile) {
       useAuthStore.getState().setUser(null);
       useAuthStore.getState().setLoading(false);
       return null;
     }
 
+    // Keep cached user immediately so avatar and profile are displayed instantly
     useAuthStore.getState().setUser(cachedProfile);
     useAuthStore.getState().setLoading(false);
 
-    // Sync in background to download updates from other devices
-    syncService.sync().catch((e) => 
-      console.log('[Auth] Background sync on session check failed:', e.message)
-    );
+    // Sync in background if token exists
+    if (token) {
+      this.fetchProfile().catch(() => {});
+      syncService.sync().catch((e) => 
+        console.log('[Auth] Background sync on session check notice:', e.message)
+      );
+    }
 
     // Sync security settings from backend
     this.fetchSecuritySettings().then((settings) => {

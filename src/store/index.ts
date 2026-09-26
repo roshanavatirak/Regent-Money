@@ -92,15 +92,26 @@ export const useBudgetStore = create<BudgetState>((set) => ({
 export interface Goal {
   id: string;
   name: string;
+  category?: 'bike' | 'car' | 'home' | 'travel' | 'wedding' | 'education' | 'emergency' | 'gadget' | 'custom' | string;
   targetAmount: number;
   currentAmount: number;
+  monthlyContribution?: number;
+  expectedReturnRate?: number;
   targetDate: number;
+  priority?: 'high' | 'medium' | 'low' | string;
+  color?: string;
+  icon?: string;
+  strategy?: string;
+  streakMonths?: number;
   status: string;
 }
 
 export interface GoalsState {
   goals: Goal[];
   setGoals: (goals: Goal[]) => void;
+  addGoal: (goal: Goal) => void;
+  updateGoal: (id: string, updates: Partial<Goal>) => void;
+  deleteGoal: (id: string) => void;
   contributeToGoal: (id: string, amount: number) => void;
 }
 
@@ -110,11 +121,38 @@ export const useGoalsStore = create<GoalsState>((set) => ({
     mmkvStorage.setObject('cache_goals', goals);
     set({ goals });
   },
-  contributeToGoal: (id, amount) =>
+  addGoal: (goal) =>
+    set((state) => {
+      const updated = [goal, ...state.goals.filter((g) => g.id !== goal.id)];
+      mmkvStorage.setObject('cache_goals', updated);
+      return { goals: updated };
+    }),
+  updateGoal: (id, updates) =>
     set((state) => {
       const updated = state.goals.map((g) =>
-        g.id === id ? { ...g, currentAmount: g.currentAmount + amount } : g
+        g.id === id ? { ...g, ...updates } : g
       );
+      mmkvStorage.setObject('cache_goals', updated);
+      return { goals: updated };
+    }),
+  deleteGoal: (id) =>
+    set((state) => {
+      const updated = state.goals.filter((g) => g.id !== id);
+      mmkvStorage.setObject('cache_goals', updated);
+      return { goals: updated };
+    }),
+  contributeToGoal: (id, amount) =>
+    set((state) => {
+      const updated = state.goals.map((g) => {
+        if (g.id !== id) return g;
+        const newCurrent = g.currentAmount + amount;
+        return {
+          ...g,
+          currentAmount: newCurrent,
+          streakMonths: (g.streakMonths || 0) + 1,
+          status: newCurrent >= g.targetAmount ? 'achieved' : g.status,
+        };
+      });
       mmkvStorage.setObject('cache_goals', updated);
       return { goals: updated };
     }),
@@ -173,11 +211,18 @@ export interface AuthState {
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
   isLoading: true,
-  setUser: (user) => set({ user }),
+  setUser: (user) => {
+    if (user) {
+      mmkvStorage.setObject('auth_user_profile', user);
+      mmkvStorage.setObject('user_profile', user);
+    }
+    set({ user });
+  },
   updateUser: (fields) =>
     set((state) => {
       if (!state.user) return state;
       const updated = { ...state.user, ...fields };
+      mmkvStorage.setObject('auth_user_profile', updated);
       mmkvStorage.setObject('user_profile', updated);
       return { user: updated };
     }),

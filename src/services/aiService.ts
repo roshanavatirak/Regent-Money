@@ -1,12 +1,16 @@
 import { mmkvStorage } from '../db/mmkv';
 import { sanitizeTransactions, SanitizedTransaction } from './sanitizer';
+import { BACKEND_URL } from '../config/api';
 
 // Configuration keys in MMKV
 const GEMINI_API_KEY_KEY = 'settings_gemini_api_key';
 const GROQ_API_KEY_KEY = 'settings_groq_api_key';
 
-export const getGeminiKey = () => mmkvStorage.getString(GEMINI_API_KEY_KEY) || '';
-export const setGeminiKey = (key: string) => mmkvStorage.setString(GEMINI_API_KEY_KEY, key);
+export const getGeminiKey = () => {
+  const envKey = (process.env.EXPO_PUBLIC_GEMINI_API_KEY || '').trim();
+  const stored = (mmkvStorage.getString(GEMINI_API_KEY_KEY) || '').trim();
+  return envKey || stored;
+};
 
 export const getGroqKey = () => {
   const envKey = (process.env.EXPO_PUBLIC_GROQ_API_KEY || '').trim();
@@ -117,11 +121,40 @@ export const askChatbot = async (
   history: ChatMessage[],
   currentContext: ChatContext
 ): Promise<string> => {
+  // 1. Primary: Use dedicated Regent Money backend AI service
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+
+    const res = await fetch(`${BACKEND_URL}/ai/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        question,
+        history,
+        context: currentContext,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.answer) {
+        return data.answer;
+      }
+    }
+  } catch (backendErr) {
+    // Continue to client-side fallback
+  }
+
   const geminiKey = getGeminiKey();
   const groqKey = getGroqKey();
 
   if (!geminiKey && !groqKey) {
-    return 'Please enter your Google Gemini API Key or Groq API Key in Settings to chat with the AI assistant.';
+    return "I'm Regent Money AI. Connecting to our backend intelligence service... If this persists, please verify the server GROQ_API_KEY in Render.";
   }
 
   const accountsSummary = (currentContext.accounts && currentContext.accounts.length > 0)
