@@ -2087,6 +2087,7 @@ const ChatScreen = () => {
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      enabled={Platform.OS === 'ios'}
       style={[styles.container, { paddingTop: 0 }]}
     >
       <AppTopBar />
@@ -2119,8 +2120,9 @@ const ChatScreen = () => {
           ref={flatListRef}
           data={chatHistory}
           keyExtractor={(_, index) => index.toString()}
-          contentContainerStyle={[styles.chatList, { paddingBottom: isKeyboardVisible ? 20 : 100 }]}
+          contentContainerStyle={[styles.chatList, { paddingBottom: isKeyboardVisible ? 20 : 80 }]}
           keyboardShouldPersistTaps="handled"
+          onScrollBeginDrag={Keyboard.dismiss}
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
           renderItem={({ item }) => (
             <View style={[
@@ -2145,8 +2147,8 @@ const ChatScreen = () => {
           styles.inputArea,
           {
             paddingBottom: isKeyboardVisible
-              ? (Platform.OS === 'ios' ? 8 : 12)
-              : (insets.bottom + 85),
+              ? (Platform.OS === 'ios' ? 8 : 10)
+              : Math.max(insets.bottom + 65, 75),
           },
         ]}
       >
