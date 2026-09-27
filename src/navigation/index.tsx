@@ -50,7 +50,9 @@ import { useSyncDb } from '../services/useSyncDb';
 import { GoalsScreen } from './GoalsScreen';
 import { UpdateModal } from './UpdateModal';
 import { AppSplashScreen } from '../components/AppSplashScreen';
+import { NotificationPermissionModal } from '../components/NotificationPermissionModal';
 import { updateService, UpdateInfo } from '../services/updateService';
+import { ACCOUNT_TYPES } from './EditBankModal';
 import bankNamesJson from './banknames.json';
 
 const POPULAR_BANKS = [
@@ -312,7 +314,8 @@ const ALL_BANKS_SORTED: { code: string; name: string }[] = Object.entries(
   .sort((a, b) => a.name.localeCompare(b.name));
 
 const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
+  const { height: windowHeight } = useWindowDimensions();
   const styles = getStyles(colors);
   const navStyles = getNavStyles(colors);
   const user = useAuthStore((state) => state.user);
@@ -322,6 +325,8 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
 
   // Form inputs
   const [bankNameInput, setBankNameInput] = useState('');
+  const [accountType, setAccountType] = useState('Savings');
+  const [accountTypeDropdownOpen, setAccountTypeDropdownOpen] = useState(false);
   const [accountSuffix, setAccountSuffix] = useState('');
   const [balance, setBalance] = useState('');
   const [smsSenderId, setSmsSenderId] = useState('');
@@ -336,6 +341,8 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
     setSelectedBank(null);
     setSearchQuery('');
     setBankNameInput('');
+    setAccountType('Savings');
+    setAccountTypeDropdownOpen(false);
     setAccountSuffix('');
     setBalance('');
     setSmsSenderId('');
@@ -435,11 +442,13 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
         body: JSON.stringify({
           id: newId,
           bankName: bankNameInput.trim(),
+          accountType: accountType || 'Savings',
           accountNumberSuffix: accountSuffix.trim(),
           currentBalance: parseFloat(balance),
           smsSenderId: smsSenderId.trim() || undefined,
           upiId: upiId.trim() || undefined,
           customKeywords: customKeywords.trim() || undefined,
+          smsConsent: true,
         }),
       });
 
@@ -472,12 +481,12 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
         }
       }}
     >
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={{ flex: 1 }}
-      >
-        <View style={styles.modalOverlayFull}>
-          <View style={styles.modalCardFull}>
+      <View style={styles.modalOverlayFull}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ width: '100%', alignItems: 'center', justifyContent: 'flex-end' }}
+        >
+          <View style={[styles.modalCardFull, { height: windowHeight * 0.85 }]}>
           <View style={navStyles.modalHeader}>
             <Text style={navStyles.modalTitle}>
               {formStep === 1 ? 'Select Your Bank' : 'Bank Account Details'}
@@ -580,26 +589,114 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
                 <View style={styles.formFieldContainer}>
                   <Text style={styles.formFieldLabel}>Bank Display Name</Text>
                   <View style={styles.formInputGroup}>
-                    <Feather name="home" size={16} color="#8E8E9F" style={styles.formInputIcon} />
+                    <Feather name="home" size={16} color={colors.textSecondary} style={styles.formInputIcon} />
                     <TextInput
                       style={styles.formInputField}
                       placeholder="e.g. HDFC Bank"
-                      placeholderTextColor="rgba(250, 251, 252, 0.4)"
+                      placeholderTextColor={isDark ? 'rgba(250, 251, 252, 0.4)' : colors.textTertiary}
                       value={bankNameInput}
                       onChangeText={setBankNameInput}
                     />
                   </View>
                 </View>
 
+                {/* Account Type Dropdown */}
+                <View style={styles.formFieldContainer}>
+                  <Text style={styles.formFieldLabel}>Account Type</Text>
+                  <TouchableOpacity
+                    style={[
+                      styles.formInputGroup,
+                      { justifyContent: 'space-between', paddingVertical: 13 },
+                      accountTypeDropdownOpen && { borderColor: colors.accent },
+                    ]}
+                    onPress={() => setAccountTypeDropdownOpen(!accountTypeDropdownOpen)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <Feather name="credit-card" size={16} color={colors.accent} style={styles.formInputIcon} />
+                      <Text style={{ fontSize: 14, color: colors.text, fontWeight: '600' }}>
+                        {ACCOUNT_TYPES.find((t) => t.id === accountType)?.label || `${accountType} Account`}
+                      </Text>
+                    </View>
+                    <Feather
+                      name={accountTypeDropdownOpen ? 'chevron-up' : 'chevron-down'}
+                      size={18}
+                      color={colors.textSecondary}
+                    />
+                  </TouchableOpacity>
+
+                  {accountTypeDropdownOpen && (
+                    <View
+                      style={{
+                        marginTop: 6,
+                        backgroundColor: isDark ? '#14141e' : '#f8fafc',
+                        borderWidth: 1,
+                        borderColor: colors.border,
+                        borderRadius: 14,
+                        overflow: 'hidden',
+                      }}
+                    >
+                      {ACCOUNT_TYPES.map((type, idx) => {
+                        const isSelected = accountType === type.id;
+                        return (
+                          <TouchableOpacity
+                            key={type.id}
+                            style={{
+                              flexDirection: 'row',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              paddingVertical: 12,
+                              paddingHorizontal: 14,
+                              backgroundColor: isSelected
+                                ? isDark
+                                  ? 'rgba(45, 186, 78, 0.15)'
+                                  : 'rgba(22, 163, 74, 0.12)'
+                                : 'transparent',
+                              borderBottomWidth: idx < ACCOUNT_TYPES.length - 1 ? 1 : 0,
+                              borderBottomColor: isDark
+                                ? 'rgba(255, 255, 255, 0.06)'
+                                : colors.border,
+                            }}
+                            onPress={() => {
+                              setAccountType(type.id);
+                              setAccountTypeDropdownOpen(false);
+                            }}
+                            activeOpacity={0.7}
+                          >
+                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                              <Feather
+                                name={type.icon as any}
+                                size={15}
+                                color={isSelected ? colors.accent : colors.textSecondary}
+                                style={{ marginRight: 10 }}
+                              />
+                              <Text
+                                style={{
+                                  fontSize: 13,
+                                  fontWeight: isSelected ? '700' : '500',
+                                  color: isSelected ? colors.accent : colors.text,
+                                }}
+                              >
+                                {type.label}
+                              </Text>
+                            </View>
+                            {isSelected && <Feather name="check" size={16} color={colors.accent} />}
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  )}
+                </View>
+
                 {/* Suffix Input */}
                 <View style={styles.formFieldContainer}>
                   <Text style={styles.formFieldLabel}>Last 4 Digits of Account Number</Text>
                   <View style={styles.formInputGroup}>
-                    <Feather name="hash" size={16} color="#8E8E9F" style={styles.formInputIcon} />
+                    <Feather name="hash" size={16} color={colors.textSecondary} style={styles.formInputIcon} />
                     <TextInput
                       style={styles.formInputField}
                       placeholder="e.g. 5678"
-                      placeholderTextColor="rgba(250, 251, 252, 0.4)"
+                      placeholderTextColor={isDark ? 'rgba(250, 251, 252, 0.4)' : colors.textTertiary}
                       keyboardType="numeric"
                       maxLength={4}
                       value={accountSuffix}
@@ -612,11 +709,11 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
                 <View style={styles.formFieldContainer}>
                   <Text style={styles.formFieldLabel}>Current / Starting Balance (INR)</Text>
                   <View style={styles.formInputGroup}>
-                    <MaterialCommunityIcons name="currency-inr" size={16} color="#8E8E9F" style={styles.formInputIcon} />
+                    <MaterialCommunityIcons name="currency-inr" size={16} color={colors.textSecondary} style={styles.formInputIcon} />
                     <TextInput
                       style={styles.formInputField}
                       placeholder="e.g. 75000"
-                      placeholderTextColor="rgba(250, 251, 252, 0.4)"
+                      placeholderTextColor={isDark ? 'rgba(250, 251, 252, 0.4)' : colors.textTertiary}
                       keyboardType="numeric"
                       value={balance}
                       onChangeText={setBalance}
@@ -628,17 +725,17 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
                 <View style={styles.formFieldContainer}>
                   <Text style={styles.formFieldLabel}>SMS Sender ID / Header</Text>
                   <View style={styles.formInputGroup}>
-                    <Feather name="message-square" size={16} color="#8E8E9F" style={styles.formInputIcon} />
+                    <Feather name="message-square" size={16} color={colors.textSecondary} style={styles.formInputIcon} />
                     <TextInput
                       style={styles.formInputField}
                       placeholder="e.g. HDFCBK"
-                      placeholderTextColor="rgba(250, 251, 252, 0.4)"
+                      placeholderTextColor={isDark ? 'rgba(250, 251, 252, 0.4)' : colors.textTertiary}
                       value={smsSenderId}
                       onChangeText={setSmsSenderId}
                       autoCapitalize="characters"
                     />
                   </View>
-                  <Text style={{ color: '#8E8E9F', fontSize: 11, marginTop: 4, lineHeight: 15 }}>
+                  <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 4, lineHeight: 15 }}>
                     The sender address of the SMS notification (e.g. AD-HDFCBK to HDFCBK).
                   </Text>
                 </View>
@@ -647,17 +744,17 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
                 <View style={styles.formFieldContainer}>
                   <Text style={styles.formFieldLabel}>Associated UPI ID (Optional)</Text>
                   <View style={styles.formInputGroup}>
-                    <Feather name="at-sign" size={16} color="#8E8E9F" style={styles.formInputIcon} />
+                    <Feather name="at-sign" size={16} color={colors.textSecondary} style={styles.formInputIcon} />
                     <TextInput
                       style={styles.formInputField}
                       placeholder="e.g. success@okhdfcbank"
-                      placeholderTextColor="rgba(250, 251, 252, 0.4)"
+                      placeholderTextColor={isDark ? 'rgba(250, 251, 252, 0.4)' : colors.textTertiary}
                       value={upiId}
                       onChangeText={setUpiId}
                       autoCapitalize="none"
                     />
                   </View>
-                  <Text style={{ color: '#8E8E9F', fontSize: 11, marginTop: 4, lineHeight: 15 }}>
+                  <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 4, lineHeight: 15 }}>
                     Used for mapping UPI payment transaction notifications.
                   </Text>
                 </View>
@@ -666,16 +763,16 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
                 <View style={styles.formFieldContainer}>
                   <Text style={styles.formFieldLabel}>Custom Matching Keywords (Optional)</Text>
                   <View style={styles.formInputGroup}>
-                    <Feather name="key" size={16} color="#8E8E9F" style={styles.formInputIcon} />
+                    <Feather name="key" size={16} color={colors.textSecondary} style={styles.formInputIcon} />
                     <TextInput
                       style={styles.formInputField}
                       placeholder="e.g. HDFC, credit card, salary"
-                      placeholderTextColor="rgba(250, 251, 252, 0.4)"
+                      placeholderTextColor={isDark ? 'rgba(250, 251, 252, 0.4)' : colors.textTertiary}
                       value={customKeywords}
                       onChangeText={setCustomKeywords}
                     />
                   </View>
-                  <Text style={{ color: '#8E8E9F', fontSize: 11, marginTop: 4, lineHeight: 15 }}>
+                  <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 4, lineHeight: 15 }}>
                     Comma-separated words that must appear in messages or screenshots for auto-matching.
                   </Text>
                 </View>
@@ -702,8 +799,8 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
             </ScrollView>
           )}
         </View>
+        </KeyboardAvoidingView>
       </View>
-      </KeyboardAvoidingView>
     </Modal>
   );
 };
@@ -2393,41 +2490,15 @@ const BanksScreen = () => {
                         {bank.bankName}
                       </Text>
                       <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 1 }}>
-                        Savings •••• {bank.accountNumberSuffix}
+                        {bank.accountType || 'Savings'} •••• {bank.accountNumberSuffix}
                       </Text>
                     </View>
                   </View>
 
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                     <Text style={{ color: colors.accent, fontSize: 15, fontWeight: '800' }}>
                       ₹{bank.currentBalance.toLocaleString('en-IN')}
                     </Text>
-
-                    <TouchableOpacity
-                      onPress={(e: any) => {
-                        e?.stopPropagation?.();
-                        handleRemoveBank(bank.id, bank.bankName, bank.accountNumberSuffix);
-                      }}
-                      disabled={removingId !== null}
-                      style={{
-                        width: 26,
-                        height: 26,
-                        borderRadius: 7,
-                        backgroundColor: colors.isDark ? 'rgba(255, 82, 82, 0.12)' : 'rgba(220, 38, 38, 0.08)',
-                        borderWidth: 1,
-                        borderColor: colors.isDark ? 'rgba(255, 82, 82, 0.25)' : 'rgba(220, 38, 38, 0.25)',
-                        justifyContent: 'center',
-                        alignItems: 'center',
-                        marginLeft: 4,
-                      }}
-                      activeOpacity={0.7}
-                    >
-                      {removingId === bank.id ? (
-                        <ActivityIndicator size="small" color="#FF5252" />
-                      ) : (
-                        <Feather name="trash-2" size={13} color="#FF5252" />
-                      )}
-                    </TouchableOpacity>
                   </View>
                 </View>
 
@@ -2816,7 +2887,7 @@ const CustomBottomTabBar = ({ state, descriptors, navigation, insets }: BottomTa
   return (
     <View
       style={{
-        pointerEvents: isKeyboardVisible ? 'none' : 'box-none',
+        pointerEvents: isKeyboardVisible ? 'none' : (Platform.OS === 'web' ? 'auto' : 'box-none'),
         position: 'absolute',
         bottom: bottomOffset,
         left: 0,
@@ -3137,6 +3208,32 @@ export default function AppNavigator() {
   const updateModalVisible = useAppUpdateStore((state) => state.updateModalVisible);
   const setUpdateInfo = useAppUpdateStore((state) => state.setUpdateInfo);
   const setUpdateModalVisible = useAppUpdateStore((state) => state.setUpdateModalVisible);
+  const [notificationModalVisible, setNotificationModalVisible] = useState(false);
+
+  useEffect(() => {
+    if (!splashFinished || isLoading || !user || Platform.OS === 'web') return;
+
+    let timer: any = null;
+    const checkNotificationPrompt = async () => {
+      try {
+        const isGranted = await notificationService.isPermissionGranted();
+        if (isGranted) {
+          await notificationService.registerForPushNotifications();
+        } else if (!notificationService.hasBeenPrompted()) {
+          timer = setTimeout(() => {
+            setNotificationModalVisible(true);
+          }, 1200);
+        }
+      } catch (e) {
+        // Silent fail
+      }
+    };
+
+    checkNotificationPrompt();
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [splashFinished, isLoading, user]);
 
   useEffect(() => {
     let isMounted = true;
@@ -3258,6 +3355,10 @@ export default function AppNavigator() {
           updateInfo={updateInfo}
           visible={updateModalVisible}
           onDismiss={() => setUpdateModalVisible(false)}
+        />
+        <NotificationPermissionModal
+          visible={notificationModalVisible}
+          onDismiss={() => setNotificationModalVisible(false)}
         />
         {!splashFinished && (
           <AppSplashScreen onFinish={() => setSplashFinished(true)} />
@@ -4000,6 +4101,7 @@ const getStyles = (colors: any) => StyleSheet.create({
     backgroundColor: 'rgba(36, 41, 46, 0.8)',
     justifyContent: 'flex-end',
     alignItems: 'center',
+    ...(Platform.OS === 'web' ? { height: '100dvh' as any, width: '100vw' as any, position: 'fixed' as any, top: 0, left: 0, right: 0, bottom: 0 } : {}),
   },
   modalCardFull: {
     backgroundColor: colors.card,
@@ -4008,7 +4110,6 @@ const getStyles = (colors: any) => StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     padding: 24,
-    height: '85%',
     width: '100%',
     maxWidth: 640,
   },

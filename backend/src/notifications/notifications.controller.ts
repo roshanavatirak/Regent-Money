@@ -10,10 +10,10 @@ export class NotificationsController {
   @Post('token')
   async registerToken(
     @Req() req: any,
-    @Body() body: { token: string },
+    @Body() body: { token?: string | null },
   ) {
     const userId = req.user.id;
-    return this.notificationsService.registerPushToken(userId, body.token);
+    return this.notificationsService.registerPushToken(userId, body.token || null);
   }
 
   @UseGuards(JwtAuthGuard)

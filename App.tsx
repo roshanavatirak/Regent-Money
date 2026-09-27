@@ -1,8 +1,36 @@
 import React, { useEffect } from 'react';
-import { Platform } from 'react-native';
+import { Platform, LogBox } from 'react-native';
 import * as Font from 'expo-font';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import AppNavigator from './src/navigation';
+
+// Ignore benign React Native Web deprecation warnings
+LogBox.ignoreLogs([
+  '"shadow*" style props are deprecated',
+  'props.pointerEvents is deprecated',
+  'Cannot record touch end without a touch start',
+  '[expo-notifications]',
+  'TouchableWithoutFeedback is deprecated',
+  'ImagePicker.MediaTypeOptions',
+]);
+
+if (Platform.OS === 'web' && typeof console !== 'undefined') {
+  const originalWarn = console.warn;
+  console.warn = (...args: any[]) => {
+    const msg = args[0] ? String(args[0]) : '';
+    if (
+      msg.includes('"shadow*" style props are deprecated') ||
+      msg.includes('props.pointerEvents is deprecated') ||
+      msg.includes('Cannot record touch end without a touch start') ||
+      msg.includes('[expo-notifications]') ||
+      msg.includes('TouchableWithoutFeedback is deprecated') ||
+      msg.includes('ImagePicker.MediaTypeOptions')
+    ) {
+      return;
+    }
+    originalWarn.apply(console, args);
+  };
+}
 
 // Configure font-display: swap on Web to prevent Chrome slow-network intervention warnings
 if (Platform.OS === 'web' && typeof document !== 'undefined') {

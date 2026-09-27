@@ -1,8 +1,6 @@
 import { Injectable, Logger, BadRequestException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
-import { InjectQueue } from '@nestjs/bull';
-import type { Queue } from 'bull';
 import { Cron } from '@nestjs/schedule';
 import { Notification } from './entities/notification.entity';
 import { User } from '../users/entities/user.entity';
@@ -18,8 +16,6 @@ export class NotificationsService implements OnModuleInit {
     private readonly notificationRepository: Repository<Notification>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-    @InjectQueue('notification')
-    private readonly notificationQueue: Queue,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -73,14 +69,14 @@ export class NotificationsService implements OnModuleInit {
     }
   }
 
-  async registerPushToken(userId: string, token: string): Promise<{ success: boolean }> {
-    this.logger.log(`Registering push token for user: ${userId}`);
+  async registerPushToken(userId: string, token: string | null): Promise<{ success: boolean }> {
+    this.logger.log(`Registering push token for user: ${userId} (Token: ${token ? 'provided' : 'cleared'})`);
     const user = await this.userRepository.findOne({ where: { id: userId, isDeleted: false } });
     if (!user) {
       throw new BadRequestException('User not found.');
     }
 
-    user.pushToken = token;
+    user.pushToken = token || null;
     user.updatedAt = Date.now();
     await this.userRepository.save(user);
 
@@ -154,23 +150,18 @@ export class NotificationsService implements OnModuleInit {
 
     const savedNotification = await this.notificationRepository.save(notification);
 
-    // If user has a registered push token, queue it for push delivery
+    // If user has a registered push token, dispatch push delivery asynchronously
     if (user.pushToken) {
-      try {
-        const job = await this.notificationQueue.add(
-          'sendPush',
-          {
-            token: user.pushToken,
-            title: data.title,
-            body: data.body,
-            payload: data.payload,
-          },
-          { removeOnComplete: true, removeOnFail: 100 },
-        );
-        this.logger.log(`Queued push notification job (ID: ${job.id}) in Bull queue.`);
-      } catch (err: any) {
-        this.logger.warn(`Failed to queue push notification job: ${err.message}. Saving DB record only.`);
-      }
+      this.sendExpoPush([
+        {
+          token: user.pushToken,
+          title: data.title,
+          body: data.body,
+          payload: data.payload,
+        },
+      ]).catch((err) => {
+        this.logger.warn(`Failed to send push notification: ${err.message}. DB record saved.`);
+      });
     } else {
       this.logger.log(`User ${userId} does not have a registered push token. DB log saved.`);
     }
@@ -256,24 +247,20 @@ export class NotificationsService implements OnModuleInit {
     await this.notificationRepository.save(notificationsToSave);
 
     // 2. Dispatch push notifications for users with registered push tokens
-    for (const user of users) {
-      if (user.pushToken) {
-        try {
-          await this.notificationQueue.add(
-            'sendPush',
-            {
-              token: user.pushToken,
-              title: message.title,
-              body: message.body,
-              payload: { slot, type: 'daily_humor' },
-            },
-            { removeOnComplete: true, removeOnFail: 50 },
-          );
-          pushQueued++;
-        } catch (e: any) {
-          this.logger.warn(`Failed to queue push for user ${user.id}: ${e.message}`);
-        }
-      }
+    const pushMessages = users
+      .filter((u) => u.pushToken)
+      .map((u) => ({
+        token: u.pushToken!,
+        title: message.title,
+        body: message.body,
+        payload: { slot, type: 'daily_humor' },
+      }));
+
+    if (pushMessages.length > 0) {
+      pushQueued = pushMessages.length;
+      this.sendExpoPush(pushMessages).catch((err) => {
+        this.logger.error(`[Broadcast] Push notification dispatch failed: ${err.message}`);
+      });
     }
 
     this.logger.log(
@@ -292,4 +279,72 @@ export class NotificationsService implements OnModuleInit {
       throw err;
     }
   }
+
+  /**
+   * Dispatches push notifications directly to Expo's Push API asynchronously.
+   * Completely eliminates the need for a Redis queue, avoiding Upstash request limit exhaustion.
+   * Batches notifications up to 100 per request according to Expo recommendations.
+   */
+  async sendExpoPush(
+    messages: Array<{ token: string; title: string; body: string; payload?: any }>,
+  ): Promise<void> {
+    if (!messages || messages.length === 0) return;
+
+    // Filter valid ExponentPushToken
+    const validMessages = messages.filter((m) => {
+      const isValid = typeof m.token === 'string' && m.token.startsWith('ExponentPushToken[');
+      if (!isValid) {
+        this.logger.warn(`Invalid Expo Push Token: "${m.token}". Skipping.`);
+      }
+      return isValid;
+    });
+
+    if (validMessages.length === 0) return;
+
+    const batchSize = 100;
+    for (let i = 0; i < validMessages.length; i += batchSize) {
+      const chunk = validMessages.slice(i, i + batchSize);
+      const pushPayload = chunk.map((m) => ({
+        to: m.token,
+        sound: 'default',
+        title: m.title,
+        body: m.body,
+        data: m.payload || {},
+      }));
+
+      try {
+        const response = await fetch('https://exp.host/--/api/v2/push/send', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify(pushPayload),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          this.logger.error(`Expo Push API returned HTTP ${response.status}: ${errorText}`);
+          continue;
+        }
+
+        const result: any = await response.json();
+        const tickets = result?.data;
+        if (Array.isArray(tickets)) {
+          tickets.forEach((ticket: any, idx: number) => {
+            if (ticket.status === 'error') {
+              this.logger.error(
+                `Expo push delivery error for ${chunk[idx]?.token}: ${ticket.message} (details: ${JSON.stringify(ticket.details)})`,
+              );
+            } else {
+              this.logger.log(`Expo push delivered successfully, ticket ID: ${ticket.id}`);
+            }
+          });
+        }
+      } catch (err: any) {
+        this.logger.error(`Failed to dispatch push notification batch to Expo: ${err.message}`);
+      }
+    }
+  }
 }
+

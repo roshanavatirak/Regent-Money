@@ -13,12 +13,14 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useTheme, useAuthStore, useThemeStore, useSecurityStore, showGlobalConfirm, UserProfile } from '../store';
 import { authService } from '../services/authService';
 import { biometricService } from '../services/biometricService';
+import { notificationService } from '../services/notificationService';
 import { pickImageFromDevice, LUXURY_PRESET_AVATARS } from '../services/imageService';
 
 export interface ProfileScreenProps {
@@ -27,6 +29,7 @@ export interface ProfileScreenProps {
 
 export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent }) => {
   const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
   const user = useAuthStore((state) => state.user);
   const theme = useThemeStore((state) => state.theme);
   const setTheme = useThemeStore((state) => state.setTheme);
@@ -38,6 +41,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
   const setAutoLockTimeout = useSecurityStore((state) => state.setAutoLockTimeout);
 
   const [biometricLoading, setBiometricLoading] = useState(false);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [notificationLoading, setNotificationLoading] = useState(false);
   const [avatarModalVisible, setAvatarModalVisible] = useState(false);
   const [editDetailsVisible, setEditDetailsVisible] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
@@ -55,6 +60,10 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
   useEffect(() => {
     // Sync latest profile on mount
     authService.fetchProfile();
+    // Check initial notification permission status
+    notificationService.isPermissionGranted().then((granted) => {
+      setNotificationsEnabled(granted);
+    });
   }, []);
 
   const openEditModal = () => {
@@ -160,6 +169,35 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
       }
     } finally {
       setBiometricLoading(false);
+    }
+  };
+
+  const handleToggleNotifications = async (enable: boolean) => {
+    setNotificationLoading(true);
+    try {
+      if (enable) {
+        const token = await notificationService.registerForPushNotifications();
+        if (token) {
+          setNotificationsEnabled(true);
+        } else {
+          setNotificationsEnabled(false);
+          showGlobalConfirm({
+            title: 'Permission Notice',
+            message:
+              'Notification permission was not granted. Please enable notifications in your phone device settings to receive 9 AM/9 PM digests.',
+            confirmText: 'OK',
+            icon: 'alert-triangle',
+            onConfirm: () => {},
+          });
+        }
+      } else {
+        await notificationService.unregisterPushToken();
+        setNotificationsEnabled(false);
+      }
+    } catch (e: any) {
+      console.warn('[ProfileScreen] Notification toggle error:', e);
+    } finally {
+      setNotificationLoading(false);
     }
   };
 
@@ -432,6 +470,41 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
           )}
         </View>
 
+        {/* Push Notifications & Daily Humor Digest */}
+        <View style={styles.card}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+            <Ionicons name="notifications-outline" size={14} color={colors.accent} style={{ marginRight: 6 }} />
+            <Text style={styles.cardKicker}>NOTIFICATIONS & DAILY HUMOR</Text>
+          </View>
+          <Text style={styles.cardSubtitle}>
+            Receive daily 9:00 AM & 9:00 PM humor digests, spending insights, and instant transaction alerts.
+          </Text>
+
+          <View style={styles.securityRow}>
+            <View style={{ flex: 1, marginRight: 12 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Ionicons name="notifications" size={16} color={colors.accent} style={{ marginRight: 6 }} />
+                <Text style={styles.securityTitle}>Push Notifications</Text>
+              </View>
+              <Text style={styles.securityDesc}>
+                {notificationsEnabled
+                  ? 'Active — 9 AM morning mood & 9 PM daily recap enabled'
+                  : 'Disabled — toggle on to receive daily humor & spending updates'}
+              </Text>
+            </View>
+            {notificationLoading ? (
+              <ActivityIndicator size="small" color={colors.accent} />
+            ) : (
+              <Switch
+                value={notificationsEnabled}
+                onValueChange={handleToggleNotifications}
+                thumbColor={notificationsEnabled ? colors.accent : colors.text}
+                trackColor={{ false: colors.buttonSecondaryBackground, true: colors.accentMuted }}
+              />
+            )}
+          </View>
+        </View>
+
         {/* Account Actions / Log Out */}
         <View style={[styles.card, { borderStyle: 'dashed' }]}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -457,96 +530,96 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
       {/* 1. Avatar Selection Modal */}
       {/* ============================================================ */}
       <Modal visible={avatarModalVisible} transparent animationType="fade" onRequestClose={() => setAvatarModalVisible(false)}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={{ flex: 1 }}
-        >
-          <View style={styles.modalBackdrop}>
-            <Pressable style={StyleSheet.absoluteFill} onPress={() => setAvatarModalVisible(false)} />
+        <View style={styles.modalBackdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setAvatarModalVisible(false)} />
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.keyboardAvoidingWrap}
+          >
             <View style={styles.modalCard}>
-            <View style={styles.modalHeaderRow}>
-              <View>
-                <Text style={styles.modalTitle}>Update Profile Photo</Text>
-                <Text style={styles.modalSubtitle}>Upload PNG / JPG or pick a luxury preset</Text>
-              </View>
-              <TouchableOpacity onPress={() => setAvatarModalVisible(false)} style={styles.modalCloseBtn}>
-                <Feather name="x" size={18} color={colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
-
-            {/* Action 1: Upload from Device */}
-            <TouchableOpacity
-              style={styles.uploadOptionBtn}
-              onPress={handlePickFromGallery}
-              disabled={avatarUploading}
-              activeOpacity={0.8}
-            >
-              <View style={[styles.optionIconBox, { backgroundColor: 'rgba(45, 186, 78, 0.12)' }]}>
-                {avatarUploading ? (
-                  <ActivityIndicator size="small" color={colors.accent} />
-                ) : (
-                  <Feather name="image" size={18} color={colors.accent} />
-                )}
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.optionTitle}>Choose PNG or JPG from Gallery</Text>
-                <Text style={styles.optionSubtitle}>Uploads securely to Cloudinary CDN</Text>
-              </View>
-              <Feather name="chevron-right" size={16} color={colors.textTertiary} />
-            </TouchableOpacity>
-
-            {/* Action 2: Curated Luxury 3D Avatars */}
-            <Text style={[styles.sectionTitleSmall, { marginTop: 16, marginBottom: 10 }]}>OR CHOOSE A LUXURY PRESET</Text>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'space-between' }}>
-              {LUXURY_PRESET_AVATARS.map((preset) => (
-                <TouchableOpacity
-                  key={preset.id}
-                  style={styles.presetAvatarBtn}
-                  onPress={() => handleSelectPresetAvatar(preset.url)}
-                  disabled={avatarUploading}
-                  activeOpacity={0.8}
-                >
-                  <Image source={{ uri: preset.url }} style={styles.presetAvatarImg} />
-                  <Text style={styles.presetAvatarName}>{preset.name}</Text>
+              <View style={styles.modalHeaderRow}>
+                <View>
+                  <Text style={styles.modalTitle}>Update Profile Photo</Text>
+                  <Text style={styles.modalSubtitle}>Upload PNG / JPG or pick a luxury preset</Text>
+                </View>
+                <TouchableOpacity onPress={() => setAvatarModalVisible(false)} style={styles.modalCloseBtn}>
+                  <Feather name="x" size={18} color={colors.textSecondary} />
                 </TouchableOpacity>
-              ))}
-            </View>
+              </View>
 
-            {/* Action 3: Custom URL */}
-            <Text style={[styles.sectionTitleSmall, { marginTop: 16, marginBottom: 8 }]}>OR PASTE PHOTO URL</Text>
-            <View style={styles.urlInputRow}>
-              <TextInput
-                style={styles.urlInput}
-                placeholder="https://images.unsplash.com/..."
-                placeholderTextColor={colors.textTertiary}
-                value={customAvatarUrl}
-                onChangeText={setCustomAvatarUrl}
-                autoCapitalize="none"
-              />
+              {/* Action 1: Upload from Device */}
               <TouchableOpacity
-                style={styles.urlSaveBtn}
-                onPress={handleSaveCustomUrl}
-                disabled={!customAvatarUrl.trim() || avatarUploading}
+                style={styles.uploadOptionBtn}
+                onPress={handlePickFromGallery}
+                disabled={avatarUploading}
+                activeOpacity={0.8}
               >
-                <Text style={styles.urlSaveBtnText}>Apply</Text>
+                <View style={[styles.optionIconBox, { backgroundColor: 'rgba(45, 186, 78, 0.12)' }]}>
+                  {avatarUploading ? (
+                    <ActivityIndicator size="small" color={colors.accent} />
+                  ) : (
+                    <Feather name="image" size={18} color={colors.accent} />
+                  )}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.optionTitle}>Choose PNG or JPG from Gallery</Text>
+                  <Text style={styles.optionSubtitle}>Uploads securely to Cloudinary CDN</Text>
+                </View>
+                <Feather name="chevron-right" size={16} color={colors.textTertiary} />
               </TouchableOpacity>
+
+              {/* Action 2: Curated Luxury 3D Avatars */}
+              <Text style={[styles.sectionTitleSmall, { marginTop: 16, marginBottom: 10 }]}>OR CHOOSE A LUXURY PRESET</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'space-between' }}>
+                {LUXURY_PRESET_AVATARS.map((preset) => (
+                  <TouchableOpacity
+                    key={preset.id}
+                    style={styles.presetAvatarBtn}
+                    onPress={() => handleSelectPresetAvatar(preset.url)}
+                    disabled={avatarUploading}
+                    activeOpacity={0.8}
+                  >
+                    <Image source={{ uri: preset.url }} style={styles.presetAvatarImg} />
+                    <Text style={styles.presetAvatarName}>{preset.name}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {/* Action 3: Custom URL */}
+              <Text style={[styles.sectionTitleSmall, { marginTop: 16, marginBottom: 8 }]}>OR PASTE PHOTO URL</Text>
+              <View style={styles.urlInputRow}>
+                <TextInput
+                  style={styles.urlInput}
+                  placeholder="https://images.unsplash.com/..."
+                  placeholderTextColor={colors.textTertiary}
+                  value={customAvatarUrl}
+                  onChangeText={setCustomAvatarUrl}
+                  autoCapitalize="none"
+                />
+                <TouchableOpacity
+                  style={styles.urlSaveBtn}
+                  onPress={handleSaveCustomUrl}
+                  disabled={!customAvatarUrl.trim() || avatarUploading}
+                >
+                  <Text style={styles.urlSaveBtnText}>Apply</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </View>
-        </KeyboardAvoidingView>
       </Modal>
 
       {/* ============================================================ */}
       {/* 2. Edit Profile Details Modal */}
       {/* ============================================================ */}
       <Modal visible={editDetailsVisible} transparent animationType="slide" onRequestClose={() => setEditDetailsVisible(false)}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={{ flex: 1 }}
-        >
-          <View style={styles.modalBackdrop}>
-            <Pressable style={StyleSheet.absoluteFill} onPress={() => setEditDetailsVisible(false)} />
-            <View style={[styles.modalCard, { maxHeight: '88%' }]}>
+        <View style={styles.modalBackdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setEditDetailsVisible(false)} />
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.keyboardAvoidingWrap}
+          >
+            <View style={[styles.modalCard, { maxHeight: windowHeight * 0.88 }]}>
               <View style={styles.modalHeaderRow}>
                 <View>
                   <Text style={styles.modalTitle}>Edit Profile Information</Text>
@@ -664,9 +737,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
               </TouchableOpacity>
             </ScrollView>
           </View>
-        </View>
         </KeyboardAvoidingView>
-      </Modal>
+      </View>
+    </Modal>
     </View>
   );
 };
@@ -942,6 +1015,11 @@ const getStyles = (colors: any, isDark: boolean) =>
       flex: 1,
       backgroundColor: 'rgba(0, 0, 0, 0.75)',
       justifyContent: 'flex-end',
+      ...(Platform.OS === 'web' ? { height: '100dvh' as any, width: '100vw' as any, position: 'fixed' as any, top: 0, left: 0, right: 0, bottom: 0 } : {}),
+    },
+    keyboardAvoidingWrap: {
+      width: '100%',
+      justifyContent: 'flex-end',
     },
     modalCard: {
       backgroundColor: colors.card,
@@ -950,6 +1028,7 @@ const getStyles = (colors: any, isDark: boolean) =>
       padding: 18,
       borderTopWidth: 1,
       borderColor: colors.border,
+      overflow: 'hidden',
       shadowColor: '#000',
       shadowOffset: { width: 0, height: -4 },
       shadowOpacity: 0.3,

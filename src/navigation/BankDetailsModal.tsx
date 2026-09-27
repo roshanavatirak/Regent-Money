@@ -28,20 +28,15 @@ import { syncService } from '../services/syncService';
 import { getBackendUrl } from '../config/api';
 import { ManualTransactionModal } from './ManualTransactionModal';
 import { TransactionDetailModal } from './TransactionDetailModal';
+import { EditBankModal } from './EditBankModal';
+import { ReviewTransactionsModal } from './ReviewTransactionsModal';
 
 const BACKEND_URL = getBackendUrl();
 
 interface BankDetailsModalProps {
   visible: boolean;
   onClose: () => void;
-  bank: {
-    id: string;
-    bankName: string;
-    accountNumberSuffix: string;
-    currentBalance: number;
-    lastSyncTimestamp?: number;
-    smsConsent?: boolean;
-  } | null;
+  bank: any | null;
 }
 
 export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalProps) => {
@@ -49,6 +44,14 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
   const styles = getStyles(colors);
 
   const transactions = useTransactionStore((state) => state.transactions);
+
+  const [localBank, setLocalBank] = useState<any>(bank);
+
+  useEffect(() => {
+    setLocalBank(bank);
+  }, [bank]);
+
+  const activeBank = localBank || bank;
   
   const [activeTab, setActiveTab] = useState<'all' | 'debits' | 'credits'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -61,11 +64,16 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
   const [passwordModalVisible, setPasswordModalVisible] = useState(false);
   const [pdfPassword, setPdfPassword] = useState('');
   const [pendingPdf, setPendingPdf] = useState<{ uri: string; name: string; type: string } | null>(null);
+  const [uploadErrorModal, setUploadErrorModal] = useState<{ title: string; message: string } | null>(null);
+  const [reviewModalVisible, setReviewModalVisible] = useState(false);
+  const [extractedTransactions, setExtractedTransactions] = useState<any[]>([]);
+  const [detectedFinalBalance, setDetectedFinalBalance] = useState<number | null>(null);
 
   // SMS Consent toggle states
-  const [smsConsent, setSmsConsent] = useState(bank?.smsConsent || false);
+  const [smsConsent, setSmsConsent] = useState(activeBank?.smsConsent || false);
   const [consentModalVisible, setConsentModalVisible] = useState(false);
   const [optionsMenuVisible, setOptionsMenuVisible] = useState(false);
+  const [editBankModalVisible, setEditBankModalVisible] = useState(false);
 
   // Manual Transaction states
   const [manualTxModalVisible, setManualTxModalVisible] = useState(false);
@@ -75,19 +83,19 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
   const [selectedTx, setSelectedTx] = useState<any | null>(null);
 
   useEffect(() => {
-    if (bank) {
-      setSmsConsent(bank.smsConsent || false);
+    if (activeBank) {
+      setSmsConsent(activeBank.smsConsent || false);
     }
-  }, [bank]);
+  }, [activeBank]);
 
   const saveSmsConsent = async (val: boolean) => {
-    if (!bank) return;
+    if (!activeBank) return;
     setSmsConsent(val);
     try {
       const token = authService.getAccessToken();
       if (!token) return;
 
-      const response = await fetch(`${BACKEND_URL}/sync/bank-profile/${bank.id}/consent`, {
+      const response = await fetch(`${BACKEND_URL}/sync/bank-profile/${activeBank.id}/consent`, {
         method: 'PATCH',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -108,12 +116,46 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
   };
 
   const handleToggleSmsConsent = async (val: boolean) => {
-    if (!bank) return;
+    if (!activeBank) return;
 
     if (val) {
       setConsentModalVisible(true);
     } else {
       await saveSmsConsent(false);
+    }
+  };
+
+  const [confirmUnlinkVisible, setConfirmUnlinkVisible] = useState(false);
+  const [unlinking, setUnlinking] = useState(false);
+
+  const executeUnlinkBank = async () => {
+    if (!activeBank) return;
+    setUnlinking(true);
+    try {
+      const token = authService.getAccessToken();
+      if (token) {
+        await fetch(`${BACKEND_URL}/sync/bank-profile/${activeBank.id}`, {
+          method: 'DELETE',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+      }
+      useBankStore.getState().removeBankProfileState(activeBank.id);
+      await syncService.sync().catch(() => {});
+      setConfirmUnlinkVisible(false);
+      setOptionsMenuVisible(false);
+      onClose();
+    } catch (err: any) {
+      console.warn('[BankDetailsModal] Failed to unlink bank:', err?.message || err);
+      // Fallback local removal even if offline
+      useBankStore.getState().removeBankProfileState(activeBank.id);
+      setConfirmUnlinkVisible(false);
+      setOptionsMenuVisible(false);
+      onClose();
+    } finally {
+      setUnlinking(false);
     }
   };
 
@@ -293,61 +335,65 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
     return parsed;
   };
 
+  const syncExtractedTransactions = async (parsedTxs: any[]) => {
+    if (!parsedTxs || parsedTxs.length === 0) {
+      throw new Error('No transactions could be extracted from this document.');
+    }
+
+    setOcrStatusText('Syncing with database...');
+    const token = authService.getAccessToken();
+    if (!token) throw new Error('Session authentication missing.');
+
+    const response = await fetch(`${BACKEND_URL}/sync/ocr-sync`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        bankProfileId: bank.id,
+        transactions: parsedTxs,
+      }),
+    });
+
+    if (!response.ok) {
+      const errJson = await response.json().catch(() => ({}));
+      throw new Error(errJson.message || 'Sync failed.');
+    }
+
+    const syncResult = await response.json();
+    await syncService.sync();
+    await fetchIncomeRecords();
+
+    Alert.alert(
+      'Import Successful',
+      `Import summary:\n• Debits imported: ${syncResult.addedTransactionsCount}\n• Credits imported: ${syncResult.addedIncomeCount}\n\nNew Bank Balance: ₹${syncResult.updatedBalance.toLocaleString('en-IN')}`
+    );
+  };
+
   const processExtractedText = async (text: string) => {
     try {
-      setOcrStatusText('Running local regex parser...');
+      setOcrStatusText('Running local parser...');
       let parsedTxs = parseTextLocally(text);
 
       if (parsedTxs.length === 0) {
-        setOcrStatusText('Structuring with AI models...');
+        setOcrStatusText('Structuring with server AI...');
         parsedTxs = await parseStatementTextWithAI(text);
       }
 
-      if (parsedTxs.length === 0) {
-        throw new Error('No transactions could be extracted from this document.');
-      }
-
-      setOcrStatusText('Syncing with database...');
-      const token = authService.getAccessToken();
-      if (!token) throw new Error('Session authentication missing.');
-
-      const response = await fetch(`${BACKEND_URL}/sync/ocr-sync`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          bankProfileId: bank.id,
-          transactions: parsedTxs,
-        }),
-      });
-
-      if (!response.ok) {
-        const errJson = await response.json();
-        throw new Error(errJson.message || 'Sync failed.');
-      }
-
-      const syncResult = await response.json();
-      await syncService.sync();
-      await fetchIncomeRecords();
-
-      Alert.alert(
-        'OCR Import Successful',
-        `Import summary:\n• Debits imported: ${syncResult.addedTransactionsCount}\n• Credits imported: ${syncResult.addedIncomeCount}\n\nNew Bank Balance: ₹${syncResult.updatedBalance.toLocaleString('en-IN')}`
-      );
+      await syncExtractedTransactions(parsedTxs);
     } catch (err: any) {
-      Alert.alert('Import Failed', err.message || 'Unable to complete OCR ingestion.');
+      Alert.alert('Import Failed', err.message || 'Unable to complete statement ingestion.');
     } finally {
       setProcessingOcr(false);
       setOcrStatusText('');
     }
   };
 
-  // Upload and parse PDF statement file on backend
-  const uploadPdfStatement = async (uri: string, name: string, type: string, password?: string) => {
+  // Upload and parse statement file (PDF or image) directly on backend
+  const uploadStatementFile = async (fileAsset: any, password?: string) => {
     setProcessingOcr(true);
-    setOcrStatusText(password ? 'Decrypting & parsing statement...' : 'Reading statement PDF...');
+    setOcrStatusText(password ? 'Decrypting & parsing statement on server...' : 'Processing statement on server...');
 
     try {
       const token = authService.getAccessToken();
@@ -358,11 +404,16 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
       if (password) {
         formData.append('password', password);
       }
-      formData.append('file', {
-        uri,
-        name: name || 'statement.pdf',
-        type: type || 'application/pdf',
-      } as any);
+
+      if (Platform.OS === 'web' && fileAsset.file) {
+        formData.append('file', fileAsset.file);
+      } else {
+        formData.append('file', {
+          uri: fileAsset.uri,
+          name: fileAsset.name || 'statement.pdf',
+          type: fileAsset.mimeType || 'application/pdf',
+        } as any);
+      }
 
       const response = await fetch(`${BACKEND_URL}/sync/upload-statement`, {
         method: 'POST',
@@ -372,7 +423,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
         body: formData,
       });
 
-      const responseJson = await response.json();
+      const responseJson = await response.json().catch(() => ({}));
 
       if (!response.ok) {
         // Check for password protected PDF indicator
@@ -381,24 +432,35 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
           responseJson.error === 'PASSWORD_REQUIRED' ||
           JSON.stringify(responseJson).includes('PASSWORD_REQUIRED')
         )) {
-          // Temporarily pause loader, save pending metadata, and open password modal
           setProcessingOcr(false);
-          setPendingPdf({ uri, name, type });
+          setPendingPdf(fileAsset);
           setPasswordModalVisible(true);
           return;
         }
-        throw new Error(responseJson.message || 'Statement extraction failed.');
+        const errorMsg = Array.isArray(responseJson.message)
+          ? responseJson.message.join('\n')
+          : (responseJson.message || responseJson.error || 'Statement extraction failed.');
+        throw new Error(errorMsg);
       }
 
-      // If successfully decrypted and text extracted
-      if (responseJson.text) {
-        await processExtractedText(responseJson.text);
-      } else {
-        throw new Error('PDF parse completed but no text was returned.');
+      const txs = responseJson.transactions || [];
+      if (txs.length === 0) {
+        throw new Error('No transactions could be extracted from this statement.');
       }
+
+      setExtractedTransactions(txs);
+      setDetectedFinalBalance(responseJson.detectedFinalBalance ?? null);
+      setReviewModalVisible(true);
     } catch (e: any) {
+      const msg = e.message || 'Unable to process statement.';
+      setUploadErrorModal({
+        title: 'Statement Import Issue',
+        message: msg,
+      });
+      Alert.alert('Statement Import Issue', msg);
+    } finally {
       setProcessingOcr(false);
-      Alert.alert('Import Error', e.message || 'Unable to process PDF statement.');
+      setOcrStatusText('');
     }
   };
 
@@ -410,21 +472,23 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
     if (!pendingPdf) return;
 
     setPasswordModalVisible(false);
-    uploadPdfStatement(pendingPdf.uri, pendingPdf.name, pendingPdf.type, pdfPassword);
+    uploadStatementFile(pendingPdf, pdfPassword);
     setPdfPassword('');
   };
 
-  // Image Upload / Ingestion
+  // Image Upload / Ingestion using Backend AI Vision
   const handleUploadScreenshot = async () => {
     try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission Denied', 'Camera roll access is needed to upload screenshots.');
-        return;
+      if (Platform.OS !== 'web') {
+        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert('Permission Denied', 'Camera roll access is needed to upload screenshots.');
+          return;
+        }
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         allowsEditing: false,
         quality: 1,
       });
@@ -432,17 +496,75 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
       if (result.canceled || !result.assets?.[0]?.uri) return;
 
       setProcessingOcr(true);
-      setOcrStatusText('Extracting text locally...');
-      
-      const recognized = await TextRecognition.recognize(result.assets[0].uri);
-      await processExtractedText(recognized.text);
+      setOcrStatusText('Processing screenshot on server...');
+
+      const token = authService.getAccessToken();
+      if (!token) throw new Error('Session authentication missing.');
+
+      const asset = result.assets[0];
+      const formData = new FormData();
+      formData.append('bankProfileId', bank.id);
+
+      if (Platform.OS === 'web' && (asset as any).file) {
+        formData.append('file', (asset as any).file);
+      } else {
+        formData.append('file', {
+          uri: asset.uri,
+          name: asset.fileName || 'screenshot.jpg',
+          type: asset.mimeType || 'image/jpeg',
+        } as any);
+      }
+
+      const response = await fetch(`${BACKEND_URL}/sync/upload-screenshot`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+        body: formData,
+      });
+
+      const responseJson = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const errorMsg = Array.isArray(responseJson.message)
+          ? responseJson.message.join('\n')
+          : (responseJson.message || responseJson.error || 'Failed to process screenshot on server.');
+        throw new Error(errorMsg);
+      }
+
+      const txs = responseJson.transactions || [];
+      if (txs.length === 0) {
+        throw new Error('No transactions could be detected in this screenshot.');
+      }
+
+      setExtractedTransactions(txs);
+      setDetectedFinalBalance(responseJson.detectedFinalBalance ?? null);
+      setReviewModalVisible(true);
     } catch (e: any) {
+      const msg = e.message || 'Failed to process screenshot.';
+      let title = 'Invalid Screenshot';
+      const lower = msg.toLowerCase();
+      if (lower.includes('selfie') || lower.includes('personal photo')) {
+        title = 'Selfie / Personal Photo Detected';
+      } else if (lower.includes('blurry') || lower.includes('low quality') || lower.includes('unreadable')) {
+        title = 'Image Too Blurry';
+      } else if (lower.includes('not contain') || lower.includes('unrelated') || lower.includes('does not contain')) {
+        title = 'Non-Financial Image';
+      } else if (lower.includes('no transaction') || lower.includes('no transactions')) {
+        title = 'No Transactions Found';
+      }
+
+      setUploadErrorModal({
+        title,
+        message: msg,
+      });
+      Alert.alert(title, msg);
+    } finally {
       setProcessingOcr(false);
-      Alert.alert('OCR Error', e.message || 'Failed to process screenshot.');
+      setOcrStatusText('');
     }
   };
 
-  // Document Statement Upload (Supports both images and password protected PDFs)
+  // Document Statement Upload (Delegates to backend for PDF or image statement)
   const handleUploadStatement = async () => {
     try {
       const doc = await DocumentPicker.getDocumentAsync({
@@ -452,26 +574,14 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
 
       if (doc.canceled || !doc.assets?.[0]?.uri) return;
 
-      const fileUri = doc.assets[0].uri;
-      const fileName = doc.assets[0].name || 'statement.pdf';
-      const fileType = doc.assets[0].mimeType || '';
-
-      if (fileType.includes('image')) {
-        setProcessingOcr(true);
-        setOcrStatusText('Extracting text locally...');
-        const recognized = await TextRecognition.recognize(fileUri);
-        await processExtractedText(recognized.text);
-      } else {
-        // Upload PDF to backend to handle decryption and text parsing
-        await uploadPdfStatement(fileUri, fileName, fileType);
-      }
+      await uploadStatementFile(doc.assets[0]);
     } catch (e: any) {
       setProcessingOcr(false);
       Alert.alert('Upload Error', e.message || 'Failed to select document.');
     }
   };
 
-  if (!visible || !bank) {
+  if (!visible || !activeBank) {
     return null;
   }
 
@@ -488,8 +598,8 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
             {/* Header */}
             <View style={styles.modalHeader}>
               <View>
-                <Text style={styles.title}>{bank.bankName}</Text>
-                <Text style={styles.subtitle}>A/c Suffix: **** {bank.accountNumberSuffix}</Text>
+                <Text style={styles.title}>{activeBank.bankName}</Text>
+                <Text style={styles.subtitle}>{activeBank.accountType || 'Savings'} •••• {activeBank.accountNumberSuffix}</Text>
               </View>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                 <TouchableOpacity
@@ -511,10 +621,10 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                 <View>
                   <Text style={styles.balanceLabel}>Current Balance</Text>
-                  <Text style={styles.balanceValue}>₹{bank.currentBalance.toLocaleString('en-IN')}</Text>
-                  {bank.lastSyncTimestamp && (
+                  <Text style={styles.balanceValue}>₹{activeBank.currentBalance.toLocaleString('en-IN')}</Text>
+                  {activeBank.lastSyncTimestamp && (
                     <Text style={styles.syncText}>
-                      Synced: {new Date(bank.lastSyncTimestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                      Synced: {new Date(activeBank.lastSyncTimestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
                     </Text>
                   )}
                 </View>
@@ -681,11 +791,11 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
         animationType="fade"
         onRequestClose={() => setPasswordModalVisible(false)}
       >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={{ flex: 1 }}
-        >
-          <View style={styles.pwdOverlay}>
+        <View style={styles.pwdOverlay}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={{ width: '100%', alignItems: 'center' }}
+          >
             <View style={styles.pwdCard}>
               <View style={styles.pwdHeader}>
                 <Feather name="lock" size={24} color="#FFD700" style={{ marginBottom: 10 }} />
@@ -725,8 +835,8 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
                 </TouchableOpacity>
               </View>
             </View>
-          </View>
-        </KeyboardAvoidingView>
+          </KeyboardAvoidingView>
+        </View>
       </Modal>
 
       {/* Custom SMS Consent Modal */}
@@ -814,18 +924,26 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
           <TouchableOpacity
             style={StyleSheet.absoluteFill}
             activeOpacity={1}
-            onPress={() => setOptionsMenuVisible(false)}
+            onPress={() => {
+              setOptionsMenuVisible(false);
+              setConfirmUnlinkVisible(false);
+            }}
           />
           <View style={styles.optionsMenuCard}>
             <View style={styles.optionsMenuHeader}>
               <View>
-                <Text style={styles.optionsMenuTitle}>Account Options</Text>
+                <Text style={styles.optionsMenuTitle}>
+                  {confirmUnlinkVisible ? 'Confirm Unlink' : 'Account Options'}
+                </Text>
                 <Text style={styles.optionsMenuSubtitle}>
-                  {bank.bankName} (•••• {bank.accountNumberSuffix})
+                  {activeBank.bankName} ({activeBank.accountType || 'Savings'} •••• {activeBank.accountNumberSuffix})
                 </Text>
               </View>
               <TouchableOpacity
-                onPress={() => setOptionsMenuVisible(false)}
+                onPress={() => {
+                  setOptionsMenuVisible(false);
+                  setConfirmUnlinkVisible(false);
+                }}
                 style={styles.closeBtn}
                 activeOpacity={0.7}
               >
@@ -833,36 +951,199 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
               </TouchableOpacity>
             </View>
 
-            {/* Background SMS Sync Row inside three dots */}
-            <View style={styles.menuItemRow}>
-              <View style={styles.menuItemIconWrap}>
-                <Feather name="message-square" size={18} color="#2dba4e" />
-              </View>
-              <View style={{ flex: 1, marginRight: 10 }}>
-                <Text style={styles.menuItemTitle}>Background SMS Sync</Text>
-                <Text style={styles.menuItemDesc}>
-                  Securely scan incoming bank transaction alerts to update balance & records automatically.
+            {confirmUnlinkVisible ? (
+              <View style={{ alignItems: 'center', paddingVertical: 10 }}>
+                <View
+                  style={{
+                    width: 56,
+                    height: 56,
+                    borderRadius: 28,
+                    backgroundColor: isDark ? 'rgba(239, 68, 68, 0.15)' : '#fee2e2',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    marginBottom: 14,
+                  }}
+                >
+                  <Feather name="trash-2" size={26} color="#ef4444" />
+                </View>
+                <Text
+                  style={{
+                    fontSize: 18,
+                    fontWeight: '800',
+                    color: colors.text,
+                    textAlign: 'center',
+                    marginBottom: 6,
+                  }}
+                >
+                  Unlink Bank Account?
                 </Text>
+                <Text
+                  style={{
+                    fontSize: 12,
+                    color: colors.textSecondary,
+                    textAlign: 'center',
+                    lineHeight: 18,
+                    marginBottom: 20,
+                  }}
+                >
+                  Are you sure you want to remove{' '}
+                  <Text style={{ fontWeight: '700', color: colors.text }}>
+                    {activeBank.bankName} (•••• {activeBank.accountNumberSuffix})
+                  </Text>
+                  ? Your local transaction history will remain safely preserved.
+                </Text>
+
+                <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
+                  <TouchableOpacity
+                    style={{
+                      flex: 1,
+                      backgroundColor: colors.isDark ? '#1a1a24' : '#f0f2f5',
+                      paddingVertical: 13,
+                      borderRadius: 12,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      borderWidth: 1,
+                      borderColor: colors.border,
+                    }}
+                    onPress={() => setConfirmUnlinkVisible(false)}
+                    disabled={unlinking}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={{ color: colors.textSecondary, fontWeight: '700', fontSize: 13 }}>
+                      Cancel
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={{
+                      flex: 1,
+                      backgroundColor: '#ef4444',
+                      paddingVertical: 13,
+                      borderRadius: 12,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                    onPress={executeUnlinkBank}
+                    disabled={unlinking}
+                    activeOpacity={0.8}
+                  >
+                    {unlinking ? (
+                      <ActivityIndicator size="small" color="#ffffff" />
+                    ) : (
+                      <Text style={{ color: '#ffffff', fontWeight: '800', fontSize: 13 }}>
+                        Yes, Unlink
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
               </View>
-              <Switch
-                value={smsConsent}
-                onValueChange={(val) => {
-                  setOptionsMenuVisible(false);
-                  handleToggleSmsConsent(val);
-                }}
-                trackColor={{ false: '#2c2c35', true: '#2dba4e' }}
-                thumbColor={smsConsent ? '#ffffff' : '#8E8E9F'}
-              />
-            </View>
+            ) : (
+              <>
+                {/* Edit Bank Details Row */}
+                <TouchableOpacity
+                  style={styles.menuItemTouchable}
+                  onPress={() => {
+                    setOptionsMenuVisible(false);
+                    setEditBankModalVisible(true);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <View
+                    style={[
+                      styles.menuItemIconWrap,
+                      {
+                        backgroundColor: isDark
+                          ? 'rgba(3, 218, 198, 0.12)'
+                          : 'rgba(3, 218, 198, 0.15)',
+                      },
+                    ]}
+                  >
+                    <Feather name="edit-3" size={18} color={colors.accent || '#03DAC6'} />
+                  </View>
+                  <View style={{ flex: 1, marginRight: 10 }}>
+                    <Text style={styles.menuItemTitle}>Edit Bank Details</Text>
+                    <Text style={styles.menuItemDesc}>
+                      Update display name, account suffix, balance, SMS sender ID, UPI ID & keywords.
+                    </Text>
+                  </View>
+                  <Feather name="chevron-right" size={18} color={colors.textTertiary || '#8E8E9F'} />
+                </TouchableOpacity>
+
+                <View style={styles.menuItemDivider} />
+
+                {/* Background SMS Sync Row inside three dots */}
+                <View style={styles.menuItemRow}>
+                  <View style={styles.menuItemIconWrap}>
+                    <Feather name="message-square" size={18} color="#2dba4e" />
+                  </View>
+                  <View style={{ flex: 1, marginRight: 10 }}>
+                    <Text style={styles.menuItemTitle}>Background SMS Sync</Text>
+                    <Text style={styles.menuItemDesc}>
+                      Securely scan incoming bank transaction alerts to update balance & records automatically.
+                    </Text>
+                  </View>
+                  <Switch
+                    value={smsConsent}
+                    onValueChange={(val) => {
+                      setOptionsMenuVisible(false);
+                      handleToggleSmsConsent(val);
+                    }}
+                    trackColor={{ false: '#2c2c35', true: '#2dba4e' }}
+                    thumbColor={smsConsent ? '#ffffff' : '#8E8E9F'}
+                  />
+                </View>
+
+                <View style={styles.menuItemDivider} />
+
+                {/* Unlink Bank Account Row */}
+                <TouchableOpacity
+                  style={styles.menuItemTouchable}
+                  onPress={() => setConfirmUnlinkVisible(true)}
+                  activeOpacity={0.7}
+                >
+                  <View
+                    style={[
+                      styles.menuItemIconWrap,
+                      {
+                        backgroundColor: isDark
+                          ? 'rgba(239, 68, 68, 0.12)'
+                          : 'rgba(239, 68, 68, 0.15)',
+                      },
+                    ]}
+                  >
+                    <Feather name="trash-2" size={18} color="#ef4444" />
+                  </View>
+                  <View style={{ flex: 1, marginRight: 10 }}>
+                    <Text style={[styles.menuItemTitle, { color: '#ef4444' }]}>Unlink Bank Account</Text>
+                    <Text style={styles.menuItemDesc}>
+                      Remove this bank account mapping from your Regent Money profile.
+                    </Text>
+                  </View>
+                  <Feather name="chevron-right" size={18} color={colors.textTertiary || '#8E8E9F'} />
+                </TouchableOpacity>
+              </>
+            )}
           </View>
         </View>
       </Modal>
+
+      {/* Edit Bank Details Modal */}
+      {activeBank && (
+        <EditBankModal
+          visible={editBankModalVisible}
+          onClose={() => setEditBankModalVisible(false)}
+          bank={activeBank}
+          onSuccess={(updated) => {
+            setLocalBank(updated);
+          }}
+        />
+      )}
 
       {/* Manual Debit / Credit Transaction Modal */}
       <ManualTransactionModal
         visible={manualTxModalVisible}
         onClose={() => setManualTxModalVisible(false)}
-        bank={bank}
+        bank={activeBank}
         initialType={manualTxType}
         onSuccess={handleManualTxSuccess}
       />
@@ -872,8 +1153,57 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
         visible={selectedTx !== null}
         onClose={() => setSelectedTx(null)}
         transaction={selectedTx}
-        bankName={bank?.bankName}
+        bankName={activeBank?.bankName}
         onSuccess={handleTxDetailSuccess}
+      />
+
+      {/* Structured Upload / Validation Error Modal */}
+      <Modal
+        visible={uploadErrorModal !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setUploadErrorModal(null)}
+      >
+        <View style={styles.pwdOverlay}>
+          <View style={styles.pwdCard}>
+            <View style={styles.pwdHeader}>
+              <View style={[styles.iconBadge, { backgroundColor: 'rgba(239, 68, 68, 0.12)', width: 52, height: 52, borderRadius: 26, marginBottom: 14, marginRight: 0 }]}>
+                <Feather name="alert-triangle" size={26} color="#ef4444" />
+              </View>
+              <Text style={styles.pwdTitle}>{uploadErrorModal?.title || 'Upload Error'}</Text>
+              <Text style={[styles.pwdSubtitle, { lineHeight: 22, marginTop: 8 }]}>
+                {uploadErrorModal?.message}
+              </Text>
+            </View>
+
+            <View style={styles.pwdButtons}>
+              <TouchableOpacity
+                style={[styles.pwdBtn, { backgroundColor: colors.accent || '#03DAC6', flex: 1 }]}
+                onPress={() => setUploadErrorModal(null)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.pwdSubmitText}>Got It</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Extracted Transactions Review & Edit Modal */}
+      <ReviewTransactionsModal
+        visible={reviewModalVisible}
+        onClose={() => setReviewModalVisible(false)}
+        bank={activeBank}
+        rawTransactions={extractedTransactions}
+        detectedFinalBalance={detectedFinalBalance}
+        onConfirmSuccess={async (summary) => {
+          await syncService.sync();
+          await fetchIncomeRecords();
+          Alert.alert(
+            'Import Successful',
+            `Imported:\n• Debits: ${summary.addedTransactionsCount}\n• Credits: ${summary.addedIncomeCount}\n\nBank Balance: ₹${summary.updatedBalance.toLocaleString('en-IN')}`
+          );
+        }}
       />
     </>
   );
@@ -964,6 +1294,17 @@ const getStyles = (colors: any) => StyleSheet.create({
   menuItemRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    paddingVertical: 4,
+  },
+  menuItemTouchable: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+  },
+  menuItemDivider: {
+    height: 1,
+    backgroundColor: colors.isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
+    marginVertical: 10,
   },
   menuItemIconWrap: {
     width: 38,
@@ -1180,6 +1521,7 @@ const getStyles = (colors: any) => StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 24,
+    ...(Platform.OS === 'web' ? { height: '100dvh' as any, width: '100vw' as any, position: 'fixed' as any, top: 0, left: 0, right: 0, bottom: 0 } : {}),
   },
   pwdCard: {
     backgroundColor: colors.isDark ? '#0f0f16' : '#ffffff',

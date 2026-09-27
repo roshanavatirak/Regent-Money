@@ -5,7 +5,7 @@ import {
   StyleSheet,
   Modal,
   TouchableOpacity,
-  TouchableWithoutFeedback,
+  Pressable,
   Animated,
   Image,
   Platform,
@@ -98,9 +98,9 @@ export const AppSidebarDrawer: React.FC = () => {
     >
       <View style={styles.overlay}>
         {/* Backdrop (tap to dismiss) */}
-        <TouchableWithoutFeedback onPress={closeSidebar}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={closeSidebar}>
           <Animated.View style={[styles.backdrop, { opacity: fadeAnim }]} />
-        </TouchableWithoutFeedback>
+        </Pressable>
 
         {/* Sliding Sidebar Panel (65% width) */}
         <Animated.View

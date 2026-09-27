@@ -8,9 +8,9 @@ import {
   TextInput,
   ScrollView,
   KeyboardAvoidingView,
-  Keyboard,
   Platform,
   Dimensions,
+  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../store';
@@ -37,6 +37,7 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
   onGoalCreated,
 }) => {
   const { colors, isDark } = useTheme();
+  const { height: windowHeight } = useWindowDimensions();
 
   // Wizard step state: 1 (Category) -> 2 (Target & Initial) -> 3 (Timeline & Strategy)
   const [step, setStep] = useState<1 | 2 | 3>(1);
@@ -53,23 +54,9 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
   const [solverMode, setSolverMode] = useState<'by_date' | 'by_monthly'>('by_date');
   const [priority, setPriority] = useState<'high' | 'medium' | 'low'>('medium');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
 
-  useEffect(() => {
-    const showSub = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
-      () => setIsKeyboardVisible(true)
-    );
-    const hideSub = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
-      () => setIsKeyboardVisible(false)
-    );
-    return () => {
-      showSub.remove();
-      hideSub.remove();
-    };
-  }, []);
+
 
   // Category selection handler
   const handleSelectCategory = (cat: GoalCategoryOption) => {
@@ -145,12 +132,13 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={{ flex: 1 }}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: bgModal, borderColor }, isKeyboardVisible && { maxHeight: Platform.OS === 'ios' ? '70%' : '100%' }]}>
+      <View style={styles.modalOverlay}>
+        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.keyboardAvoidingWrap}
+        >
+          <View style={[styles.modalContent, { backgroundColor: bgModal, borderColor, maxHeight: windowHeight * 0.9 }]}>
             {/* Header */}
             <View style={styles.modalHeader}>
               <View>
@@ -180,10 +168,10 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
 
             <ScrollView 
               ref={scrollViewRef}
-              style={[styles.scrollBody, isKeyboardVisible && { maxHeight: 260 }]} 
+              style={styles.scrollBody} 
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
-              contentContainerStyle={{ paddingBottom: isKeyboardVisible ? 100 : 60 }}
+              contentContainerStyle={{ paddingBottom: 60 }}
             >
             {/* STEP 1: CATEGORY SELECTION */}
             {step === 1 && (
@@ -448,7 +436,7 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
           </ScrollView>
 
           {/* Footer Buttons */}
-          <View style={[styles.footerRow, { borderTopColor: borderColor }, isKeyboardVisible && { paddingVertical: 8 }]}>
+          <View style={[styles.footerRow, { borderTopColor: borderColor }]}>
             {step > 1 && (
               <TouchableOpacity
                 onPress={() => setStep((s) => (s - 1) as any)}
@@ -477,9 +465,9 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
               </TouchableOpacity>
             )}
           </View>
-        </View>
+          </View>
+        </KeyboardAvoidingView>
       </View>
-      </KeyboardAvoidingView>
     </Modal>
   );
 };
@@ -489,12 +477,16 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.75)',
     justifyContent: 'flex-end',
+    ...(Platform.OS === 'web' ? { height: '100dvh' as any, width: '100vw' as any, position: 'fixed' as any, top: 0, left: 0, right: 0, bottom: 0 } : {}),
+  },
+  keyboardAvoidingWrap: {
+    width: '100%',
+    justifyContent: 'flex-end',
   },
   modalContent: {
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     borderWidth: 1,
-    maxHeight: '90%',
     paddingBottom: Platform.OS === 'ios' ? 24 : 12,
   },
   modalHeader: {

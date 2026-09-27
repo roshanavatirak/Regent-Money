@@ -286,106 +286,25 @@ ${txsSummary}
 };
 
 export const parseStatementTextWithAI = async (text: string): Promise<any[]> => {
-  const geminiKey = getGeminiKey();
-  const groqKey = getGroqKey();
+  try {
+    const response = await fetch(`${BACKEND_URL}/ai/parse-statement`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ text }),
+    });
 
-  if (!geminiKey && !groqKey) {
-    throw new Error('No API keys configured. Please add a Gemini or Groq key in Settings.');
-  }
-
-  const systemInstruction = `
-You are an expert financial OCR parser. Your job is to extract transactions from raw text of a bank statement, SMS logs, or screenshot.
-Analyze the text and extract all transactions. Return ONLY a valid JSON array of objects, with no markdown code formatting, no prefix/suffix text, and no explanations. If no transactions are found, return an empty array [].
-
-Each object in the array must have the following exact fields:
-- date: string (format YYYY-MM-DD)
-- amount: number (positive value)
-- type: string ('debit' or 'credit')
-- merchant: string (name of the merchant, source of credit, or transaction description)
-`;
-
-  const prompt = `
-Raw Text:
-${text}
-
-Extract all transactions now:
-`;
-
-  // 1. Try Google Gemini first
-  if (geminiKey) {
-    try {
-      console.log('[AI OCR] Attempting to parse with Google Gemini 2.5 Flash...');
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            systemInstruction: { parts: [{ text: systemInstruction }] },
-            generationConfig: {
-              responseMimeType: 'application/json',
-            },
-          }),
-        }
-      );
-
-      const json = await response.json();
-      const rawResponseText = json.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (rawResponseText) {
-        console.log('[AI OCR] Gemini response received:', rawResponseText);
-        const parsed = JSON.parse(rawResponseText.trim());
-        if (Array.isArray(parsed)) return parsed;
-        if (parsed.transactions && Array.isArray(parsed.transactions)) return parsed.transactions;
-      }
-      throw new Error(json.error?.message || 'Empty or invalid JSON response from Gemini');
-    } catch (e: any) {
-      console.warn('[AI OCR] Gemini Parsing failed, falling back to Groq Llama 3:', e.message);
+    if (!response.ok) {
+      const errJson = await response.json().catch(() => ({}));
+      throw new Error(errJson.message || 'Backend AI statement parsing failed.');
     }
+
+    const data = await response.json();
+    return data.transactions || [];
+  } catch (error: any) {
+    console.error('[AI Service] Backend parse-statement error:', error);
+    throw new Error(error.message || 'Failed to parse statement using backend AI.');
   }
-
-  // 2. Fallback to Groq Llama 3
-  if (groqKey) {
-    try {
-      console.log('[AI OCR] Attempting to parse with Groq Llama 3...');
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${groqKey.trim()}`,
-        },
-        body: JSON.stringify({
-          model: 'llama-3.3-70b-versatile',
-          messages: [
-            { role: 'system', content: systemInstruction },
-            { role: 'user', content: prompt }
-          ],
-          temperature: 0.1,
-          max_tokens: 1000,
-          response_format: { type: 'json_object' }
-        }),
-      });
-
-      const json = await response.json();
-      const rawResponseText = json.choices?.[0]?.message?.content;
-      if (rawResponseText) {
-        console.log('[AI OCR] Groq response received:', rawResponseText);
-        const parsed = JSON.parse(rawResponseText.trim());
-        if (Array.isArray(parsed)) return parsed;
-        if (parsed.transactions && Array.isArray(parsed.transactions)) return parsed.transactions;
-        const values = Object.values(parsed);
-        for (const val of values) {
-          if (Array.isArray(val)) return val;
-        }
-      }
-      throw new Error(json.error?.message || 'Empty or invalid response from Groq');
-    } catch (e: any) {
-      console.error('[AI OCR] Groq fallback failed:', e);
-      throw new Error(`Failed to parse bank statement with AI: ${e.message}`);
-    }
-  }
-
-  throw new Error('Failed to parse bank statement: AI models unavailable.');
 };
+

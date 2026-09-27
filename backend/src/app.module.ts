@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { BullModule } from '@nestjs/bull';
 import { ScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -81,30 +80,6 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
         }
 
         return connectionOptions;
-      },
-    }),
-
-    // Configure Bull Queue with Redis URL or Host/Port
-    BullModule.forRootAsync({
-      inject: [ConfigService],
-      useFactory: (configService: ConfigService) => {
-        const redisUrl = configService.get<string>('REDIS_URL');
-        if (redisUrl) {
-          return {
-            url: redisUrl,
-            redis: {
-              tls: redisUrl.startsWith('rediss://') ? { rejectUnauthorized: false } : undefined,
-              maxRetriesPerRequest: null,
-            },
-          };
-        }
-        return {
-          redis: {
-            host: configService.get<string>('REDIS_HOST') || '127.0.0.1',
-            port: configService.get<number>('REDIS_PORT') || 6379,
-            maxRetriesPerRequest: null,
-          },
-        };
       },
     }),
 

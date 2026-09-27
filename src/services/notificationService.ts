@@ -3,21 +3,53 @@ import { Platform } from 'react-native';
 import { useNotificationStore, useAuthStore } from '../store';
 import { authService } from './authService';
 import { getBackendUrl } from '../config/api';
+import { mmkvStorage } from '../db/mmkv';
 
 const BACKEND_URL = getBackendUrl();
+const PROMPTED_KEY = 'notification_permission_prompted';
+const TOKEN_KEY = 'saved_expo_push_token';
 
-// Set notification handler for foreground notifications
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
+// Set notification handler for foreground notifications on mobile
+if (Platform.OS !== 'web') {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge: true,
+      shouldShowBanner: true,
+      shouldShowList: true,
+    }),
+  });
+}
 
 export const notificationService = {
+  /**
+   * Check whether OS push notification permission is currently granted.
+   */
+  async isPermissionGranted(): Promise<boolean> {
+    if (Platform.OS === 'web') return false;
+    try {
+      const { status } = await Notifications.getPermissionsAsync();
+      return status === 'granted';
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Has the user already seen the onboarding notification permission prompt?
+   */
+  hasBeenPrompted(): boolean {
+    return mmkvStorage.getBoolean(PROMPTED_KEY) || false;
+  },
+
+  /**
+   * Mark that the user was prompted for notification permission.
+   */
+  setPrompted(val: boolean = true): void {
+    mmkvStorage.setBoolean(PROMPTED_KEY, val);
+  },
+
   /**
    * Request permissions and retrieve Expo Push Token, then send it to the backend.
    */
@@ -41,6 +73,8 @@ export const notificationService = {
         finalStatus = status;
       }
 
+      this.setPrompted(true);
+
       if (finalStatus !== 'granted') {
         console.warn('[NotificationService] Push notification permissions denied.');
         return null;
@@ -62,6 +96,7 @@ export const notificationService = {
       });
       const token = tokenData.data;
       console.log('[NotificationService] Expo Push Token obtained:', token);
+      mmkvStorage.setString(TOKEN_KEY, token);
 
       // Send token to backend
       await this.registerTokenOnBackend(token);
@@ -77,9 +112,17 @@ export const notificationService = {
   },
 
   /**
-   * Upload push token to NestJS backend.
+   * Unregister / remove push token from backend and local cache.
    */
-  async registerTokenOnBackend(token: string): Promise<void> {
+  async unregisterPushToken(): Promise<void> {
+    mmkvStorage.delete(TOKEN_KEY);
+    await this.registerTokenOnBackend(null);
+  },
+
+  /**
+   * Upload push token to NestJS backend (or clear if null).
+   */
+  async registerTokenOnBackend(token: string | null): Promise<void> {
     const accessToken = authService.getAccessToken();
     if (!accessToken) return;
 
@@ -96,7 +139,7 @@ export const notificationService = {
       if (!response.ok) {
         throw new Error(`Status ${response.status}`);
       }
-      console.log('[NotificationService] Push token registered on NestJS backend.');
+      console.log('[NotificationService] Push token successfully updated on NestJS backend.');
     } catch (err: any) {
       console.warn('[NotificationService] Failed to upload push token to backend:', err.message);
     }

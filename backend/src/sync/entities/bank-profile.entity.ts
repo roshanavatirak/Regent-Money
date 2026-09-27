@@ -11,6 +11,9 @@ export class BankProfile {
   @Column({ name: 'bank_name', type: 'text', nullable: true })
   bankName: string;
 
+  @Column({ name: 'account_type', type: 'text', nullable: true, default: 'Savings' })
+  accountType: string;
+
   @Column({ name: 'account_number_suffix', type: 'text', nullable: true })
   accountNumberSuffix: string;
 
@@ -38,7 +41,7 @@ export class BankProfile {
   @Column({ name: 'statement_password', type: 'text', nullable: true })
   statementPassword: string | null;
 
-  @Column({ name: 'sms_consent', type: 'boolean', default: false })
+  @Column({ name: 'sms_consent', type: 'boolean', default: true })
   smsConsent: boolean;
 
   @Column({ name: 'updated_at', type: 'bigint', transformer: {

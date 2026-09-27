@@ -10,6 +10,7 @@ import { NetWorthSnapshot } from './entities/net-worth-snapshot.entity';
 import { IncomeRecord } from './entities/income-record.entity';
 import { AuthModule } from '../auth/auth.module';
 import { User } from '../users/entities/user.entity';
+import { AiModule } from '../ai/ai.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { User } from '../users/entities/user.entity';
       User,
     ]),
     AuthModule,
+    AiModule,
   ],
   providers: [SyncService],
   controllers: [SyncController],

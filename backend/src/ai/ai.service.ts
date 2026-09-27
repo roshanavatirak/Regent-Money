@@ -44,6 +44,30 @@ export class ChatRequestDto {
   context?: ChatContextDto;
 }
 
+export interface OcrTransactionExtracted {
+  date: string;
+  amount: number;
+  type: 'debit' | 'credit';
+  merchant: string;
+  category?: string;
+  balanceAfter?: number | null;
+}
+
+export interface OcrValidationResult {
+  isValid: boolean;
+  category: 'transaction_screenshot' | 'selfie_or_portrait' | 'unrelated_image' | 'blurry_or_unreadable' | 'empty_financial_screen';
+  rejectionReason: string | null;
+  finalDetectedBalance?: number | null;
+  transactions: OcrTransactionExtracted[];
+}
+
+export interface StatementValidationResult {
+  isValid: boolean;
+  rejectionReason: string | null;
+  finalDetectedBalance?: number | null;
+  transactions: OcrTransactionExtracted[];
+}
+
 @Injectable()
 export class AiService {
   private readonly logger = new Logger(AiService.name);
@@ -278,6 +302,278 @@ ${txsSummary}
     return {
       answer: `Hello ${userName}! I see your live total balance is ₹${Number(dto.context?.totalBalance || 0).toLocaleString('en-IN')}. All external AI services are currently experiencing high traffic. Please check back in a few moments.`,
       model: 'system/offline-fallback',
+    };
+  }
+
+  async parseStatementText(text: string): Promise<StatementValidationResult> {
+    const geminiKey = this.configService.get<string>('GEMINI_API_KEY')?.trim();
+    if (!text || text.trim().length === 0) {
+      return {
+        isValid: false,
+        rejectionReason: 'The statement document appears to be empty or unreadable.',
+        transactions: [],
+      };
+    }
+
+    const systemInstruction = `
+You are an expert financial document parser for Regent Money.
+Your job is to analyze the extracted text from a bank statement or financial PDF.
+
+First, determine if the text contains valid financial bank transactions:
+- If the text is NOT a bank statement (e.g. personal document, letter, invoice, resume, random notes, or contains no debit/credit transactions):
+  Set isValid to false, provide a clear explanation in rejectionReason, and return empty transactions [].
+- If the text contains bank transactions:
+  Set isValid to true, rejectionReason to null, and extract all transactions.
+
+Each transaction in the array must have:
+- date: string (format YYYY-MM-DD)
+- amount: number (positive value, no commas)
+- type: 'debit' or 'credit' (debit for withdrawal/spend/DR/Paid; credit for deposit/salary/CR/Received)
+- merchant: string (clean merchant/payee/payer name or transaction details, remove generic bank noise if possible)
+- category: string ('food', 'shopping', 'transfer', 'entertainment', 'utilities', 'salary', 'investment', 'health', 'travel', or 'general')
+- balanceAfter: number or null (CRITICAL: if the statement has a "Balance" column or indicates the account balance after this transaction, extract that exact numeric balance here!)
+
+Also determine:
+- finalDetectedBalance: number or null (the latest/closing account balance visible in the statement)
+
+Return ONLY a valid JSON object matching:
+{
+  "isValid": boolean,
+  "rejectionReason": string or null,
+  "finalDetectedBalance": number or null,
+  "transactions": [
+    {
+      "date": "YYYY-MM-DD",
+      "amount": 0.00,
+      "type": "debit" | "credit",
+      "merchant": "Name",
+      "category": "transfer",
+      "balanceAfter": 0.00
+    }
+  ]
+}
+`;
+
+    const prompt = `Raw Statement Text:\n${text.slice(0, 30000)}\n\nAnalyze and extract transactions:`;
+
+    if (geminiKey) {
+      try {
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              systemInstruction: { parts: [{ text: systemInstruction }] },
+              generationConfig: { responseMimeType: 'application/json' },
+            }),
+          }
+        );
+
+        if (response.ok) {
+          const json = await response.json();
+          const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (rawText) {
+            const parsed = JSON.parse(rawText.trim());
+            const txs: OcrTransactionExtracted[] = Array.isArray(parsed.transactions)
+              ? parsed.transactions
+              : Array.isArray(parsed)
+              ? parsed
+              : [];
+
+            let finalBal = parsed.finalDetectedBalance;
+            if (finalBal === undefined || finalBal === null) {
+              // Try to find the latest transaction that has balanceAfter
+              for (let i = txs.length - 1; i >= 0; i--) {
+                const b = txs[i].balanceAfter;
+                if (typeof b === 'number' && !isNaN(b)) {
+                  finalBal = b;
+                  break;
+                }
+              }
+            }
+
+            const isValid = (parsed.isValid ?? txs.length > 0) && txs.length > 0;
+            return {
+              isValid,
+              rejectionReason: isValid ? null : (parsed.rejectionReason || 'No recognizable bank transaction entries found in this statement.'),
+              finalDetectedBalance: typeof finalBal === 'number' ? finalBal : null,
+              transactions: txs,
+            };
+          }
+        }
+      } catch (err: any) {
+        this.logger.warn(`[AiService] parseStatementText error: ${err?.message || err}`);
+      }
+    }
+
+    return {
+      isValid: false,
+      rejectionReason: 'Unable to parse statement text.',
+      finalDetectedBalance: null,
+      transactions: [],
+    };
+  }
+
+  async parseImageOcr(imageBuffer: Buffer, mimeType: string = 'image/jpeg'): Promise<OcrValidationResult> {
+    const geminiKey = this.configService.get<string>('GEMINI_API_KEY')?.trim();
+    if (!geminiKey) {
+      throw new Error('GEMINI_API_KEY is not configured on the backend.');
+    }
+
+    const base64Data = imageBuffer.toString('base64');
+    const systemInstruction = `
+You are an expert AI financial document validator and transaction extractor for Regent Money.
+Your first and most critical duty is to inspect and validate the uploaded image.
+
+Carefully evaluate the image and classify it into ONE of these categories:
+1. "selfie_or_portrait": The image contains a human face, selfie, person, portrait, or group photo.
+   - rejectionReason: "The uploaded image appears to be a personal photo or selfie. Please upload a clear screenshot of your bank transactions, UPI payment receipt, or bank statement."
+   - isValid: false
+   - transactions: []
+
+2. "blurry_or_unreadable": The image is blurry, out of focus, shaky, low resolution, or too degraded to reliably read transaction dates, amounts, or merchant names.
+   - rejectionReason: "The image is too blurry or low quality to read transaction details clearly. Please upload a sharper, clear screenshot."
+   - isValid: false
+   - transactions: []
+
+3. "unrelated_image": The image does NOT contain banking, UPI, payment, or financial records (e.g. food, nature, animals, vehicles, memes, non-financial screenshots, wallpaper, generic documents).
+   - rejectionReason: "The uploaded image does not contain any bank transactions or payment details. Please upload a screenshot of your bank passbook, UPI receipt, or transaction history."
+   - isValid: false
+   - transactions: []
+
+4. "empty_financial_screen": The image is a banking or payment app screen, but contains NO transaction records (e.g., login screen, app settings, empty account dashboard, credit card ad).
+   - rejectionReason: "No transaction records were found on this screen. Please open your transaction history or mini-statement and upload a screenshot."
+   - isValid: false
+   - transactions: []
+
+5. "transaction_screenshot": The image contains valid financial transactions (e.g. bank statement table, GPay, PhonePe, Paytm, CRED, BHIM, bank app transaction list, payment receipt, SMS transaction screenshot, passbook page).
+   - isValid: true
+   - rejectionReason: null
+   - transactions: Extract all visible transactions into an array.
+     Each transaction must have:
+     * date: string in 'YYYY-MM-DD' format (if year is missing, assume current year or year in screenshot)
+     * amount: number (positive value, no commas or currency symbols)
+     * type: 'debit' or 'credit' (debit for withdrawal/spend/DR/Paid; credit for deposit/salary/CR/Received)
+     * merchant: string (clean merchant/payee/payer name or description, remove generic noise)
+     * category: string ('food', 'shopping', 'transfer', 'entertainment', 'utilities', 'salary', 'investment', 'health', 'travel', or 'general')
+     * balanceAfter: number or null (CRITICAL: if the table or screenshot has a "Balance" column or indicates the running account balance after that transaction, extract that exact numeric balance here!)
+
+Also determine:
+- finalDetectedBalance: number or null (the latest/closing account balance visible in the statement or screenshot)
+
+Return ONLY a valid JSON object matching this schema:
+{
+  "isValid": boolean,
+  "category": "transaction_screenshot" | "selfie_or_portrait" | "unrelated_image" | "blurry_or_unreadable" | "empty_financial_screen",
+  "rejectionReason": string or null,
+  "finalDetectedBalance": number or null,
+  "transactions": [
+    {
+      "date": "YYYY-MM-DD",
+      "amount": 0.00,
+      "type": "debit" | "credit",
+      "merchant": "Name",
+      "category": "transfer",
+      "balanceAfter": 0.00
+    }
+  ]
+}
+`;
+
+    const prompt = 'Validate this image and extract any financial transactions and balance details according to the instructions:';
+
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: mimeType || 'image/jpeg',
+                      data: base64Data,
+                    },
+                  },
+                  { text: prompt },
+                ],
+              },
+            ],
+            systemInstruction: { parts: [{ text: systemInstruction }] },
+            generationConfig: { responseMimeType: 'application/json' },
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const errText = await response.text();
+        this.logger.error(`[AiService] Gemini Vision error: ${errText}`);
+        return {
+          isValid: false,
+          category: 'blurry_or_unreadable',
+          rejectionReason: 'Unable to analyze image at this time. Please ensure the image is clear and try again.',
+          finalDetectedBalance: null,
+          transactions: [],
+        };
+      }
+
+      const json = await response.json();
+      const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (rawText) {
+        const parsed = JSON.parse(rawText.trim());
+        const category = parsed.category || (parsed.isValid ? 'transaction_screenshot' : 'unrelated_image');
+        const transactions: OcrTransactionExtracted[] = Array.isArray(parsed.transactions) ? parsed.transactions : [];
+
+        let rejectionReason = parsed.rejectionReason;
+        if (!parsed.isValid || transactions.length === 0) {
+          if (!rejectionReason) {
+            if (category === 'selfie_or_portrait') {
+              rejectionReason = 'The uploaded image appears to be a personal photo or selfie. Please upload a clear screenshot of your bank transactions or UPI receipt.';
+            } else if (category === 'blurry_or_unreadable') {
+              rejectionReason = 'The image is too blurry or low quality to read transaction details clearly. Please upload a sharper, clear screenshot.';
+            } else if (category === 'empty_financial_screen') {
+              rejectionReason = 'No transaction records were found on this screen. Please open your transaction history and upload a screenshot.';
+            } else {
+              rejectionReason = 'The uploaded image does not contain recognizable bank transactions. Please upload a valid bank or payment app screenshot.';
+            }
+          }
+        }
+
+        let finalBal = parsed.finalDetectedBalance;
+        if (finalBal === undefined || finalBal === null) {
+          // If statement table has balanceAfter, find the latest row with a balance
+          for (let i = transactions.length - 1; i >= 0; i--) {
+            const b = transactions[i].balanceAfter;
+            if (typeof b === 'number' && !isNaN(b)) {
+              finalBal = b;
+              break;
+            }
+          }
+        }
+
+        return {
+          isValid: !!parsed.isValid && transactions.length > 0,
+          category,
+          rejectionReason: (parsed.isValid && transactions.length > 0) ? null : rejectionReason,
+          finalDetectedBalance: typeof finalBal === 'number' ? finalBal : null,
+          transactions,
+        };
+      }
+    } catch (err: any) {
+      this.logger.error(`[AiService] Vision OCR parsing exception: ${err?.message || err}`);
+    }
+
+    return {
+      isValid: false,
+      category: 'unrelated_image',
+      rejectionReason: 'Could not process this image. Please upload a clear screenshot of your bank transaction history.',
+      finalDetectedBalance: null,
+      transactions: [],
     };
   }
 }

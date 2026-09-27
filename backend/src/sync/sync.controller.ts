@@ -25,6 +25,7 @@ export class SyncController {
       bankName: string;
       accountNumberSuffix: string;
       currentBalance: number;
+      accountType?: string;
       smsSenderId?: string;
       upiId?: string;
       customKeywords?: string;
@@ -130,10 +131,25 @@ export class SyncController {
     return this.syncService.deleteTransactionEntry(userId, id, type);
   }
 
+  @Post('upload-screenshot')
+  @UseInterceptors(FileInterceptor('file'))
+  @HttpCode(HttpStatus.OK)
+  async uploadScreenshot(
+    @Req() req: any,
+    @Body('bankProfileId') bankProfileId: string,
+    @UploadedFile() file?: any,
+  ) {
+    const userId = req.user.id;
+    if (!file) {
+      throw new BadRequestException('Screenshot image file is required.');
+    }
+    return this.syncService.processScreenshotUpload(userId, bankProfileId, file.buffer, file.mimetype);
+  }
+
   @Post('upload-statement')
   @UseInterceptors(FileInterceptor('file'))
   @HttpCode(HttpStatus.OK)
-  async uploadStatementPdf(
+  async uploadStatement(
     @Req() req: any,
     @Body('bankProfileId') bankProfileId: string,
     @Body('password') password?: string,
@@ -141,9 +157,9 @@ export class SyncController {
   ) {
     const userId = req.user.id;
     if (!file) {
-      throw new BadRequestException('Statement PDF file is required.');
+      throw new BadRequestException('Statement file is required.');
     }
-    return this.syncService.syncStatementPdf(userId, bankProfileId, file.buffer, password);
+    return this.syncService.syncStatementFile(userId, bankProfileId, file.buffer, file.mimetype, password);
   }
 
   @Patch('bank-profile/:id/consent')

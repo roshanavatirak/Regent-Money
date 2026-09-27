@@ -11,6 +11,7 @@ import { User } from '../users/entities/user.entity';
 import { OcrSyncDto } from './dto/ocr-sync.dto';
 import { ManualTransactionDto } from './dto/manual-transaction.dto';
 import { PDFExtract, PDFExtractOptions } from 'pdf.js-extract';
+import { AiService } from '../ai/ai.service';
 
 @Injectable()
 export class SyncService implements OnModuleInit {
@@ -32,6 +33,7 @@ export class SyncService implements OnModuleInit {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly dataSource: DataSource,
+    private readonly aiService: AiService,
   ) {}
 
   async onModuleInit() {
@@ -51,6 +53,9 @@ export class SyncService implements OnModuleInit {
       `);
       await this.dataSource.query(`
         ALTER TABLE core.bank_profiles ADD COLUMN IF NOT EXISTS sms_consent BOOLEAN DEFAULT FALSE;
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE core.bank_profiles ADD COLUMN IF NOT EXISTS account_type TEXT DEFAULT 'Savings';
       `);
       await this.dataSource.query(`
         ALTER TABLE finance.income_records ADD COLUMN IF NOT EXISTS category TEXT;
@@ -132,22 +137,45 @@ export class SyncService implements OnModuleInit {
       bankName: string;
       accountNumberSuffix: string;
       currentBalance: number;
+      accountType?: string;
       smsSenderId?: string;
       upiId?: string;
       customKeywords?: string;
+      smsConsent?: boolean;
     },
   ) {
-    this.logger.log(`Creating bank profile for user: ${userId}`);
+    this.logger.log(`Creating/updating bank profile for user: ${userId} (${data.id})`);
+
+    let existing = await this.bankProfileRepository.findOne({
+      where: { id: data.id, userId, isDeleted: false },
+    });
+
+    if (existing) {
+      existing.bankName = data.bankName;
+      existing.accountNumberSuffix = data.accountNumberSuffix;
+      existing.currentBalance = data.currentBalance;
+      existing.accountType = data.accountType || existing.accountType || 'Savings';
+      existing.smsSenderId = data.smsSenderId || null;
+      existing.upiId = data.upiId || null;
+      existing.customKeywords = data.customKeywords || null;
+      if (data.smsConsent !== undefined) {
+        existing.smsConsent = data.smsConsent;
+      }
+      existing.updatedAt = Date.now();
+      return this.bankProfileRepository.save(existing);
+    }
 
     const bankProfile = this.bankProfileRepository.create({
       id: data.id,
       userId,
       bankName: data.bankName,
+      accountType: data.accountType || 'Savings',
       accountNumberSuffix: data.accountNumberSuffix,
       currentBalance: data.currentBalance,
       smsSenderId: data.smsSenderId || null,
       upiId: data.upiId || null,
       customKeywords: data.customKeywords || null,
+      smsConsent: data.smsConsent !== undefined ? data.smsConsent : true,
       lastSyncTimestamp: Date.now(),
       updatedAt: Date.now(),
       isDeleted: false,
@@ -465,7 +493,7 @@ export class SyncService implements OnModuleInit {
             id: txId,
             userId,
             amount,
-            category: item.merchant ? this.classifyCategory(item.merchant) : 'shopping',
+            category: item.category || (item.merchant ? this.classifyCategory(item.merchant) : 'shopping'),
             merchant: item.merchant || 'Merchant',
             timestamp: parsedDate.getTime(),
             bankProfileId: data.bankProfileId,
@@ -514,7 +542,12 @@ export class SyncService implements OnModuleInit {
       await this.incomeRecordRepository.save(newIncomeRecords);
     }
 
-    if (addedTransactionsCount > 0 || addedIncomeCount > 0) {
+    if (data.updatedBalance !== undefined && data.updatedBalance !== null && !isNaN(Number(data.updatedBalance))) {
+      bank.currentBalance = parseFloat(String(data.updatedBalance));
+      bank.lastSyncTimestamp = Date.now();
+      bank.updatedAt = Date.now();
+      await this.bankProfileRepository.save(bank);
+    } else if (addedTransactionsCount > 0 || addedIncomeCount > 0) {
       bank.currentBalance = parseFloat(String(bank.currentBalance)) + netBalanceChange;
       bank.lastSyncTimestamp = Date.now();
       bank.updatedAt = Date.now();
@@ -549,8 +582,40 @@ export class SyncService implements OnModuleInit {
     return 'shopping';
   }
 
-  async syncStatementPdf(userId: string, bankProfileId: string, fileBuffer: Buffer, password?: string) {
-    this.logger.log(`Processing bank statement PDF upload for user ${userId}, bank: ${bankProfileId}`);
+  async processScreenshotUpload(userId: string, bankProfileId: string, imageBuffer: Buffer, mimeType: string) {
+    this.logger.log(`Extracting screenshot data via Vision AI for user ${userId}, bank: ${bankProfileId}`);
+    const bank = await this.bankProfileRepository.findOne({
+      where: { id: bankProfileId, userId, isDeleted: false },
+    });
+    if (!bank) {
+      throw new BadRequestException('Bank account profile not found.');
+    }
+
+    const ocrResult = await this.aiService.parseImageOcr(imageBuffer, mimeType || 'image/jpeg');
+    if (!ocrResult.isValid || !ocrResult.transactions || ocrResult.transactions.length === 0) {
+      const errorMsg = ocrResult.rejectionReason || 'No transactions could be extracted from this screenshot. Please upload a clear bank transaction screenshot.';
+      this.logger.warn(`[Screenshot Validation Rejection] User: ${userId}, Reason: ${errorMsg}`);
+      throw new BadRequestException(errorMsg);
+    }
+
+    return {
+      success: true,
+      bankProfileId,
+      detectedFinalBalance: ocrResult.finalDetectedBalance ?? null,
+      transactions: ocrResult.transactions.map((tx, idx) => ({
+        id: `extracted_${Date.now()}_${idx}`,
+        date: tx.date,
+        amount: tx.amount,
+        type: tx.type,
+        merchant: tx.merchant,
+        category: tx.category || this.classifyCategory(tx.merchant),
+        balanceAfter: tx.balanceAfter ?? null,
+      })),
+    };
+  }
+
+  async syncStatementFile(userId: string, bankProfileId: string, fileBuffer: Buffer, mimeType?: string, password?: string) {
+    this.logger.log(`Extracting bank statement data for user ${userId}, bank: ${bankProfileId}`);
 
     const bank = await this.bankProfileRepository.findOne({
       where: { id: bankProfileId, userId, isDeleted: false },
@@ -559,28 +624,66 @@ export class SyncService implements OnModuleInit {
       throw new BadRequestException('Bank account profile not found.');
     }
 
-    let passwordToUse = password || bank.statementPassword || '';
-    let extractedText = '';
+    let transactions: any[] = [];
+    let detectedFinalBalance: number | null = null;
 
-    try {
-      extractedText = await this.extractTextFromPdfBuffer(fileBuffer, passwordToUse);
-    } catch (e: any) {
-      if (bank.statementPassword && !password) {
-        bank.statementPassword = null;
+    if (mimeType && mimeType.startsWith('image/')) {
+      const ocrResult = await this.aiService.parseImageOcr(fileBuffer, mimeType);
+      if (!ocrResult.isValid || !ocrResult.transactions || ocrResult.transactions.length === 0) {
+        const errorMsg = ocrResult.rejectionReason || 'No transactions could be extracted from this statement image. Please upload a clear bank statement photo.';
+        this.logger.warn(`[Statement Image Validation Rejection] User: ${userId}, Reason: ${errorMsg}`);
+        throw new BadRequestException(errorMsg);
+      }
+      transactions = ocrResult.transactions;
+      detectedFinalBalance = ocrResult.finalDetectedBalance ?? null;
+    } else {
+      let passwordToUse = password || bank.statementPassword || '';
+      let extractedText = '';
+
+      try {
+        extractedText = await this.extractTextFromPdfBuffer(fileBuffer, passwordToUse);
+      } catch (e: any) {
+        if (bank.statementPassword && !password) {
+          bank.statementPassword = null;
+          await this.bankProfileRepository.save(bank);
+        }
+        throw e;
+      }
+
+      if (password && password !== bank.statementPassword) {
+        bank.statementPassword = password;
         await this.bankProfileRepository.save(bank);
       }
-      throw e;
-    }
 
-    if (password && password !== bank.statementPassword) {
-      bank.statementPassword = password;
-      await this.bankProfileRepository.save(bank);
+      // Structure extracted PDF text using backend AI
+      const statementResult = await this.aiService.parseStatementText(extractedText);
+      if (!statementResult.isValid || !statementResult.transactions || statementResult.transactions.length === 0) {
+        const errorMsg = statementResult.rejectionReason || 'No transactions could be structured from this statement. Please verify the PDF format.';
+        this.logger.warn(`[Statement PDF Validation Rejection] User: ${userId}, Reason: ${errorMsg}`);
+        throw new BadRequestException(errorMsg);
+      }
+      transactions = statementResult.transactions;
+      detectedFinalBalance = statementResult.finalDetectedBalance ?? null;
     }
 
     return {
       success: true,
-      text: extractedText,
+      bankProfileId,
+      detectedFinalBalance,
+      transactions: transactions.map((tx, idx) => ({
+        id: `extracted_${Date.now()}_${idx}`,
+        date: tx.date,
+        amount: tx.amount,
+        type: tx.type,
+        merchant: tx.merchant,
+        category: tx.category || this.classifyCategory(tx.merchant),
+        balanceAfter: tx.balanceAfter ?? null,
+      })),
     };
+  }
+
+  async syncStatementPdf(userId: string, bankProfileId: string, fileBuffer: Buffer, password?: string) {
+    return this.syncStatementFile(userId, bankProfileId, fileBuffer, 'application/pdf', password);
   }
 
   private async extractTextFromPdfBuffer(buffer: Buffer, password?: string): Promise<string> {

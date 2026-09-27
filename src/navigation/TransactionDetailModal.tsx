@@ -10,8 +10,8 @@ import {
   Alert,
   StyleSheet,
   KeyboardAvoidingView,
-  Keyboard,
   Platform,
+  useWindowDimensions,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -73,6 +73,7 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
 }) => {
   const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
   const styles = useMemo(() => getStyles(colors, isDark), [colors, isDark]);
 
   const [amountStr, setAmountStr] = useState('');
@@ -80,23 +81,9 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
 
-  useEffect(() => {
-    const showSub = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
-      () => setIsKeyboardVisible(true)
-    );
-    const hideSub = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
-      () => setIsKeyboardVisible(false)
-    );
-    return () => {
-      showSub.remove();
-      hideSub.remove();
-    };
-  }, []);
+
 
   useEffect(() => {
     if (visible && transaction) {
@@ -222,15 +209,13 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
       animationType="slide"
       onRequestClose={onClose}
     >
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.modalOverlay}
-      >
-        <View style={styles.modalBackdrop}>
-          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
-        </View>
-
-        <View style={[styles.modalCard, isKeyboardVisible && { maxHeight: Platform.OS === 'ios' ? '70%' : '100%' }]}>
+      <View style={styles.modalOverlay}>
+        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.keyboardAvoidingWrap}
+        >
+          <View style={[styles.modalCard, { maxHeight: windowHeight * 0.88 }]}>
           {/* Header */}
           <View style={styles.headerRow}>
             <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
@@ -276,7 +261,7 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
             showsVerticalScrollIndicator={false}
             bounces={false}
             keyboardShouldPersistTaps="handled"
-            contentContainerStyle={[styles.scrollContent, isKeyboardVisible && { paddingBottom: 24 }]}
+            contentContainerStyle={styles.scrollContent}
           >
             {/* Type Indicator Banner */}
             <View
@@ -411,7 +396,7 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
           </ScrollView>
 
           {/* Action Buttons: Delete & Save */}
-          <View style={[styles.footer, { paddingBottom: isKeyboardVisible ? 10 : Math.max(insets.bottom, 16) + 12 }]}>
+          <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 16) + 12 }]}>
             <TouchableOpacity
               style={styles.deleteBtn}
               onPress={handleDelete}
@@ -447,8 +432,9 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
               )}
             </TouchableOpacity>
           </View>
-        </View>
-      </KeyboardAvoidingView>
+          </View>
+        </KeyboardAvoidingView>
+      </View>
     </Modal>
   );
 };
@@ -457,15 +443,13 @@ const getStyles = (colors: any, isDark: boolean) =>
   StyleSheet.create({
     modalOverlay: {
       flex: 1,
-      justifyContent: 'flex-end',
-    },
-    modalBackdrop: {
-      position: 'absolute',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
       backgroundColor: 'rgba(0, 0, 0, 0.65)',
+      justifyContent: 'flex-end',
+      ...(Platform.OS === 'web' ? { height: '100dvh' as any, width: '100vw' as any, position: 'fixed' as any, top: 0, left: 0, right: 0, bottom: 0 } : {}),
+    },
+    keyboardAvoidingWrap: {
+      width: '100%',
+      justifyContent: 'flex-end',
     },
     modalCard: {
       backgroundColor: isDark ? '#1a1d24' : '#ffffff',
@@ -474,7 +458,6 @@ const getStyles = (colors: any, isDark: boolean) =>
       borderTopWidth: 1,
       borderColor: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.08)',
       paddingTop: 10,
-      maxHeight: '90%',
       shadowColor: '#000',
       shadowOffset: { width: 0, height: -4 },
       shadowOpacity: 0.35,

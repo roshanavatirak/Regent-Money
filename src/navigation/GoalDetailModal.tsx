@@ -8,8 +8,8 @@ import {
   TextInput,
   ScrollView,
   KeyboardAvoidingView,
-  Keyboard,
   Platform,
+  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, Goal } from '../store';
@@ -34,28 +34,15 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
   onUpdated,
 }) => {
   const { colors, isDark } = useTheme();
+  const { height: windowHeight } = useWindowDimensions();
 
   // Deposit input state
   const [depositAmount, setDepositAmount] = useState('');
   const [isDepositing, setIsDepositing] = useState(false);
   const [showDepositBox, setShowDepositBox] = useState(false);
-  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
 
-  useEffect(() => {
-    const showSub = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
-      () => setIsKeyboardVisible(true)
-    );
-    const hideSub = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
-      () => setIsKeyboardVisible(false)
-    );
-    return () => {
-      showSub.remove();
-      hideSub.remove();
-    };
-  }, []);
+
 
   // Live levers for simulator
   const [extraMonthly, setExtraMonthly] = useState(0);
@@ -149,12 +136,13 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={{ flex: 1 }}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: bgModal, borderColor }, isKeyboardVisible && { maxHeight: Platform.OS === 'ios' ? '70%' : '100%' }]}>
+      <View style={styles.modalOverlay}>
+        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.keyboardAvoidingWrap}
+        >
+          <View style={[styles.modalContent, { backgroundColor: bgModal, borderColor, maxHeight: windowHeight * 0.92 }]}>
             {/* Header */}
             <View style={styles.modalHeader}>
               <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
@@ -193,7 +181,7 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
               style={styles.scrollBody} 
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
-              contentContainerStyle={{ paddingBottom: isKeyboardVisible ? 120 : 60 }}
+              contentContainerStyle={{ paddingBottom: 60 }}
             >
             {/* Progress Big Ring & Summary */}
             <View style={[styles.heroSummaryCard, { backgroundColor: cardBg, borderColor }]}>
@@ -412,9 +400,9 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
               <Text style={styles.doneBtnText}>Close Roadmap</Text>
             </TouchableOpacity>
           </View>
-        </View>
+          </View>
+        </KeyboardAvoidingView>
       </View>
-      </KeyboardAvoidingView>
     </Modal>
   );
 };
@@ -424,12 +412,16 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.78)',
     justifyContent: 'flex-end',
+    ...(Platform.OS === 'web' ? { height: '100dvh' as any, width: '100vw' as any, position: 'fixed' as any, top: 0, left: 0, right: 0, bottom: 0 } : {}),
+  },
+  keyboardAvoidingWrap: {
+    width: '100%',
+    justifyContent: 'flex-end',
   },
   modalContent: {
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     borderWidth: 1,
-    maxHeight: '92%',
     paddingBottom: Platform.OS === 'ios' ? 24 : 12,
   },
   modalHeader: {

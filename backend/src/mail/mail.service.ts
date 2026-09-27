@@ -1,6 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { InjectQueue } from '@nestjs/bull';
-import type { Queue } from 'bull';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 
@@ -10,7 +8,6 @@ export class MailService {
   private transporter: nodemailer.Transporter | null = null;
 
   constructor(
-    @InjectQueue('mail') private readonly mailQueue: Queue,
     private readonly configService: ConfigService,
   ) {
     this.initializeTransporter();

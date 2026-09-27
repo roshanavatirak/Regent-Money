@@ -239,6 +239,7 @@ export interface BankProfileType {
   smsSenderId?: string;
   upiId?: string;
   customKeywords?: string;
+  accountType?: string;
   smsConsent: boolean;
 }
 
@@ -247,6 +248,7 @@ export interface BankState {
   setBankProfiles: (profiles: BankProfileType[]) => void;
   addBankProfileState: (profile: BankProfileType) => void;
   removeBankProfileState: (id: string) => void;
+  updateBankProfileState: (profile: BankProfileType) => void;
   updateBankBalance: (id: string, newBalance: number) => void;
 }
 
@@ -265,6 +267,12 @@ export const useBankStore = create<BankState>((set) => ({
   removeBankProfileState: (id) =>
     set((state) => {
       const updated = state.bankProfiles.filter((b) => b.id !== id);
+      mmkvStorage.setObject('cache_bank_profiles', updated);
+      return { bankProfiles: updated };
+    }),
+  updateBankProfileState: (profile) =>
+    set((state) => {
+      const updated = state.bankProfiles.map((b) => (b.id === profile.id ? { ...b, ...profile } : b));
       mmkvStorage.setObject('cache_bank_profiles', updated);
       return { bankProfiles: updated };
     }),

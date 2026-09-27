@@ -56,10 +56,10 @@ const SmsBackgroundSyncTask = async (taskData: any) => {
     const syncData = await syncRes.json();
     const bankProfiles = syncData.bankProfiles || [];
 
-    // 2. Suffix match (last 4 digits)
+    // 2. Suffix match (last 4 digits after stripping non-digits)
     const matchedBank = bankProfiles.find((bank: any) => {
-      const dbSuffix = (bank.accountNumberSuffix || bank.account_number_suffix || '').slice(-4);
-      const parsedSuffix = (parsed.accountSuffix || '').slice(-4);
+      const dbSuffix = (bank.accountNumberSuffix || bank.account_number_suffix || '').replace(/\D/g, '').slice(-4);
+      const parsedSuffix = (parsed.accountSuffix || '').replace(/\D/g, '').slice(-4);
       return dbSuffix && parsedSuffix && dbSuffix === parsedSuffix;
     });
 
@@ -68,8 +68,8 @@ const SmsBackgroundSyncTask = async (taskData: any) => {
       return;
     }
 
-    // 3. CHECK CONSENT FIRST
-    const hasConsent = matchedBank.smsConsent ?? matchedBank.sms_consent ?? false;
+    // 3. CHECK CONSENT (Defaults to true once SMS permission is granted, unless explicitly disabled)
+    const hasConsent = matchedBank.smsConsent !== false && matchedBank.sms_consent !== false;
     if (!hasConsent) {
       console.log(`[SMS Headless JS] Blocked: Background SMS sync is disabled for bank ${matchedBank.bankName || matchedBank.bank_name}.`);
       return;
@@ -99,6 +99,15 @@ const SmsBackgroundSyncTask = async (taskData: any) => {
     if (response.ok) {
       const result = await response.json();
       console.log('[SMS Headless JS] Dynamic balance synced successfully:', result);
+
+      // Trigger syncService to update local SQLite/MMKV database and Zustand UI state
+      try {
+        const { syncService } = require('./src/services/syncService');
+        await syncService.sync();
+        console.log('[SMS Headless JS] Local store synced successfully after SMS ingestion.');
+      } catch (syncErr: any) {
+        console.warn('[SMS Headless JS] Local store sync notice:', syncErr?.message);
+      }
     } else {
       console.error('[SMS Headless JS] Synced failed:', await response.text());
     }

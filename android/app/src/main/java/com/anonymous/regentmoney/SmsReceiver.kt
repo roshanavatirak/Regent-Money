@@ -3,8 +3,10 @@ package com.anonymous.regentmoney
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.provider.Telephony
 import android.util.Log
+import com.facebook.react.HeadlessJsTaskService
 
 class SmsReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -21,7 +23,20 @@ class SmsReceiver : BroadcastReceiver() {
                         putExtra("sender", sender)
                         putExtra("body", body)
                     }
-                    context.startService(serviceIntent)
+
+                    try {
+                        HeadlessJsTaskService.acquireWakeLockNow(context)
+                        context.startService(serviceIntent)
+                    } catch (serviceEx: Exception) {
+                        Log.w("SmsReceiver", "startService failed, attempting foreground fallback", serviceEx)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            try {
+                                context.startForegroundService(serviceIntent)
+                            } catch (fgEx: Exception) {
+                                Log.e("SmsReceiver", "startForegroundService also failed", fgEx)
+                            }
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 Log.e("SmsReceiver", "Error processing SMS", e)
