@@ -22,7 +22,7 @@ export const AppSplashScreen: React.FC<AppSplashScreenProps> = ({ onFinish }) =>
   const onFinishRef = useRef(onFinish);
   onFinishRef.current = onFinish;
 
-  const logoScale = useRef(new Animated.Value(0.72)).current;
+  const logoScale = useRef(new Animated.Value(0.65)).current;
   const logoOpacity = useRef(new Animated.Value(0)).current;
   const contentOpacity = useRef(new Animated.Value(0)).current;
   const footerOpacity = useRef(new Animated.Value(0)).current;
@@ -41,37 +41,37 @@ export const AppSplashScreen: React.FC<AppSplashScreenProps> = ({ onFinish }) =>
 
     const useNative = Platform.OS !== 'web';
 
-    // Sequence of animations: Luxury / Elite financial opening
+    // Sequence of animations: Luxury / Elite financial opening starts immediately
     Animated.parallel([
-      // 1. Logo scale up and fade in
+      // 1. Logo spring scale up and fade in from frame 0
       Animated.spring(logoScale, {
         toValue: 1,
-        friction: 6.5,
-        tension: 38,
+        friction: 6,
+        tension: 42,
         useNativeDriver: useNative,
       }),
       Animated.timing(logoOpacity, {
         toValue: 1,
-        duration: 650,
+        duration: 400,
         useNativeDriver: useNative,
       }),
-      // 2. Brand name subtitle fade in
+      // 2. Brand name subtitle glide in
       Animated.timing(contentOpacity, {
         toValue: 1,
-        duration: 700,
-        delay: 350,
+        duration: 550,
+        delay: 220,
         useNativeDriver: useNative,
       }),
       // 3. Footer "RAO Dev Studios" fade in
       Animated.timing(footerOpacity, {
         toValue: 1,
-        duration: 800,
-        delay: 600,
+        duration: 650,
+        delay: 400,
         useNativeDriver: useNative,
       }),
     ]).start();
 
-    // Subtle luxury breathing pulse on the emblem during loading (1.0s to 4.0s)
+    // Subtle luxury breathing pulse on the emblem during loading (starts right after entrance)
     const pulseLoop = Animated.loop(
       Animated.sequence([
         Animated.timing(pulseScale, {
@@ -89,7 +89,7 @@ export const AppSplashScreen: React.FC<AppSplashScreenProps> = ({ onFinish }) =>
 
     const pulseTimer = setTimeout(() => {
       pulseLoop.start();
-    }, 1000);
+    }, 600);
 
     // Keep all elements proudly displayed for the full 4 seconds, then smoothly fade out
     const dismissTimer = setTimeout(() => {

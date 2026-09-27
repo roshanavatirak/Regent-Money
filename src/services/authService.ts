@@ -1,9 +1,9 @@
+import { Platform, NativeModules } from 'react-native';
 import { mmkvStorage } from '../db/mmkv';
 import { useAuthStore, UserProfile, useSecurityStore, AutoLockTimeout } from '../store';
 import { syncService } from './syncService';
 import { getGoogleWebClientId } from './supabaseClient';
-
-import { BACKEND_URL } from '../config/api';
+import { BACKEND_URL, getBackendUrl } from '../config/api';
 
 const SESSION_KEY = 'auth_user_id';
 const USER_PROFILE_KEY = 'auth_user_profile';
@@ -20,6 +20,20 @@ function formatPhoneNumber(phone: string): string {
     return '+91' + clean;
   }
   return '+' + clean;
+}
+
+function syncNativeAuthCredentials(token: string | null) {
+  if (Platform.OS === 'android') {
+    try {
+      if (token) {
+        NativeModules.NativeStorage?.setAuthCredentials?.(token, getBackendUrl());
+      } else {
+        NativeModules.NativeStorage?.clearAuthCredentials?.();
+      }
+    } catch (e) {
+      console.warn('[AuthService] Failed to sync credentials to native storage:', e);
+    }
+  }
 }
 
 export const authService = {
@@ -52,6 +66,7 @@ export const authService = {
 
     // Sync in background if token exists
     if (token) {
+      syncNativeAuthCredentials(token);
       this.fetchProfile().catch(() => {});
       syncService.sync().catch((e) => 
         console.log('[Auth] Background sync on session check notice:', e.message)
@@ -107,6 +122,7 @@ export const authService = {
       mmkvStorage.setString(TOKEN_KEY, data.accessToken);
       mmkvStorage.setBoolean('auth_remember_me', true); // Sign up auto-remembers
       useAuthStore.getState().setUser(profile);
+      syncNativeAuthCredentials(data.accessToken);
 
       // Initial database push
       syncService.sync().catch((e) => console.error('[Auth] Initial sync push failed:', e));
@@ -146,6 +162,7 @@ export const authService = {
     mmkvStorage.setString(TOKEN_KEY, data.accessToken);
     mmkvStorage.setBoolean('auth_remember_me', rememberMe);
     useAuthStore.getState().setUser(profile);
+    syncNativeAuthCredentials(data.accessToken);
 
     // Initial database pull (downloads user transactions, budgets, goals)
     syncService.sync().catch((e) => console.error('[Auth] Initial sync pull failed:', e));
@@ -206,6 +223,7 @@ export const authService = {
       mmkvStorage.setObject(USER_PROFILE_KEY, profile);
       mmkvStorage.setString(TOKEN_KEY, data.accessToken);
       useAuthStore.getState().setUser(profile);
+      syncNativeAuthCredentials(data.accessToken);
 
       // Initial database sync
       syncService.sync().catch((e) => console.error('[Auth] Google Native login sync failed:', e));
@@ -246,6 +264,7 @@ export const authService = {
     mmkvStorage.setObject(USER_PROFILE_KEY, profile);
     mmkvStorage.setString(TOKEN_KEY, data.accessToken);
     useAuthStore.getState().setUser(profile);
+    syncNativeAuthCredentials(data.accessToken);
 
     // Initial database sync
     syncService.sync().catch((e) => console.error('[Auth] Google login sync failed:', e));
@@ -413,6 +432,8 @@ export const authService = {
     } catch (e: any) {
       console.error('[Auth] Failed to delete MMKV session keys:', e.message);
     }
+
+    syncNativeAuthCredentials(null);
 
     useAuthStore.getState().setUser(null);
   },

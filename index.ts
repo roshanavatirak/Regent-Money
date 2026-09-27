@@ -25,6 +25,9 @@ const SmsBackgroundSyncTask = async (taskData: any) => {
   if (!body) return;
 
   try {
+    const { mmkvStorage } = require('./src/db/mmkv');
+    await mmkvStorage.initialize();
+
     const parsed = parseSMS(sender, body);
     if (!parsed) {
       console.log('[SMS Headless JS] SMS did not match any transaction pattern.');

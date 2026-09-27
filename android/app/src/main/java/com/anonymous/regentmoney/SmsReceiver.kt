@@ -16,9 +16,17 @@ class SmsReceiver : BroadcastReceiver() {
                 for (message in messages) {
                     val sender = message.displayOriginatingAddress ?: ""
                     val body = message.displayMessageBody ?: ""
+                    val timestamp = message.timestampMillis
                     Log.d("SmsReceiver", "Received SMS from $sender: $body")
 
-                    // Start Headless JS Task Service
+                    // 1. Direct Native Ingestion (<50ms, zero JS dependency)
+                    try {
+                        SmsDirectSyncWorker.syncSms(context, sender, body, timestamp)
+                    } catch (nativeEx: Exception) {
+                        Log.e("SmsReceiver", "Native direct sync dispatch failed", nativeEx)
+                    }
+
+                    // 2. Headless JS Task Service (kept as secondary fallback)
                     val serviceIntent = Intent(context, SmsTaskService::class.java).apply {
                         putExtra("sender", sender)
                         putExtra("body", body)

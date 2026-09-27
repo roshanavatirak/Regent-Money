@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
 import { useTheme, useAuthStore, useThemeStore, useSecurityStore, showGlobalConfirm, UserProfile } from '../store';
 import { authService } from '../services/authService';
 import { biometricService } from '../services/biometricService';
@@ -29,7 +30,7 @@ export interface ProfileScreenProps {
 
 export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent }) => {
   const insets = useSafeAreaInsets();
-  const { height: windowHeight } = useWindowDimensions();
+  const navigation = useNavigation<any>();
   const user = useAuthStore((state) => state.user);
   const theme = useThemeStore((state) => state.theme);
   const setTheme = useThemeStore((state) => state.setTheme);
@@ -44,17 +45,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [notificationLoading, setNotificationLoading] = useState(false);
   const [avatarModalVisible, setAvatarModalVisible] = useState(false);
-  const [editDetailsVisible, setEditDetailsVisible] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
-  const [saveLoading, setSaveLoading] = useState(false);
-
-  // Edit form state
-  const [editName, setEditName] = useState(user?.name || '');
-  const [editDob, setEditDob] = useState(user?.dob || '');
-  const [editGender, setEditGender] = useState(user?.gender || 'Male');
-  const [editOccupation, setEditOccupation] = useState(user?.occupation || 'Salaried');
-  const [editIncome, setEditIncome] = useState(user?.currentIncome ? String(user.currentIncome) : '75000');
-  const [editSourcesCount, setEditSourcesCount] = useState<number>(user?.incomeSourcesCount || 1);
   const [customAvatarUrl, setCustomAvatarUrl] = useState('');
 
   useEffect(() => {
@@ -65,36 +56,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
       setNotificationsEnabled(granted);
     });
   }, []);
-
-  const openEditModal = () => {
-    setEditName(user?.name || '');
-    setEditDob(user?.dob || '');
-    setEditGender(user?.gender || 'Male');
-    setEditOccupation(user?.occupation || 'Salaried');
-    setEditIncome(user?.currentIncome ? String(user.currentIncome) : '75000');
-    setEditSourcesCount(user?.incomeSourcesCount || 1);
-    setEditDetailsVisible(true);
-  };
-
-  const handleSaveProfile = async () => {
-    setSaveLoading(true);
-    try {
-      const parsedIncome = parseFloat(editIncome.replace(/[^0-9.]/g, '')) || 0;
-      await authService.updateProfile({
-        name: editName.trim() || user?.name || 'User',
-        dob: editDob.trim() || undefined,
-        gender: editGender,
-        occupation: editOccupation,
-        currentIncome: parsedIncome,
-        incomeSourcesCount: editSourcesCount,
-      });
-      setEditDetailsVisible(false);
-    } catch (err: any) {
-      alert('Failed to save profile: ' + (err?.message || err));
-    } finally {
-      setSaveLoading(false);
-    }
-  };
 
   const handlePickFromGallery = async () => {
     setAvatarUploading(true);
@@ -292,7 +253,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
               <Feather name="user-check" size={14} color={colors.accent} style={{ marginRight: 6 }} />
               <Text style={styles.cardKicker}>Personal Information</Text>
             </View>
-            <TouchableOpacity onPress={openEditModal} style={styles.editActionBtn} activeOpacity={0.7}>
+            <TouchableOpacity onPress={() => navigation.navigate('EditProfile')} style={styles.editActionBtn} activeOpacity={0.7}>
               <Feather name="edit-3" size={11} color={colors.accent} style={{ marginRight: 4 }} />
               <Text style={styles.editActionBtnText}>Edit Details</Text>
             </TouchableOpacity>
@@ -608,138 +569,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
           </KeyboardAvoidingView>
         </View>
       </Modal>
-
-      {/* ============================================================ */}
-      {/* 2. Edit Profile Details Modal */}
-      {/* ============================================================ */}
-      <Modal visible={editDetailsVisible} transparent animationType="slide" onRequestClose={() => setEditDetailsVisible(false)}>
-        <View style={styles.modalBackdrop}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setEditDetailsVisible(false)} />
-          <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            style={styles.keyboardAvoidingWrap}
-          >
-            <View style={[styles.modalCard, { maxHeight: windowHeight * 0.88 }]}>
-              <View style={styles.modalHeaderRow}>
-                <View>
-                  <Text style={styles.modalTitle}>Edit Profile Information</Text>
-                  <Text style={styles.modalSubtitle}>Customize your personal and financial attributes</Text>
-                </View>
-                <TouchableOpacity onPress={() => setEditDetailsVisible(false)} style={styles.modalCloseBtn}>
-                  <Feather name="x" size={18} color={colors.textSecondary} />
-                </TouchableOpacity>
-              </View>
-
-              <ScrollView 
-                showsVerticalScrollIndicator={false} 
-                keyboardShouldPersistTaps="handled"
-                contentContainerStyle={{ paddingBottom: 100 }}
-              >
-              {/* Full Name */}
-              <Text style={styles.formFieldLabel}>FULL NAME</Text>
-              <TextInput
-                style={styles.formInput}
-                value={editName}
-                onChangeText={setEditName}
-                placeholder="Your Full Name"
-                placeholderTextColor={colors.textTertiary}
-              />
-
-              {/* Date of Birth */}
-              <Text style={styles.formFieldLabel}>DATE OF BIRTH (DD / MM / YYYY)</Text>
-              <TextInput
-                style={styles.formInput}
-                value={editDob}
-                onChangeText={setEditDob}
-                placeholder="e.g. 15/08/1998"
-                placeholderTextColor={colors.textTertiary}
-              />
-
-              {/* Gender */}
-              <Text style={styles.formFieldLabel}>GENDER</Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
-                {['Male', 'Female', 'Other', 'Prefer not to say'].map((gen) => {
-                  const isSel = editGender === gen;
-                  return (
-                    <TouchableOpacity
-                      key={gen}
-                      onPress={() => setEditGender(gen)}
-                      style={[styles.smallPill, isSel && styles.smallPillActive]}
-                    >
-                      <Text style={[styles.smallPillText, isSel && styles.smallPillTextActive]}>{gen}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-
-              {/* Occupation */}
-              <Text style={styles.formFieldLabel}>OCCUPATION</Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
-                {['Salaried', 'Business Owner', 'Freelancer', 'Student', 'Professional'].map((occ) => {
-                  const isSel = editOccupation === occ;
-                  return (
-                    <TouchableOpacity
-                      key={occ}
-                      onPress={() => setEditOccupation(occ)}
-                      style={[styles.smallPill, isSel && styles.smallPillActive]}
-                    >
-                      <Text style={[styles.smallPillText, isSel && styles.smallPillTextActive]}>{occ}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-
-              {/* Monthly Income */}
-              <Text style={styles.formFieldLabel}>CURRENT MONTHLY INCOME (₹)</Text>
-              <TextInput
-                style={styles.formInput}
-                value={editIncome}
-                onChangeText={setEditIncome}
-                placeholder="e.g. 75000"
-                keyboardType="numeric"
-                placeholderTextColor={colors.textTertiary}
-              />
-
-              {/* Number of Income Streams */}
-              <Text style={styles.formFieldLabel}>NUMBER OF INCOME SOURCES</Text>
-              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
-                {[1, 2, 3, 4].map((count) => {
-                  const isSel = editSourcesCount === count;
-                  return (
-                    <TouchableOpacity
-                      key={count}
-                      onPress={() => setEditSourcesCount(count)}
-                      style={[styles.streamPill, isSel && styles.streamPillActive]}
-                    >
-                      <Text style={[styles.streamPillText, isSel && styles.streamPillTextActive]}>
-                        {count}{count === 4 ? '+' : ''} Stream{count > 1 ? 's' : ''}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-
-              {/* Save Button */}
-              <TouchableOpacity
-                style={styles.saveProfileBtn}
-                onPress={handleSaveProfile}
-                disabled={saveLoading}
-                activeOpacity={0.8}
-              >
-                {saveLoading ? (
-                  <ActivityIndicator size="small" color="#ffffff" />
-                ) : (
-                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    <Feather name="check" size={14} color="#ffffff" style={{ marginRight: 6 }} />
-                    <Text style={styles.saveProfileBtnText}>Save Profile Details</Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-            </ScrollView>
-          </View>
-        </KeyboardAvoidingView>
-      </View>
-    </Modal>
     </View>
   );
 };

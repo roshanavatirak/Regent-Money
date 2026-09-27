@@ -20,15 +20,13 @@ import { Feather, Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import TextRecognition from '@react-native-ml-kit/text-recognition';
+import { useNavigation } from '@react-navigation/native';
 import { useTheme, useBankStore } from '../store';
 import { useTransactionStore } from '../store';
 import { authService } from '../services/authService';
 import { parseStatementTextWithAI } from '../services/aiService';
 import { syncService } from '../services/syncService';
 import { getBackendUrl } from '../config/api';
-import { ManualTransactionModal } from './ManualTransactionModal';
-import { TransactionDetailModal } from './TransactionDetailModal';
-import { EditBankModal } from './EditBankModal';
 import { ReviewTransactionsModal } from './ReviewTransactionsModal';
 
 const BACKEND_URL = getBackendUrl();
@@ -40,6 +38,7 @@ interface BankDetailsModalProps {
 }
 
 export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalProps) => {
+  const navigation = useNavigation<any>();
   const { colors, isDark } = useTheme();
   const styles = getStyles(colors);
 
@@ -73,14 +72,6 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
   const [smsConsent, setSmsConsent] = useState(activeBank?.smsConsent || false);
   const [consentModalVisible, setConsentModalVisible] = useState(false);
   const [optionsMenuVisible, setOptionsMenuVisible] = useState(false);
-  const [editBankModalVisible, setEditBankModalVisible] = useState(false);
-
-  // Manual Transaction states
-  const [manualTxModalVisible, setManualTxModalVisible] = useState(false);
-  const [manualTxType, setManualTxType] = useState<'credit' | 'debit'>('credit');
-
-  // Selected Transaction for View/Edit/Delete
-  const [selectedTx, setSelectedTx] = useState<any | null>(null);
 
   useEffect(() => {
     if (activeBank) {
@@ -194,48 +185,6 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
     } finally {
       setLoadingIncome(false);
     }
-  };
-
-  const handleManualTxSuccess = async (data: {
-    type: 'credit' | 'debit';
-    amount: number;
-    updatedBalance: number;
-    record: any;
-  }) => {
-    if (!bank) return;
-    useBankStore.getState().updateBankBalance(bank.id, data.updatedBalance);
-    if (data.type === 'debit' && data.record) {
-      useTransactionStore.getState().addTransactionState(data.record);
-    }
-    await fetchIncomeRecords();
-    syncService.sync();
-  };
-
-  const handleTxDetailSuccess = async (action: 'updated' | 'deleted', data: any) => {
-    if (!bank) return;
-
-    if (action === 'updated') {
-      if (data.type === 'debit') {
-        useTransactionStore.getState().updateTransactionState(data.id, {
-          amount: data.newAmount,
-          category: data.category,
-          merchant: data.merchant,
-        });
-      }
-      if (data.updatedBalance !== undefined && data.updatedBalance !== null) {
-        useBankStore.getState().updateBankBalance(bank.id, data.updatedBalance);
-      }
-    } else if (action === 'deleted') {
-      if (data.type === 'debit') {
-        useTransactionStore.getState().removeTransactionState(data.id);
-      }
-      if (data.updatedBalance !== undefined && data.updatedBalance !== null) {
-        useBankStore.getState().updateBankBalance(bank.id, data.updatedBalance);
-      }
-    }
-
-    await fetchIncomeRecords();
-    syncService.sync();
   };
 
   useEffect(() => {
@@ -634,8 +583,8 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
                   <TouchableOpacity
                     style={[styles.compactActionBtn, styles.compactCreditBtn]}
                     onPress={() => {
-                      setManualTxType('credit');
-                      setManualTxModalVisible(true);
+                      onClose();
+                      navigation.navigate('ManualTransaction', { bank: activeBank, initialType: 'credit' });
                     }}
                     activeOpacity={0.8}
                   >
@@ -646,8 +595,8 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
                   <TouchableOpacity
                     style={[styles.compactActionBtn, styles.compactDebitBtn]}
                     onPress={() => {
-                      setManualTxType('debit');
-                      setManualTxModalVisible(true);
+                      onClose();
+                      navigation.navigate('ManualTransaction', { bank: activeBank, initialType: 'debit' });
                     }}
                     activeOpacity={0.8}
                   >
@@ -733,7 +682,10 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
                   return (
                     <TouchableOpacity
                       style={styles.txRow}
-                      onPress={() => setSelectedTx(item)}
+                      onPress={() => {
+                        onClose();
+                        navigation.navigate('TransactionDetail', { transaction: item, bankName: activeBank?.bankName });
+                      }}
                       activeOpacity={0.7}
                     >
                       <View style={styles.txLeft}>
@@ -1044,7 +996,8 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
                   style={styles.menuItemTouchable}
                   onPress={() => {
                     setOptionsMenuVisible(false);
-                    setEditBankModalVisible(true);
+                    onClose();
+                    navigation.navigate('EditBank', { bank: activeBank });
                   }}
                   activeOpacity={0.7}
                 >
@@ -1126,36 +1079,6 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
           </View>
         </View>
       </Modal>
-
-      {/* Edit Bank Details Modal */}
-      {activeBank && (
-        <EditBankModal
-          visible={editBankModalVisible}
-          onClose={() => setEditBankModalVisible(false)}
-          bank={activeBank}
-          onSuccess={(updated) => {
-            setLocalBank(updated);
-          }}
-        />
-      )}
-
-      {/* Manual Debit / Credit Transaction Modal */}
-      <ManualTransactionModal
-        visible={manualTxModalVisible}
-        onClose={() => setManualTxModalVisible(false)}
-        bank={activeBank}
-        initialType={manualTxType}
-        onSuccess={handleManualTxSuccess}
-      />
-
-      {/* Transaction Detail, Edit & Delete Modal */}
-      <TransactionDetailModal
-        visible={selectedTx !== null}
-        onClose={() => setSelectedTx(null)}
-        transaction={selectedTx}
-        bankName={activeBank?.bankName}
-        onSuccess={handleTxDetailSuccess}
-      />
 
       {/* Structured Upload / Validation Error Modal */}
       <Modal

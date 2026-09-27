@@ -210,56 +210,46 @@ export const WelcomeScreen = ({ navigation }: { navigation: any }) => {
   };
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {/* Glow Element */}
-        <View style={styles.neonGlow} />
+    <View style={[styles.container, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 24) }]}>
+      {/* Ambient Neon Glow */}
+      <View style={styles.neonGlow} />
 
-        {/* Branding Title */}
+      <View style={styles.welcomeMainContent}>
+        {/* Top/Center Branding */}
         <Animated.View entering={FadeIn.delay(100).duration(800)} style={styles.welcomeBranding}>
-          <View style={styles.logoBadge}>
+          <View style={styles.logoBadgeLuxury}>
             <Image 
-              source={require('../../assets/icon.png')} 
-              style={styles.logoImage}
+              source={require('../../assets/insideicon.png')} 
+              style={styles.logoImageInside}
+              resizeMode="contain"
             />
           </View>
-          <Text style={styles.welcomeHeaderSmall}>REGENT</Text>
-          <Text style={styles.welcomeHeaderBig}>MONEY</Text>
-          <Text style={styles.welcomeSlogan}>Next-Gen Smart Expense Manager</Text>
+          <Text style={styles.welcomeHeaderSmall}>WELCOME TO</Text>
+          <Text style={styles.welcomeHeaderBig}>REGENT MONEY</Text>
+          <Text style={styles.welcomeSlogan}>Master your wealth. In absolute privacy.</Text>
         </Animated.View>
 
-        {/* Features Preview */}
-        <Animated.View entering={FadeInDown.delay(300).duration(800)} style={styles.featuresList}>
-          <View style={styles.featureItem}>
-            <Feather name="shield" size={18} color="#2dba4e" style={styles.featureIcon} />
-            <View>
-              <Text style={styles.featureTitle}>100% Offline Database</Text>
-              <Text style={styles.featureDesc}>All transaction ingestion, SMS reading & analysis stays local.</Text>
-            </View>
-          </View>
-          <View style={styles.featureItem}>
-            <Feather name="cpu" size={18} color="#2dba4e" style={styles.featureIcon} />
-            <View>
-              <Text style={styles.featureTitle}>Private AI Insights</Text>
-              <Text style={styles.featureDesc}>Sanitizes your financial context before checking local models.</Text>
-            </View>
-          </View>
-        </Animated.View>
-
-        {/* Interaction Actions */}
-        <Animated.View entering={FadeInDown.delay(500).duration(800)} style={styles.actionsContainer}>
+        {/* Bottom Interaction Actions */}
+        <Animated.View entering={FadeInDown.delay(300).duration(800)} style={styles.actionsContainer}>
           {loading ? (
             <ActivityIndicator size="large" color="#2dba4e" style={{ marginVertical: 24 }} />
           ) : (
             <>
               <TouchableOpacity 
-                style={[styles.primaryBtn, styles.neonBorder]} 
-                onPress={() => navigation.navigate('Login')}
-                activeOpacity={0.8}
+                style={styles.primaryBtnLuxury} 
+                onPress={() => navigation.navigate('Signup')}
+                activeOpacity={0.85}
               >
-                <Text style={styles.primaryBtnText}>Sign In</Text>
+                <Text style={styles.primaryBtnLuxuryText}>Create Account</Text>
               </TouchableOpacity>
 
+              <TouchableOpacity 
+                style={styles.secondaryBtnLuxury} 
+                onPress={() => navigation.navigate('Login')}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.secondaryBtnLuxuryText}>Log In</Text>
+              </TouchableOpacity>
 
               <View style={styles.dividerRow}>
                 <View style={styles.dividerLine} />
@@ -268,17 +258,145 @@ export const WelcomeScreen = ({ navigation }: { navigation: any }) => {
               </View>
 
               <TouchableOpacity 
-                style={styles.googleBtn} 
+                style={styles.googleBtnLuxury} 
                 onPress={handleGooglePress}
-                activeOpacity={0.8}
+                activeOpacity={0.85}
               >
-                <Ionicons name="logo-google" size={18} color="#FFF" style={{ marginRight: 10 }} />
-                <Text style={styles.googleBtnText}>Continue with Google</Text>
+                <Ionicons name="logo-google" size={18} color="#FFFFFF" style={{ marginRight: 10 }} />
+                <Text style={styles.googleBtnLuxuryText}>Continue with Google</Text>
               </TouchableOpacity>
             </>
           )}
+
+          <Text style={styles.legalNotice}>
+            End-to-End Encryption
+          </Text>
         </Animated.View>
-      </ScrollView>
+      </View>
+
+      <GoogleAccountModal 
+        visible={googleVisible} 
+        onClose={() => setGoogleVisible(false)} 
+        onSelectAccount={handleGoogleSelect} 
+      />
+    </View>
+  );
+};
+
+// ----------------------------------------------------
+// 1B. Auth Landing Screen (For Returning / Logged-Out Users)
+// No "WELCOME TO" message since the user is already onboarded.
+// Primary action is "Log In".
+// ----------------------------------------------------
+export const AuthLandingScreen = ({ navigation }: { navigation: any }) => {
+  const { colors } = useTheme();
+  const styles = getStyles(colors);
+  const insets = useSafeAreaInsets();
+  const [googleVisible, setGoogleVisible] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const handleGooglePress = async () => {
+    const webClientId = getGoogleWebClientId();
+    if (Platform.OS !== 'web' && webClientId) {
+      setLoading(true);
+      try {
+        await authService.signInWithGoogleNative();
+      } catch (e: any) {
+        if (e.message?.includes('developer error') || e.code === 'DEVELOPER_ERROR') {
+          alert('Google Sign-In Developer Error: This usually means your Google Web Client ID is mismatching, or your SHA-1 fingerprint is not configured in the Google Cloud Console for Android Package Name (com.anonymous.regentmoney). Please check settings.');
+        } else if (e.code === 'SIGN_IN_CANCELLED' || e.message?.includes('cancelled')) {
+          console.log('[Auth] Google Sign-In cancelled.');
+        } else {
+          alert('Native Google Sign-In failed: ' + e.message);
+        }
+      } finally {
+        setLoading(false);
+      }
+    } else {
+      let warningMsg = 'Google Web Client ID is not configured in Settings. ';
+      if (Platform.OS === 'web') {
+        warningMsg = 'Native Google Sign-In is not supported on Web. ';
+      }
+      alert(warningMsg + 'Launching simulated Google accounts chooser.');
+      setGoogleVisible(true);
+    }
+  };
+
+  const handleGoogleSelect = async (account: GoogleAccount) => {
+    setGoogleVisible(false);
+    setLoading(true);
+    try {
+      await authService.signUpOrLogInGoogle(account.name, account.email, account.avatarUrl);
+    } catch (e: any) {
+      alert('Simulated Google Auth failed: ' + e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <View style={[styles.container, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 24) }]}>
+      {/* Ambient Neon Glow */}
+      <View style={styles.neonGlow} />
+
+      <View style={styles.welcomeMainContent}>
+        {/* Top/Center Branding - NO "WELCOME TO" message! */}
+        <Animated.View entering={FadeIn.delay(100).duration(800)} style={styles.welcomeBranding}>
+          <View style={styles.logoBadgeLuxury}>
+            <Image 
+              source={require('../../assets/insideicon.png')} 
+              style={styles.logoImageInside}
+              resizeMode="contain"
+            />
+          </View>
+          <Text style={styles.welcomeHeaderBig}>REGENT MONEY</Text>
+          <Text style={styles.welcomeSlogan}>Master your wealth. In absolute privacy.</Text>
+        </Animated.View>
+
+        {/* Bottom Interaction Actions - Log In is Primary */}
+        <Animated.View entering={FadeInDown.delay(300).duration(800)} style={styles.actionsContainer}>
+          {loading ? (
+            <ActivityIndicator size="large" color="#2dba4e" style={{ marginVertical: 24 }} />
+          ) : (
+            <>
+              <TouchableOpacity 
+                style={styles.primaryBtnLuxury} 
+                onPress={() => navigation.navigate('Login')}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.primaryBtnLuxuryText}>Log In</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={styles.secondaryBtnLuxury} 
+                onPress={() => navigation.navigate('Signup')}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.secondaryBtnLuxuryText}>Create Account</Text>
+              </TouchableOpacity>
+
+              <View style={styles.dividerRow}>
+                <View style={styles.dividerLine} />
+                <Text style={styles.dividerText}>OR</Text>
+                <View style={styles.dividerLine} />
+              </View>
+
+              <TouchableOpacity 
+                style={styles.googleBtnLuxury} 
+                onPress={handleGooglePress}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="logo-google" size={18} color="#FFFFFF" style={{ marginRight: 10 }} />
+                <Text style={styles.googleBtnLuxuryText}>Continue with Google</Text>
+              </TouchableOpacity>
+            </>
+          )}
+
+          <Text style={styles.legalNotice}>
+            End-to-End Encryption
+          </Text>
+        </Animated.View>
+      </View>
 
       <GoogleAccountModal 
         visible={googleVisible} 
@@ -757,10 +875,36 @@ const getStyles = (colors: any) => StyleSheet.create({
     backgroundColor: colors.isDark ? 'rgba(45, 186, 78, 0.08)' : 'rgba(45, 186, 78, 0.04)',
     filter: 'blur(80px)',
   },
+  welcomeMainContent: {
+    flex: 1,
+    justifyContent: 'space-between',
+    paddingHorizontal: 28,
+  },
   welcomeBranding: {
     alignItems: 'center',
-    marginTop: 40,
-    marginBottom: 40,
+    justifyContent: 'center',
+    flex: 1,
+    marginTop: 20,
+  },
+  logoBadgeLuxury: {
+    width: 84,
+    height: 84,
+    borderRadius: 26,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 24,
+    shadowColor: '#2dba4e',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.35,
+    shadowRadius: 20,
+    elevation: 10,
+    overflow: 'hidden',
+    padding: 8,
+  },
+  logoImageInside: {
+    width: '100%',
+    height: '100%',
   },
   logoBadge: {
     width: 64,
@@ -807,56 +951,90 @@ const getStyles = (colors: any) => StyleSheet.create({
     borderRadius: 14,
   },
   welcomeHeaderSmall: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '800',
-    color: colors.accent,
-    letterSpacing: 4,
+    color: '#2dba4e',
+    letterSpacing: 3,
+    marginBottom: 6,
+    textTransform: 'uppercase',
   },
   welcomeHeaderBig: {
-    fontSize: 42,
+    fontSize: 34,
     fontWeight: '900',
-    color: colors.text,
+    color: '#FFFFFF',
     letterSpacing: 2,
-    marginTop: 4,
+    textAlign: 'center',
   },
   welcomeSlogan: {
-    fontSize: 13,
-    color: colors.textSecondary,
+    fontSize: 15,
+    color: '#94A3B8',
     marginTop: 8,
     fontWeight: '500',
-  },
-  featuresList: {
-    backgroundColor: colors.card,
-    borderRadius: 20,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: colors.border,
-    marginBottom: 40,
-  },
-  featureItem: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginVertical: 8,
-  },
-  featureIcon: {
-    marginRight: 14,
-    marginTop: 2,
-  },
-  featureTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.text,
-  },
-  featureDesc: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    marginTop: 2,
-    lineHeight: 18,
-    paddingRight: 16,
+    letterSpacing: 0.3,
+    textAlign: 'center',
   },
   actionsContainer: {
     width: '100%',
-    marginBottom: 20,
+    marginBottom: 12,
+  },
+  primaryBtnLuxury: {
+    backgroundColor: '#2dba4e',
+    borderRadius: 28,
+    height: 54,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 6,
+    shadowColor: '#2dba4e',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 14,
+    elevation: 6,
+  },
+  primaryBtnLuxuryText: {
+    color: '#0B0E14',
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  secondaryBtnLuxury: {
+    backgroundColor: '#161B22',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    borderRadius: 28,
+    height: 54,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 6,
+  },
+  secondaryBtnLuxuryText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+  },
+  googleBtnLuxury: {
+    backgroundColor: '#161B22',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 28,
+    height: 54,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  googleBtnLuxuryText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  legalNotice: {
+    color: '#64748B',
+    fontSize: 11,
+    fontWeight: '600',
+    textAlign: 'center',
+    marginTop: 18,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
   },
   primaryBtn: {
     backgroundColor: colors.accent,

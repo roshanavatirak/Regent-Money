@@ -25,7 +25,7 @@ import {
   AppState,
   AppStateStatus,
 } from 'react-native';
-import { NavigationContainer, useFocusEffect, createNavigationContainerRef } from '@react-navigation/native';
+import { NavigationContainer, useFocusEffect, createNavigationContainerRef, useNavigation } from '@react-navigation/native';
 import { createBottomTabNavigator, BottomTabBarProps } from '@react-navigation/bottom-tabs';
 
 export const navigationRef = createNavigationContainerRef<any>();
@@ -51,8 +51,10 @@ import { GoalsScreen } from './GoalsScreen';
 import { UpdateModal } from './UpdateModal';
 import { AppSplashScreen } from '../components/AppSplashScreen';
 import { NotificationPermissionModal } from '../components/NotificationPermissionModal';
+import { SmsPermissionModal } from '../components/SmsPermissionModal';
+import { smsPermissionService } from '../services/smsPermissionService';
 import { updateService, UpdateInfo } from '../services/updateService';
-import { ACCOUNT_TYPES } from './EditBankModal';
+import { ACCOUNT_TYPES } from './EditBankScreen';
 import bankNamesJson from './banknames.json';
 
 const POPULAR_BANKS = [
@@ -223,11 +225,16 @@ import { authService } from '../services/authService';
 import { notificationService } from '../services/notificationService';
 import { getBackendUrl } from '../config/api';
 const BACKEND_URL = getBackendUrl();
-import { WelcomeScreen, LoginScreen, SignupScreen } from './authScreens';
+import { WelcomeScreen, LoginScreen, SignupScreen, AuthLandingScreen } from './authScreens';
+import { OnboardingScreen } from './OnboardingScreen';
 import { syncService } from '../services/syncService';
 import { BankDetailsModal } from './BankDetailsModal';
-import { ManualTransactionModal } from './ManualTransactionModal';
 import { ProfileScreen } from './ProfileScreen';
+import { EditProfileScreen } from './EditProfileScreen';
+import { EditBankScreen } from './EditBankScreen';
+import { ManualTransactionScreen } from './ManualTransactionScreen';
+import { TransactionDetailScreen } from './TransactionDetailScreen';
+import { smsCatchupService } from '../services/smsCatchupService';
 import {
   askChatbot,
   ChatMessage
@@ -2144,8 +2151,8 @@ const ChatScreen = () => {
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      enabled={Platform.OS !== 'web'}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      enabled={Platform.OS === 'ios'}
       style={[styles.container, { paddingTop: 0 }]}
     >
       <AppTopBar />
@@ -2251,6 +2258,7 @@ const BanksScreen = () => {
   const { colors } = useTheme();
   const styles = getStyles(colors);
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation<any>();
   const { sync } = useSyncDb();
 
   const bankProfiles = useBankStore((state) => state.bankProfiles);
@@ -2260,11 +2268,6 @@ const BanksScreen = () => {
   const [detailsVisible, setDetailsVisible] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Manual Transaction on bank card
-  const [manualBank, setManualBank] = useState<any | null>(null);
-  const [manualType, setManualType] = useState<'credit' | 'debit'>('credit');
-  const [manualVisible, setManualVisible] = useState(false);
-
   const totalBalance = useMemo(() => {
     return bankProfiles.reduce((sum, bank) => sum + (Number(bank.currentBalance) || 0), 0);
   }, [bankProfiles]);
@@ -2272,6 +2275,7 @@ const BanksScreen = () => {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
+      await smsCatchupService.reconcile(true).catch(() => {});
       await sync();
     } finally {
       setRefreshing(false);
@@ -2525,9 +2529,7 @@ const BanksScreen = () => {
                       }}
                       onPress={(e: any) => {
                         e?.stopPropagation?.();
-                        setManualBank(bank);
-                        setManualType('credit');
-                        setManualVisible(true);
+                        navigation.navigate('ManualTransaction', { bank, initialType: 'credit' });
                       }}
                       activeOpacity={0.7}
                     >
@@ -2548,9 +2550,7 @@ const BanksScreen = () => {
                       }}
                       onPress={(e: any) => {
                         e?.stopPropagation?.();
-                        setManualBank(bank);
-                        setManualType('debit');
-                        setManualVisible(true);
+                        navigation.navigate('ManualTransaction', { bank, initialType: 'debit' });
                       }}
                       activeOpacity={0.7}
                     >
@@ -2618,22 +2618,6 @@ const BanksScreen = () => {
         visible={detailsVisible}
         onClose={() => setDetailsVisible(false)}
         bank={selectedBank ? bankProfiles.find((b) => b.id === selectedBank.id) || selectedBank : null}
-      />
-
-      <ManualTransactionModal
-        visible={manualVisible}
-        onClose={() => setManualVisible(false)}
-        bank={manualBank ? bankProfiles.find((b) => b.id === manualBank.id) || manualBank : null}
-        initialType={manualType}
-        onSuccess={async (data) => {
-          if (manualBank) {
-            useBankStore.getState().updateBankBalance(manualBank.id, data.updatedBalance);
-            if (data.type === 'debit' && data.record) {
-              useTransactionStore.getState().addTransactionState(data.record);
-            }
-            await sync();
-          }
-        }}
       />
     </View>
   );
@@ -3203,21 +3187,33 @@ export default function AppNavigator() {
   const { colors, isDark } = useTheme();
 
   const [splashFinished, setSplashFinished] = useState(false);
+  const hasSeenOnboarding = mmkvStorage.getBoolean('has_seen_onboarding_v1') ?? false;
 
   const updateInfo = useAppUpdateStore((state) => state.updateInfo);
   const updateModalVisible = useAppUpdateStore((state) => state.updateModalVisible);
   const setUpdateInfo = useAppUpdateStore((state) => state.setUpdateInfo);
   const setUpdateModalVisible = useAppUpdateStore((state) => state.setUpdateModalVisible);
   const [notificationModalVisible, setNotificationModalVisible] = useState(false);
+  const [smsModalVisible, setSmsModalVisible] = useState(false);
 
   useEffect(() => {
     if (!splashFinished || isLoading || !user || Platform.OS === 'web') return;
 
     let timer: any = null;
-    const checkNotificationPrompt = async () => {
+    const checkPermissionsFlow = async () => {
       try {
-        const isGranted = await notificationService.isPermissionGranted();
-        if (isGranted) {
+        // 1. Check SMS permission first (core real-time auto-tracking feature)
+        const isSmsGranted = await smsPermissionService.isPermissionGranted();
+        if (!isSmsGranted && !smsPermissionService.hasBeenPrompted()) {
+          timer = setTimeout(() => {
+            setSmsModalVisible(true);
+          }, 1000);
+          return;
+        }
+
+        // 2. Then check Notification permission
+        const isNotificationGranted = await notificationService.isPermissionGranted();
+        if (isNotificationGranted) {
           await notificationService.registerForPushNotifications();
         } else if (!notificationService.hasBeenPrompted()) {
           timer = setTimeout(() => {
@@ -3229,7 +3225,7 @@ export default function AppNavigator() {
       }
     };
 
-    checkNotificationPrompt();
+    checkPermissionsFlow();
     return () => {
       if (timer) clearTimeout(timer);
     };
@@ -3262,6 +3258,7 @@ export default function AppNavigator() {
       // Restore persisted theme after MMKV async fallback loads
       await useThemeStore.getState().rehydrateTheme();
       await authService.checkSession();
+      smsCatchupService.reconcile().catch(() => {});
     };
     initAndCheck();
   }, []);
@@ -3293,6 +3290,8 @@ export default function AppNavigator() {
           }
         }
         setLastBackgroundTimestamp(null);
+        // Catch up on any SMS messages received while app was in background or suspended
+        smsCatchupService.reconcile().catch(() => {});
       }
     };
 
@@ -3338,12 +3337,62 @@ export default function AppNavigator() {
             <Stack.Navigator screenOptions={{ headerShown: false }}>
               {user === null ? (
                 <>
-                  <Stack.Screen name="Welcome" component={WelcomeScreen} />
+                  {!hasSeenOnboarding ? (
+                    <>
+                      <Stack.Screen name="Onboarding" component={OnboardingScreen} />
+                      <Stack.Screen name="Welcome" component={WelcomeScreen} />
+                      <Stack.Screen name="AuthLanding" component={AuthLandingScreen} />
+                    </>
+                  ) : (
+                    <>
+                      <Stack.Screen name="AuthLanding" component={AuthLandingScreen} />
+                      <Stack.Screen name="Welcome" component={WelcomeScreen} />
+                      <Stack.Screen name="Onboarding" component={OnboardingScreen} />
+                    </>
+                  )}
                   <Stack.Screen name="Login" component={LoginScreen} />
                   <Stack.Screen name="Signup" component={SignupScreen} />
                 </>
               ) : (
-                <Stack.Screen name="Main" component={TabNavigator} />
+                <>
+                  <Stack.Screen name="Main" component={TabNavigator} />
+                  <Stack.Screen
+                    name="EditProfile"
+                    component={EditProfileScreen}
+                    options={{
+                      presentation: 'card',
+                      animation: 'slide_from_bottom',
+                      headerShown: false,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="EditBank"
+                    component={EditBankScreen}
+                    options={{
+                      presentation: 'card',
+                      animation: 'slide_from_bottom',
+                      headerShown: false,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="ManualTransaction"
+                    component={ManualTransactionScreen}
+                    options={{
+                      presentation: 'card',
+                      animation: 'slide_from_bottom',
+                      headerShown: false,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="TransactionDetail"
+                    component={TransactionDetailScreen}
+                    options={{
+                      presentation: 'card',
+                      animation: 'slide_from_bottom',
+                      headerShown: false,
+                    }}
+                  />
+                </>
               )}
             </Stack.Navigator>
           </NavigationContainer>
@@ -3359,6 +3408,21 @@ export default function AppNavigator() {
         <NotificationPermissionModal
           visible={notificationModalVisible}
           onDismiss={() => setNotificationModalVisible(false)}
+        />
+        <SmsPermissionModal
+          visible={smsModalVisible}
+          onDismiss={() => {
+            setSmsModalVisible(false);
+            if (!notificationService.hasBeenPrompted()) {
+              setTimeout(() => setNotificationModalVisible(true), 800);
+            }
+          }}
+          onGranted={() => {
+            setSmsModalVisible(false);
+            if (!notificationService.hasBeenPrompted()) {
+              setTimeout(() => setNotificationModalVisible(true), 800);
+            }
+          }}
         />
         {!splashFinished && (
           <AppSplashScreen onFinish={() => setSplashFinished(true)} />

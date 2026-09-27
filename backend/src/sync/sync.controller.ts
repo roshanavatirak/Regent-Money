@@ -94,6 +94,16 @@ export class SyncController {
     return this.syncService.syncOcrTransactions(userId, body);
   }
 
+  @Post('direct-sms')
+  @HttpCode(HttpStatus.OK)
+  async ingestDirectSms(
+    @Req() req: any,
+    @Body() body: { sender: string; body: string; timestamp?: number },
+  ) {
+    const userId = req.user.id;
+    return this.syncService.ingestDirectSms(userId, body);
+  }
+
   @Post('manual-transaction')
   @HttpCode(HttpStatus.CREATED)
   async addManualTransaction(

@@ -12,6 +12,7 @@ import { OcrSyncDto } from './dto/ocr-sync.dto';
 import { ManualTransactionDto } from './dto/manual-transaction.dto';
 import { PDFExtract, PDFExtractOptions } from 'pdf.js-extract';
 import { AiService } from '../ai/ai.service';
+import { parseSMS } from './sms-parser.util';
 
 @Injectable()
 export class SyncService implements OnModuleInit {
@@ -1133,5 +1134,132 @@ export class SyncService implements OnModuleInit {
     goal.updatedAt = Date.now();
     await this.savingsGoalRepository.save(goal);
     return { success: true, deletedId: id };
+  }
+
+  /**
+   * Directly ingests SMS from native Android receiver without React Native overhead.
+   */
+  async ingestDirectSms(userId: string, data: { sender: string; body: string; timestamp?: number }) {
+    this.logger.log(`Direct native SMS ingestion for user ${userId} from ${data.sender}`);
+    const parsed = parseSMS(data.sender, data.body);
+    if (!parsed) {
+      this.logger.log(`Direct SMS ignored: Not a financial transaction pattern`);
+      return { success: false, reason: 'not_transaction_pattern' };
+    }
+
+    const parsedSuffix = (parsed.accountSuffix || '').replace(/\D/g, '').slice(-4);
+    if (!parsedSuffix) {
+      return { success: false, reason: 'no_account_suffix_found' };
+    }
+
+    const bankProfiles = await this.bankProfileRepository.find({
+      where: { userId, isDeleted: false },
+    });
+
+    const matchedBank = bankProfiles.find((b) => {
+      const dbSuffix = (b.accountNumberSuffix || '').replace(/\D/g, '').slice(-4);
+      return dbSuffix && dbSuffix === parsedSuffix;
+    });
+
+    if (!matchedBank) {
+      this.logger.log(`No matching bank profile found for suffix ${parsedSuffix}`);
+      return { success: false, reason: 'bank_not_found', parsedSuffix };
+    }
+
+    if (matchedBank.smsConsent === false) {
+      this.logger.log(`SMS consent disabled for bank ${matchedBank.bankName}`);
+      return { success: false, reason: 'consent_disabled' };
+    }
+
+    const txTime = data.timestamp && !isNaN(Number(data.timestamp)) ? Number(data.timestamp) : Date.now();
+    const parsedDate = new Date(txTime);
+    const startOfDay = new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate(), 0, 0, 0, 0).getTime();
+    const endOfDay = new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate(), 23, 59, 59, 999).getTime();
+
+    const [existingTxs, existingIncome] = await Promise.all([
+      this.transactionRepository.find({
+        where: { userId, bankProfileId: matchedBank.id, isDeleted: false },
+      }),
+      this.incomeRecordRepository.find({
+        where: { userId, bankProfileId: matchedBank.id, isDeleted: false },
+      }),
+    ]);
+
+    let ingested = false;
+    let newBalance = parseFloat(String(matchedBank.currentBalance || 0));
+
+    if (parsed.type === 'debit') {
+      const isDuplicate = existingTxs.some((tx) => {
+        const t = Number(tx.timestamp);
+        return Math.abs(tx.amount - parsed.amount) < 0.01 && t >= startOfDay && t <= endOfDay;
+      });
+
+      if (isDuplicate) {
+        return { success: true, duplicate: true, message: 'Transaction already recorded' };
+      }
+
+      const txId = 'tx_direct_' + Math.random().toString(36).substr(2, 9);
+      const newTx = this.transactionRepository.create({
+        id: txId,
+        userId,
+        amount: parsed.amount,
+        category: parsed.merchant ? this.classifyCategory(parsed.merchant) : 'shopping',
+        merchant: parsed.merchant,
+        timestamp: txTime,
+        bankProfileId: matchedBank.id,
+        smsId: 'direct_sms_ingest',
+        isAnomaly: parsed.amount > 5000,
+        status: 'cleared',
+        updatedAt: Date.now(),
+        isDeleted: false,
+      });
+
+      await this.transactionRepository.save(newTx);
+      newBalance = Math.max(0, newBalance - parsed.amount);
+      ingested = true;
+    } else {
+      const isDuplicate = existingIncome.some((inc) => {
+        const t = Number(inc.timestamp);
+        return Math.abs(inc.amount - parsed.amount) < 0.01 && t >= startOfDay && t <= endOfDay;
+      });
+
+      if (isDuplicate) {
+        return { success: true, duplicate: true, message: 'Income already recorded' };
+      }
+
+      const incId = 'income_direct_' + Math.random().toString(36).substr(2, 9);
+      const newInc = this.incomeRecordRepository.create({
+        id: incId,
+        userId,
+        amount: parsed.amount,
+        source: parsed.merchant,
+        category: parsed.isSalary ? 'Salary' : 'Other Income',
+        timestamp: txTime,
+        bankProfileId: matchedBank.id,
+        updatedAt: Date.now(),
+        isDeleted: false,
+      });
+
+      await this.incomeRecordRepository.save(newInc);
+      newBalance += parsed.amount;
+      ingested = true;
+    }
+
+    if (ingested) {
+      matchedBank.currentBalance = newBalance;
+      matchedBank.lastSyncTimestamp = Date.now();
+      await this.bankProfileRepository.save(matchedBank);
+    }
+
+    return {
+      success: true,
+      ingested,
+      type: parsed.type,
+      amount: parsed.amount,
+      updatedBalance: newBalance,
+      bankName: matchedBank.bankName,
+      accountSuffix: matchedBank.accountNumberSuffix,
+      merchant: parsed.merchant,
+    };
   }
 }

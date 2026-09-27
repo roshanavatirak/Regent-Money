@@ -1,0 +1,613 @@
+import React, { useState, useMemo, useRef } from 'react';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  TextInput,
+  ScrollView,
+  ActivityIndicator,
+  Alert,
+  StyleSheet,
+  KeyboardAvoidingView,
+  Platform,
+} from 'react-native';
+import { Feather } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation, useRoute } from '@react-navigation/native';
+import { useTheme, showGlobalConfirm, useBankStore, useTransactionStore } from '../store';
+import { authService } from '../services/authService';
+import { getBackendUrl } from '../config/api';
+
+const BACKEND_URL = getBackendUrl();
+
+export interface TransactionItem {
+  id: string;
+  amount: number;
+  category?: string;
+  merchant?: string;
+  timestamp?: number;
+  type: 'credit' | 'debit';
+  bankProfileId?: string;
+}
+
+interface CategoryOption {
+  id: string;
+  label: string;
+  iconName: any;
+}
+
+const CREDIT_CATEGORIES: CategoryOption[] = [
+  { id: 'salary', label: 'Salary', iconName: 'briefcase' },
+  { id: 'friend', label: 'From Friend', iconName: 'users' },
+  { id: 'freelance', label: 'Freelance', iconName: 'monitor' },
+  { id: 'investment', label: 'Investment', iconName: 'trending-up' },
+  { id: 'cashback', label: 'Refund/Cashback', iconName: 'refresh-cw' },
+  { id: 'other_income', label: 'Other Earning', iconName: 'gift' },
+];
+
+const DEBIT_CATEGORIES: CategoryOption[] = [
+  { id: 'food', label: 'Food & Dining', iconName: 'coffee' },
+  { id: 'utilities', label: 'Rent & Bills', iconName: 'home' },
+  { id: 'transport', label: 'Travel & Cab', iconName: 'map-pin' },
+  { id: 'shopping', label: 'Shopping', iconName: 'shopping-bag' },
+  { id: 'entertainment', label: 'Entertainment', iconName: 'film' },
+  { id: 'health', label: 'Health & Med', iconName: 'activity' },
+  { id: 'other_expense', label: 'Other Expense', iconName: 'tag' },
+];
+
+export const TransactionDetailScreen: React.FC = () => {
+  const insets = useSafeAreaInsets();
+  const navigation = useNavigation<any>();
+  const route = useRoute<any>();
+  const { colors, isDark } = useTheme();
+
+  const transaction: TransactionItem = route.params?.transaction;
+  const bankName: string | undefined = route.params?.bankName;
+
+  const [amountStr, setAmountStr] = useState(transaction?.amount ? String(transaction.amount) : '');
+  const [selectedCategory, setSelectedCategory] = useState<string>(
+    (transaction?.category || (transaction?.type === 'credit' ? 'salary' : 'food')).toLowerCase()
+  );
+  const [note, setNote] = useState(transaction?.merchant || '');
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const scrollViewRef = useRef<ScrollView>(null);
+
+  if (!transaction) {
+    navigation.goBack();
+    return null;
+  }
+
+  const isCredit = transaction.type === 'credit';
+  const categories = isCredit ? CREDIT_CATEGORIES : DEBIT_CATEGORIES;
+  const parsedAmount = parseFloat(amountStr) || 0;
+  const originalAmount = Number(transaction.amount || 0);
+  const amountDiff = parsedAmount - originalAmount;
+
+  const handleSave = async () => {
+    if (parsedAmount <= 0) {
+      Alert.alert('Invalid Amount', 'Please enter a valid positive amount.');
+      return;
+    }
+
+    if (!selectedCategory) {
+      Alert.alert('Category Required', 'Please select a category.');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const token = authService.getAccessToken();
+      if (!token) throw new Error('Not authenticated.');
+
+      const response = await fetch(`${BACKEND_URL}/sync/transaction-entry`, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          id: transaction.id,
+          type: transaction.type,
+          amount: parsedAmount,
+          category: selectedCategory,
+          note: note.trim() || undefined,
+        }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.message || 'Failed to update transaction.');
+      }
+
+      const res = await response.json();
+
+      // If bank profile balance was updated, update bank store
+      if (transaction.bankProfileId && res.updatedBalance !== undefined) {
+        useBankStore.getState().updateBankBalance(transaction.bankProfileId, res.updatedBalance);
+      }
+
+      // Update transaction store if transaction exists there
+      try {
+        useTransactionStore.getState().updateTransactionState(transaction.id, {
+          amount: parsedAmount,
+          category: selectedCategory,
+          merchant: note.trim() || selectedCategory,
+        });
+      } catch (err) {
+        // Store might not track all modal transactions
+      }
+
+      if (typeof route.params?.onSuccess === 'function') {
+        route.params.onSuccess('updated', {
+          ...res,
+          id: transaction.id,
+          type: transaction.type,
+          newAmount: parsedAmount,
+          category: selectedCategory,
+          merchant: note.trim() || selectedCategory,
+        });
+      }
+
+      navigation.goBack();
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'Unable to update transaction.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = () => {
+    showGlobalConfirm({
+      title: `Delete ${isCredit ? 'Income' : 'Spending'} Record`,
+      message: `Are you sure you want to delete this ₹${originalAmount.toLocaleString('en-IN')} ${isCredit ? 'credit' : 'debit'} record? Your bank balance will be automatically ${isCredit ? 'reduced' : 'restored'}.`,
+      confirmText: 'Yes, Delete',
+      cancelText: 'Cancel',
+      isDestructive: true,
+      onConfirm: async () => {
+        setDeleting(true);
+        try {
+          const token = authService.getAccessToken();
+          if (!token) throw new Error('Not authenticated.');
+
+          const response = await fetch(
+            `${BACKEND_URL}/sync/transaction-entry/${transaction.id}?type=${transaction.type}`,
+            {
+              method: 'DELETE',
+              headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+              },
+            }
+          );
+
+          if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.message || 'Failed to delete transaction.');
+          }
+
+          const res = await response.json();
+
+          // Update bank store if updatedBalance returned
+          if (transaction.bankProfileId && res.updatedBalance !== undefined) {
+            useBankStore.getState().updateBankBalance(transaction.bankProfileId, res.updatedBalance);
+          }
+
+          // Remove from transaction store if present
+          try {
+            useTransactionStore.getState().removeTransactionState(transaction.id);
+          } catch (err) {
+            // Store might not track all
+          }
+
+          if (typeof route.params?.onSuccess === 'function') {
+            route.params.onSuccess('deleted', {
+              id: transaction.id,
+              type: transaction.type,
+              amount: originalAmount,
+              updatedBalance: res.updatedBalance,
+            });
+          }
+
+          navigation.goBack();
+        } catch (e: any) {
+          Alert.alert('Delete Failed', e.message || 'Unable to delete transaction.');
+        } finally {
+          setDeleting(false);
+        }
+      },
+    });
+  };
+
+  const styles = getStyles(colors, isDark);
+
+  return (
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      {/* Top Header */}
+      <View style={[styles.header, { paddingTop: Math.max(insets.top, 16) }]}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={styles.backBtn}
+          activeOpacity={0.7}
+        >
+          <Feather name="arrow-left" size={20} color={colors.text} />
+        </TouchableOpacity>
+        <View style={{ flex: 1, marginLeft: 12 }}>
+          <Text style={styles.headerTitle}>Transaction Details</Text>
+          <Text style={styles.headerSubtitle} numberOfLines={1}>
+            {transaction.timestamp
+              ? new Date(transaction.timestamp).toLocaleDateString('en-IN', {
+                  day: 'numeric',
+                  month: 'short',
+                  year: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })
+              : 'Transaction Record'}
+            {bankName ? ` • ${bankName}` : ''}
+          </Text>
+        </View>
+        <View
+          style={[
+            styles.headerBadge,
+            {
+              backgroundColor: isCredit ? 'rgba(45, 186, 78, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+              borderColor: isCredit ? 'rgba(45, 186, 78, 0.35)' : 'rgba(239, 68, 68, 0.35)',
+            },
+          ]}
+        >
+          <Feather
+            name={isCredit ? 'arrow-up-left' : 'arrow-down-right'}
+            size={14}
+            color={isCredit ? '#2dba4e' : '#ef4444'}
+          />
+        </View>
+      </View>
+
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={{ flex: 1 }}
+      >
+        <ScrollView
+          ref={scrollViewRef}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 40 }]}
+        >
+          {/* Type Indicator Banner */}
+          <View
+            style={[
+              styles.typeBanner,
+              {
+                backgroundColor: isCredit ? 'rgba(45, 186, 78, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                borderColor: isCredit ? 'rgba(45, 186, 78, 0.25)' : 'rgba(239, 68, 68, 0.25)',
+              },
+            ]}
+          >
+            <Text
+              style={[
+                styles.typeBannerText,
+                { color: isCredit ? '#2dba4e' : '#ef4444' },
+              ]}
+            >
+              {isCredit ? '+ CREDIT (INCOME)' : '- DEBIT (SPENDING)'}
+            </Text>
+          </View>
+
+          {/* Editable Amount */}
+          <View style={styles.inputSection}>
+            <View style={styles.labelRow}>
+              <Text style={styles.inputLabel}>AMOUNT</Text>
+              {amountDiff !== 0 && (
+                <Text
+                  style={{
+                    fontSize: 11,
+                    fontWeight: '700',
+                    color: isCredit
+                      ? amountDiff > 0 ? '#2dba4e' : '#ef4444'
+                      : amountDiff > 0 ? '#ef4444' : '#2dba4e',
+                  }}
+                >
+                  Balance impact: {isCredit
+                    ? (amountDiff > 0 ? `+₹${amountDiff}` : `-₹${Math.abs(amountDiff)}`)
+                    : (amountDiff > 0 ? `-₹${amountDiff}` : `+₹${Math.abs(amountDiff)}`)}
+                </Text>
+              )}
+            </View>
+
+            <View style={styles.amountInputRow}>
+              <Text
+                style={[
+                  styles.currencySymbol,
+                  { color: isCredit ? '#2dba4e' : '#ef4444' },
+                ]}
+              >
+                ₹
+              </Text>
+              <TextInput
+                style={[
+                  styles.amountInput,
+                  { color: isCredit ? '#2dba4e' : '#ef4444' },
+                ]}
+                placeholder="0"
+                placeholderTextColor={colors.textTertiary}
+                keyboardType="numeric"
+                value={amountStr}
+                onChangeText={(t) => setAmountStr(t.replace(/[^0-9.]/g, ''))}
+              />
+            </View>
+          </View>
+
+          {/* Editable Category Chips */}
+          <View style={styles.inputSection}>
+            <Text style={styles.inputLabel}>CATEGORY</Text>
+            <View style={styles.categoryWrap}>
+              {categories.map((cat) => {
+                const isSelected = selectedCategory === cat.id;
+                const activeColor = isCredit ? '#2dba4e' : '#ef4444';
+                const activeBg = isCredit ? 'rgba(45, 186, 78, 0.15)' : 'rgba(239, 68, 68, 0.15)';
+
+                return (
+                  <TouchableOpacity
+                    key={cat.id}
+                    style={[
+                      styles.categoryChip,
+                      isSelected && {
+                        borderColor: activeColor,
+                        backgroundColor: activeBg,
+                      },
+                    ]}
+                    onPress={() => setSelectedCategory(cat.id)}
+                    activeOpacity={0.7}
+                  >
+                    <Feather
+                      name={cat.iconName}
+                      size={13}
+                      color={isSelected ? activeColor : colors.textSecondary}
+                      style={{ marginRight: 6 }}
+                    />
+                    <Text
+                      style={[
+                        styles.categoryChipText,
+                        isSelected && {
+                          color: isDark ? '#ffffff' : '#000000',
+                          fontWeight: '700',
+                        },
+                      ]}
+                    >
+                      {cat.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+
+          {/* Editable Note / Merchant */}
+          <View style={styles.inputSection}>
+            <Text style={styles.inputLabel}>NOTE / SOURCE / MERCHANT</Text>
+            <View style={styles.textInputWrap}>
+              <Feather name="edit-3" size={14} color={colors.textSecondary} style={{ marginRight: 8 }} />
+              <TextInput
+                style={styles.textInputField}
+                placeholder="Description or merchant name"
+                placeholderTextColor={colors.textTertiary}
+                value={note}
+                onChangeText={setNote}
+                maxLength={50}
+              />
+            </View>
+          </View>
+
+          {/* Action Buttons: Delete & Save */}
+          <View style={styles.actionRow}>
+            <TouchableOpacity
+              style={styles.deleteBtn}
+              onPress={handleDelete}
+              disabled={deleting || saving}
+              activeOpacity={0.8}
+            >
+              {deleting ? (
+                <ActivityIndicator size="small" color="#FF5252" />
+              ) : (
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <Feather name="trash-2" size={15} color="#FF5252" style={{ marginRight: 6 }} />
+                  <Text style={styles.deleteBtnText}>Delete</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.saveBtn,
+                { opacity: saving || deleting || parsedAmount <= 0 ? 0.6 : 1 },
+              ]}
+              onPress={handleSave}
+              disabled={saving || deleting || parsedAmount <= 0}
+              activeOpacity={0.8}
+            >
+              {saving ? (
+                <ActivityIndicator size="small" color="#ffffff" />
+              ) : (
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <Feather name="check" size={15} color="#ffffff" style={{ marginRight: 6 }} />
+                  <Text style={styles.saveBtnText}>Save Changes</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </View>
+  );
+};
+
+const getStyles = (colors: any, isDark: boolean) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+    },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 16,
+      paddingBottom: 14,
+      borderBottomWidth: 1,
+      borderBottomColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
+    },
+    backBtn: {
+      width: 40,
+      height: 40,
+      borderRadius: 12,
+      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)',
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    headerTitle: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    headerSubtitle: {
+      fontSize: 12,
+      color: colors.textSecondary,
+      marginTop: 2,
+    },
+    headerBadge: {
+      width: 32,
+      height: 32,
+      borderRadius: 10,
+      borderWidth: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    scrollContent: {
+      paddingHorizontal: 16,
+      paddingTop: 16,
+    },
+    typeBanner: {
+      paddingVertical: 10,
+      paddingHorizontal: 14,
+      borderRadius: 12,
+      borderWidth: 1,
+      alignItems: 'center',
+      marginBottom: 18,
+    },
+    typeBannerText: {
+      fontSize: 12,
+      fontWeight: '800',
+      letterSpacing: 0.8,
+    },
+    inputSection: {
+      marginBottom: 18,
+    },
+    labelRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 8,
+    },
+    inputLabel: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: colors.textSecondary,
+      letterSpacing: 0.5,
+    },
+    amountInputRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.12)',
+      borderRadius: 14,
+      paddingHorizontal: 14,
+      paddingVertical: 6,
+      backgroundColor: isDark ? '#12141a' : '#f8f9fa',
+    },
+    currencySymbol: {
+      fontSize: 26,
+      fontWeight: '700',
+      marginRight: 6,
+    },
+    amountInput: {
+      flex: 1,
+      fontSize: 26,
+      fontWeight: '700',
+      paddingVertical: 4,
+    },
+    categoryWrap: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+      marginTop: 8,
+    },
+    categoryChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.08)',
+      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.03)' : 'rgba(0, 0, 0, 0.02)',
+    },
+    categoryChipText: {
+      fontSize: 12,
+      color: colors.textSecondary,
+      fontWeight: '500',
+    },
+    textInputWrap: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.1)',
+      borderRadius: 12,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      backgroundColor: isDark ? '#12141a' : '#f8f9fa',
+      marginTop: 8,
+    },
+    textInputField: {
+      flex: 1,
+      fontSize: 13,
+      color: colors.text,
+      padding: 0,
+    },
+    actionRow: {
+      flexDirection: 'row',
+      gap: 12,
+      marginTop: 12,
+    },
+    deleteBtn: {
+      flex: 1,
+      borderWidth: 1,
+      borderColor: 'rgba(255, 82, 82, 0.3)',
+      backgroundColor: 'rgba(255, 82, 82, 0.08)',
+      borderRadius: 14,
+      paddingVertical: 14,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    deleteBtnText: {
+      color: '#FF5252',
+      fontSize: 14,
+      fontWeight: '700',
+    },
+    saveBtn: {
+      flex: 2,
+      backgroundColor: '#0070F3',
+      borderRadius: 14,
+      paddingVertical: 14,
+      alignItems: 'center',
+      justifyContent: 'center',
+      shadowColor: '#0070F3',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.3,
+      shadowRadius: 6,
+      elevation: 4,
+    },
+    saveBtnText: {
+      color: '#ffffff',
+      fontSize: 14,
+      fontWeight: '700',
+    },
+  });
