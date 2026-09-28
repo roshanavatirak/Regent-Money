@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -10,18 +10,20 @@ import {
   Image,
   Platform,
   useWindowDimensions,
+  ScrollView,
 } from 'react-native';
 import { Ionicons, Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme, useAuthStore, useSidebarStore, useAppUpdateStore, showGlobalConfirm } from '../store';
 import { getAppCurrentVersion } from '../services/updateService';
 import { authService } from '../services/authService';
+import { navigationRef } from '../navigation';
 
 export const AppSidebarDrawer: React.FC = () => {
   const insets = useSafeAreaInsets();
   const { colors, isDark } = useTheme();
   const { width: SCREEN_WIDTH } = useWindowDimensions();
-  const DRAWER_WIDTH = SCREEN_WIDTH * 0.65;
+  const DRAWER_WIDTH = Math.min(Math.max(SCREEN_WIDTH * 0.75, 290), 360);
 
   const user = useAuthStore((state) => state.user);
   const isOpen = useSidebarStore((state) => state.isOpen);
@@ -67,8 +69,6 @@ export const AppSidebarDrawer: React.FC = () => {
     }
   }, [isOpen, DRAWER_WIDTH]);
 
-  if (!isOpen) return null;
-
   const handleUpdatePress = () => {
     closeSidebar();
     openUpdateModal();
@@ -90,130 +90,237 @@ export const AppSidebarDrawer: React.FC = () => {
   };
 
   return (
-    <Modal
-      visible={isOpen}
-      transparent
-      animationType="none"
-      onRequestClose={closeSidebar}
-    >
-      <View style={styles.overlay}>
-        {/* Backdrop (tap to dismiss) */}
-        <Pressable style={StyleSheet.absoluteFill} onPress={closeSidebar}>
-          <Animated.View style={[styles.backdrop, { opacity: fadeAnim }]} />
-        </Pressable>
+    <>
+      <Modal
+        visible={isOpen}
+        transparent
+        animationType="none"
+        onRequestClose={closeSidebar}
+      >
+        <View style={styles.overlay}>
+          {/* Backdrop (tap to dismiss) */}
+          <Pressable style={StyleSheet.absoluteFill} onPress={closeSidebar}>
+            <Animated.View style={[styles.backdrop, { opacity: fadeAnim }]} />
+          </Pressable>
 
-        {/* Sliding Sidebar Panel (65% width) */}
-        <Animated.View
-          style={[
-            styles.drawerContainer,
-            {
-              width: DRAWER_WIDTH,
-              backgroundColor: colors.card,
-              borderRightColor: colors.border,
-              paddingTop: Math.max(insets.top, 16),
-              paddingBottom: Math.max(insets.bottom, 16),
-              transform: [{ translateX: slideAnim }],
-            },
-          ]}
-        >
-          {/* Header Branding - Seamless logo without green border */}
-          <View style={styles.header}>
-            <View style={styles.brandRow}>
-              <View style={styles.logoBadge}>
-                <Image
-                  source={require('../../assets/insideicon.png')}
-                  style={styles.logoImage}
-                  resizeMode="cover"
-                />
-              </View>
-              <View style={styles.brandTextCol}>
-                <View style={styles.brandTitleRow}>
-                  <Text style={[styles.brandRegent, { color: colors.text }]}>REGENT</Text>
-                  <Text style={[styles.brandMoney, { color: colors.accent }]}>MONEY</Text>
+          {/* Sliding Sidebar Panel */}
+          <Animated.View
+            style={[
+              styles.drawerContainer,
+              {
+                width: DRAWER_WIDTH,
+                backgroundColor: colors.card,
+                borderRightColor: colors.border,
+                paddingTop: Math.max(insets.top, 16),
+                paddingBottom: Math.max(insets.bottom, 16),
+                transform: [{ translateX: slideAnim }],
+              },
+            ]}
+          >
+            {/* Header Branding */}
+            <View style={styles.header}>
+              <View style={styles.brandRow}>
+                <View style={styles.logoBadge}>
+                  <Image
+                    source={require('../../assets/insideicon.png')}
+                    style={styles.logoImage}
+                    resizeMode="cover"
+                  />
                 </View>
-                <Text style={[styles.brandSubtitle, { color: colors.textTertiary }]}>PRIVATE WEALTH</Text>
+                <View style={styles.brandTextCol}>
+                  <View style={styles.brandTitleRow}>
+                    <Text style={[styles.brandRegent, { color: colors.text }]}>REGENT</Text>
+                    <Text style={[styles.brandMoney, { color: colors.accent }]}>MONEY</Text>
+                  </View>
+                  <Text style={[styles.brandSubtitle, { color: colors.textTertiary }]}>PRIVATE WEALTH</Text>
+                </View>
               </View>
-            </View>
 
-            <TouchableOpacity
-              onPress={closeSidebar}
-              style={[styles.closeBtn, { borderColor: colors.border }]}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <Ionicons name="close" size={16} color={colors.textSecondary} />
-            </TouchableOpacity>
-          </View>
-
-          {/* User Account Card - Clean display, no logged-in badge */}
-          <View style={[styles.userCard, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.04)' : '#f8fafc', borderColor: colors.border }]}>
-            <View style={[styles.avatarCircle, { backgroundColor: colors.accent }]}>
-              {user?.avatarUrl ? (
-                <Image source={{ uri: user.avatarUrl }} style={styles.avatarImg} />
-              ) : (
-                <Text style={styles.avatarText}>
-                  {(user?.name || user?.email || 'R').charAt(0).toUpperCase()}
-                </Text>
-              )}
-            </View>
-            <View style={styles.userMeta}>
-              <Text style={[styles.userName, { color: colors.text }]} numberOfLines={1}>
-                {user?.name || 'Regent Member'}
-              </Text>
-              <Text style={[styles.userEmail, { color: colors.textSecondary }]} numberOfLines={1}>
-                {user?.email || 'user@regentmoney.com'}
-              </Text>
-            </View>
-          </View>
-
-          {/* Spacer pushing the footer down */}
-          <View style={{ flex: 1 }} />
-
-          {/* Sticky Bottom Footer */}
-          <View style={[styles.footer, { borderTopColor: colors.border }]}>
-            {/* Show Update Option ONLY if update is available */}
-            {updateInfo?.isUpdateAvailable && (
               <TouchableOpacity
-                style={[styles.updateBannerBtn, { backgroundColor: colors.accent }]}
-                onPress={handleUpdatePress}
-                activeOpacity={0.85}
+                onPress={closeSidebar}
+                style={[styles.closeBtn, { borderColor: colors.border }]}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               >
-                <View style={styles.updateIconCircle}>
-                  <Ionicons name="download-outline" size={13} color="#ffffff" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.updateBannerTitle}>Update Available</Text>
-                  <Text style={styles.updateBannerSub}>v{updateInfo.latestVersion} ready to install</Text>
-                </View>
-                <Ionicons name="arrow-forward" size={13} color="#ffffff" />
+                <Ionicons name="close" size={16} color={colors.textSecondary} />
               </TouchableOpacity>
-            )}
+            </View>
 
-            {/* Sticky Log Out Button */}
+            {/* User Account Card */}
             <TouchableOpacity
-              style={[
-                styles.logoutBtn,
-                {
-                  borderColor: isDark ? 'rgba(239, 68, 68, 0.25)' : '#fee2e2',
-                  backgroundColor: isDark ? 'rgba(239, 68, 68, 0.08)' : '#fff5f5',
-                },
-              ]}
-              onPress={handleLogout}
-              activeOpacity={0.75}
+              style={[styles.userCard, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.04)' : '#f8fafc' }]}
+              onPress={() => {
+                closeSidebar();
+                setTimeout(() => {
+                  if (navigationRef.isReady()) {
+                    navigationRef.navigate('EditProfile');
+                  }
+                }, 120);
+              }}
+              activeOpacity={0.7}
             >
-              <Feather name="log-out" size={14} color="#ef4444" style={{ marginRight: 8 }} />
-              <Text style={styles.logoutText}>Log Out</Text>
+              <View style={[styles.avatarCircle, { backgroundColor: colors.accent }]}>
+                {user?.avatarUrl ? (
+                  <Image source={{ uri: user.avatarUrl }} style={styles.avatarImg} />
+                ) : (
+                  <Text style={styles.avatarText}>
+                    {(user?.name || user?.email || 'R').charAt(0).toUpperCase()}
+                  </Text>
+                )}
+              </View>
+              <View style={styles.userMeta}>
+                <Text style={[styles.userName, { color: colors.text }]} numberOfLines={1}>
+                  {user?.name || 'Regent Member'}
+                </Text>
+                <Text style={[styles.userEmail, { color: colors.textSecondary }]} numberOfLines={1}>
+                  {user?.email || 'user@regentmoney.com'}
+                </Text>
+              </View>
             </TouchableOpacity>
 
-            {/* Current Version below Log Out */}
-            <View style={styles.versionRow}>
-              <Text style={[styles.versionLabel, { color: colors.textTertiary }]}>
-                Version {currentVersion}
-              </Text>
+            {/* Sidebar Menu Sections */}
+            <ScrollView
+              style={styles.menuScroll}
+              contentContainerStyle={styles.menuScrollContent}
+              showsVerticalScrollIndicator={false}
+            >
+              {/* Section 1: PREFERENCES & SECURITY */}
+              <View style={styles.sectionBlock}>
+                <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
+                  PREFERENCES & SECURITY
+                </Text>
+
+                {/* Settings */}
+                <TouchableOpacity
+                  style={styles.menuItem}
+                  onPress={() => {
+                    closeSidebar();
+                    setTimeout(() => {
+                      if (navigationRef.isReady()) {
+                        navigationRef.navigate('AppSettings');
+                      }
+                    }, 120);
+                  }}
+                  activeOpacity={0.65}
+                >
+                  <View style={[styles.menuIconBox, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)' }]}>
+                    <Ionicons name="settings-outline" size={15} color={colors.text} />
+                  </View>
+                  <Text style={[styles.menuTitle, { color: colors.text }]}>Settings</Text>
+                </TouchableOpacity>
+
+                {/* Privacy Center */}
+                <TouchableOpacity
+                  style={styles.menuItem}
+                  onPress={() => {
+                    closeSidebar();
+                    setTimeout(() => {
+                      if (navigationRef.isReady()) {
+                        navigationRef.navigate('PrivacyCenter');
+                      }
+                    }, 120);
+                  }}
+                  activeOpacity={0.65}
+                >
+                  <View style={[styles.menuIconBox, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)' }]}>
+                    <Ionicons name="shield-checkmark-outline" size={15} color={colors.text} />
+                  </View>
+                  <Text style={[styles.menuTitle, { color: colors.text }]}>Privacy Center</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Section 2: FEEDBACK & COMMUNITY */}
+              <View style={styles.sectionBlock}>
+                <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
+                  FEEDBACK & COMMUNITY
+                </Text>
+
+                {/* Suggest a Feature */}
+                <TouchableOpacity
+                  style={styles.menuItem}
+                  onPress={() => {
+                    closeSidebar();
+                    setTimeout(() => {
+                      if (navigationRef.isReady()) {
+                        navigationRef.navigate('SuggestFeature');
+                      }
+                    }, 120);
+                  }}
+                  activeOpacity={0.65}
+                >
+                  <View style={[styles.menuIconBox, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)' }]}>
+                    <Ionicons name="bulb-outline" size={15} color={colors.text} />
+                  </View>
+                  <Text style={[styles.menuTitle, { color: colors.text }]}>Suggest a Feature</Text>
+                </TouchableOpacity>
+
+                {/* Report a Bug */}
+                <TouchableOpacity
+                  style={styles.menuItem}
+                  onPress={() => {
+                    closeSidebar();
+                    setTimeout(() => {
+                      if (navigationRef.isReady()) {
+                        navigationRef.navigate('ReportBug');
+                      }
+                    }, 120);
+                  }}
+                  activeOpacity={0.65}
+                >
+                  <View style={[styles.menuIconBox, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)' }]}>
+                    <Ionicons name="bug-outline" size={15} color={colors.text} />
+                  </View>
+                  <Text style={[styles.menuTitle, { color: colors.text }]}>Report a Bug</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+
+            {/* Sticky Bottom Footer */}
+            <View style={[styles.footer, { borderTopColor: colors.border }]}>
+              {/* Show Update Option ONLY if update is available */}
+              {updateInfo?.isUpdateAvailable && (
+                <TouchableOpacity
+                  style={[styles.updateBannerBtn, { backgroundColor: colors.accent }]}
+                  onPress={handleUpdatePress}
+                  activeOpacity={0.85}
+                >
+                  <View style={styles.updateIconCircle}>
+                    <Ionicons name="download-outline" size={13} color="#ffffff" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.updateBannerTitle}>Update Available</Text>
+                    <Text style={styles.updateBannerSub}>v{updateInfo.latestVersion} ready to install</Text>
+                  </View>
+                  <Ionicons name="arrow-forward" size={13} color="#ffffff" />
+                </TouchableOpacity>
+              )}
+
+              {/* Sticky Log Out Button */}
+              <TouchableOpacity
+                style={[
+                  styles.logoutBtn,
+                  {
+                    borderColor: isDark ? 'rgba(239, 68, 68, 0.25)' : '#fee2e2',
+                    backgroundColor: isDark ? 'rgba(239, 68, 68, 0.08)' : '#fff5f5',
+                  },
+                ]}
+                onPress={handleLogout}
+                activeOpacity={0.75}
+              >
+                <Feather name="log-out" size={14} color="#ef4444" style={{ marginRight: 8 }} />
+                <Text style={styles.logoutText}>Log Out</Text>
+              </TouchableOpacity>
+
+              {/* Current Version below Log Out */}
+              <View style={styles.versionRow}>
+                <Text style={[styles.versionLabel, { color: colors.textTertiary }]}>
+                  Version {currentVersion}
+                </Text>
+              </View>
             </View>
-          </View>
-        </Animated.View>
-      </View>
-    </Modal>
+          </Animated.View>
+        </View>
+      </Modal>
+    </>
   );
 };
 
@@ -302,10 +409,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   userCard: {
-    padding: 12,
-    borderRadius: 14,
-    borderWidth: 1,
-    marginTop: 6,
+    padding: 10,
+    borderRadius: 12,
+    marginTop: 4,
     gap: 8,
   },
   avatarCircle: {
@@ -335,6 +441,45 @@ const styles = StyleSheet.create({
   userEmail: {
     fontSize: 10,
     marginTop: 2,
+  },
+  menuScroll: {
+    flex: 1,
+    marginTop: 12,
+  },
+  menuScrollContent: {
+    paddingBottom: 12,
+    gap: 12,
+  },
+  sectionBlock: {
+    gap: 1,
+  },
+  sectionTitle: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    letterSpacing: 0.9,
+    marginLeft: 4,
+    marginBottom: 4,
+    textTransform: 'uppercase',
+  },
+  menuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 5,
+    paddingHorizontal: 6,
+    borderRadius: 6,
+    gap: 9,
+  },
+  menuIconBox: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  menuTitle: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
   },
   footer: {
     borderTopWidth: 1,

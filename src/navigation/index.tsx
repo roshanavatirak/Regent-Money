@@ -24,6 +24,8 @@ import {
   ViewStyle,
   AppState,
   AppStateStatus,
+  PanResponder,
+  Animated as RNAnimated,
 } from 'react-native';
 import { NavigationContainer, useFocusEffect, createNavigationContainerRef, useNavigation } from '@react-navigation/native';
 import { createBottomTabNavigator, BottomTabBarProps } from '@react-navigation/bottom-tabs';
@@ -56,6 +58,7 @@ import { smsPermissionService } from '../services/smsPermissionService';
 import { updateService, UpdateInfo } from '../services/updateService';
 import { ACCOUNT_TYPES } from './EditBankScreen';
 import bankNamesJson from './banknames.json';
+import { getExecutiveGreeting, getSessionGreeting } from '../constants/aiGreetings';
 
 const POPULAR_BANKS = [
   { code: 'SBIN', name: 'State Bank of India', short: 'SBI Bank' },
@@ -234,6 +237,10 @@ import { EditProfileScreen } from './EditProfileScreen';
 import { EditBankScreen } from './EditBankScreen';
 import { ManualTransactionScreen } from './ManualTransactionScreen';
 import { TransactionDetailScreen } from './TransactionDetailScreen';
+import { SettingsScreen } from './SettingsScreen';
+import { PrivacyCenterScreen } from './PrivacyCenterScreen';
+import { SuggestFeatureScreen } from './SuggestFeatureScreen';
+import { ReportBugScreen } from './ReportBugScreen';
 import { smsCatchupService } from '../services/smsCatchupService';
 import {
   askChatbot,
@@ -2013,7 +2020,7 @@ const DashboardScreen = () => {
 // 2. AI Chatbot Screen Component
 // ----------------------------------------------------
 const ChatScreen = () => {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const styles = getStyles(colors);
   const insets = useSafeAreaInsets();
   const { sync } = useSyncDb();
@@ -2028,6 +2035,7 @@ const ChatScreen = () => {
 
   const chatHistory = useAIStore((state) => state.chatHistory);
   const addChatMessage = useAIStore((state) => state.addChatMessage);
+  const clearChatHistory = useAIStore((state) => state.clearChatHistory);
   const isThinking = useAIStore((state) => state.isThinking);
   const setThinking = useAIStore((state) => state.setThinking);
 
@@ -2038,28 +2046,81 @@ const ChatScreen = () => {
   const budgets = useBudgetStore((state) => state.budgets);
 
   const [chatInput, setChatInput] = useState('');
-  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
-  const flatListRef = React.useRef<FlatList>(null);
+  const [executiveGreeting, setExecutiveGreeting] = useState(() => getSessionGreeting(user?.name));
 
   useEffect(() => {
-    const showSub = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
-      () => {
-        setIsKeyboardVisible(true);
-        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
-      }
-    );
-    const hideSub = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
-      () => {
-        setIsKeyboardVisible(false);
-      }
-    );
+    if (user?.name) {
+      setExecutiveGreeting(getSessionGreeting(user.name));
+    }
+  }, [user?.name]);
+
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [containerHeight, setContainerHeight] = useState(0);
+  const initialContainerHeightRef = React.useRef(0);
+  const flatListRef = React.useRef<FlatList>(null);
+  const inputRef = React.useRef<TextInput>(null);
+
+  useEffect(() => {
+    const onShow = (e: any) => {
+      const height = e?.endCoordinates?.height || 0;
+      setKeyboardHeight(height);
+      setIsKeyboardVisible(true);
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 80);
+    };
+
+    const onHide = () => {
+      setKeyboardHeight(0);
+      setIsKeyboardVisible(false);
+    };
+
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvent, onShow);
+    const hideSub = Keyboard.addListener(hideEvent, onHide);
+
     return () => {
       showSub.remove();
       hideSub.remove();
     };
   }, []);
+
+  const handleContainerLayout = (e: any) => {
+    const h = e.nativeEvent.layout.height;
+    if (initialContainerHeightRef.current === 0 && h > 0) {
+      initialContainerHeightRef.current = h;
+    }
+    setContainerHeight(h);
+  };
+
+  // Determine whether Android's OS window actually resized
+  const containerDidShrink =
+    initialContainerHeightRef.current > 0 &&
+    containerHeight > 0 &&
+    initialContainerHeightRef.current - containerHeight > 120;
+
+  // Responsive bottom clearance:
+  // - On iOS: KeyboardAvoidingView handles the lift, so bottom spacing is 8px.
+  // - On Android: If container resized, bottom spacing is 8px. If container did NOT resize, lift by keyboardHeight!
+  // - When keyboard is closed: Bottom spacing rests cleanly above the floating bottom tab bar.
+  const dynamicBottomPadding = useMemo(() => {
+    if (Platform.OS === 'web') {
+      return navBarClearance + 8;
+    }
+    if (isKeyboardVisible) {
+      if (Platform.OS === 'ios') {
+        return 8;
+      }
+      if (containerDidShrink) {
+        return 8;
+      }
+      return Math.max(keyboardHeight, 0) + 8;
+    }
+    return navBarClearance + 8;
+  }, [isKeyboardVisible, keyboardHeight, containerDidShrink, navBarClearance]);
 
   // Sync DB on screen focus
   useFocusEffect(
@@ -2068,18 +2129,16 @@ const ChatScreen = () => {
     }, [sync])
   );
 
+  const handleSendQuery = async (queryText?: string) => {
+    const textToSend = (queryText || chatInput).trim();
+    if (!textToSend || isThinking) return;
 
-  const handleSendMessage = async () => {
-    if (!chatInput.trim()) return;
-
-    const query = chatInput;
     setChatInput('');
+    Keyboard.dismiss();
 
-    // Add user message to history
-    addChatMessage({ role: 'user', content: query });
+    addChatMessage({ role: 'user', content: textToSend });
     setThinking(true);
 
-    // Auto scroll to bottom
     setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
 
     try {
@@ -2137,106 +2196,415 @@ const ChatScreen = () => {
         recentTransactions: recentTxs,
       };
 
-      // Call Groq / Gemini with full live context
-      const response = await askChatbot(query, chatHistory, context);
+      const response = await askChatbot(textToSend, chatHistory, context);
       addChatMessage({ role: 'assistant', content: response });
     } catch (e: any) {
       console.error(e);
-      addChatMessage({ role: 'assistant', content: 'Connection issue. Could not contact financial helper.' });
+      addChatMessage({
+        role: 'assistant',
+        content: 'Connection issue. Could not contact financial assistant.',
+      });
     } finally {
       setThinking(false);
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
     }
   };
 
+  const handleClearChat = () => {
+    showGlobalConfirm({
+      title: 'Clear Chat History',
+      message: 'Are you sure you want to clear your conversation with Regent AI?',
+      confirmText: 'Clear Chat',
+      cancelText: 'Cancel',
+      isDestructive: true,
+      icon: 'trash-2',
+      onConfirm: () => {
+        clearChatHistory();
+      },
+    });
+  };
+
+  const EXECUTIVE_PROMPTS = [
+    {
+      id: 'liquidity',
+      icon: 'briefcase',
+      title: 'Total Liquidity & Balances',
+      query: 'What is my total liquidity across all connected bank accounts?',
+    },
+    {
+      id: 'cashflow',
+      icon: 'activity',
+      title: 'Cash Flow & Burn Rate',
+      query: 'Analyze my net cash flow and monthly burn rate this month.',
+    },
+    {
+      id: 'budgets',
+      icon: 'target',
+      title: 'Budget & Capital Allocation',
+      query: 'Review my remaining budget and category spending limits.',
+    },
+    {
+      id: 'expenses',
+      icon: 'trending-down',
+      title: 'Top Expense Analysis',
+      query: 'What are my largest single transactions and expenses recently?',
+    },
+    {
+      id: 'inflows',
+      icon: 'dollar-sign',
+      title: 'Income & Credit Inflow',
+      query: 'Summarize all credit deposits and salary inflows this month.',
+    },
+    {
+      id: 'goals',
+      icon: 'award',
+      title: 'Savings & Wealth Goals',
+      query: 'What is my progress toward my active savings targets?',
+    },
+    {
+      id: 'recurring',
+      icon: 'repeat',
+      title: 'Recurring Subscriptions & Bills',
+      query: 'Identify all my recurring payments and utility charges.',
+    },
+    {
+      id: 'lifestyle',
+      icon: 'coffee',
+      title: 'Dining & Lifestyle Spending',
+      query: 'How much have I spent on food, dining, and travel recently?',
+    },
+    {
+      id: 'networth',
+      icon: 'pie-chart',
+      title: 'Monthly Net Worth Snapshot',
+      query: 'Calculate my total estimated net worth across all accounts.',
+    },
+    {
+      id: 'tax',
+      icon: 'zap',
+      title: 'Financial Optimization Tips',
+      query: 'Provide 3 actionable tips to optimize my monthly cash flow.',
+    },
+    {
+      id: 'security',
+      icon: 'shield',
+      title: 'Anomaly & Security Check',
+      query: 'Were there any unusual spikes or suspicious transactions?',
+    },
+  ];
+
+  const [cardIndex, setCardIndex] = useState(0);
+  const pan = React.useRef(new RNAnimated.ValueXY()).current;
+
+  const cardRotate = pan.x.interpolate({
+    inputRange: [-200, 0, 200],
+    outputRange: ['-8deg', '0deg', '8deg'],
+    extrapolate: 'clamp',
+  });
+
+  const cardOpacity = pan.x.interpolate({
+    inputRange: [-200, -100, 0, 100, 200],
+    outputRange: [0.6, 0.9, 1, 0.9, 0.6],
+    extrapolate: 'clamp',
+  });
+
+  const nextCard = useCallback(() => {
+    pan.setValue({ x: 0, y: 0 });
+    setCardIndex((prev) => (prev + 1) % (EXECUTIVE_PROMPTS.length + 1));
+  }, [pan, EXECUTIVE_PROMPTS.length]);
+
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_, gesture) => {
+          return Math.abs(gesture.dx) > 10 && Math.abs(gesture.dy) < 30;
+        },
+        onPanResponderMove: (_, gesture) => {
+          pan.setValue({ x: gesture.dx, y: 0 });
+        },
+        onPanResponderRelease: (_, gesture) => {
+          if (gesture.dx < -40) {
+            RNAnimated.timing(pan, {
+              toValue: { x: -350, y: 0 },
+              duration: 180,
+              useNativeDriver: false,
+            }).start(() => nextCard());
+          } else if (gesture.dx > 40) {
+            RNAnimated.timing(pan, {
+              toValue: { x: 350, y: 0 },
+              duration: 180,
+              useNativeDriver: false,
+            }).start(() => nextCard());
+          } else {
+            RNAnimated.spring(pan, {
+              toValue: { x: 0, y: 0 },
+              friction: 6,
+              useNativeDriver: false,
+            }).start();
+          }
+        },
+      }),
+    [pan, nextCard]
+  );
+
+  const currentCard = EXECUTIVE_PROMPTS[cardIndex];
+  const nextCard1 = cardIndex < EXECUTIVE_PROMPTS.length ? EXECUTIVE_PROMPTS[(cardIndex + 1) % EXECUTIVE_PROMPTS.length] : null;
+  const nextCard2 = cardIndex < EXECUTIVE_PROMPTS.length ? EXECUTIVE_PROMPTS[(cardIndex + 2) % EXECUTIVE_PROMPTS.length] : null;
+
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      enabled={Platform.OS === 'ios'}
+    <View
       style={[styles.container, { paddingTop: 0 }]}
+      onLayout={handleContainerLayout}
     >
       <AppTopBar />
-      <View style={[styles.header, { paddingTop: 8, paddingBottom: 4 }]}>
-        <Text style={styles.headerTitle}>AI Assistant</Text>
-        <Text style={styles.subtitle}>Powered by Groq Ultra-Fast AI</Text>
-      </View>
 
-      {chatHistory.length === 0 ? (
-        <View style={styles.chatWelcome}>
-          <View style={styles.welcomeCircle}>
-            <Ionicons name="chatbubble-ellipses-outline" size={40} color="#2dba4e" />
-          </View>
-          <Text style={styles.welcomeTitle}>Regent AI Chatbot</Text>
-          <Text style={styles.welcomeText}>
-            Ask financial questions instantly. Your data stays local and is anonymized before leaving the device.
-          </Text>
-          <View style={styles.suggestedBox}>
-            <Text style={styles.suggestedTitle}>Try saying:</Text>
-            <TouchableOpacity onPress={() => setChatInput('How much did I spend on Food this month?')}>
-              <Text style={styles.suggestText}>"How much did I spend on Food this month?"</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setChatInput('What is my remaining budget for Shopping?')}>
-              <Text style={styles.suggestText}>"What is my remaining budget for Shopping?"</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      ) : (
-        <FlatList
-          ref={flatListRef}
-          data={chatHistory}
-          keyExtractor={(_, index) => index.toString()}
-          contentContainerStyle={[
-            styles.chatList,
-            { paddingBottom: isKeyboardVisible ? 20 : navBarClearance + 80 },
-          ]}
-          keyboardShouldPersistTaps="handled"
-          onScrollBeginDrag={Keyboard.dismiss}
-          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
-          renderItem={({ item }) => (
-            <View style={[
-              styles.chatBubble,
-              item.role === 'user' ? styles.userBubble : styles.botBubble
-            ]}>
-              <Text style={[
-                styles.chatText,
-                item.role === 'user' ? styles.userChatText : styles.botChatText
-              ]}>
-                {item.content}
-              </Text>
-            </View>
-          )}
-        />
-      )}
-
-      {isThinking && <TypingIndicator />}
-
-      <View
-        style={[
-          styles.inputArea,
-          {
-            paddingBottom: isKeyboardVisible
-              ? (Platform.OS === 'ios' ? 8 : 10)
-              : navBarClearance + 16,
-          },
-        ]}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={{ flex: 1 }}
       >
-        <TextInput
-          style={styles.chatTextInput}
-          placeholder="Type a message..."
-          placeholderTextColor="#8E8E9F"
-          value={chatInput}
-          onChangeText={setChatInput}
-          editable={!isThinking}
-          onFocus={() => {
-            setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 150);
-          }}
-        />
+        {/* Minimalist Executive Header */}
+        <View style={styles.chatHeaderRow}>
+          <Text style={styles.headerTitle}>Regent AI</Text>
 
-        <TouchableOpacity style={styles.sendBtn} onPress={handleSendMessage} disabled={isThinking}>
-          <Feather name="send" size={18} color="#24292e" />
-        </TouchableOpacity>
-      </View>
-    </KeyboardAvoidingView>
+          {chatHistory.length > 0 && (
+            <TouchableOpacity
+              style={styles.chatResetBtn}
+              onPress={handleClearChat}
+              activeOpacity={0.7}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Feather name="rotate-ccw" size={15} color={colors.textSecondary} />
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* Content Body: Empty State or Active Messages */}
+        {chatHistory.length === 0 ? (
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={styles.welcomeScroll}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            {/* Executive Greeting */}
+            <View style={styles.welcomeHero}>
+              <View style={styles.welcomeAvatar}>
+                <Image
+                  source={require('../../assets/tree.png')}
+                  style={styles.welcomeAvatarImage}
+                  resizeMode="contain"
+                />
+              </View>
+              <Text style={styles.execGreetingTitle}>{executiveGreeting}</Text>
+              {/* <Text style={styles.execGreetingSub}>
+                Executive intelligence across your accounts, cash flow, and budgets.
+              </Text> */}
+            </View>
+
+            {/* Stacked Card Deck (11 cards) or End-Of-Deck Card */}
+            {cardIndex < EXECUTIVE_PROMPTS.length ? (
+              <View style={{ width: '100%', alignItems: 'center' }}>
+                <View style={styles.deckContainer}>
+                  {/* 3rd Card Behind */}
+                  {nextCard2 && (
+                    <View
+                      style={[
+                        styles.deckCardBehind,
+                        {
+                          top: 18,
+                          transform: [{ scale: 0.90 }],
+                          opacity: 0.35,
+                          zIndex: 1,
+                        },
+                      ]}
+                    >
+                      <View style={styles.suggestIconBox}>
+                        <Feather name={nextCard2.icon as any} size={16} color={colors.accent} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.suggestCategory} numberOfLines={1}>{nextCard2.title}</Text>
+                        <Text style={styles.suggestPrompt} numberOfLines={1}>{nextCard2.query}</Text>
+                      </View>
+                    </View>
+                  )}
+
+                  {/* 2nd Card Behind */}
+                  {nextCard1 && (
+                    <View
+                      style={[
+                        styles.deckCardBehind,
+                        {
+                          top: 9,
+                          transform: [{ scale: 0.95 }],
+                          opacity: 0.65,
+                          zIndex: 2,
+                        },
+                      ]}
+                    >
+                      <View style={styles.suggestIconBox}>
+                        <Feather name={nextCard1.icon as any} size={16} color={colors.accent} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.suggestCategory} numberOfLines={1}>{nextCard1.title}</Text>
+                        <Text style={styles.suggestPrompt} numberOfLines={1}>{nextCard1.query}</Text>
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Active Front Card (Swipeable) */}
+                  <RNAnimated.View
+                    style={[
+                      styles.deckCardFront,
+                      {
+                        transform: [{ translateX: pan.x }, { rotate: cardRotate }],
+                        opacity: cardOpacity,
+                        zIndex: 5,
+                      },
+                    ]}
+                    {...panResponder.panHandlers}
+                  >
+                    <TouchableOpacity
+                      style={styles.cardInnerTouchable}
+                      onPress={() => handleSendQuery(currentCard.query)}
+                      activeOpacity={0.8}
+                    >
+                      <View style={styles.suggestIconBox}>
+                        <Feather name={currentCard.icon as any} size={16} color={colors.accent} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.suggestCategory}>{currentCard.title}</Text>
+                        <Text style={styles.suggestPrompt}>{currentCard.query}</Text>
+                      </View>
+                      <Feather name="arrow-up-right" size={16} color={colors.accent} style={{ marginLeft: 8 }} />
+                    </TouchableOpacity>
+                  </RNAnimated.View>
+                </View>
+
+                <Text style={styles.deckSwipeHint}>
+                  Swipe left or right for next suggestion
+                </Text>
+              </View>
+            ) : (
+              /* End of Suggestions State */
+              <View style={styles.endDeckCard}>
+                <View style={styles.endIconCircle}>
+                  <Feather name="check" size={20} color={colors.accent} />
+                </View>
+                <Text style={styles.endTitle}>All suggestions explored</Text>
+                <Text style={styles.endSub}>
+                  Type your custom question below or replay executive suggestions.
+                </Text>
+                <View style={styles.endActionRow}>
+                  <TouchableOpacity
+                    style={styles.endBtnPrimary}
+                    onPress={() => {
+                      setCardIndex(0);
+                      pan.setValue({ x: 0, y: 0 });
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Feather name="rotate-ccw" size={14} color="#ffffff" style={{ marginRight: 6 }} />
+                    <Text style={styles.endBtnPrimaryText}>Start Over</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.endBtnSecondary}
+                    onPress={() => inputRef.current?.focus()}
+                    activeOpacity={0.8}
+                  >
+                    <Feather name="edit-3" size={14} color={colors.text} style={{ marginRight: 6 }} />
+                    <Text style={styles.endBtnSecondaryText}>Ask Myself</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+          </ScrollView>
+        ) : (
+          <FlatList
+            ref={flatListRef}
+            data={chatHistory}
+            keyExtractor={(_, index) => index.toString()}
+            contentContainerStyle={styles.chatList}
+            keyboardShouldPersistTaps="handled"
+            onScrollBeginDrag={Keyboard.dismiss}
+            onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+            renderItem={({ item }) => {
+              const isUser = item.role === 'user';
+              return (
+                <View style={{ flexDirection: 'row', justifyContent: isUser ? 'flex-end' : 'flex-start', marginBottom: 12 }}>
+                  {!isUser && (
+                    <View style={styles.chatAvatarBadge}>
+                      <Ionicons name="sparkles" size={13} color={colors.accent} />
+                    </View>
+                  )}
+                  <View
+                    style={[
+                      styles.chatBubble,
+                      isUser ? styles.userBubble : styles.botBubble,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.chatText,
+                        isUser ? styles.userChatText : styles.botChatText,
+                      ]}
+                      selectable
+                    >
+                      {item.content}
+                    </Text>
+                  </View>
+                </View>
+              );
+            }}
+          />
+        )}
+
+        {/* Typing Indicator */}
+        {isThinking && <TypingIndicator />}
+
+        {/* Clean Input Bar */}
+        <View
+          style={[
+            styles.inputArea,
+            { paddingBottom: dynamicBottomPadding },
+          ]}
+        >
+          <TextInput
+            ref={inputRef}
+            style={styles.chatTextInput}
+            placeholder="Ask Regent AI..."
+            placeholderTextColor="#8E8E9F"
+            value={chatInput}
+            onChangeText={setChatInput}
+            editable={!isThinking}
+            returnKeyType="send"
+            onSubmitEditing={() => handleSendQuery()}
+            onFocus={() => {
+              setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 150);
+            }}
+          />
+
+          <TouchableOpacity
+            style={[
+              styles.sendBtn,
+              (!chatInput.trim() || isThinking) && styles.sendBtnDisabled,
+            ]}
+            onPress={() => handleSendQuery()}
+            disabled={!chatInput.trim() || isThinking}
+            activeOpacity={0.8}
+          >
+            {isThinking ? (
+              <ActivityIndicator size="small" color="#24292e" />
+            ) : (
+              <Feather
+                name="send"
+                size={18}
+                color={!chatInput.trim() ? colors.textSecondary : '#24292e'}
+              />
+            )}
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+    </View>
   );
 };
 
@@ -2249,7 +2617,7 @@ const GoalsTabScreen = () => <GoalsScreen AppTopBarComponent={AppTopBar} />;
 // ----------------------------------------------------
 // 4. Settings Screen Component
 // ----------------------------------------------------
-const SettingsScreen = () => <ProfileScreen AppTopBarComponent={AppTopBar} />;
+const TabProfileScreen = () => <ProfileScreen AppTopBarComponent={AppTopBar} />;
 
 // ----------------------------------------------------
 // Connected Banks Screen
@@ -2713,18 +3081,6 @@ const CustomTabButton = ({
     transform: [{ scale: scale.value }],
   }));
 
-  const pillBgColor = isFocused
-    ? (isDark ? 'rgba(45, 186, 78, 0.16)' : 'rgba(22, 163, 74, 0.12)')
-    : isHovered
-      ? (isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.04)')
-      : 'transparent';
-
-  const pillBorderColor = isFocused
-    ? (isDark ? 'rgba(45, 186, 78, 0.35)' : 'rgba(22, 163, 74, 0.28)')
-    : isHovered
-      ? (isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)')
-      : 'transparent';
-
   const iconColor = isFocused
     ? (isDark ? '#2dba4e' : '#16a34a')
     : isHovered
@@ -2765,21 +3121,10 @@ const CustomTabButton = ({
             flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
-            paddingHorizontal: isSmall ? 7 : (isMedium ? 10 : 14),
-            paddingVertical: 4.5,
-            borderRadius: 18,
-            borderWidth: 1,
-            borderColor: pillBorderColor,
-            backgroundColor: pillBgColor,
+            paddingHorizontal: isSmall ? 4 : (isMedium ? 8 : 12),
+            paddingVertical: 4,
             maxWidth: '96%',
             minWidth: isSmall ? 44 : 50,
-          },
-          isFocused && {
-            shadowColor: isDark ? '#2dba4e' : '#16a34a',
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: isDark ? 0.32 : 0.16,
-            shadowRadius: 5,
-            elevation: 2,
           },
           animatedStyle,
         ]}
@@ -2956,7 +3301,7 @@ function TabNavigator() {
       <Tab.Screen name="Goals" component={GoalsTabScreen} />
       <Tab.Screen name="Banks" component={BanksScreen} />
       <Tab.Screen name="AI Chat" component={ChatScreen} />
-      <Tab.Screen name="Settings" component={SettingsScreen} />
+      <Tab.Screen name="Settings" component={TabProfileScreen} />
     </Tab.Navigator>
   );
 }
@@ -3389,6 +3734,42 @@ export default function AppNavigator() {
                     options={{
                       presentation: 'card',
                       animation: 'slide_from_bottom',
+                      headerShown: false,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="AppSettings"
+                    component={SettingsScreen}
+                    options={{
+                      presentation: 'card',
+                      animation: 'slide_from_right',
+                      headerShown: false,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="PrivacyCenter"
+                    component={PrivacyCenterScreen}
+                    options={{
+                      presentation: 'card',
+                      animation: 'slide_from_right',
+                      headerShown: false,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="SuggestFeature"
+                    component={SuggestFeatureScreen}
+                    options={{
+                      presentation: 'card',
+                      animation: 'slide_from_right',
+                      headerShown: false,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="ReportBug"
+                    component={ReportBugScreen}
+                    options={{
+                      presentation: 'card',
+                      animation: 'slide_from_right',
                       headerShown: false,
                     }}
                   />
@@ -3899,90 +4280,288 @@ const getStyles = (colors: any) => StyleSheet.create({
     textAlign: 'center',
     marginTop: 10,
   },
-  chatWelcome: {
-    flex: 1,
+  chatHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 8,
+  },
+  chatResetBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: colors.isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)',
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 30,
   },
-  welcomeCircle: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
+  welcomeScroll: {
+    flexGrow: 1,
+    paddingHorizontal: 20,
+    justifyContent: 'center',
+    paddingBottom: 24,
+  },
+  welcomeHero: {
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  welcomeAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: colors.isDark ? '#1e293b' : '#ffffff',
+    borderWidth: 1.2,
+    borderColor: colors.isDark ? 'rgba(45, 186, 78, 0.35)' : 'rgba(45, 186, 78, 0.25)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 12,
+    overflow: 'hidden',
+    shadowColor: colors.accent,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: colors.isDark ? 0.3 : 0.1,
+    shadowRadius: 10,
+    elevation: 3,
   },
-  welcomeTitle: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: colors.text,
-    marginBottom: 8,
+  welcomeAvatarImage: {
+    width: 44,
+    height: 44,
+    transform: [{ scale: 1.25 }],
   },
-  welcomeText: {
+  execGreetingTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.isDark ? '#e2e8f0' : '#475569',
+    letterSpacing: -0.2,
+    marginBottom: 6,
+    textAlign: 'center',
+    paddingHorizontal: 16,
+    lineHeight: 24,
+  },
+  execGreetingSub: {
     fontSize: 13,
     color: colors.textSecondary,
+    lineHeight: 18,
+    maxWidth: 340,
     textAlign: 'center',
-    lineHeight: 20,
-    marginBottom: 20,
   },
-  suggestedBox: {
+  deckContainer: {
+    width: '100%',
+    height: 122,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    position: 'relative',
+    marginTop: 6,
+  },
+  deckCardBehind: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 104,
     backgroundColor: colors.card,
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  deckCardFront: {
+    width: '100%',
+    height: 104,
+    backgroundColor: colors.card,
+    borderRadius: 16,
+    borderWidth: 1.2,
+    borderColor: colors.isDark ? 'rgba(45, 186, 78, 0.4)' : 'rgba(22, 163, 74, 0.3)',
+    shadowColor: colors.shadowColor,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: colors.isDark ? 0.35 : 0.08,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  cardInnerTouchable: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+  },
+  suggestIconBox: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: colors.isDark ? 'rgba(45, 186, 78, 0.12)' : 'rgba(45, 186, 78, 0.08)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  suggestCategory: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.text,
+    marginBottom: 3,
+  },
+  suggestPrompt: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    lineHeight: 16,
+  },
+  deckControlRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 14,
+    marginTop: 18,
+  },
+  deckArrowBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  deckPaginationBadge: {
+    backgroundColor: colors.isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)',
+    paddingHorizontal: 12,
+    paddingVertical: 5,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.border,
-    padding: 16,
-    width: '100%',
   },
-  suggestedTitle: {
-    color: colors.text,
-    fontSize: 13,
-    fontWeight: '700',
-    marginBottom: 8,
-  },
-  suggestText: {
-    color: colors.accent,
+  deckPaginationText: {
     fontSize: 12,
-    fontWeight: '600',
-    paddingVertical: 4,
+    fontWeight: '700',
+    color: colors.textSecondary,
+    letterSpacing: 0.5,
   },
-  chatList: {
-    padding: 16,
+  deckSwipeHint: {
+    fontSize: 11,
+    color: colors.textTertiary || '#8E8E9F',
+    textAlign: 'center',
+    marginTop: 8,
+    fontWeight: '500',
   },
-  chatBubble: {
+  endDeckCard: {
+    width: '100%',
+    backgroundColor: colors.card,
     borderRadius: 16,
-    padding: 12,
-    marginBottom: 12,
-    maxWidth: '85%',
-  },
-  userBubble: {
-    backgroundColor: colors.chatSelfBubble,
-    alignSelf: 'flex-end',
-    borderWidth: 1,
-    borderColor: colors.accent,
-  },
-  botBubble: {
-    backgroundColor: colors.chatBotBubble,
-    alignSelf: 'flex-start',
+    padding: 20,
+    alignItems: 'center',
     borderWidth: 1,
     borderColor: colors.border,
   },
+  endIconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.isDark ? 'rgba(45, 186, 78, 0.12)' : 'rgba(45, 186, 78, 0.08)',
+    borderWidth: 1,
+    borderColor: colors.accent,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  endTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: colors.text,
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  endSub: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 17,
+    marginBottom: 16,
+    maxWidth: 280,
+  },
+  endActionRow: {
+    flexDirection: 'row',
+    gap: 10,
+    width: '100%',
+  },
+  endBtnPrimary: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.accent,
+    paddingVertical: 10,
+    borderRadius: 12,
+  },
+  endBtnPrimaryText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  endBtnSecondary: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)',
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: 10,
+    borderRadius: 12,
+  },
+  endBtnSecondaryText: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  chatList: {
+    padding: 16,
+    paddingBottom: 20,
+  },
+  chatAvatarBadge: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.accent,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+    marginTop: 4,
+  },
+  chatBubble: {
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    maxWidth: '82%',
+  },
+  userBubble: {
+    backgroundColor: colors.isDark ? '#1b3b27' : '#dcfce7',
+    alignSelf: 'flex-end',
+    borderWidth: 1,
+    borderColor: colors.accent,
+    borderBottomRightRadius: 4,
+  },
+  botBubble: {
+    backgroundColor: colors.card,
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderBottomLeftRadius: 4,
+  },
   chatText: {
     fontSize: 14,
-    lineHeight: 20,
+    lineHeight: 21,
   },
   userChatText: {
     color: colors.text,
+    fontWeight: '500',
   },
   botChatText: {
     color: colors.text,
   },
   inputArea: {
     flexDirection: 'row',
-    padding: 12,
+    paddingHorizontal: 16,
+    paddingTop: 10,
     backgroundColor: colors.card,
     alignItems: 'center',
     borderTopWidth: 1,
@@ -3992,26 +4571,14 @@ const getStyles = (colors: any) => StyleSheet.create({
     flex: 1,
     backgroundColor: colors.inputBackground,
     color: colors.text,
-    borderRadius: 24,
+    borderRadius: 22,
     paddingHorizontal: 16,
-    height: 42,
+    paddingVertical: 8,
+    minHeight: 44,
+    maxHeight: 90,
+    fontSize: 14,
     borderWidth: 1,
     borderColor: colors.inputBorder,
-  },
-  micBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginLeft: 8,
-    backgroundColor: colors.inputBackground,
-    borderWidth: 1,
-    borderColor: colors.inputBorder,
-  },
-  micBtnActive: {
-    backgroundColor: colors.accent,
-    borderColor: colors.accent,
   },
   sendBtn: {
     width: 40,
@@ -4021,6 +4588,9 @@ const getStyles = (colors: any) => StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginLeft: 8,
+  },
+  sendBtnDisabled: {
+    backgroundColor: colors.isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
   },
   typingContainer: {
     flexDirection: 'row',

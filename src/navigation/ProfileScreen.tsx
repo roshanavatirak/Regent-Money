@@ -32,18 +32,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
   const user = useAuthStore((state) => state.user);
-  const theme = useThemeStore((state) => state.theme);
-  const setTheme = useThemeStore((state) => state.setTheme);
   const { colors, isDark } = useTheme();
 
-  const biometricsEnabled = useSecurityStore((state) => state.biometricsEnabled);
-  const autoLockTimeout = useSecurityStore((state) => state.autoLockTimeout);
-  const setBiometricsEnabled = useSecurityStore((state) => state.setBiometricsEnabled);
-  const setAutoLockTimeout = useSecurityStore((state) => state.setAutoLockTimeout);
-
-  const [biometricLoading, setBiometricLoading] = useState(false);
-  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
-  const [notificationLoading, setNotificationLoading] = useState(false);
   const [avatarModalVisible, setAvatarModalVisible] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [customAvatarUrl, setCustomAvatarUrl] = useState('');
@@ -51,10 +41,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
   useEffect(() => {
     // Sync latest profile on mount
     authService.fetchProfile();
-    // Check initial notification permission status
-    notificationService.isPermissionGranted().then((granted) => {
-      setNotificationsEnabled(granted);
-    });
   }, []);
 
   const handlePickFromGallery = async () => {
@@ -94,73 +80,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
     }
   };
 
-  const handleToggleBiometrics = async (enable: boolean) => {
-    if (!enable) {
-      setBiometricsEnabled(false);
-      authService.updateSecuritySettings({ biometricsEnabled: false, autoLockTimeout });
-      return;
-    }
 
-    setBiometricLoading(true);
-    try {
-      const check = await biometricService.checkBiometrics();
-      if (!check.available) {
-        showGlobalConfirm({
-          title: 'Biometrics Unavailable',
-          message: check.errorMessage || 'Biometric hardware is not available on this device.',
-          confirmText: 'OK',
-          icon: 'alert-triangle',
-          onConfirm: () => {},
-        });
-        return;
-      }
-
-      const auth = await biometricService.authenticate('Scan fingerprint to activate Regent Money App Lock');
-      if (auth.success) {
-        setBiometricsEnabled(true);
-        authService.updateSecuritySettings({ biometricsEnabled: true, autoLockTimeout });
-      } else {
-        showGlobalConfirm({
-          title: 'Verification Failed',
-          message: auth.error || 'Biometric verification did not succeed.',
-          confirmText: 'OK',
-          icon: 'alert-triangle',
-          onConfirm: () => {},
-        });
-      }
-    } finally {
-      setBiometricLoading(false);
-    }
-  };
-
-  const handleToggleNotifications = async (enable: boolean) => {
-    setNotificationLoading(true);
-    try {
-      if (enable) {
-        const token = await notificationService.registerForPushNotifications();
-        if (token) {
-          setNotificationsEnabled(true);
-        } else {
-          setNotificationsEnabled(false);
-          showGlobalConfirm({
-            title: 'Permission Notice',
-            message:
-              'Notification permission was not granted. Please enable notifications in your phone device settings to receive 9 AM/9 PM digests.',
-            confirmText: 'OK',
-            icon: 'alert-triangle',
-            onConfirm: () => {},
-          });
-        }
-      } else {
-        await notificationService.unregisterPushToken();
-        setNotificationsEnabled(false);
-      }
-    } catch (e: any) {
-      console.warn('[ProfileScreen] Notification toggle error:', e);
-    } finally {
-      setNotificationLoading(false);
-    }
-  };
 
   const handleLogoutConfirm = () => {
     showGlobalConfirm({
@@ -323,148 +243,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
           </View>
         </View>
 
-        {/* Appearance Setting */}
-        <View style={styles.card}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-            <Feather name="moon" size={13} color={colors.accent} style={{ marginRight: 6 }} />
-            <Text style={styles.cardKicker}>INTERFACE THEME</Text>
-          </View>
-          <Text style={styles.cardSubtitle}>Choose your interface appearance preference.</Text>
-          
-          <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
-            {(['light', 'dark', 'system'] as const).map((mode) => {
-              const isSelected = theme === mode;
-              return (
-                <TouchableOpacity
-                  key={mode}
-                  onPress={() => setTheme(mode)}
-                  style={[
-                    styles.themePill,
-                    isSelected && { backgroundColor: colors.accent, borderColor: colors.accent },
-                  ]}
-                  activeOpacity={0.7}
-                >
-                  <Text
-                    style={[
-                      styles.themePillText,
-                      isSelected && { color: '#ffffff', fontWeight: '800' },
-                    ]}
-                  >
-                    {mode}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
-
-        {/* Security & Biometric Lock */}
-        <View style={styles.card}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-            <Ionicons name="shield-checkmark-outline" size={14} color={colors.accent} style={{ marginRight: 6 }} />
-            <Text style={styles.cardKicker}>PRIVACY & BIOMETRIC LOCK</Text>
-          </View>
-          <Text style={styles.cardSubtitle}>
-            Secure Regent Money with your fingerprint or face recognition upon returning.
-          </Text>
-
-          <View style={styles.securityRow}>
-            <View style={{ flex: 1, marginRight: 12 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <Ionicons name="finger-print" size={16} color={colors.accent} style={{ marginRight: 6 }} />
-                <Text style={styles.securityTitle}>Biometric Fingerprint Lock</Text>
-              </View>
-              <Text style={styles.securityDesc}>
-                {biometricsEnabled
-                  ? 'Active — device authentication requested on resume'
-                  : 'Disabled — toggle to configure and verify fingerprint'}
-              </Text>
-            </View>
-            {biometricLoading ? (
-              <ActivityIndicator size="small" color={colors.accent} />
-            ) : (
-              <Switch
-                value={biometricsEnabled}
-                onValueChange={handleToggleBiometrics}
-                thumbColor={biometricsEnabled ? colors.accent : colors.text}
-                trackColor={{ false: colors.buttonSecondaryBackground, true: colors.accentMuted }}
-              />
-            )}
-          </View>
-
-          {biometricsEnabled && (
-            <View style={styles.autoLockSection}>
-              <Text style={styles.autoLockLabel}>Auto-Lock Inactivity Timeout</Text>
-              <Text style={styles.autoLockDesc}>
-                Lock the app when it remains in the background for:
-              </Text>
-
-              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-                {([1, 5, 10] as const).map((mins) => {
-                  const isSelected = autoLockTimeout === mins;
-                  return (
-                    <TouchableOpacity
-                      key={mins}
-                      onPress={() => {
-                        setAutoLockTimeout(mins);
-                        authService.updateSecuritySettings({ autoLockTimeout: mins });
-                      }}
-                      style={[
-                        styles.timeoutPill,
-                        isSelected && { backgroundColor: colors.accent, borderColor: colors.accent },
-                      ]}
-                      activeOpacity={0.7}
-                    >
-                      <Text
-                        style={[
-                          styles.timeoutPillText,
-                          isSelected && { color: '#ffffff', fontWeight: '800' },
-                        ]}
-                      >
-                        {mins} min
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </View>
-          )}
-        </View>
-
-        {/* Push Notifications & Daily Humor Digest */}
-        <View style={styles.card}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-            <Ionicons name="notifications-outline" size={14} color={colors.accent} style={{ marginRight: 6 }} />
-            <Text style={styles.cardKicker}>NOTIFICATIONS & DAILY HUMOR</Text>
-          </View>
-          <Text style={styles.cardSubtitle}>
-            Receive daily 9:00 AM & 9:00 PM humor digests, spending insights, and instant transaction alerts.
-          </Text>
-
-          <View style={styles.securityRow}>
-            <View style={{ flex: 1, marginRight: 12 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <Ionicons name="notifications" size={16} color={colors.accent} style={{ marginRight: 6 }} />
-                <Text style={styles.securityTitle}>Push Notifications</Text>
-              </View>
-              <Text style={styles.securityDesc}>
-                {notificationsEnabled
-                  ? 'Active — 9 AM morning mood & 9 PM daily recap enabled'
-                  : 'Disabled — toggle on to receive daily humor & spending updates'}
-              </Text>
-            </View>
-            {notificationLoading ? (
-              <ActivityIndicator size="small" color={colors.accent} />
-            ) : (
-              <Switch
-                value={notificationsEnabled}
-                onValueChange={handleToggleNotifications}
-                thumbColor={notificationsEnabled ? colors.accent : colors.text}
-                trackColor={{ false: colors.buttonSecondaryBackground, true: colors.accentMuted }}
-              />
-            )}
-          </View>
-        </View>
 
         {/* Account Actions / Log Out */}
         <View style={[styles.card, { borderStyle: 'dashed' }]}>

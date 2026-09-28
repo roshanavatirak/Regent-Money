@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -16,6 +16,7 @@ import { Feather } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme, useAuthStore } from '../store';
 import { authService } from '../services/authService';
+import { DobDatePickerModal, calculateAge } from '../components/DobDatePickerModal';
 
 export const EditProfileScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
@@ -25,13 +26,34 @@ export const EditProfileScreen: React.FC = () => {
 
   const [name, setName] = useState(user?.name || '');
   const [dob, setDob] = useState(user?.dob || '');
+  const [calendarVisible, setCalendarVisible] = useState(false);
   const [gender, setGender] = useState(user?.gender || 'Male');
   const [occupation, setOccupation] = useState(user?.occupation || 'Salaried');
   const [income, setIncome] = useState(user?.currentIncome ? String(user.currentIncome) : '75000');
   const [sourcesCount, setSourcesCount] = useState(user?.incomeSourcesCount || 1);
   const [loading, setLoading] = useState(false);
 
+
   const handleSave = async () => {
+    // 18+ Age Validation Check
+    if (dob.trim()) {
+      const ageCheck = calculateAge(dob);
+      if (ageCheck.age !== null && !ageCheck.isAdult) {
+        Alert.alert(
+          'Age Requirement',
+          'You must be at least 18 years old to use Regent Money. Please select a valid birth date from the calendar.'
+        );
+        return;
+      }
+      if (ageCheck.age === null) {
+        Alert.alert(
+          'Invalid Date Format',
+          'Please choose a valid birth date from the calendar or enter in DD/MM/YYYY format.'
+        );
+        return;
+      }
+    }
+
     setLoading(true);
     try {
       const parsedIncome = parseFloat(income.replace(/[^0-9.]/g, '')) || 0;
@@ -91,13 +113,25 @@ export const EditProfileScreen: React.FC = () => {
 
           {/* Date of Birth */}
           <Text style={styles.formFieldLabel}>DATE OF BIRTH (DD / MM / YYYY)</Text>
-          <TextInput
-            style={styles.formInput}
-            value={dob}
-            onChangeText={setDob}
-            placeholder="e.g. 15/08/1998"
-            placeholderTextColor={colors.textTertiary}
-          />
+
+          <View style={styles.dobInputRow}>
+            <TextInput
+              style={styles.dobTextInput}
+              value={dob}
+              onChangeText={setDob}
+              placeholder="e.g. 15/08/1998"
+              placeholderTextColor={colors.textTertiary}
+              keyboardType="numbers-and-punctuation"
+              maxLength={10}
+            />
+            <TouchableOpacity
+              style={styles.calendarTriggerBtn}
+              onPress={() => setCalendarVisible(true)}
+              activeOpacity={0.7}
+            >
+              <Feather name="calendar" size={17} color={colors.accent} />
+            </TouchableOpacity>
+          </View>
 
           {/* Gender */}
           <Text style={styles.formFieldLabel}>GENDER</Text>
@@ -184,6 +218,14 @@ export const EditProfileScreen: React.FC = () => {
           </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Dynamic 18+ Date Picker Modal */}
+      <DobDatePickerModal
+        visible={calendarVisible}
+        initialDateString={dob}
+        onClose={() => setCalendarVisible(false)}
+        onSelectDate={(formattedDate) => setDob(formattedDate)}
+      />
     </View>
   );
 };
@@ -242,6 +284,63 @@ const getStyles = (colors: any, isDark: boolean) =>
       fontSize: 13.5,
       color: colors.text,
       fontWeight: '600',
+    },
+    fieldHeaderRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginTop: 14,
+      marginBottom: 6,
+    },
+    dobInputRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.card,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 12,
+      paddingRight: 6,
+    },
+    dobTextInput: {
+      flex: 1,
+      paddingHorizontal: 14,
+      paddingVertical: 11,
+      fontSize: 13.5,
+      color: colors.text,
+      fontWeight: '600',
+    },
+    calendarTriggerBtn: {
+      width: 36,
+      height: 36,
+      borderRadius: 10,
+      backgroundColor: isDark ? 'rgba(45, 186, 78, 0.15)' : 'rgba(45, 186, 78, 0.08)',
+      justifyContent: 'center',
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(45, 186, 78, 0.3)' : 'rgba(45, 186, 78, 0.2)',
+    },
+    ageBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 6,
+    },
+    ageBadgeSuccess: {
+      backgroundColor: isDark ? 'rgba(45, 186, 78, 0.15)' : 'rgba(45, 186, 78, 0.08)',
+    },
+    ageBadgeWarning: {
+      backgroundColor: isDark ? 'rgba(245, 158, 11, 0.15)' : 'rgba(245, 158, 11, 0.08)',
+    },
+    ageBadgeText: {
+      fontSize: 10.5,
+      fontWeight: '700',
+    },
+    ageBadgeTextSuccess: {
+      color: colors.accent,
+    },
+    ageBadgeTextWarning: {
+      color: '#f59e0b',
     },
     pillRow: {
       flexDirection: 'row',
