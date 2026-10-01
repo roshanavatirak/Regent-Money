@@ -32,7 +32,10 @@ object SmsDirectSyncWorker {
             try {
                 val prefs = context.getSharedPreferences("regent_native_prefs", Context.MODE_PRIVATE)
                 val token = prefs.getString("auth_access_token", null)
-                val backendUrl = prefs.getString("backend_url", "https://regent-money.onrender.com")
+                var backendUrl = prefs.getString("backend_url", "https://regent-money.onrender.com") ?: "https://regent-money.onrender.com"
+                if (backendUrl.contains("localhost")) {
+                    backendUrl = "https://regent-money.onrender.com"
+                }
 
                 if (token.isNullOrBlank()) {
                     Log.w(TAG, "No user auth token found in native storage. Skipping native ingestion.")

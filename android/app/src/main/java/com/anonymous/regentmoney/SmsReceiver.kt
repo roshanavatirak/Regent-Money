@@ -13,11 +13,15 @@ class SmsReceiver : BroadcastReceiver() {
         if (intent.action == Telephony.Sms.Intents.SMS_RECEIVED_ACTION) {
             try {
                 val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
-                for (message in messages) {
-                    val sender = message.displayOriginatingAddress ?: ""
-                    val body = message.displayMessageBody ?: ""
-                    val timestamp = message.timestampMillis
-                    Log.d("SmsReceiver", "Received SMS from $sender: $body")
+                if (messages.isNullOrEmpty()) return
+
+                // Group multi-part SMS segments by sender so concatenated messages are reconstructed
+                val messagesBySender = messages.groupBy { it.displayOriginatingAddress ?: "" }
+
+                for ((sender, msgList) in messagesBySender) {
+                    val body = msgList.joinToString(separator = "") { it.displayMessageBody ?: "" }
+                    val timestamp = msgList.firstOrNull()?.timestampMillis ?: System.currentTimeMillis()
+                    Log.d("SmsReceiver", "Received SMS from $sender (length: ${body.length}): $body")
 
                     // 1. Direct Native Ingestion (<50ms, zero JS dependency)
                     try {

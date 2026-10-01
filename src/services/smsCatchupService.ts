@@ -37,9 +37,8 @@ export const smsCatchupService = {
       return null;
     }
 
-    const user = useAuthStore.getState().user;
     const token = authService.getAccessToken();
-    if (!user || !token) {
+    if (!token) {
       return null;
     }
 

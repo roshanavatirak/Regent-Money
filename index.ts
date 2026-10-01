@@ -76,21 +76,44 @@ const SmsBackgroundSyncTask = async (taskData: any) => {
 
     const { matchesSmsSender } = require('./src/constants/bankSmsSenders');
 
-    // 2. Suffix + SMS Sender Tag match
-    const matchedBank = bankProfiles.find((bank: any) => {
+    const parsedSuffix = (parsed.accountSuffix || '').replace(/\D/g, '').slice(-4);
+
+    // 2. Multi-tier Cascade Matching:
+    // Tier 1: Suffix + Sender Tag
+    let matchedBank = parsedSuffix ? bankProfiles.find((bank: any) => {
       const dbSuffix = (bank.accountNumberSuffix || bank.account_number_suffix || '').replace(/\D/g, '').slice(-4);
-      const parsedSuffix = (parsed.accountSuffix || '').replace(/\D/g, '').slice(-4);
-      const suffixMatches = dbSuffix && parsedSuffix && dbSuffix === parsedSuffix;
+      const suffixMatches = dbSuffix && dbSuffix === parsedSuffix;
       const senderMatches = matchesSmsSender(sender, bank.smsSenderId || bank.sms_sender_id);
       return suffixMatches && senderMatches;
-    }) || bankProfiles.find((bank: any) => {
-      const dbSuffix = (bank.accountNumberSuffix || bank.account_number_suffix || '').replace(/\D/g, '').slice(-4);
-      const parsedSuffix = (parsed.accountSuffix || '').replace(/\D/g, '').slice(-4);
-      return dbSuffix && parsedSuffix && dbSuffix === parsedSuffix;
-    });
+    }) : null;
+
+    // Tier 2: Suffix alone
+    if (!matchedBank && parsedSuffix) {
+      matchedBank = bankProfiles.find((bank: any) => {
+        const dbSuffix = (bank.accountNumberSuffix || bank.account_number_suffix || '').replace(/\D/g, '').slice(-4);
+        return dbSuffix && dbSuffix === parsedSuffix;
+      });
+    }
+
+    // Tier 3: Sender tag or Bank name match (crucial for UPI transactions without suffix)
+    if (!matchedBank) {
+      matchedBank = bankProfiles.find((bank: any) => {
+        const senderMatches = matchesSmsSender(sender, bank.smsSenderId || bank.sms_sender_id);
+        const nameMatches =
+          parsed.bankName &&
+          parsed.bankName !== 'Bank' &&
+          (bank.bankName || bank.bank_name || '').toLowerCase().includes(parsed.bankName.toLowerCase());
+        return senderMatches || nameMatches;
+      });
+    }
+
+    // Tier 4: Fallback to primary or any active bank
+    if (!matchedBank && bankProfiles.length > 0) {
+      matchedBank = bankProfiles.find((b: any) => b.isPrimary || b.is_primary) || bankProfiles[0];
+    }
 
     if (!matchedBank) {
-      console.log('[SMS Headless JS] No linked bank accounts match suffix:', parsed.accountSuffix);
+      console.log('[SMS Headless JS] No bank accounts available to link transaction.');
       return;
     }
 

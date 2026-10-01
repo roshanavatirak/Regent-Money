@@ -2666,6 +2666,9 @@ const BanksScreen = () => {
   useFocusEffect(
     useCallback(() => {
       sync();
+      if (Platform.OS === 'android') {
+        smsCatchupService.reconcile(false, 72).catch(() => {});
+      }
     }, [sync])
   );
 
@@ -3629,13 +3632,16 @@ export default function AppNavigator() {
       // Restore persisted theme after MMKV async fallback loads
       await useThemeStore.getState().rehydrateTheme();
       await authService.checkSession();
+      // Auto-scan recent SMS on Android once session and stores are completely hydrated
+      if (Platform.OS === 'android') {
+        setTimeout(() => {
+          smsCatchupService.reconcile(false, 168).catch((err) => {
+            console.warn('[AppRoot] Initial SMS catchup notice:', err);
+          });
+        }, 1500);
+      }
     };
     initAndCheck();
-  }, []);
-
-  // Auto-scan recent SMS on app mount to catch any transactions that arrived while closed
-  useEffect(() => {
-    smsCatchupService.reconcile(false, 168).catch(() => {});
   }, []);
 
   useEffect(() => {

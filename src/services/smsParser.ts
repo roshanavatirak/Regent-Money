@@ -33,12 +33,19 @@ export const parseSMS = (sender: string, body: string): ParsedTransaction | null
     return null;
   }
 
-  // 2. Exclude OTPs, verification codes, and marketing spam
+  // 2. Exclude genuine OTP requests and marketing spam
+  // NOTE: Many bank transaction SMS include disclaimers like "Never share OTP with anyone" or "Bank never asks for OTP".
+  // We only reject messages that are prompt requests for OTP verification, NOT security disclaimers.
+  const isSecurityDisclaimer = /\b(?:never\s*share|do\s*not\s*share|don't\s*share|never\s*ask|not\s*ask|never\s*call|disclose|beware\s*of)\b.*?\b(?:otp|password|pin|cvv)\b/i.test(lower);
   if (
-    /\b(?:otp|one\s*time\s*password|verification\s*code|secret\s*(?:otp|code)|pre-approved|apply\s*now)\b/i.test(
+    !isSecurityDisclaimer &&
+    /\b(?:is\s*your\s*otp|your\s*otp\s*is|use\s*otp|enter\s*otp|otp\s*to\s*verify|otp\s*for\s*(?:txn|transaction|login)|secret\s*(?:otp|code)|verification\s*code\s*is|is\s*the\s*verification\s*code|one\s*time\s*password\s*is)\b/i.test(
       lower,
     )
   ) {
+    return null;
+  }
+  if (/\b(?:pre-approved\s*loan|apply\s*now|claim\s*your\s*reward|congratulations!?\s*you\s*are\s*eligible)\b/i.test(lower)) {
     return null;
   }
 
@@ -48,13 +55,13 @@ export const parseSMS = (sender: string, body: string): ParsedTransaction | null
   let type: 'debit' | 'credit' | null = null;
 
   if (
-    /\b(?:credited|received|refunded|deposited|transferred\s*from|trf\s*from|\bcr\b|inward\s*remittance|cashback\s*received)\b/i.test(
+    /\b(?:credited|received|refunded|deposited|transferred\s*from|trf\s*from|\bcr\b|inward\s*remittance|cashback\s*received|money\s*received|added\s*to\s*(?:your\s*)?(?:a\/c|account))\b/i.test(
       textWithoutCard,
     )
   ) {
     type = 'credit';
   } else if (
-    /\b(?:debited|debit|sent|paid|spent|withdrawn|used\s*for|used\s*at|purchase\s*of|transferred\s*to|trf\s*to|\bdr\b|txn\s*of|transaction\s*of|transaction\s*on|txn\s*on|charged|payment\s*of|payment\s*to|vpa\s*debited)\b/i.test(
+    /\b(?:debited|debit|sent|paid|spent|withdrawn|used\s*for|used\s*at|purchase\s*of|transferred\s*to|trf\s*to|\bdr\b|txn\s*of|transaction\s*of|transaction\s*on|txn\s*on|charged|payment\s*of|payment\s*to|vpa\s*debited|deducted|auto-debit|auto-debited|money\s*sent)\b/i.test(
       textWithoutCard,
     )
   ) {
@@ -76,12 +83,12 @@ export const parseSMS = (sender: string, body: string): ParsedTransaction | null
   let amountMatchIndex: number = -1;
 
   const amountRegexes = [
-    // Preceded by verb: e.g. "debited by Rs 500", "was used for Rs 2,500.00", "debited: 500.00"
-    /(?:debited|credited|paid|sent|withdrawn|spent|used\s*for|charge|towards|payment\s*of|txn\s*of|transaction\s*of)\s*(?:by|for|with|of)?\s*[:\-\s]*(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d{1,2})?)/i,
+    // Preceded by verb: e.g. "debited by Rs 500", "was used for Rs 2,500.00", "debited: 500.00", "deducted Rs 200"
+    /(?:debited|credited|paid|sent|withdrawn|spent|used\s*for|charge|towards|payment\s*of|txn\s*of|transaction\s*of|deducted)\s*(?:by|for|with|of)?\s*[:\-\s]*(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d{1,2})?)/i,
     // Explicit currency symbol followed by number
     /(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)/i,
     // Verb with colon and number without currency
-    /(?:debited|credited)\s*[:\-\s]+([\d,]+(?:\.\d{1,2})?)/i,
+    /(?:debited|credited|deducted)\s*[:\-\s]+([\d,]+(?:\.\d{1,2})?)/i,
     // Suffix currency e.g. "500.00 INR"
     /([\d,]+(?:\.\d{1,2})?)\s*(?:rs\.?|inr|₹)/i,
   ];

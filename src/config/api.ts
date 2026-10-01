@@ -32,12 +32,12 @@ export const getBackendUrl = (): string => {
   }
 
   // In Native (Android / iOS):
-  if (envUrl) {
+  if (envUrl && !envUrl.includes('localhost') && !envUrl.includes('10.0.2.2')) {
     return envUrl.replace(/\/+$/, '');
   }
 
-  // Android emulator loopback to host machine
-  return 'http://10.0.2.2:3000';
+  // On native device, localhost is unreachable; fallback to live Render backend
+  return PRODUCTION_RENDER_URL;
 };
 
 export const BACKEND_URL = {
