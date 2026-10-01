@@ -17,7 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme, useAuthStore, useSidebarStore, useAppUpdateStore, showGlobalConfirm } from '../store';
 import { getAppCurrentVersion } from '../services/updateService';
 import { authService } from '../services/authService';
-import { navigationRef } from '../navigation';
+import { navigationRef } from '../navigation/navigationRef';
 
 export const AppSidebarDrawer: React.FC = () => {
   const insets = useSafeAreaInsets();
@@ -183,6 +183,32 @@ export const AppSidebarDrawer: React.FC = () => {
               contentContainerStyle={styles.menuScrollContent}
               showsVerticalScrollIndicator={false}
             >
+              {/* Section 0: FINANCIAL PLANNING */}
+              <View style={styles.sectionBlock}>
+                <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
+                  FINANCIAL PLANNING
+                </Text>
+
+                {/* Budgets & Allocation */}
+                <TouchableOpacity
+                  style={styles.menuItem}
+                  onPress={() => {
+                    closeSidebar();
+                    setTimeout(() => {
+                      if (navigationRef.isReady()) {
+                        navigationRef.navigate('Main', { screen: 'Budgets' });
+                      }
+                    }, 120);
+                  }}
+                  activeOpacity={0.65}
+                >
+                  <View style={[styles.menuIconBox, { backgroundColor: isDark ? 'rgba(45, 186, 78, 0.12)' : 'rgba(22, 163, 74, 0.10)' }]}>
+                    <Ionicons name="pie-chart-outline" size={15} color={colors.accent} />
+                  </View>
+                  <Text style={[styles.menuTitle, { color: colors.text }]}>Budgets & Allocation</Text>
+                </TouchableOpacity>
+              </View>
+
               {/* Section 1: PREFERENCES & SECURITY */}
               <View style={styles.sectionBlock}>
                 <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>

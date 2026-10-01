@@ -26,6 +26,33 @@ export class BudgetDeclaration {
   }})
   spentAmount: number;
 
+  @Column({ type: 'text', nullable: true })
+  name: string;
+
+  @Column({ name: 'is_overall', type: 'boolean', default: false })
+  isOverall: boolean;
+
+  @Column({ name: 'start_date', type: 'bigint', nullable: true, transformer: {
+    to: (value: number) => value ? String(value) : null,
+    from: (value: string) => value ? Number(value) : null
+  }})
+  startDate: number;
+
+  @Column({ name: 'end_date', type: 'bigint', nullable: true, transformer: {
+    to: (value: number) => value ? String(value) : null,
+    from: (value: string) => value ? Number(value) : null
+  }})
+  endDate: number;
+
+  @Column({ name: 'period_type', type: 'text', nullable: true, default: 'monthly' })
+  periodType: string;
+
+  @Column({ name: 'fixed_obligations', type: 'numeric', nullable: true, default: 0, transformer: {
+    to: (value: number) => value,
+    from: (value: string) => value ? parseFloat(value) : 0
+  }})
+  fixedObligations: number;
+
   @Column({ name: 'updated_at', type: 'bigint', transformer: {
     to: (value: number) => value ? String(value) : null,
     from: (value: string) => value ? Number(value) : null

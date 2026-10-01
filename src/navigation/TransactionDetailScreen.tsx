@@ -11,12 +11,15 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import { Feather } from '@expo/vector-icons';
+import { Feather, Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useTheme, showGlobalConfirm, useBankStore, useTransactionStore } from '../store';
 import { authService } from '../services/authService';
 import { getBackendUrl } from '../config/api';
+import { TagPaymentModal } from '../components/TagPaymentModal';
+import { getTagDef } from '../constants/transactionTags';
+import { tagLearningService } from '../services/tagLearningService';
 
 const BACKEND_URL = getBackendUrl();
 
@@ -71,6 +74,7 @@ export const TransactionDetailScreen: React.FC = () => {
   const [note, setNote] = useState(transaction?.merchant || '');
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [tagModalVisible, setTagModalVisible] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
 
   if (!transaction) {
@@ -136,6 +140,12 @@ export const TransactionDetailScreen: React.FC = () => {
         });
       } catch (err) {
         // Store might not track all modal transactions
+      }
+
+      // Save user learning rule for this merchant!
+      const targetMerchant = note.trim() || transaction.merchant;
+      if (targetMerchant) {
+        await tagLearningService.saveLearnedTag(targetMerchant, selectedCategory).catch(() => {});
       }
 
       if (typeof route.params?.onSuccess === 'function') {
@@ -338,49 +348,173 @@ export const TransactionDetailScreen: React.FC = () => {
             </View>
           </View>
 
-          {/* Editable Category Chips */}
+          {/* Editable Category / Tag Section */}
           <View style={styles.inputSection}>
-            <Text style={styles.inputLabel}>CATEGORY</Text>
-            <View style={styles.categoryWrap}>
-              {categories.map((cat) => {
-                const isSelected = selectedCategory === cat.id;
-                const activeColor = isCredit ? '#2dba4e' : '#ef4444';
-                const activeBg = isCredit ? 'rgba(45, 186, 78, 0.15)' : 'rgba(239, 68, 68, 0.15)';
+            <View style={styles.labelRow}>
+              <Text style={styles.inputLabel}>TRANSACTION TAG</Text>
+              <TouchableOpacity
+                onPress={() => setTagModalVisible(true)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Text style={{ fontSize: 11, fontWeight: '700', color: (colors as any).primary || colors.accent || '#0070F3' }}>
+                  Choose from 30+ Tags
+                </Text>
+              </TouchableOpacity>
+            </View>
 
-                return (
+            {/* Selected Tag Card */}
+            {(() => {
+              const currentTagDef = getTagDef(selectedCategory);
+              const quickTags = isCredit
+                ? ['salary', 'cashback', 'interest', 'money_received']
+                : ['food', 'shopping', 'groceries', 'commute', 'fuel'];
+
+              return (
+                <>
                   <TouchableOpacity
-                    key={cat.id}
                     style={[
-                      styles.categoryChip,
-                      isSelected && {
-                        borderColor: activeColor,
-                        backgroundColor: activeBg,
+                      styles.selectedTagCard,
+                      {
+                        backgroundColor: isDark ? '#1C1C26' : '#F9FAFB',
+                        borderColor: isDark ? '#2D2D3D' : '#E5E7EB',
                       },
                     ]}
-                    onPress={() => setSelectedCategory(cat.id)}
+                    onPress={() => setTagModalVisible(true)}
                     activeOpacity={0.7}
                   >
-                    <Feather
-                      name={cat.iconName}
-                      size={13}
-                      color={isSelected ? activeColor : colors.textSecondary}
-                      style={{ marginRight: 6 }}
-                    />
-                    <Text
+                    <View
                       style={[
-                        styles.categoryChipText,
-                        isSelected && {
-                          color: isDark ? '#ffffff' : '#000000',
-                          fontWeight: '700',
+                        styles.selectedTagIconWrap,
+                        {
+                          backgroundColor: isDark ? currentTagDef.bgColorDark : currentTagDef.bgColorLight,
                         },
                       ]}
                     >
-                      {cat.label}
-                    </Text>
+                      {currentTagDef.iconType === 'ionicons' ? (
+                        <Ionicons
+                          name={currentTagDef.iconName as any}
+                          size={22}
+                          color={currentTagDef.iconColor}
+                        />
+                      ) : (
+                        <Feather
+                          name={currentTagDef.iconName as any}
+                          size={20}
+                          color={currentTagDef.iconColor}
+                        />
+                      )}
+                    </View>
+
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <Text
+                        style={[
+                          styles.selectedTagName,
+                          { color: isDark ? '#FFFFFF' : '#111827' },
+                        ]}
+                      >
+                        {currentTagDef.label}
+                      </Text>
+                      <Text style={styles.selectedTagSub}>
+                        {note || transaction.merchant
+                          ? `Auto-learned for "${note || transaction.merchant}"`
+                          : 'Tap to change category'}
+                      </Text>
+                    </View>
+
+                    <View
+                      style={[
+                        styles.changeTagBtn,
+                        { borderColor: isDark ? '#3D3D52' : '#D1D5DB' },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.changeTagBtnText,
+                          { color: isDark ? '#9CA3AF' : '#4B5563' },
+                        ]}
+                      >
+                        Change
+                      </Text>
+                      <Feather
+                        name="chevron-right"
+                        size={14}
+                        color={isDark ? '#9CA3AF' : '#4B5563'}
+                      />
+                    </View>
                   </TouchableOpacity>
-                );
-              })}
-            </View>
+
+                  {/* Quick Tag Pills */}
+                  <View style={styles.quickTagRow}>
+                    {quickTags.map((tagId) => {
+                      const def = getTagDef(tagId);
+                      const isSelected =
+                        selectedCategory.toLowerCase() === def.id.toLowerCase();
+                      return (
+                        <TouchableOpacity
+                          key={def.id}
+                          style={[
+                            styles.quickTagChip,
+                            {
+                              backgroundColor: isSelected
+                                ? isDark
+                                  ? 'rgba(0, 112, 243, 0.2)'
+                                  : '#EEF2FF'
+                                : isDark
+                                ? '#232332'
+                                : '#F3F4F6',
+                              borderColor: isSelected
+                                ? '#0070F3'
+                                : 'transparent',
+                            },
+                          ]}
+                          onPress={() => setSelectedCategory(def.id)}
+                          activeOpacity={0.7}
+                        >
+                          <Text
+                            style={[
+                              styles.quickTagChipText,
+                              {
+                                color: isSelected
+                                  ? '#0070F3'
+                                  : isDark
+                                  ? '#D1D5DB'
+                                  : '#4B5563',
+                                fontWeight: isSelected ? '800' : '600',
+                              },
+                            ]}
+                          >
+                            {def.label}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                    <TouchableOpacity
+                      style={[
+                        styles.quickTagChip,
+                        { backgroundColor: isDark ? '#232332' : '#F3F4F6' },
+                      ]}
+                      onPress={() => setTagModalVisible(true)}
+                      activeOpacity={0.7}
+                    >
+                      <Feather
+                        name="plus"
+                        size={12}
+                        color="#0070F3"
+                        style={{ marginRight: 2 }}
+                      />
+                      <Text
+                        style={[
+                          styles.quickTagChipText,
+                          { color: '#0070F3', fontWeight: '800' },
+                        ]}
+                      >
+                        More
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              );
+            })()}
           </View>
 
           {/* Editable Note / Merchant */}
@@ -438,6 +572,17 @@ export const TransactionDetailScreen: React.FC = () => {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Paytm-Style Tag Payment Modal */}
+      <TagPaymentModal
+        visible={tagModalVisible}
+        onClose={() => setTagModalVisible(false)}
+        selectedTag={selectedCategory}
+        onSelectTag={(tag) => setSelectedCategory(tag)}
+        merchantName={note.trim() || transaction.merchant}
+        isDark={isDark}
+        colors={colors}
+      />
     </View>
   );
 };
@@ -609,5 +754,59 @@ const getStyles = (colors: any, isDark: boolean) =>
       color: '#ffffff',
       fontSize: 14,
       fontWeight: '700',
+    },
+    selectedTagCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      padding: 12,
+      borderRadius: 16,
+      borderWidth: 1,
+      marginTop: 8,
+    },
+    selectedTagIconWrap: {
+      width: 44,
+      height: 44,
+      borderRadius: 14,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    selectedTagName: {
+      fontSize: 15,
+      fontWeight: '800',
+      marginBottom: 2,
+    },
+    selectedTagSub: {
+      fontSize: 11,
+      color: '#8E8E9F',
+    },
+    changeTagBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 5,
+      paddingHorizontal: 10,
+      borderRadius: 12,
+      borderWidth: 1,
+    },
+    changeTagBtnText: {
+      fontSize: 12,
+      fontWeight: '700',
+      marginRight: 2,
+    },
+    quickTagRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 6,
+      marginTop: 10,
+    },
+    quickTagChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 6,
+      paddingHorizontal: 11,
+      borderRadius: 10,
+      borderWidth: 1,
+    },
+    quickTagChipText: {
+      fontSize: 11,
     },
   });

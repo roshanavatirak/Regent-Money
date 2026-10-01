@@ -30,7 +30,8 @@ import {
 import { NavigationContainer, useFocusEffect, createNavigationContainerRef, useNavigation } from '@react-navigation/native';
 import { createBottomTabNavigator, BottomTabBarProps } from '@react-navigation/bottom-tabs';
 
-export const navigationRef = createNavigationContainerRef<any>();
+import { navigationRef } from './navigationRef';
+export { navigationRef };
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -59,6 +60,8 @@ import { updateService, UpdateInfo } from '../services/updateService';
 import { ACCOUNT_TYPES } from './EditBankScreen';
 import bankNamesJson from './banknames.json';
 import { getExecutiveGreeting, getSessionGreeting } from '../constants/aiGreetings';
+import { SmsSenderTagsManager } from '../components/SmsSenderTagsManager';
+import { getSmsSenderSuggestions, formatSmsSenderTags } from '../constants/bankSmsSenders';
 
 const POPULAR_BANKS = [
   { code: 'SBIN', name: 'State Bank of India', short: 'SBI Bank' },
@@ -241,6 +244,8 @@ import { SettingsScreen } from './SettingsScreen';
 import { PrivacyCenterScreen } from './PrivacyCenterScreen';
 import { SuggestFeatureScreen } from './SuggestFeatureScreen';
 import { ReportBugScreen } from './ReportBugScreen';
+import { BudgetScreen } from './BudgetScreen';
+import { CreateBudgetScreen } from './CreateBudgetScreen';
 import { smsCatchupService } from '../services/smsCatchupService';
 import {
   askChatbot,
@@ -343,7 +348,7 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
   const [accountTypeDropdownOpen, setAccountTypeDropdownOpen] = useState(false);
   const [accountSuffix, setAccountSuffix] = useState('');
   const [balance, setBalance] = useState('');
-  const [smsSenderId, setSmsSenderId] = useState('');
+  const [smsSenderTags, setSmsSenderTags] = useState<string[]>([]);
   const [upiId, setUpiId] = useState('');
   const [customKeywords, setCustomKeywords] = useState('');
 
@@ -359,7 +364,7 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
     setAccountTypeDropdownOpen(false);
     setAccountSuffix('');
     setBalance('');
-    setSmsSenderId('');
+    setSmsSenderTags([]);
     setUpiId('');
     setCustomKeywords('');
     setFormError('');
@@ -376,9 +381,9 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
     setSelectedBank(bank);
     setBankNameInput(bank.name);
 
-    // Guess SMS Sender ID based on dictionary, fallback to bank.code + "BK"
-    const guessedSender = BANK_DEFAULT_SMS_SENDER[bank.code] || `${bank.code}BK`;
-    setSmsSenderId(guessedSender);
+    // Pre-populate with known default SMS sender tags (e.g. SBIPSG, SBIBNK, SBIUPI, SBIINB)
+    const suggestions = getSmsSenderSuggestions(bank.code);
+    setSmsSenderTags(suggestions.length > 0 ? suggestions.slice(0, 4) : [`${bank.code}BK`]);
 
     setFormStep(2);
   };
@@ -459,7 +464,7 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
           accountType: accountType || 'Savings',
           accountNumberSuffix: accountSuffix.trim(),
           currentBalance: parseFloat(balance),
-          smsSenderId: smsSenderId.trim() || undefined,
+          smsSenderId: formatSmsSenderTags(smsSenderTags) || undefined,
           upiId: upiId.trim() || undefined,
           customKeywords: customKeywords.trim() || undefined,
           smsConsent: true,
@@ -735,23 +740,17 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
                   </View>
                 </View>
 
-                {/* SMS Sender ID Input */}
+                {/* SMS Sender Tags Manager */}
                 <View style={styles.formFieldContainer}>
-                  <Text style={styles.formFieldLabel}>SMS Sender ID / Header</Text>
-                  <View style={styles.formInputGroup}>
-                    <Feather name="message-square" size={16} color={colors.textSecondary} style={styles.formInputIcon} />
-                    <TextInput
-                      style={styles.formInputField}
-                      placeholder="e.g. HDFCBK"
-                      placeholderTextColor={isDark ? 'rgba(250, 251, 252, 0.4)' : colors.textTertiary}
-                      value={smsSenderId}
-                      onChangeText={setSmsSenderId}
-                      autoCapitalize="characters"
-                    />
-                  </View>
-                  <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 4, lineHeight: 15 }}>
-                    The sender address of the SMS notification (e.g. AD-HDFCBK to HDFCBK).
-                  </Text>
+                  <SmsSenderTagsManager
+                    tags={smsSenderTags}
+                    onChangeTags={setSmsSenderTags}
+                    bankCodeOrName={selectedBank?.code || bankNameInput}
+                    colors={colors}
+                    isDark={isDark}
+                    label="SMS SENDER CODES / HEADERS"
+                    hint="Transactions from any of these sender codes (e.g. SBIPSG, SBIBNK) will be automatically read."
+                  />
                 </View>
 
                 {/* UPI ID Input */}
@@ -2613,6 +2612,20 @@ const ChatScreen = () => {
 // ----------------------------------------------------
 const GoalsTabScreen = () => <GoalsScreen AppTopBarComponent={AppTopBar} />;
 
+// ----------------------------------------------------
+// 3b. Budgets Screen Component
+// ----------------------------------------------------
+const BudgetTabScreen = () => <BudgetScreen AppTopBarComponent={AppTopBar} />;
+
+const BudgetStackScreen = ({ navigation }: any) => {
+  useEffect(() => {
+    navigation.replace('Main', { screen: 'Budgets' });
+  }, [navigation]);
+  return <BudgetScreen AppTopBarComponent={AppTopBar} />;
+};
+
+const CreateBudgetStackScreen = () => <CreateBudgetScreen AppTopBarComponent={AppTopBar} />;
+
 
 // ----------------------------------------------------
 // 4. Settings Screen Component
@@ -3011,6 +3024,12 @@ const TAB_CONFIG: { [key: string]: TabItemConfig } = {
     inactiveIcon: 'home-outline',
     size: 20,
   },
+  Budgets: {
+    label: 'Budgets',
+    activeIcon: 'pie-chart',
+    inactiveIcon: 'pie-chart-outline',
+    size: 19,
+  },
   Goals: {
     label: 'Goals',
     activeIcon: 'trophy',
@@ -3121,10 +3140,10 @@ const CustomTabButton = ({
             flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
-            paddingHorizontal: isSmall ? 4 : (isMedium ? 8 : 12),
+            paddingHorizontal: isSmall ? 2 : (isMedium ? 6 : 10),
             paddingVertical: 4,
             maxWidth: '96%',
-            minWidth: isSmall ? 44 : 50,
+            minWidth: isSmall ? 36 : 46,
           },
           animatedStyle,
         ]}
@@ -3205,7 +3224,7 @@ const CustomBottomTabBar = ({ state, descriptors, navigation, insets }: BottomTa
 
   // Responsive margins ensuring perfect clearance on all devices
   const barMarginHorizontal = isSmall ? 10 : 16;
-  const maxBarWidth = 520;
+  const maxBarWidth = 560;
   const barWidth = Math.min(windowWidth - barMarginHorizontal * 2, maxBarWidth);
 
   // Safe bottom offset considering home indicator and gesture navigation
@@ -3251,6 +3270,12 @@ const CustomBottomTabBar = ({ state, descriptors, navigation, insets }: BottomTa
           const isFocused = state.index === index;
 
           const onPress = () => {
+            if (Platform.OS === 'web' && typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+              try {
+                document.activeElement.blur();
+              } catch {}
+            }
+
             const event = navigation.emit({
               type: 'tabPress',
               target: route.key,
@@ -3298,6 +3323,7 @@ function TabNavigator() {
       }}
     >
       <Tab.Screen name="Home" component={DashboardScreen} />
+      <Tab.Screen name="Budgets" component={BudgetTabScreen} />
       <Tab.Screen name="Goals" component={GoalsTabScreen} />
       <Tab.Screen name="Banks" component={BanksScreen} />
       <Tab.Screen name="AI Chat" component={ChatScreen} />
@@ -3603,9 +3629,13 @@ export default function AppNavigator() {
       // Restore persisted theme after MMKV async fallback loads
       await useThemeStore.getState().rehydrateTheme();
       await authService.checkSession();
-      smsCatchupService.reconcile().catch(() => {});
     };
     initAndCheck();
+  }, []);
+
+  // Auto-scan recent SMS on app mount to catch any transactions that arrived while closed
+  useEffect(() => {
+    smsCatchupService.reconcile(false, 168).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -3618,6 +3648,11 @@ export default function AppNavigator() {
         setLocked,
         isLocked,
       } = useSecurityStore.getState();
+
+      if (nextAppState === 'active') {
+        // Automatic catch-up scan whenever user switches back into the app
+        smsCatchupService.reconcile(false, 72).catch(() => {});
+      }
 
       if (!biometricsEnabled) return;
 
@@ -3635,8 +3670,6 @@ export default function AppNavigator() {
           }
         }
         setLastBackgroundTimestamp(null);
-        // Catch up on any SMS messages received while app was in background or suspended
-        smsCatchupService.reconcile().catch(() => {});
       }
     };
 
@@ -3770,6 +3803,24 @@ export default function AppNavigator() {
                     options={{
                       presentation: 'card',
                       animation: 'slide_from_right',
+                      headerShown: false,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="BudgetScreen"
+                    component={BudgetStackScreen}
+                    options={{
+                      presentation: 'card',
+                      animation: 'slide_from_right',
+                      headerShown: false,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="CreateBudget"
+                    component={CreateBudgetStackScreen}
+                    options={{
+                      presentation: 'card',
+                      animation: 'slide_from_bottom',
                       headerShown: false,
                     }}
                   />

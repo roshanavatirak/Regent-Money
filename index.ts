@@ -17,6 +17,21 @@ if (Platform.OS === 'web' && typeof window !== 'undefined') {
       }
     }
   });
+
+  // Prevent Chrome "Blocked aria-hidden on an element because its descendant retained focus"
+  if (typeof Element !== 'undefined' && Element.prototype && Element.prototype.setAttribute) {
+    const originalSetAttribute = Element.prototype.setAttribute;
+    Element.prototype.setAttribute = function (name: string, value: string) {
+      if (name === 'aria-hidden' && (value === 'true' || value === '')) {
+        if (typeof document !== 'undefined' && document.activeElement && this.contains(document.activeElement)) {
+          try {
+            (document.activeElement as HTMLElement).blur?.();
+          } catch {}
+        }
+      }
+      return originalSetAttribute.apply(this, arguments as any);
+    };
+  }
 }
 
 const SmsBackgroundSyncTask = async (taskData: any) => {
@@ -59,8 +74,16 @@ const SmsBackgroundSyncTask = async (taskData: any) => {
     const syncData = await syncRes.json();
     const bankProfiles = syncData.bankProfiles || [];
 
-    // 2. Suffix match (last 4 digits after stripping non-digits)
+    const { matchesSmsSender } = require('./src/constants/bankSmsSenders');
+
+    // 2. Suffix + SMS Sender Tag match
     const matchedBank = bankProfiles.find((bank: any) => {
+      const dbSuffix = (bank.accountNumberSuffix || bank.account_number_suffix || '').replace(/\D/g, '').slice(-4);
+      const parsedSuffix = (parsed.accountSuffix || '').replace(/\D/g, '').slice(-4);
+      const suffixMatches = dbSuffix && parsedSuffix && dbSuffix === parsedSuffix;
+      const senderMatches = matchesSmsSender(sender, bank.smsSenderId || bank.sms_sender_id);
+      return suffixMatches && senderMatches;
+    }) || bankProfiles.find((bank: any) => {
       const dbSuffix = (bank.accountNumberSuffix || bank.account_number_suffix || '').replace(/\D/g, '').slice(-4);
       const parsedSuffix = (parsed.accountSuffix || '').replace(/\D/g, '').slice(-4);
       return dbSuffix && parsedSuffix && dbSuffix === parsedSuffix;

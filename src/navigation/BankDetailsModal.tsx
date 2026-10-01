@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { 
   Modal, 
   View, 
@@ -10,11 +10,13 @@ import {
   Alert, 
   StyleSheet, 
   FlatList,
+  SectionList,
   Switch,
   KeyboardAvoidingView,
   Platform,
   PermissionsAndroid,
-  Linking
+  Linking,
+  NativeModules
 } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -28,6 +30,9 @@ import { parseStatementTextWithAI } from '../services/aiService';
 import { syncService } from '../services/syncService';
 import { getBackendUrl } from '../config/api';
 import { ReviewTransactionsModal } from './ReviewTransactionsModal';
+import { smsCatchupService } from '../services/smsCatchupService';
+import { smsPermissionService } from '../services/smsPermissionService';
+import { parseSmsSenderTags } from '../constants/bankSmsSenders';
 
 const BACKEND_URL = getBackendUrl();
 
@@ -150,6 +155,62 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
     }
   };
 
+  const [isSyncingSms, setIsSyncingSms] = useState(false);
+
+  const handleSyncLast48HoursSms = async () => {
+    if (!activeBank) return;
+    setOptionsMenuVisible(false);
+
+    if (Platform.OS !== 'android') {
+      Alert.alert(
+        'Android Device Only',
+        'Automatic SMS inbox scanning is only available on Android devices.'
+      );
+      return;
+    }
+
+    setIsSyncingSms(true);
+    try {
+      const granted = await smsPermissionService.requestSmsPermissions();
+      if (!granted) {
+        Alert.alert(
+          'SMS Permission Denied',
+          'SMS read permission is required to scan your inbox for bank alerts. Please allow SMS permission in Android Settings.'
+        );
+        return;
+      }
+
+      const Sms = NativeModules.Sms;
+      if (!Sms || typeof Sms.list !== 'function') {
+        Alert.alert(
+          'Module Unavailable',
+          'Native SMS reader is not compiled into your currently installed build.'
+        );
+        return;
+      }
+
+      const res = await smsCatchupService.reconcile(true, 48, activeBank.id);
+      await fetchIncomeRecords();
+      await syncService.sync(true).catch(() => {});
+
+      if (res && res.syncedCount > 0) {
+        Alert.alert(
+          'Sync Complete',
+          `Successfully recovered and added ${res.syncedCount} missed transaction(s) for ${activeBank.bankName || 'Bank'}! Balance updated.`
+        );
+      } else {
+        Alert.alert(
+          'Inbox Up to Date',
+          `Scanned SMS inbox for the last 48 hours for •••• ${activeBank.accountNumberSuffix}. No new missed transactions found. Duplicate entries avoided.`
+        );
+      }
+    } catch (err: any) {
+      Alert.alert('Scan Failed', err?.message || 'Error scanning SMS inbox.');
+    } finally {
+      setIsSyncingSms(false);
+    }
+  };
+
   // Fetch Income Records for Credit transactions
   const fetchIncomeRecords = async () => {
     if (!bank) return;
@@ -193,12 +254,13 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
     }
   }, [visible, bank]);
 
-  if (!bank) return null;
-
   // Filter transactions for this bank
-  const bankDebits = transactions
-    .filter((tx) => tx.bankProfileId === bank.id)
-    .map((tx) => ({ ...tx, type: 'debit' }));
+  const currentBankId = activeBank?.id || bank?.id;
+  const bankDebits = currentBankId
+    ? transactions
+        .filter((tx) => tx.bankProfileId === currentBankId)
+        .map((tx) => ({ ...tx, type: 'debit' }))
+    : [];
 
   const mergedList = [...bankDebits, ...incomeRecords].sort(
     (a, b) => b.timestamp - a.timestamp
@@ -216,6 +278,42 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
     }
     return true;
   });
+
+  // Group filtered transactions by Month & Year with totals for Paytm-style sticky headers
+  const sections = useMemo(() => {
+    const groups: { [key: string]: { title: string; totalSpent: number; totalIncome: number; data: any[] } } = {};
+    const order: string[] = [];
+
+    for (const item of filteredData) {
+      const parsedTime = typeof item.timestamp === 'number' ? item.timestamp : new Date(item.timestamp).getTime();
+      const date = isNaN(parsedTime) ? new Date() : new Date(parsedTime);
+      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+
+      if (!groups[key]) {
+        const title = date.toLocaleDateString('en-IN', {
+          month: 'long',
+          year: 'numeric',
+        });
+        groups[key] = {
+          title,
+          totalSpent: 0,
+          totalIncome: 0,
+          data: [],
+        };
+        order.push(key);
+      }
+
+      groups[key].data.push(item);
+      const amt = Number(item.amount) || 0;
+      if (item.type === 'debit') {
+        groups[key].totalSpent += amt;
+      } else {
+        groups[key].totalIncome += amt;
+      }
+    }
+
+    return order.map((key) => groups[key]);
+  }, [filteredData]);
 
   // Local regex matcher for common SMS transaction formats
   const parseTextLocally = (text: string) => {
@@ -300,7 +398,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        bankProfileId: bank.id,
+        bankProfileId: (activeBank || bank)?.id,
         transactions: parsedTxs,
       }),
     });
@@ -349,7 +447,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
       if (!token) throw new Error('Session credentials missing.');
 
       const formData = new FormData();
-      formData.append('bankProfileId', bank.id);
+      formData.append('bankProfileId', (activeBank || bank)?.id);
       if (password) {
         formData.append('password', password);
       }
@@ -452,7 +550,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
 
       const asset = result.assets[0];
       const formData = new FormData();
-      formData.append('bankProfileId', bank.id);
+      formData.append('bankProfileId', (activeBank || bank)?.id);
 
       if (Platform.OS === 'web' && (asset as any).file) {
         formData.append('file', (asset as any).file);
@@ -628,6 +726,54 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
               </TouchableOpacity>
             </View>
 
+            {/* Active SMS Sender Codes */}
+            {(() => {
+              const tags = parseSmsSenderTags(activeBank.smsSenderId);
+              return (
+                <View style={[styles.smsTagsBanner, { backgroundColor: isDark ? '#1C1C24' : '#F9FAFB', borderColor: isDark ? '#2D2D3A' : '#E5E7EB' }]}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <Feather name="message-square" size={12} color={colors.accent || '#03DAC6'} style={{ marginRight: 5 }} />
+                      <Text style={[styles.smsTagsTitle, { color: colors.textSecondary }]}>TRACKED SMS HEADERS</Text>
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => {
+                        onClose();
+                        navigation.navigate('EditBank', { bank: activeBank });
+                      }}
+                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    >
+                      <Text style={{ fontSize: 11, color: colors.accent || '#03DAC6', fontWeight: '700' }}>
+                        + Manage Tags
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 5 }}>
+                    {tags.length > 0 ? (
+                      tags.map((tag: string) => (
+                        <View
+                          key={tag}
+                          style={[
+                            styles.smsTagPill,
+                            {
+                              backgroundColor: isDark ? 'rgba(3, 218, 198, 0.12)' : 'rgba(3, 218, 198, 0.15)',
+                              borderColor: isDark ? 'rgba(3, 218, 198, 0.3)' : 'rgba(3, 218, 198, 0.4)',
+                            },
+                          ]}
+                        >
+                          <Text style={[styles.smsTagPillText, { color: colors.accent || '#03DAC6' }]}>{tag}</Text>
+                        </View>
+                      ))
+                    ) : (
+                      <Text style={{ fontSize: 11, color: colors.textTertiary, fontStyle: 'italic' }}>
+                        Listening to all bank SMS alerts. Tap Manage Tags to specify codes.
+                      </Text>
+                    )}
+                  </View>
+                </View>
+              );
+            })()}
+
             {/* Search bar */}
             <View style={styles.searchContainer}>
               <Feather name="search" size={16} color={colors.textSecondary} style={{ marginRight: 8 }} />
@@ -663,20 +809,59 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
               })}
             </View>
 
-            {/* Transactions List */}
+            {/* Transactions List with Paytm-style Sticky Month Headers */}
             {loadingIncome ? (
               <ActivityIndicator size="small" color="#2dba4e" style={{ marginTop: 20 }} />
-            ) : filteredData.length === 0 ? (
+            ) : sections.length === 0 ? (
               <View style={styles.emptyContainer}>
                 <Feather name="archive" size={32} color="#8E8E9F" style={{ marginBottom: 8 }} />
                 <Text style={styles.emptyText}>No transactions found for this account.</Text>
               </View>
             ) : (
-              <FlatList
-                data={filteredData}
-                keyExtractor={(item) => item.id}
+              <SectionList
+                sections={sections}
+                keyExtractor={(item, index) => item.id || `tx-${index}`}
+                stickySectionHeadersEnabled={true}
                 showsVerticalScrollIndicator={false}
-                contentContainerStyle={{ paddingBottom: 20 }}
+                contentContainerStyle={{ paddingBottom: 24 }}
+                renderSectionHeader={({ section: { title, totalSpent, totalIncome } }) => (
+                  <View style={styles.stickySectionHeader}>
+                    <Text style={styles.stickySectionTitle}>{title}</Text>
+                    <View style={styles.stickySectionRight}>
+                      {activeTab === 'credits' ? (
+                        <>
+                          <Text style={styles.stickySectionLabel}>Total Received</Text>
+                          <Text style={[styles.stickySectionAmount, { color: '#2dba4e' }]}>
+                            +₹{Math.round(totalIncome).toLocaleString('en-IN')}
+                          </Text>
+                        </>
+                      ) : activeTab === 'debits' ? (
+                        <>
+                          <Text style={styles.stickySectionLabel}>Total Spent</Text>
+                          <Text style={styles.stickySectionAmount}>
+                            ₹{Math.round(totalSpent).toLocaleString('en-IN')}
+                          </Text>
+                        </>
+                      ) : (
+                        <>
+                          <Text style={styles.stickySectionLabel}>
+                            {totalSpent > 0 ? 'Total Spent' : 'Total Received'}
+                          </Text>
+                          <Text
+                            style={[
+                              styles.stickySectionAmount,
+                              totalSpent === 0 && totalIncome > 0 ? { color: '#2dba4e' } : {},
+                            ]}
+                          >
+                            {totalSpent > 0
+                              ? `₹${Math.round(totalSpent).toLocaleString('en-IN')}`
+                              : `+₹${Math.round(totalIncome).toLocaleString('en-IN')}`}
+                          </Text>
+                        </>
+                      )}
+                    </View>
+                  </View>
+                )}
                 renderItem={({ item }) => {
                   const isDebit = item.type === 'debit';
                   return (
@@ -1017,6 +1202,42 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
                     <Text style={styles.menuItemTitle}>Edit Bank Details</Text>
                     <Text style={styles.menuItemDesc}>
                       Update display name, account suffix, balance, SMS sender ID, UPI ID & keywords.
+                    </Text>
+                  </View>
+                  <Feather name="chevron-right" size={18} color={colors.textTertiary || '#8E8E9F'} />
+                </TouchableOpacity>
+
+                <View style={styles.menuItemDivider} />
+
+                {/* Manual Scan SMS Inbox Row */}
+                <TouchableOpacity
+                  style={styles.menuItemTouchable}
+                  onPress={handleSyncLast48HoursSms}
+                  disabled={isSyncingSms}
+                  activeOpacity={0.7}
+                >
+                  <View
+                    style={[
+                      styles.menuItemIconWrap,
+                      {
+                        backgroundColor: isDark
+                          ? 'rgba(45, 186, 78, 0.12)'
+                          : 'rgba(45, 186, 78, 0.15)',
+                      },
+                    ]}
+                  >
+                    {isSyncingSms ? (
+                      <ActivityIndicator size="small" color="#2dba4e" />
+                    ) : (
+                      <Feather name="refresh-cw" size={18} color="#2dba4e" />
+                    )}
+                  </View>
+                  <View style={{ flex: 1, marginRight: 10 }}>
+                    <Text style={styles.menuItemTitle}>
+                      {isSyncingSms ? 'Scanning SMS Inbox...' : 'Sync Last 48h Missed Alerts'}
+                    </Text>
+                    <Text style={styles.menuItemDesc}>
+                      Scan SMS inbox for •••• {activeBank.accountNumberSuffix} and add missed transactions without duplicates.
                     </Text>
                   </View>
                   <Feather name="chevron-right" size={18} color={colors.textTertiary || '#8E8E9F'} />
@@ -1367,6 +1588,43 @@ const getStyles = (colors: any) => StyleSheet.create({
     color: '#2dba4e',
     fontWeight: '800',
   },
+  stickySectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    backgroundColor: colors.isDark ? '#14141e' : '#f4f6f8',
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: colors.border,
+    marginTop: 10,
+    marginBottom: 2,
+    borderRadius: 8,
+    ...(Platform.OS === 'web' ? { position: 'sticky' as any, top: 0, zIndex: 10 } : {}),
+  },
+  stickySectionTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: colors.text,
+    letterSpacing: 0.2,
+  },
+  stickySectionRight: {
+    alignItems: 'flex-end',
+  },
+  stickySectionLabel: {
+    fontSize: 9,
+    color: colors.textSecondary,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginBottom: 1,
+  },
+  stickySectionAmount: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: colors.text,
+  },
   txRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1541,5 +1799,29 @@ const getStyles = (colors: any) => StyleSheet.create({
     color: colors.textSecondary,
     marginTop: 2,
     lineHeight: 14,
+  },
+  smsTagsBanner: {
+    marginHorizontal: 16,
+    marginBottom: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  smsTagsTitle: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  smsTagPill: {
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  smsTagPillText: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
   },
 });

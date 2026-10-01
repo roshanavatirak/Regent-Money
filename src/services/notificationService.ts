@@ -249,6 +249,9 @@ export const notificationService = {
     onReceived: (notification: Notifications.Notification) => void,
     onResponse: (response: Notifications.NotificationResponse) => void,
   ) {
+    if (Platform.OS === 'web') {
+      return () => {};
+    }
     const notificationListener = Notifications.addNotificationReceivedListener(onReceived);
     const responseListener = Notifications.addNotificationResponseReceivedListener(onResponse);
 

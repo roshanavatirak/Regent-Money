@@ -58,17 +58,41 @@ export const useTransactionStore = create<TransactionState>((set) => ({
 }));
 
 // 2. Budget Store
+export type BudgetPeriodType =
+  | 'monthly'
+  | '1_week'
+  | '2_week'
+  | '3_week'
+  | '4_week'
+  | '2_month'
+  | '3_month'
+  | '4_month'
+  | '6_month'
+  | '1_year'
+  | '5_year'
+  | 'salary_cycle'
+  | 'custom';
+
 export interface BudgetCategory {
   id: string;
+  name?: string;
   category: string;
   limitAmount: number;
   spentAmount: number;
   period: string;
+  periodType?: BudgetPeriodType;
+  startDate?: number;
+  endDate?: number;
+  isOverall?: boolean;
+  fixedObligations?: number;
 }
 
 export interface BudgetState {
   budgets: BudgetCategory[];
   setBudgets: (budgets: BudgetCategory[]) => void;
+  addBudget: (budget: BudgetCategory) => void;
+  updateBudget: (id: string, budget: Partial<BudgetCategory>) => void;
+  deleteBudget: (id: string) => void;
   updateSpent: (category: string, amount: number) => void;
 }
 
@@ -78,6 +102,24 @@ export const useBudgetStore = create<BudgetState>((set) => ({
     mmkvStorage.setObject('cache_budgets', budgets);
     set({ budgets });
   },
+  addBudget: (budget) =>
+    set((state) => {
+      const updated = [budget, ...state.budgets.filter((b) => b.id !== budget.id)];
+      mmkvStorage.setObject('cache_budgets', updated);
+      return { budgets: updated };
+    }),
+  updateBudget: (id, partial) =>
+    set((state) => {
+      const updated = state.budgets.map((b) => (b.id === id ? { ...b, ...partial } : b));
+      mmkvStorage.setObject('cache_budgets', updated);
+      return { budgets: updated };
+    }),
+  deleteBudget: (id) =>
+    set((state) => {
+      const updated = state.budgets.filter((b) => b.id !== id);
+      mmkvStorage.setObject('cache_budgets', updated);
+      return { budgets: updated };
+    }),
   updateSpent: (category, amount) =>
     set((state) => {
       const updated = state.budgets.map((b) =>

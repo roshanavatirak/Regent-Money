@@ -78,10 +78,20 @@ export class SyncController {
   async updateCategory(
     @Req() req: any,
     @Param('id') id: string,
-    @Body() body: { category: string },
+    @Body() body: { category: string; merchant?: string },
   ) {
     const userId = req.user.id;
-    return this.syncService.updateTransactionCategory(userId, id, body.category);
+    return this.syncService.updateTransactionCategory(userId, id, body.category, body.merchant);
+  }
+
+  @Post('merchant-tag-rule')
+  @HttpCode(HttpStatus.OK)
+  async saveMerchantTagRule(
+    @Req() req: any,
+    @Body() body: { merchant: string; tag: string },
+  ) {
+    const userId = req.user.id;
+    return this.syncService.saveMerchantTagRule(userId, body.merchant, body.tag);
   }
 
   @Post('ocr-sync')
@@ -208,5 +218,26 @@ export class SyncController {
   async deleteGoal(@Req() req: any, @Param('id') id: string) {
     const userId = req.user.id;
     return this.syncService.deleteGoal(userId, id);
+  }
+
+  @Post('budget')
+  @HttpCode(HttpStatus.CREATED)
+  async createBudget(@Req() req: any, @Body() body: any) {
+    const userId = req.user.id;
+    return this.syncService.createBudget(userId, body);
+  }
+
+  @Patch('budget/:id')
+  @HttpCode(HttpStatus.OK)
+  async updateBudget(@Req() req: any, @Param('id') id: string, @Body() body: any) {
+    const userId = req.user.id;
+    return this.syncService.updateBudget(userId, id, body);
+  }
+
+  @Delete('budget/:id')
+  @HttpCode(HttpStatus.OK)
+  async deleteBudget(@Req() req: any, @Param('id') id: string) {
+    const userId = req.user.id;
+    return this.syncService.deleteBudget(userId, id);
   }
 }

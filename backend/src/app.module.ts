@@ -13,6 +13,7 @@ import { BudgetDeclaration } from './sync/entities/budget-declaration.entity';
 import { SavingsGoal } from './sync/entities/savings-goal.entity';
 import { NetWorthSnapshot } from './sync/entities/net-worth-snapshot.entity';
 import { IncomeRecord } from './sync/entities/income-record.entity';
+import { UserMerchantTag } from './sync/entities/user-merchant-tag.entity';
 import { Notification } from './notifications/entities/notification.entity';
 import { NotificationsModule } from './notifications/notifications.module';
 import { AiModule } from './ai/ai.module';
@@ -57,6 +58,7 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
             SavingsGoal,
             NetWorthSnapshot,
             IncomeRecord,
+            UserMerchantTag,
             Notification,
           ],
           synchronize: false, // Set to false to avoid altering tables automatically, schemas exist

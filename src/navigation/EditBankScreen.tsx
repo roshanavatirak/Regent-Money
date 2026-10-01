@@ -17,6 +17,8 @@ import { useTheme, useBankStore, BankProfileType } from '../store';
 import { authService } from '../services/authService';
 import { getBackendUrl } from '../config/api';
 import { BankIcon } from '../components/BankIcon';
+import { SmsSenderTagsManager } from '../components/SmsSenderTagsManager';
+import { formatSmsSenderTags, parseSmsSenderTags } from '../constants/bankSmsSenders';
 
 const BACKEND_URL = getBackendUrl();
 
@@ -41,7 +43,9 @@ export const EditBankScreen: React.FC = () => {
   const [accountTypeDropdownOpen, setAccountTypeDropdownOpen] = useState(false);
   const [accountSuffix, setAccountSuffix] = useState(bank?.accountNumberSuffix || '');
   const [balance, setBalance] = useState(bank?.currentBalance !== undefined ? String(bank.currentBalance) : '');
-  const [smsSenderId, setSmsSenderId] = useState(bank?.smsSenderId || '');
+  const [smsSenderTags, setSmsSenderTags] = useState<string[]>(
+    parseSmsSenderTags(bank?.smsSenderId)
+  );
   const [upiId, setUpiId] = useState(bank?.upiId || '');
   const [customKeywords, setCustomKeywords] = useState(bank?.customKeywords || '');
 
@@ -82,7 +86,7 @@ export const EditBankScreen: React.FC = () => {
         accountType: accountType || 'Savings',
         accountNumberSuffix: accountSuffix.trim(),
         currentBalance: parseFloat(balance),
-        smsSenderId: smsSenderId.trim() || undefined,
+        smsSenderId: formatSmsSenderTags(smsSenderTags) || undefined,
         upiId: upiId.trim() || undefined,
         customKeywords: customKeywords.trim() || undefined,
         smsConsent: bank.smsConsent !== undefined ? bank.smsConsent : true,
@@ -152,7 +156,7 @@ export const EditBankScreen: React.FC = () => {
           <View style={styles.bankFormHeader}>
             <View style={{ marginBottom: 12 }}>
               <BankIcon
-                code={smsSenderId || ''}
+                code={smsSenderTags[0] || bankNameInput || bank.bankName}
                 name={bankNameInput || bank.bankName}
                 size={60}
               />
@@ -289,19 +293,17 @@ export const EditBankScreen: React.FC = () => {
             </View>
           </View>
 
-          {/* SMS Sender ID Field */}
+          {/* SMS Sender Tags Manager */}
           <View style={styles.formFieldContainer}>
-            <Text style={styles.fieldLabel}>SMS SENDER ID (HEADER)</Text>
-            <View style={styles.inputContainer}>
-              <TextInput
-                style={styles.inputField}
-                value={smsSenderId}
-                onChangeText={setSmsSenderId}
-                placeholder="e.g. SBIINB, HDFCBK, AXISBK"
-                placeholderTextColor={colors.textTertiary}
-                autoCapitalize="characters"
-              />
-            </View>
+            <SmsSenderTagsManager
+              tags={smsSenderTags}
+              onChangeTags={setSmsSenderTags}
+              bankCodeOrName={bankNameInput || bank.bankName}
+              colors={colors}
+              isDark={isDark}
+              label="SMS SENDER CODES / HEADERS"
+              hint="Add all SMS codes used by your bank (e.g. SBIPSG, SBIBNK, SBIUPI) to capture salary, UPI, and ATM alerts."
+            />
           </View>
 
           {/* UPI ID Field */}

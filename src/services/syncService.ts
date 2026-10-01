@@ -159,10 +159,16 @@ export const syncService = {
       // 2. Map Budgets
       const mappedBudgets = (data.budgets || []).map((b: any) => ({
         id: b.id,
+        name: b.name || (b.isOverall ? 'Total Spending Budget' : b.category),
         category: b.category,
         limitAmount: parseFloat(b.limitAmount ?? b.limit_amount ?? 0),
         spentAmount: parseFloat(b.spentAmount ?? b.spent_amount ?? 0),
-        period: b.period,
+        period: b.period || 'Current Cycle',
+        periodType: b.periodType ?? b.period_type ?? 'monthly',
+        startDate: b.startDate ?? b.start_date ? Number(b.startDate ?? b.start_date) : undefined,
+        endDate: b.endDate ?? b.end_date ? Number(b.endDate ?? b.end_date) : undefined,
+        isOverall: Boolean(b.isOverall ?? b.is_overall),
+        fixedObligations: parseFloat(b.fixedObligations ?? b.fixed_obligations ?? 0),
       }));
       useBudgetStore.getState().setBudgets(mappedBudgets);
 

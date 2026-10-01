@@ -7,6 +7,7 @@ import { BudgetDeclaration } from './entities/budget-declaration.entity';
 import { SavingsGoal } from './entities/savings-goal.entity';
 import { NetWorthSnapshot } from './entities/net-worth-snapshot.entity';
 import { IncomeRecord } from './entities/income-record.entity';
+import { UserMerchantTag } from './entities/user-merchant-tag.entity';
 import { User } from '../users/entities/user.entity';
 import { OcrSyncDto } from './dto/ocr-sync.dto';
 import { ManualTransactionDto } from './dto/manual-transaction.dto';
@@ -31,6 +32,8 @@ export class SyncService implements OnModuleInit {
     private readonly netWorthSnapshotRepository: Repository<NetWorthSnapshot>,
     @InjectRepository(IncomeRecord)
     private readonly incomeRecordRepository: Repository<IncomeRecord>,
+    @InjectRepository(UserMerchantTag)
+    private readonly userMerchantTagRepository: Repository<UserMerchantTag>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly dataSource: DataSource,
@@ -99,7 +102,41 @@ export class SyncService implements OnModuleInit {
       await this.dataSource.query(`
         CREATE INDEX IF NOT EXISTS idx_savings_goals_user_active ON wealth.savings_goals(user_id, is_deleted);
       `);
-      this.logger.log('BankProfile & SavingsGoal schema checks completed successfully.');
+      // User merchant learning table
+      await this.dataSource.query(`
+        CREATE TABLE IF NOT EXISTS finance.user_merchant_tags (
+          id TEXT PRIMARY KEY,
+          user_id UUID NOT NULL,
+          merchant_normalized TEXT NOT NULL,
+          tag TEXT NOT NULL,
+          created_at BIGINT NOT NULL,
+          updated_at BIGINT NOT NULL,
+          CONSTRAINT uq_user_merchant UNIQUE(user_id, merchant_normalized)
+        );
+      `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_user_merchant_lookup ON finance.user_merchant_tags(user_id, merchant_normalized);
+      `);
+      // Budget declarations column migrations
+      await this.dataSource.query(`
+        ALTER TABLE finance.budget_declarations ADD COLUMN IF NOT EXISTS name TEXT;
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE finance.budget_declarations ADD COLUMN IF NOT EXISTS is_overall BOOLEAN DEFAULT FALSE;
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE finance.budget_declarations ADD COLUMN IF NOT EXISTS start_date BIGINT;
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE finance.budget_declarations ADD COLUMN IF NOT EXISTS end_date BIGINT;
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE finance.budget_declarations ADD COLUMN IF NOT EXISTS period_type TEXT DEFAULT 'monthly';
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE finance.budget_declarations ADD COLUMN IF NOT EXISTS fixed_obligations NUMERIC DEFAULT 0;
+      `);
+      this.logger.log('BankProfile, SavingsGoal & Budget schema checks completed successfully.');
     } catch (e: any) {
       this.logger.error(`Error checking/updating schema: ${e.message}`, e.stack);
     }
@@ -433,14 +470,56 @@ export class SyncService implements OnModuleInit {
     };
   }
 
-  async updateTransactionCategory(userId: string, id: string, category: string) {
+  async updateTransactionCategory(userId: string, id: string, category: string, merchant?: string) {
     const tx = await this.transactionRepository.findOne({ where: { id, userId, isDeleted: false } });
     if (!tx) {
       throw new BadRequestException('Transaction not found or deleted.');
     }
     tx.category = category;
     tx.updatedAt = Date.now();
-    return this.transactionRepository.save(tx);
+    await this.transactionRepository.save(tx);
+
+    const targetMerchant = merchant || tx.merchant;
+    if (targetMerchant) {
+      await this.saveMerchantTagRule(userId, targetMerchant, category).catch(() => {});
+    }
+
+    return tx;
+  }
+
+  async saveMerchantTagRule(userId: string, merchant: string, tag: string) {
+    if (!merchant || !tag) return null;
+    const norm = merchant
+      .toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!norm) return null;
+
+    let existing = await this.userMerchantTagRepository.findOne({
+      where: { userId, merchantNormalized: norm },
+    });
+
+    const now = Date.now();
+    if (existing) {
+      existing.tag = tag;
+      existing.updatedAt = now;
+      await this.userMerchantTagRepository.save(existing);
+      this.logger.log(`Updated merchant tag rule for user ${userId}: "${norm}" -> "${tag}"`);
+      return existing;
+    }
+
+    const newRule = this.userMerchantTagRepository.create({
+      id: `rule_${now}_${Math.random().toString(36).substr(2, 9)}`,
+      userId,
+      merchantNormalized: norm,
+      tag,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await this.userMerchantTagRepository.save(newRule);
+    this.logger.log(`Created new merchant tag rule for user ${userId}: "${norm}" -> "${tag}"`);
+    return newRule;
   }
 
   async syncOcrTransactions(userId: string, data: OcrSyncDto) {
@@ -494,7 +573,7 @@ export class SyncService implements OnModuleInit {
             id: txId,
             userId,
             amount,
-            category: item.category || (item.merchant ? this.classifyCategory(item.merchant) : 'shopping'),
+            category: item.category || (item.merchant ? await this.classifyCategory(item.merchant, userId) : 'miscellaneous'),
             merchant: item.merchant || 'Merchant',
             timestamp: parsedDate.getTime(),
             bankProfileId: data.bankProfileId,
@@ -563,24 +642,107 @@ export class SyncService implements OnModuleInit {
     };
   }
 
-  private classifyCategory(merchantName: string): string {
-    const name = merchantName.toLowerCase();
-    if (name.includes('uber') || name.includes('ola') || name.includes('rapido') || name.includes('metro') || name.includes('fuel') || name.includes('petrol')) {
-      return 'transport';
+  private async classifyCategory(merchantName: string, userId?: string): Promise<string> {
+    const name = (merchantName || '')
+      .toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!name) return 'miscellaneous';
+
+    // 1. Check user learned memory if userId provided
+    if (userId) {
+      try {
+        const learned = await this.userMerchantTagRepository.findOne({
+          where: { userId, merchantNormalized: name },
+        });
+        if (learned && learned.tag) {
+          return learned.tag;
+        }
+
+        const allUserRules = await this.userMerchantTagRepository.find({
+          where: { userId },
+        });
+        for (const rule of allUserRules) {
+          if (name.includes(rule.merchantNormalized) || rule.merchantNormalized.includes(name)) {
+            return rule.tag;
+          }
+        }
+      } catch (err: any) {
+        this.logger.warn(`Failed to check user merchant rules: ${err.message}`);
+      }
     }
-    if (name.includes('zomato') || name.includes('swiggy') || name.includes('restaurant') || name.includes('food') || name.includes('cafe') || name.includes('starbucks')) {
+
+    // 2. 30+ Indian merchant & category keyword rules
+    if (/blinkit|zepto|instamart|bigbasket|dmart|supermarket|kirana|provision|nature basket|spencer|more retail|dairy|milk|fruits|vegetable|bakery/.test(name)) {
+      return 'groceries';
+    }
+    if (/zomato|swiggy|starbucks|mcdonald|burger king|kfc|pizza hut|domino|haldiram|subway|barbeque|cafe|restaurant|dhaba|tea|chai|coffee|bhojanalaya|biryani|sweets|tiffin|canteen|dining/.test(name)) {
       return 'food';
     }
-    if (name.includes('amazon') || name.includes('flipkart') || name.includes('myntra') || name.includes('mall') || name.includes('store') || name.includes('clothing')) {
+    if (/uber|ola|rapido|metro|chalo|fastag|toll|parking|auto|taxi|ride|cab|transit/.test(name)) {
+      return 'commute';
+    }
+    if (/indian oil|iocl|bharat petroleum|bpcl|hindustan petroleum|hpcl|shell|petrol|diesel|cng|fuel|gas station/.test(name)) {
+      return 'fuel';
+    }
+    if (/makemytrip|goibibo|easemytrip|irctc|yatra|indigo|air india|vistara|spicejet|akasa|hotel|flight|resort|train ticket|railways|bus|redbus/.test(name)) {
+      return 'travel';
+    }
+    if (/amazon|flipkart|myntra|ajio|nykaa|tata cliq|meesho|zara|h&m|uniqlo|shoppers stop|lifestyle|max fashion|westside|decathlon|croma|reliance digital|mall|store|clothing|apparel/.test(name)) {
       return 'shopping';
     }
-    if (name.includes('netflix') || name.includes('spotify') || name.includes('cinema') || name.includes('movies') || name.includes('hotstar')) {
+    if (/netflix|prime video|hotstar|disney|spotify|pvr|inox|cinepolis|bookmyshow|sonyliv|zee5|youtube|gaming|steam|playstation|movies/.test(name)) {
       return 'entertainment';
     }
-    if (name.includes('electricity') || name.includes('water') || name.includes('recharge') || name.includes('jio') || name.includes('airtel') || name.includes('bill')) {
+    if (/apollo|pharmeasy|1mg|netmeds|medplus|hospital|clinic|diagnostic|doctor|pharmacy|chemist|pathology|lab|health|dental|opticals/.test(name)) {
+      return 'medical';
+    }
+    if (/jio|airtel|vodafone|vi bill|bsnl|tatasky|tata play|dth|dish tv|broadband|act fibernet|hathway|recharge|mobile bill/.test(name)) {
+      return 'bill_payments';
+    }
+    if (/bescom|tata power|adani electricity|bses|mahavitaran|wbsetcl|uppcl|water board|igl|indraprastha gas|mahanagar gas|piped gas|electricity|cylinder|hp gas|indane|bharat gas/.test(name)) {
       return 'utilities';
     }
-    return 'shopping';
+    if (/nobroker|magicbricks|housing|house rent|flat rent|society maintenance|landlord|rent payment/.test(name)) {
+      return 'rent';
+    }
+    if (/bajaj finserv|home credit|kreditbee|lazypay|simpl|loan|emi|finance emi|car loan|personal loan/.test(name)) {
+      return 'emi_loans';
+    }
+    if (/zerodha|groww|upstox|angelone|indmoney|motilal oswal|demat|brokerage|sharekhan/.test(name)) {
+      return 'financial_services';
+    }
+    if (/lic|hdfc ergo|icici lombard|star health|policybazaar|care health|max life|sbi life|insurance premium/.test(name)) {
+      return 'insurance';
+    }
+    if (/mutual fund|sip|fixed deposit|recurring deposit|sgb|gold bond|nps|ppf|crypto|coin|securities/.test(name)) {
+      return 'investment';
+    }
+    if (/school|college|university|tuition|coaching|fees|unacademy|byju|coursera|udemy/.test(name)) {
+      return 'education';
+    }
+    if (/cult\.fit|cure\.fit|gold gym|anytime fitness|gym|fitness|yoga|crossfit|sports club|protein/.test(name)) {
+      return 'fitness';
+    }
+    if (/salon|spa|urban company|geetanjali|enrich|barber|parlour|grooming|haircut|cosmetics/.test(name)) {
+      return 'personal_care';
+    }
+    if (/atm|cash wdl|cash withdrawal|nfs cash/.test(name)) {
+      return 'cash_withdrawals';
+    }
+    if (/salary|payroll|stipend|employer|batchid|wages/.test(name)) {
+      return 'salary';
+    }
+    if (/cashback|refund|reversal|reward|promo credit/.test(name)) {
+      return 'cashback';
+    }
+    if (/interest|savings bank interest|fd interest|int\.pd/.test(name)) {
+      return 'interest';
+    }
+
+    return 'miscellaneous';
   }
 
   async processScreenshotUpload(userId: string, bankProfileId: string, imageBuffer: Buffer, mimeType: string) {
@@ -819,6 +981,10 @@ export class SyncService implements OnModuleInit {
       bank.currentBalance = parseFloat(String(bank.currentBalance)) + amount;
     }
 
+    if (note) {
+      await this.saveMerchantTagRule(userId, note, cleanCategory.toLowerCase()).catch(() => {});
+    }
+
     bank.lastSyncTimestamp = Date.now();
     bank.updatedAt = Date.now();
     await this.bankProfileRepository.save(bank);
@@ -872,6 +1038,10 @@ export class SyncService implements OnModuleInit {
       tx.merchant = note;
       tx.updatedAt = Date.now();
       await this.transactionRepository.save(tx);
+
+      if (note) {
+        await this.saveMerchantTagRule(userId, note, cleanCategory.toLowerCase()).catch(() => {});
+      }
 
       let updatedBalance: number | null = null;
       if (tx.bankProfileId) {
@@ -1137,6 +1307,102 @@ export class SyncService implements OnModuleInit {
   }
 
   /**
+   * Create a new custom-date or monthly budget
+   */
+  async createBudget(
+    userId: string,
+    dto: {
+      id?: string;
+      name?: string;
+      category?: string;
+      limitAmount: number;
+      period?: string;
+      periodType?: string;
+      startDate?: number;
+      endDate?: number;
+      isOverall?: boolean;
+      fixedObligations?: number;
+    },
+  ) {
+    const budget = this.budgetDeclarationRepository.create({
+      id: dto.id || 'budget_' + Math.random().toString(36).substr(2, 9),
+      userId,
+      name: dto.name || (dto.isOverall ? 'Total Spending Budget' : dto.category || 'Custom Budget'),
+      category: dto.isOverall ? 'all' : (dto.category?.toLowerCase() || 'other_expense'),
+      limitAmount: parseFloat(String(dto.limitAmount || 0)),
+      spentAmount: 0,
+      period: dto.period || 'Current Cycle',
+      periodType: dto.periodType || 'monthly',
+      startDate: dto.startDate ? Number(dto.startDate) : Date.now(),
+      endDate: dto.endDate ? Number(dto.endDate) : Date.now() + 30 * 24 * 60 * 60 * 1000,
+      isOverall: !!dto.isOverall,
+      fixedObligations: parseFloat(String(dto.fixedObligations || 0)),
+      updatedAt: Date.now(),
+      isDeleted: false,
+    });
+
+    const saved = await this.budgetDeclarationRepository.save(budget);
+    return saved;
+  }
+
+  /**
+   * Update an existing budget ceiling or dates
+   */
+  async updateBudget(
+    userId: string,
+    id: string,
+    dto: Partial<{
+      name: string;
+      category: string;
+      limitAmount: number;
+      spentAmount: number;
+      period: string;
+      periodType: string;
+      startDate: number;
+      endDate: number;
+      isOverall: boolean;
+      fixedObligations: number;
+    }>,
+  ) {
+    const budget = await this.budgetDeclarationRepository.findOne({
+      where: { id, userId, isDeleted: false },
+    });
+    if (!budget) {
+      throw new BadRequestException('Budget not found.');
+    }
+
+    if (dto.name !== undefined) budget.name = dto.name;
+    if (dto.category !== undefined) budget.category = dto.category.toLowerCase();
+    if (dto.limitAmount !== undefined) budget.limitAmount = parseFloat(String(dto.limitAmount));
+    if (dto.spentAmount !== undefined) budget.spentAmount = parseFloat(String(dto.spentAmount));
+    if (dto.period !== undefined) budget.period = dto.period;
+    if (dto.periodType !== undefined) budget.periodType = dto.periodType;
+    if (dto.startDate !== undefined) budget.startDate = Number(dto.startDate);
+    if (dto.endDate !== undefined) budget.endDate = Number(dto.endDate);
+    if (dto.isOverall !== undefined) budget.isOverall = !!dto.isOverall;
+    if (dto.fixedObligations !== undefined) budget.fixedObligations = parseFloat(String(dto.fixedObligations));
+
+    budget.updatedAt = Date.now();
+    return this.budgetDeclarationRepository.save(budget);
+  }
+
+  /**
+   * Soft-delete a budget
+   */
+  async deleteBudget(userId: string, id: string) {
+    const budget = await this.budgetDeclarationRepository.findOne({
+      where: { id, userId, isDeleted: false },
+    });
+    if (!budget) {
+      throw new BadRequestException('Budget not found.');
+    }
+    budget.isDeleted = true;
+    budget.updatedAt = Date.now();
+    await this.budgetDeclarationRepository.save(budget);
+    return { success: true, message: 'Budget deleted successfully.' };
+  }
+
+  /**
    * Directly ingests SMS from native Android receiver without React Native overhead.
    */
   async ingestDirectSms(userId: string, data: { sender: string; body: string; timestamp?: number }) {
@@ -1148,22 +1414,59 @@ export class SyncService implements OnModuleInit {
     }
 
     const parsedSuffix = (parsed.accountSuffix || '').replace(/\D/g, '').slice(-4);
-    if (!parsedSuffix) {
-      return { success: false, reason: 'no_account_suffix_found' };
-    }
 
     const bankProfiles = await this.bankProfileRepository.find({
       where: { userId, isDeleted: false },
     });
 
-    const matchedBank = bankProfiles.find((b) => {
-      const dbSuffix = (b.accountNumberSuffix || '').replace(/\D/g, '').slice(-4);
-      return dbSuffix && dbSuffix === parsedSuffix;
-    });
+    let matchedBank =
+      (parsedSuffix
+        ? bankProfiles.find((b) => {
+            const dbSuffix = (b.accountNumberSuffix || '').replace(/\D/g, '').slice(-4);
+            const suffixMatches = dbSuffix && dbSuffix === parsedSuffix;
+            const senderMatches = this.matchesSmsSender(data.sender, b.smsSenderId);
+            return suffixMatches && senderMatches;
+          }) ||
+          bankProfiles.find((b) => {
+            const dbSuffix = (b.accountNumberSuffix || '').replace(/\D/g, '').slice(-4);
+            return dbSuffix && dbSuffix === parsedSuffix;
+          })
+        : null);
 
+    // 2. If not matched by suffix, match by sender ID or bank name (crucial for UPI transactions)
     if (!matchedBank) {
-      this.logger.log(`No matching bank profile found for suffix ${parsedSuffix}`);
-      return { success: false, reason: 'bank_not_found', parsedSuffix };
+      matchedBank = bankProfiles.find((b) => {
+        const senderMatches = this.matchesSmsSender(data.sender, b.smsSenderId);
+        const nameMatches =
+          parsed.bankName &&
+          parsed.bankName !== 'Bank' &&
+          (b.bankName || '').toLowerCase().includes(parsed.bankName.toLowerCase());
+        return senderMatches || nameMatches;
+      });
+    }
+
+    // 3. Fallback to any active bank profile if user has bank accounts
+    if (!matchedBank && bankProfiles.length > 0) {
+      matchedBank = bankProfiles[0];
+    }
+
+    // 4. If user has NO bank profiles at all, auto-create a primary bank profile
+    if (!matchedBank) {
+      const newBankId = 'bank_auto_' + Math.random().toString(36).substr(2, 9);
+      matchedBank = this.bankProfileRepository.create({
+        id: newBankId,
+        userId,
+        bankName: parsed.bankName && parsed.bankName !== 'Bank' ? parsed.bankName : 'Primary Bank',
+        accountNumberSuffix: parsedSuffix || '0000',
+        accountType: 'Savings',
+        currentBalance: parsed.amount,
+        smsConsent: true,
+        smsSenderId: data.sender || 'BANK',
+        updatedAt: Date.now(),
+        isDeleted: false,
+      });
+      await this.bankProfileRepository.save(matchedBank);
+      this.logger.log(`Auto-created bank profile ${matchedBank.bankName} for user ${userId}`);
     }
 
     if (matchedBank.smsConsent === false) {
@@ -1199,11 +1502,15 @@ export class SyncService implements OnModuleInit {
       }
 
       const txId = 'tx_direct_' + Math.random().toString(36).substr(2, 9);
+      const predictedCategory = parsed.merchant
+        ? await this.classifyCategory(parsed.merchant, userId)
+        : 'miscellaneous';
+
       const newTx = this.transactionRepository.create({
         id: txId,
         userId,
         amount: parsed.amount,
-        category: parsed.merchant ? this.classifyCategory(parsed.merchant) : 'shopping',
+        category: predictedCategory,
         merchant: parsed.merchant,
         timestamp: txTime,
         bankProfileId: matchedBank.id,
@@ -1261,5 +1568,28 @@ export class SyncService implements OnModuleInit {
       accountSuffix: matchedBank.accountNumberSuffix,
       merchant: parsed.merchant,
     };
+  }
+
+  /**
+   * Helper to check if incoming SMS sender header matches any of the bank's configured tags.
+   */
+  private matchesSmsSender(incomingSender: string, bankSmsSenderId?: string | null): boolean {
+    if (!incomingSender) return false;
+    if (!bankSmsSenderId) return true;
+    const tags = bankSmsSenderId
+      .split(/[,;\s]+/)
+      .map((t) => t.replace(/[^A-Za-z0-9]/g, '').toUpperCase().trim())
+      .filter((t) => t.length >= 3);
+    if (tags.length === 0) return true;
+
+    const cleanSender = incomingSender
+      .toUpperCase()
+      .replace(/^[A-Z]{2}-/i, '')
+      .replace(/[^A-Z0-9]/g, '')
+      .trim();
+
+    return tags.some(
+      (tag) => cleanSender === tag || cleanSender.includes(tag) || tag.includes(cleanSender),
+    );
   }
 }

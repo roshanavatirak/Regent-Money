@@ -36,13 +36,13 @@ export function parseSMS(sender: string, body: string): ParsedTransaction | null
   let type: 'debit' | 'credit' | null = null;
 
   if (
-    /\b(?:credited|received|refunded|deposited|transferred\s*from|trf\s*from|\bcr\b)\b/i.test(
+    /\b(?:credited|received|refunded|deposited|transferred\s*from|trf\s*from|\bcr\b|inward\s*remittance|cashback\s*received)\b/i.test(
       textWithoutCard,
     )
   ) {
     type = 'credit';
   } else if (
-    /\b(?:debited|debit|sent|paid|spent|withdrawn|used\s*for|used\s*at|purchase\s*of|transferred\s*to|trf\s*to|\bdr\b)\b/i.test(
+    /\b(?:debited|debit|sent|paid|spent|withdrawn|used\s*for|used\s*at|purchase\s*of|transferred\s*to|trf\s*to|\bdr\b|txn\s*of|transaction\s*of|transaction\s*on|txn\s*on|charged|payment\s*of|payment\s*to|vpa\s*debited)\b/i.test(
       textWithoutCard,
     )
   ) {
@@ -63,9 +63,13 @@ export function parseSMS(sender: string, body: string): ParsedTransaction | null
   let amountMatchIndex: number = -1;
 
   const amountRegexes = [
-    /(?:debited|credited|paid|sent|withdrawn|spent|used\s*for|charge|towards)\s*(?:by|for|with|of)?\s*[:\-\s]*(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d{1,2})?)/i,
+    // Preceded by verb: e.g. "debited by Rs 500", "was used for Rs 2,500.00", "debited: 500.00"
+    /(?:debited|credited|paid|sent|withdrawn|spent|used\s*for|charge|towards|payment\s*of|txn\s*of|transaction\s*of)\s*(?:by|for|with|of)?\s*[:\-\s]*(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d{1,2})?)/i,
+    // Explicit currency symbol followed by number
     /(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)/i,
+    // Verb with colon and number without currency
     /(?:debited|credited)\s*[:\-\s]+([\d,]+(?:\.\d{1,2})?)/i,
+    // Suffix currency e.g. "500.00 INR"
     /([\d,]+(?:\.\d{1,2})?)\s*(?:rs\.?|inr|₹)/i,
   ];
 
@@ -88,8 +92,9 @@ export function parseSMS(sender: string, body: string): ParsedTransaction | null
   // 5. Extract Account Number / Suffix
   let accountSuffix = 'XXXX';
   const accountRegexes = [
-    /(?:a\/c|ac|acct|account|card)\s*(?:no\.?|number|ending(?:\s*in|\s*with)?)?\s*[:\-\s]*([A-Za-z0-9*._]{3,24})/i,
+    /(?:a\/c|ac|acct|account|card|vpa)\s*(?:no\.?|number|ending(?:\s*in|\s*with)?)?\s*[:\-\s]*([A-Za-z0-9*._]{2,24})/i,
     /([A-Za-z0-9*]{4,20})\s*(?:debited|credited|-credited|-debited)/i,
+    /(?:from|in)\s+(?:account|a\/c|card)\s+([A-Za-z0-9*._]{2,24})/i,
   ];
 
   for (const rx of accountRegexes) {
@@ -109,11 +114,11 @@ export function parseSMS(sender: string, body: string): ParsedTransaction | null
   // 6. Extract Merchant / Beneficiary / Counterparty
   let merchant = '';
   const boundaryLookahead =
-    '(?=(?:\\s+from|\\s+to|\\s+ref|\\s+refno|\\s+upi|\\s+on|\\s+dated|\\s+if|\\s+avail|\\s+bal|\\s+not|\\s*[-–]|https?:|\\.\\s*|$))';
+    '(?=(?:[,.]|\\s+from|\\s+to|\\s+ref|\\s+refno|\\s+upi|\\s+on|\\s+dated|\\s+if|\\s+avail|\\s+bal|\\s+not|\\s*[-–]|https?:|\\.\\s*|\\binfo:|$))';
 
   const merchantDebitRegexes = [
     new RegExp(
-      `(?:trf\\s*to|transfer\\s*to|transferred\\s*to|paid\\s*to|sent\\s*to|\\bto\\b|\\bat\\b|towards)\\s+([-A-Za-z0-9\\s&.*]{2,40})` +
+      `(?:trf\\s*to|transfer\\s*to|transferred\\s*to|paid\\s*to|sent\\s*to|\\bto\\b|\\bat\\b|towards)\\s+([A-Za-z0-9\\s&.*-]{2,40}?)` +
       boundaryLookahead,
       'i',
     ),
@@ -121,7 +126,7 @@ export function parseSMS(sender: string, body: string): ParsedTransaction | null
 
   const merchantCreditRegexes = [
     new RegExp(
-      `(?:transfer\\s*from|trf\\s*from|transferred\\s*from|received\\s*from|\\bfrom\\b)\\s+([-A-Za-z0-9\\s&.*]{2,40})` +
+      `(?:transfer\\s*from|trf\\s*from|transferred\\s*from|received\\s*from|\\bfrom\\b|\\bby\\b)\\s+([A-Za-z0-9\\s&.*-]{2,40}?)` +
       boundaryLookahead,
       'i',
     ),
@@ -179,7 +184,7 @@ export function parseSMS(sender: string, body: string): ParsedTransaction | null
     bankName = 'Axis';
   } else if (combinedText.includes('PNB') || combinedText.includes('PUNJAB')) {
     bankName = 'PNB';
-  } else if (combinedText.includes('BOB') || combinedText.includes('BANK OF BARODA')) {
+  } else if (combinedText.includes('BOB') || combinedText.includes('BANK OF BARODA') || combinedText.includes('BARODA')) {
     bankName = 'Bank of Baroda';
   } else if (combinedText.includes('CANARA') || combinedText.includes('CANBNK')) {
     bankName = 'Canara Bank';
@@ -189,6 +194,14 @@ export function parseSMS(sender: string, body: string): ParsedTransaction | null
     bankName = 'IndusInd';
   } else if (combinedText.includes('IDFC')) {
     bankName = 'IDFC First';
+  } else if (combinedText.includes('PAYTM') || combinedText.includes('PPBL')) {
+    bankName = 'Paytm Payments Bank';
+  } else if (combinedText.includes('FEDERAL') || combinedText.includes('FEDBNK') || combinedText.includes('JUPITER') || combinedText.includes('FIMONEY') || combinedText.includes('EPICFI')) {
+    bankName = 'Federal Bank';
+  } else if (combinedText.includes('AUBANK') || combinedText.includes('AU BANK')) {
+    bankName = 'AU Small Finance';
+  } else if (combinedText.includes('RBL')) {
+    bankName = 'RBL Bank';
   } else if (
     /\b(?:YES\s*BANK|YESBANK)\b/i.test(combinedText) ||
     (sender && sender.toUpperCase().includes('YESB'))

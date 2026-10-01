@@ -16,10 +16,11 @@ async function bootstrap() {
   app.use(json({ limit: '25mb' }));
   app.use(urlencoded({ extended: true, limit: '25mb' }));
 
-  // Enable CORS for frontend integration
+  // Enable CORS for frontend integration (origin: true reflects incoming request origin to satisfy credentials: true)
   app.enableCors({
-    origin: '*', // Allow all origins in dev mode, can restrict in production
+    origin: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
     credentials: true,
   });
 

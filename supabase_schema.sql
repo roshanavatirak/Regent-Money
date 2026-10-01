@@ -132,10 +132,16 @@ CREATE POLICY "Users can manage their own salary model" ON finance.salary_model
 CREATE TABLE finance.budget_declarations (
   id TEXT PRIMARY KEY,
   user_id UUID REFERENCES auth.users NOT NULL DEFAULT auth.uid(),
+  name TEXT,
   category TEXT,
   limit_amount NUMERIC,
-  period TEXT,
   spent_amount NUMERIC,
+  period TEXT,
+  period_type TEXT DEFAULT 'monthly',
+  start_date BIGINT,
+  end_date BIGINT,
+  is_overall BOOLEAN DEFAULT FALSE,
+  fixed_obligations NUMERIC DEFAULT 0,
   updated_at BIGINT NOT NULL,
   is_deleted BOOLEAN DEFAULT FALSE
 );

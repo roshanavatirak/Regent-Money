@@ -8,6 +8,7 @@ import { BudgetDeclaration } from './entities/budget-declaration.entity';
 import { SavingsGoal } from './entities/savings-goal.entity';
 import { NetWorthSnapshot } from './entities/net-worth-snapshot.entity';
 import { IncomeRecord } from './entities/income-record.entity';
+import { UserMerchantTag } from './entities/user-merchant-tag.entity';
 import { AuthModule } from '../auth/auth.module';
 import { User } from '../users/entities/user.entity';
 import { AiModule } from '../ai/ai.module';
@@ -21,6 +22,7 @@ import { AiModule } from '../ai/ai.module';
       SavingsGoal,
       NetWorthSnapshot,
       IncomeRecord,
+      UserMerchantTag,
       User,
     ]),
     AuthModule,
