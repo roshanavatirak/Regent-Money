@@ -1,6 +1,6 @@
 import { Injectable, Logger, BadRequestException, UnauthorizedException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, In } from 'typeorm';
 import { BankProfile } from './entities/bank-profile.entity';
 import { Transaction } from './entities/transaction.entity';
 import { BudgetDeclaration } from './entities/budget-declaration.entity';
@@ -142,16 +142,65 @@ export class SyncService implements OnModuleInit {
     }
   }
 
+  // In-memory mutex map to serialize sync requests per user
+  private static userSyncLocks = new Map<string, Promise<any>>();
+
+  private async withUserLock<T>(userId: string, fn: () => Promise<T>): Promise<T> {
+    const prevLock = SyncService.userSyncLocks.get(userId) || Promise.resolve();
+    let resolveLock: () => void;
+    const currentLock = new Promise<void>((resolve) => {
+      resolveLock = resolve;
+    });
+    SyncService.userSyncLocks.set(userId, currentLock);
+
+    try {
+      await prevLock;
+      return await fn();
+    } finally {
+      resolveLock!();
+      if (SyncService.userSyncLocks.get(userId) === currentLock) {
+        SyncService.userSyncLocks.delete(userId);
+      }
+    }
+  }
+
   async sync(userId: string) {
     this.logger.log(`Performing data synchronization for user: ${userId}`);
 
-    const [transactions, budgets, goals, bankProfiles, incomeRecords] = await Promise.all([
-      this.transactionRepository.find({ where: { userId, isDeleted: false } }),
+    const [rawTransactions, budgets, goals, bankProfiles, incomeRecords] = await Promise.all([
+      this.transactionRepository.find({ where: { userId, isDeleted: false }, order: { timestamp: 'DESC' } }),
       this.budgetDeclarationRepository.find({ where: { userId, isDeleted: false } }),
       this.savingsGoalRepository.find({ where: { userId, isDeleted: false } }),
       this.bankProfileRepository.find({ where: { userId, isDeleted: false } }),
       this.incomeRecordRepository.find({ where: { userId, isDeleted: false } }),
     ]);
+
+    // Deduplicate any duplicate transactions before returning
+    const seenTx = new Set<string>();
+    const transactions: Transaction[] = [];
+    const duplicateIdsToDelete: string[] = [];
+
+    for (const tx of rawTransactions) {
+      const txDate = new Date(Number(tx.timestamp) || 0);
+      const dayKey = `${txDate.getUTCFullYear()}-${txDate.getUTCMonth()}-${txDate.getUTCDate()}`;
+      const normMerchant = (tx.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const sig = `${tx.bankProfileId}_${Math.round(Number(tx.amount) * 100)}_${normMerchant}_${dayKey}`;
+
+      if (seenTx.has(sig)) {
+        duplicateIdsToDelete.push(tx.id);
+        continue;
+      }
+      seenTx.add(sig);
+      transactions.push(tx);
+    }
+
+    if (duplicateIdsToDelete.length > 0) {
+      this.logger.log(`Cleaning up ${duplicateIdsToDelete.length} duplicate transactions for user: ${userId}`);
+      this.transactionRepository.update(
+        { id: In(duplicateIdsToDelete), userId },
+        { isDeleted: true, updatedAt: Date.now() },
+      ).catch((err) => this.logger.warn(`Failed to soft-delete duplicate transactions: ${err.message}`));
+    }
 
     const now = Date.now();
     for (const bank of bankProfiles) {
@@ -523,49 +572,54 @@ export class SyncService implements OnModuleInit {
   }
 
   async syncOcrTransactions(userId: string, data: OcrSyncDto) {
-    this.logger.log(`Syncing OCR transactions for user ${userId}, bank: ${data.bankProfileId}`);
-    
-    const bank = await this.bankProfileRepository.findOne({
-      where: { id: data.bankProfileId, userId, isDeleted: false },
-    });
-    if (!bank) {
-      throw new BadRequestException('Bank account profile not found.');
-    }
+    return this.withUserLock(userId, async () => {
+      this.logger.log(`Syncing OCR transactions for user ${userId}, bank: ${data.bankProfileId}`);
+      
+      const bank = await this.bankProfileRepository.findOne({
+        where: { id: data.bankProfileId, userId, isDeleted: false },
+      });
+      if (!bank) {
+        throw new BadRequestException('Bank account profile not found.');
+      }
 
-    const [existingTxs, existingIncome] = await Promise.all([
-      this.transactionRepository.find({
-        where: { userId, bankProfileId: data.bankProfileId, isDeleted: false },
-      }),
-      this.incomeRecordRepository.find({
-        where: { userId, bankProfileId: data.bankProfileId, isDeleted: false },
-      }),
-    ]);
+      const [existingTxs, existingIncome] = await Promise.all([
+        this.transactionRepository.find({
+          where: { userId, bankProfileId: data.bankProfileId, isDeleted: false },
+        }),
+        this.incomeRecordRepository.find({
+          where: { userId, bankProfileId: data.bankProfileId, isDeleted: false },
+        }),
+      ]);
 
-    let addedTransactionsCount = 0;
-    let addedIncomeCount = 0;
-    let netBalanceChange = 0;
+      let addedTransactionsCount = 0;
+      let addedIncomeCount = 0;
+      let netBalanceChange = 0;
 
-    const newTransactions: Transaction[] = [];
-    const newIncomeRecords: IncomeRecord[] = [];
+      const newTransactions: Transaction[] = [];
+      const newIncomeRecords: IncomeRecord[] = [];
 
-    for (const item of data.transactions) {
-      const amount = parseFloat(String(item.amount));
-      if (isNaN(amount) || amount <= 0) continue;
+      for (const item of data.transactions) {
+        const amount = parseFloat(String(item.amount));
+        if (isNaN(amount) || amount <= 0) continue;
 
-      const parsedDate = new Date(item.date);
-      if (isNaN(parsedDate.getTime())) continue;
+        const parsedDate = new Date(item.date);
+        if (isNaN(parsedDate.getTime())) continue;
 
-      const startOfDay = new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate(), 0, 0, 0, 0).getTime();
-      const endOfDay = new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate(), 23, 59, 59, 999).getTime();
+        const startOfDay = new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate(), 0, 0, 0, 0).getTime();
+        const endOfDay = new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate(), 23, 59, 59, 999).getTime();
 
-      if (item.type === 'debit') {
-        const isDuplicate = existingTxs.some((tx) => {
-          const txTime = Number(tx.timestamp);
-          return Math.abs(tx.amount - amount) < 0.01 && txTime >= startOfDay && txTime <= endOfDay;
-        }) || newTransactions.some((tx) => {
-          const txTime = Number(tx.timestamp);
-          return Math.abs(tx.amount - amount) < 0.01 && txTime >= startOfDay && txTime <= endOfDay;
-        });
+        if (item.type === 'debit') {
+          const isDuplicate = existingTxs.some((tx) => {
+            const txTime = Number(tx.timestamp);
+            const sameAmount = Math.abs(tx.amount - amount) < 0.01;
+            const isSameDay = (txTime >= startOfDay && txTime <= endOfDay) || Math.abs(txTime - parsedDate.getTime()) < 86400000;
+            return sameAmount && isSameDay;
+          }) || newTransactions.some((tx) => {
+            const txTime = Number(tx.timestamp);
+            const sameAmount = Math.abs(tx.amount - amount) < 0.01;
+            const isSameDay = (txTime >= startOfDay && txTime <= endOfDay) || Math.abs(txTime - parsedDate.getTime()) < 86400000;
+            return sameAmount && isSameDay;
+          });
 
         if (!isDuplicate) {
           const txId = 'tx_ocr_' + Math.random().toString(36).substr(2, 9);
@@ -590,10 +644,14 @@ export class SyncService implements OnModuleInit {
       } else if (item.type === 'credit') {
         const isDuplicate = existingIncome.some((inc) => {
           const incTime = Number(inc.timestamp);
-          return Math.abs(inc.amount - amount) < 0.01 && incTime >= startOfDay && incTime <= endOfDay;
+          const sameAmount = Math.abs(inc.amount - amount) < 0.01;
+          const isSameDay = (incTime >= startOfDay && incTime <= endOfDay) || Math.abs(incTime - parsedDate.getTime()) < 86400000;
+          return sameAmount && isSameDay;
         }) || newIncomeRecords.some((inc) => {
           const incTime = Number(inc.timestamp);
-          return Math.abs(inc.amount - amount) < 0.01 && incTime >= startOfDay && incTime <= endOfDay;
+          const sameAmount = Math.abs(inc.amount - amount) < 0.01;
+          const isSameDay = (incTime >= startOfDay && incTime <= endOfDay) || Math.abs(incTime - parsedDate.getTime()) < 86400000;
+          return sameAmount && isSameDay;
         });
 
         if (!isDuplicate) {
@@ -640,6 +698,7 @@ export class SyncService implements OnModuleInit {
       addedIncomeCount,
       updatedBalance: bank.currentBalance,
     };
+    });
   }
 
   private async classifyCategory(merchantName: string, userId?: string): Promise<string> {
@@ -1322,6 +1381,10 @@ export class SyncService implements OnModuleInit {
       endDate?: number;
       isOverall?: boolean;
       fixedObligations?: number;
+      isManuallyActivated?: boolean;
+      effectiveStartDate?: number;
+      parentBudgetId?: string;
+      isPaused?: boolean;
     },
   ) {
     const budget = this.budgetDeclarationRepository.create({
@@ -1337,6 +1400,10 @@ export class SyncService implements OnModuleInit {
       endDate: dto.endDate ? Number(dto.endDate) : Date.now() + 30 * 24 * 60 * 60 * 1000,
       isOverall: !!dto.isOverall,
       fixedObligations: parseFloat(String(dto.fixedObligations || 0)),
+      isManuallyActivated: !!dto.isManuallyActivated,
+      effectiveStartDate: dto.effectiveStartDate ? Number(dto.effectiveStartDate) : null,
+      parentBudgetId: dto.parentBudgetId || null,
+      isPaused: !!dto.isPaused,
       updatedAt: Date.now(),
       isDeleted: false,
     });
@@ -1362,6 +1429,10 @@ export class SyncService implements OnModuleInit {
       endDate: number;
       isOverall: boolean;
       fixedObligations: number;
+      isManuallyActivated: boolean;
+      effectiveStartDate: number;
+      parentBudgetId: string;
+      isPaused: boolean;
     }>,
   ) {
     const budget = await this.budgetDeclarationRepository.findOne({
@@ -1381,6 +1452,10 @@ export class SyncService implements OnModuleInit {
     if (dto.endDate !== undefined) budget.endDate = Number(dto.endDate);
     if (dto.isOverall !== undefined) budget.isOverall = !!dto.isOverall;
     if (dto.fixedObligations !== undefined) budget.fixedObligations = parseFloat(String(dto.fixedObligations));
+    if (dto.isManuallyActivated !== undefined) budget.isManuallyActivated = !!dto.isManuallyActivated;
+    if (dto.effectiveStartDate !== undefined) budget.effectiveStartDate = dto.effectiveStartDate ? Number(dto.effectiveStartDate) : null;
+    if (dto.parentBudgetId !== undefined) budget.parentBudgetId = dto.parentBudgetId || null;
+    if (dto.isPaused !== undefined) budget.isPaused = !!dto.isPaused;
 
     budget.updatedAt = Date.now();
     return this.budgetDeclarationRepository.save(budget);
@@ -1406,6 +1481,7 @@ export class SyncService implements OnModuleInit {
    * Directly ingests SMS from native Android receiver without React Native overhead.
    */
   async ingestDirectSms(userId: string, data: { sender: string; body: string; timestamp?: number }) {
+    return this.withUserLock(userId, async () => {
     this.logger.log(`Direct native SMS ingestion for user ${userId} from ${data.sender}`);
     const parsed = parseSMS(data.sender, data.body);
     if (!parsed) {
@@ -1494,7 +1570,9 @@ export class SyncService implements OnModuleInit {
     if (parsed.type === 'debit') {
       const isDuplicate = existingTxs.some((tx) => {
         const t = Number(tx.timestamp);
-        return Math.abs(tx.amount - parsed.amount) < 0.01 && t >= startOfDay && t <= endOfDay;
+        const sameAmount = Math.abs(tx.amount - parsed.amount) < 0.01;
+        const isSameDay = (t >= startOfDay && t <= endOfDay) || Math.abs(t - txTime) < 86400000;
+        return sameAmount && isSameDay;
       });
 
       if (isDuplicate) {
@@ -1527,7 +1605,9 @@ export class SyncService implements OnModuleInit {
     } else {
       const isDuplicate = existingIncome.some((inc) => {
         const t = Number(inc.timestamp);
-        return Math.abs(inc.amount - parsed.amount) < 0.01 && t >= startOfDay && t <= endOfDay;
+        const sameAmount = Math.abs(inc.amount - parsed.amount) < 0.01;
+        const isSameDay = (t >= startOfDay && t <= endOfDay) || Math.abs(t - txTime) < 86400000;
+        return sameAmount && isSameDay;
       });
 
       if (isDuplicate) {
@@ -1568,6 +1648,7 @@ export class SyncService implements OnModuleInit {
       accountSuffix: matchedBank.accountNumberSuffix,
       merchant: parsed.merchant,
     };
+    });
   }
 
   /**

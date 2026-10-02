@@ -11,42 +11,150 @@ import {
   differenceInDays,
   format,
 } from 'date-fns';
-import { BudgetCategory, BudgetPeriodType, useBudgetStore } from '../store';
+import { BudgetCategory, BudgetPeriodType, BudgetCustomCategory, useBudgetStore } from '../store';
 import { authService } from './authService';
 import { BACKEND_URL } from '../config/api';
 
 /**
- * Common Debit Categories synchronized with TransactionDetailScreen
+ * Top 30 Comprehensive Everyday Indian Spending Categories + Overall
  */
 export const BUDGET_DEBIT_CATEGORIES = [
-  { id: 'all', label: 'Total Spending (Overall)', icon: 'globe-outline', isOverall: true, color: '#2dba4e' },
-  { id: 'food', label: 'Food & Dining', icon: 'restaurant-outline', color: '#ff9800' },
-  { id: 'utilities', label: 'Rent & Bills', icon: 'home-outline', color: '#2196f3' },
-  { id: 'transport', label: 'Travel & Cab', icon: 'car-outline', color: '#9c27b0' },
-  { id: 'shopping', label: 'Shopping', icon: 'cart-outline', color: '#e91e63' },
-  { id: 'entertainment', label: 'Entertainment', icon: 'film-outline', color: '#00bcd4' },
-  { id: 'health', label: 'Health & Med', icon: 'fitness-outline', color: '#4caf50' },
-  { id: 'other_expense', label: 'Other Expense', icon: 'pricetag-outline', color: '#8b949e' },
+  { id: 'all', label: 'Overall Monthly Budget', icon: 'globe-outline', isOverall: true, color: '#2dba4e' },
+  { id: 'food', label: 'Food & Dining', icon: 'restaurant-outline', color: '#2dba4e' },
+  { id: 'groceries', label: 'Groceries & Supermarket', icon: 'cart-outline', color: '#2dba4e' },
+  { id: 'rent', label: 'House Rent', icon: 'home-outline', color: '#2dba4e' },
+  { id: 'bills', label: 'Electricity & Utilities', icon: 'flash-outline', color: '#2dba4e' },
+  { id: 'recharge', label: 'Mobile & WiFi', icon: 'wifi-outline', color: '#2dba4e' },
+  { id: 'fuel', label: 'Fuel (Petrol/Diesel/EV)', icon: 'flame-outline', color: '#2dba4e' },
+  { id: 'cab', label: 'Cab & Auto (Uber/Ola)', icon: 'car-outline', color: '#2dba4e' },
+  { id: 'transit', label: 'Metro & Public Transit', icon: 'bus-outline', color: '#2dba4e' },
+  { id: 'shopping', label: 'Shopping & Clothing', icon: 'shirt-outline', color: '#2dba4e' },
+  { id: 'entertainment', label: 'Movies & Outings', icon: 'film-outline', color: '#2dba4e' },
+  { id: 'subscriptions', label: 'OTT & Subscriptions', icon: 'tv-outline', color: '#2dba4e' },
+  { id: 'fitness', label: 'Gym & Fitness', icon: 'barbell-outline', color: '#2dba4e' },
+  { id: 'medical', label: 'Pharmacy & Medicines', icon: 'medkit-outline', color: '#2dba4e' },
+  { id: 'doctor', label: 'Doctor & Consultation', icon: 'pulse-outline', color: '#2dba4e' },
+  { id: 'salon', label: 'Personal Care & Salon', icon: 'cut-outline', color: '#2dba4e' },
+  { id: 'credit_card', label: 'Credit Card Bill', icon: 'card-outline', color: '#2dba4e' },
+  { id: 'emi', label: 'EMI & Loan Payments', icon: 'cash-outline', color: '#2dba4e' },
+  { id: 'education', label: 'Education & Tuition', icon: 'school-outline', color: '#2dba4e' },
+  { id: 'books', label: 'Books & Courses', icon: 'book-outline', color: '#2dba4e' },
+  { id: 'investments', label: 'Mutual Funds & SIP', icon: 'trending-up-outline', color: '#2dba4e' },
+  { id: 'insurance', label: 'Insurance (Life/Health)', icon: 'shield-checkmark-outline', color: '#2dba4e' },
+  { id: 'travel', label: 'Travel & Flights', icon: 'airplane-outline', color: '#2dba4e' },
+  { id: 'hotel', label: 'Hotel & Stay', icon: 'bed-outline', color: '#2dba4e' },
+  { id: 'maintenance', label: 'Home Maintenance', icon: 'construct-outline', color: '#2dba4e' },
+  { id: 'electronics', label: 'Electronics & Gadgets', icon: 'hardware-chip-outline', color: '#2dba4e' },
+  { id: 'cafe', label: 'Café & Quick Snacks', icon: 'cafe-outline', color: '#2dba4e' },
+  { id: 'nightlife', label: 'Nightlife & Drinks', icon: 'wine-outline', color: '#2dba4e' },
+  { id: 'gifts', label: 'Gifts & Celebrations', icon: 'gift-outline', color: '#2dba4e' },
+  { id: 'pets', label: 'Pet Care & Supplies', icon: 'paw-outline', color: '#2dba4e' },
+  { id: 'charity', label: 'Charity & Donations', icon: 'heart-outline', color: '#2dba4e' },
+  { id: 'other_expense', label: 'Other Expense', icon: 'pricetag-outline', color: '#2dba4e' },
 ];
 
 /**
- * Period preset definitions with human-readable labels
+ * Simplified Budget Duration: EXACTLY 2 Options
  */
-export const BUDGET_PERIOD_PRESETS: { id: BudgetPeriodType; label: string; badge: string }[] = [
-  { id: 'monthly', label: 'This Month', badge: 'Default' },
-  { id: '1_week', label: '1 Week', badge: '7 Days' },
-  { id: '2_week', label: '2 Weeks', badge: '14 Days' },
-  { id: '3_week', label: '3 Weeks', badge: '21 Days' },
-  { id: '4_week', label: '4 Weeks', badge: '28 Days' },
-  { id: '2_month', label: '2 Months', badge: '~60 Days' },
-  { id: '3_month', label: '3 Months (Quarter)', badge: 'Qtr' },
-  { id: '4_month', label: '4 Months', badge: '~120 Days' },
-  { id: '6_month', label: '6 Months (Half-Yr)', badge: '6M' },
-  { id: '1_year', label: '1 Year (Annual)', badge: 'Annual' },
-  { id: '5_year', label: '5 Years', badge: '5Y' },
-  { id: 'salary_cycle', label: 'Salary Cycle', badge: 'Payday' },
-  { id: 'custom', label: 'Custom Range', badge: 'Pick Dates' },
+export const BUDGET_PERIOD_PRESETS: { id: BudgetPeriodType; label: string; badge: string; desc: string }[] = [
+  { id: 'monthly', label: 'Monthly Budget', badge: 'Default', desc: 'Current calendar month or custom monthly cycle' },
+  { id: 'custom_event', label: 'Special / Event Budget', badge: 'Custom Dates', desc: 'Trip, festival, wedding, or planned event' },
 ];
+
+export type BudgetStatus = 'not_started' | 'in_progress' | 'paused' | 'done';
+
+export function getBudgetStatus(
+  budget: BudgetCategory,
+  now: number = Date.now()
+): {
+  status: BudgetStatus;
+  label: string;
+  color: string;
+  icon: string;
+  badgeBg: string;
+} {
+  if (budget.isDone) {
+    return {
+      status: 'done',
+      label: 'Done',
+      color: '#2dba4e',
+      icon: 'checkmark-circle',
+      badgeBg: 'rgba(45, 186, 78, 0.15)',
+    };
+  }
+  if (budget.isPaused) {
+    return {
+      status: 'paused',
+      label: 'Paused',
+      color: '#e3b341',
+      icon: 'pause-circle',
+      badgeBg: 'rgba(227, 179, 65, 0.15)',
+    };
+  }
+  const start = budget.startDate || 0;
+  const end = budget.endDate || Infinity;
+  const isEarly = !!budget.isManuallyActivated;
+
+  if (now > end) {
+    return {
+      status: 'done',
+      label: 'Done',
+      color: '#2dba4e',
+      icon: 'checkmark-circle',
+      badgeBg: 'rgba(45, 186, 78, 0.15)',
+    };
+  }
+  if (now < start && !isEarly) {
+    return {
+      status: 'not_started',
+      label: 'Upcoming',
+      color: '#94a3b8',
+      icon: 'hourglass-outline',
+      badgeBg: 'rgba(255, 255, 255, 0.08)',
+    };
+  }
+  return {
+    status: 'in_progress',
+    label: 'In Progress',
+    color: '#2dba4e',
+    icon: 'radio-button-on',
+    badgeBg: 'rgba(45, 186, 78, 0.15)',
+  };
+}
+
+/**
+ * Extracts reusable configuration from an existing budget for cloning/templating
+ */
+export function getBudgetTemplateData(
+  budget: BudgetCategory,
+  allBudgets: BudgetCategory[]
+): {
+  amount: number;
+  name: string;
+  category: string;
+  periodType: BudgetPeriodType;
+  subCategories: Array<{ category: string; limitAmount: number; name?: string; customCategoryDef?: any }>;
+  customCategoryDef?: any;
+} {
+  const isOverall = !!budget.isOverall;
+  const relatedSubBudgets = isOverall
+    ? allBudgets.filter((b) => !b.isOverall && (b.parentBudgetId === budget.id || (!b.parentBudgetId && b.period === budget.period)))
+    : [];
+
+  return {
+    amount: Number(budget.limitAmount || 0),
+    name: budget.name || '',
+    category: budget.category || 'all',
+    periodType: budget.periodType || 'monthly',
+    subCategories: relatedSubBudgets.map((sb) => ({
+      category: sb.category,
+      limitAmount: Number(sb.limitAmount || 0),
+      name: sb.name,
+      customCategoryDef: sb.customCategoryDef,
+    })),
+    customCategoryDef: budget.customCategoryDef,
+  };
+}
 
 /**
  * Helper to adjust a Date to the start of day (00:00:00.000) in IST (UTC+05:30)
@@ -220,7 +328,8 @@ export function getBudgetPeriodRange(
       };
     }
 
-    case 'custom': {
+    case 'custom':
+    case 'custom_event': {
       if (customRange && customRange.start && customRange.end) {
         const start = getISTStartOfDay(customRange.start);
         const end = getISTEndOfDay(customRange.end);
@@ -261,10 +370,20 @@ export function getBudgetPeriodRange(
  * Detect if a transaction is a self-transfer or credit card bill payment
  * (Strictly excluded to prevent double counting in budgets)
  */
-export function isExcludedFromBudget(tx: any): boolean {
-  if (tx.isSelfTransfer === true) return true;
+export function isExcludedFromBudget(tx: any, explicitExcludedIds?: string[]): boolean {
+  if (tx.isSelfTransfer === true || tx.excludedFromBudget === true) return true;
   const category = (tx.category || '').toLowerCase();
-  if (category === 'transfer') return true;
+  if (category === 'transfer' || category === 'self_transfer') return true;
+
+  if (explicitExcludedIds && tx.id && explicitExcludedIds.includes(tx.id)) {
+    return true;
+  }
+
+  try {
+    const { useBudgetStore } = require('../store');
+    const excludedIds: string[] = useBudgetStore.getState().excludedTransactionIds || [];
+    if (tx.id && excludedIds.includes(tx.id)) return true;
+  } catch {}
 
   const note = (tx.merchant || tx.source || tx.note || '').toUpperCase();
   const excludedPatterns = [
@@ -284,8 +403,61 @@ export function isExcludedFromBudget(tx: any): boolean {
 }
 
 /**
- * Calculate Net Spend for a Budget within its active date window
- * Net Spend = Gross Debits - Refunds/Cashback Credits
+ * Category alias dictionary to link various transaction spend tags/categories
+ * to their respective budget categories seamlessly.
+ */
+export const CATEGORY_ALIASES: Record<string, string[]> = {
+  fuel: ['fuel', 'petrol', 'diesel', 'cng', 'ev', 'ev charging', 'gas'],
+  bills: ['bills', 'bill', 'electricity', 'utilities', 'utility', 'water', 'power', 'bescom', 'gas bill', 'maintenance'],
+  recharge: ['recharge', 'mobile', 'wifi', 'broadband', 'dth', 'internet', 'airtel', 'jio'],
+  food: ['food', 'dining', 'restaurant', 'cafe', 'snacks', 'breakfast', 'lunch', 'dinner', 'zomato', 'swiggy', 'poha'],
+  groceries: ['groceries', 'grocery', 'supermarket', 'mart', 'vegetables', 'blinkit', 'zepto', 'instamart'],
+  cab: ['cab', 'taxi', 'uber', 'ola', 'auto', 'rapido'],
+  transit: ['transit', 'metro', 'bus', 'train', 'irctc'],
+  shopping: ['shopping', 'clothing', 'apparel', 'ecommerce', 'amazon', 'flipkart', 'myntra', 'zara'],
+  medical: ['medical', 'medicine', 'medicines', 'pharmacy', 'chemist', '1mg', 'apollo'],
+  doctor: ['doctor', 'consultation', 'clinic', 'hospital'],
+  entertainment: ['entertainment', 'movies', 'cinema', 'theatre', 'bookmyshow'],
+  subscriptions: ['subscriptions', 'subscription', 'ott', 'netflix', 'spotify', 'hotstar', 'prime'],
+  investments: ['investments', 'investment', 'sip', 'mutual_funds', 'stocks', 'zerodha', 'groww'],
+  rent: ['rent', 'house_rent', 'home_rent'],
+  fitness: ['fitness', 'gym', 'yoga', 'cult', 'sports'],
+  education: ['education', 'tuition', 'school', 'college', 'course', 'books'],
+  travel: ['travel', 'flights', 'hotel', 'trip', 'makemytrip'],
+};
+
+/**
+ * Robust category matching that checks exact ID, canonical names, and synonyms/aliases.
+ */
+export function isCategoryMatching(
+  txCategoryRaw: string | undefined,
+  budgetCategoryRaw: string | undefined,
+  isOverall: boolean = false
+): boolean {
+  if (isOverall) return true;
+  const txCat = (txCategoryRaw || 'other_expense').toLowerCase().trim();
+  const bCat = (budgetCategoryRaw || '').toLowerCase().trim();
+  if (!bCat) return false;
+
+  if (txCat === bCat) return true;
+
+  // Direct alias check for budget category
+  const bAliases = CATEGORY_ALIASES[bCat];
+  if (bAliases && bAliases.includes(txCat)) return true;
+
+  // Cross-reference checks across known alias maps
+  for (const [canonical, aliases] of Object.entries(CATEGORY_ALIASES)) {
+    if (canonical === bCat && aliases.includes(txCat)) return true;
+    if (aliases.includes(bCat) && (aliases.includes(txCat) || canonical === txCat)) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Calculate Spend for a Budget within its active date window
+ * Strictly tracks DEBIT spending only. No credits or refunds mixed in.
+ * Supports manual early-tracking activation before scheduled start date.
  */
 export function calculateBudgetNetSpend(
   budget: BudgetCategory,
@@ -296,57 +468,231 @@ export function calculateBudgetNetSpend(
   netSpend: number;
   transactionCount: number;
   matchingTransactions: any[];
+  isUpcoming: boolean;
+  isPaused: boolean;
+  effectiveStartDate: number;
+  daysUntilStart: number;
 } {
-  const startDate = budget.startDate || getISTStartOfDay(startOfMonth(new Date()));
+  const isPaused = !!budget.isPaused;
+  const now = Date.now();
+  const rawStart = budget.startDate || getISTStartOfDay(startOfMonth(new Date()));
+  const isManuallyActivated = !!budget.isManuallyActivated;
+
+  // If budget tracking is turned off / paused, do not track transactions
+  if (isPaused) {
+    return {
+      grossSpend: 0,
+      refunds: 0,
+      netSpend: 0,
+      transactionCount: 0,
+      matchingTransactions: [],
+      isUpcoming: false,
+      isPaused: true,
+      effectiveStartDate: rawStart,
+      daysUntilStart: 0,
+    };
+  }
+
+  // If user activated early, track from effectiveStartDate or now, whichever is valid
+  const effectiveStart = isManuallyActivated
+    ? (budget.effectiveStartDate || now)
+    : rawStart;
+
   const endDate = budget.endDate || getISTEndOfDay(endOfMonth(new Date()));
   const isOverall = !!budget.isOverall;
   const targetCategory = (budget.category || '').toLowerCase();
 
+  const isUpcoming = rawStart > now && !isManuallyActivated;
+  const daysUntilStart = isUpcoming ? Math.max(1, Math.ceil((rawStart - now) / (1000 * 60 * 60 * 24))) : 0;
+
   let grossSpend = 0;
-  let refunds = 0;
   let transactionCount = 0;
   const matchingTransactions: any[] = [];
 
-  for (const tx of transactions) {
-    if (tx.isDeleted) continue;
-    if (isExcludedFromBudget(tx)) continue;
+  // Only track debits if active (not future upcoming, or manually activated early)
+  if (!isUpcoming) {
+    for (const tx of transactions) {
+      if (tx.isDeleted) continue;
+      if (isExcludedFromBudget(tx)) continue;
 
-    // Normalize timestamp
-    const txTime = typeof tx.timestamp === 'number' ? tx.timestamp : new Date(tx.timestamp || tx.date).getTime();
-    if (isNaN(txTime)) continue;
+      // Pure DEBIT spend tracking only (strictly exclude credits, income, salary)
+      const isCredit = tx.type === 'credit' || !!tx.isSalary;
+      const isDebit = !isCredit && (tx.type ? tx.type === 'debit' : true);
+      if (!isDebit) continue;
 
-    // Check date interval
-    if (txTime < startDate || txTime > endDate) continue;
+      const txTime = typeof tx.timestamp === 'number' ? tx.timestamp : new Date(tx.timestamp || tx.date).getTime();
+      if (isNaN(txTime)) continue;
 
-    const txCategory = (tx.category || 'other_expense').toLowerCase();
-    const isCategoryMatch = isOverall || txCategory === targetCategory;
+      // Only count transactions within the active window
+      if (txTime < effectiveStart || txTime > endDate) continue;
 
-    if (!isCategoryMatch) continue;
+      const txCategory = (tx.category || 'other_expense').toLowerCase();
+      const isCategoryMatch = isCategoryMatching(txCategory, targetCategory, isOverall);
 
-    const amount = Math.abs(parseFloat(tx.amount || 0));
-    if (isNaN(amount) || amount === 0) continue;
+      if (!isCategoryMatch) continue;
 
-    if (tx.type === 'debit') {
+      const amount = Math.abs(parseFloat(tx.amount || 0));
+      if (isNaN(amount) || amount === 0) continue;
+
       grossSpend += amount;
       transactionCount += 1;
       matchingTransactions.push(tx);
-    } else if (tx.type === 'credit') {
-      // If it's a refund or cashback in the same category, subtract it
-      if (txCategory === targetCategory || txCategory === 'cashback') {
-        refunds += amount;
-        matchingTransactions.push(tx);
+    }
+  }
+
+  return {
+    grossSpend,
+    refunds: 0,
+    netSpend: grossSpend,
+    transactionCount,
+    matchingTransactions,
+    isUpcoming,
+    isPaused: false,
+    effectiveStartDate: effectiveStart,
+    daysUntilStart,
+  };
+}
+
+export interface UnallocatedCategoryGroup {
+  category: string;
+  label: string;
+  icon: string;
+  color: string;
+  totalSpent: number;
+  count: number;
+  transactions: any[];
+}
+
+/**
+ * Hierarchical Sub-Budget & Free to Spend Allocation Calculation
+ * (e.g. ₹9,000 overall - ₹3,000 Rent - ₹3,000 Food = ₹3,000 Free to Spend Cash)
+ */
+export function calculateBudgetHierarchy(
+  overallBudget: BudgetCategory | undefined,
+  subBudgets: BudgetCategory[],
+  allTransactions: any[]
+): {
+  totalLimit: number;
+  totalSpent: number;
+  totalRemaining: number;
+  allocatedLimit: number;
+  unallocatedBuffer: number;
+  unallocatedSpent: number;
+  unallocatedRemaining: number;
+  dailySafeSpend: number;
+  daysRemaining: number;
+  unallocatedTransactions: any[];
+  unallocatedBreakdown: UnallocatedCategoryGroup[];
+} {
+  const totalLimit = overallBudget ? Number(overallBudget.limitAmount || 0) : 0;
+
+  // Overall debits during cycle
+  const overallSpendData = overallBudget
+    ? calculateBudgetNetSpend(overallBudget, allTransactions)
+    : { netSpend: 0, matchingTransactions: [] };
+  const totalSpent = overallSpendData.netSpend;
+  const totalRemaining = Math.max(0, totalLimit - totalSpent);
+
+  // Sub-categories allocated
+  const allocatedLimit = subBudgets.reduce((acc, b) => acc + Number(b.limitAmount || 0), 0);
+  const unallocatedBuffer = Math.max(0, totalLimit - allocatedLimit);
+
+  // Sub-categories spent & matching tracker
+  let allocatedSpent = 0;
+  for (const b of subBudgets) {
+    const s = calculateBudgetNetSpend(b, allTransactions);
+    allocatedSpent += s.netSpend;
+  }
+
+  // Any spend outside specific allocated categories reduces the unallocated buffer
+  const unallocatedSpent = Math.max(0, totalSpent - allocatedSpent);
+  const unallocatedRemaining = Math.max(0, unallocatedBuffer - unallocatedSpent);
+
+  // Identify transactions outside allocated sub-budgets
+  const unallocatedTransactions: any[] = [];
+  const groupMap = new Map<string, { totalSpent: number; count: number; txs: any[] }>();
+
+  if (overallSpendData.matchingTransactions && overallSpendData.matchingTransactions.length > 0) {
+    for (const tx of overallSpendData.matchingTransactions) {
+      const matchesSubBudget = subBudgets.some((b) =>
+        isCategoryMatching(tx.category, b.category, false)
+      );
+      if (!matchesSubBudget) {
+        unallocatedTransactions.push(tx);
+        const catKey = (tx.category || 'other_expense').toLowerCase();
+        const amt = Math.abs(parseFloat(tx.amount || 0)) || 0;
+        const existing = groupMap.get(catKey) || { totalSpent: 0, count: 0, txs: [] };
+        existing.totalSpent += amt;
+        existing.count += 1;
+        existing.txs.push(tx);
+        groupMap.set(catKey, existing);
       }
     }
   }
 
-  const netSpend = Math.max(0, grossSpend - refunds);
+  const unallocatedBreakdown: UnallocatedCategoryGroup[] = Array.from(groupMap.entries())
+    .map(([catKey, data]) => {
+      const meta = getCategoryMeta(catKey);
+      return {
+        category: catKey,
+        label: meta.label,
+        icon: meta.icon,
+        color: meta.color,
+        totalSpent: data.totalSpent,
+        count: data.count,
+        transactions: data.txs.sort((a: any, b: any) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0)),
+      };
+    })
+    .sort((a, b) => b.totalSpent - a.totalSpent);
+
+  // Days remaining in cycle
+  const now = Date.now();
+  const endDate = overallBudget?.endDate || getISTEndOfDay(endOfMonth(new Date()));
+  const daysRemaining = Math.max(1, Math.ceil((endDate - now) / (1000 * 60 * 60 * 24)));
+
+  // Daily safe spend is calculated strictly from the unallocated free cash buffer!
+  const dailySafeSpend = Math.round(unallocatedRemaining / daysRemaining);
 
   return {
-    grossSpend,
-    refunds,
-    netSpend,
-    transactionCount,
-    matchingTransactions,
+    totalLimit,
+    totalSpent,
+    totalRemaining,
+    allocatedLimit,
+    unallocatedBuffer,
+    unallocatedSpent,
+    unallocatedRemaining,
+    dailySafeSpend,
+    daysRemaining,
+    unallocatedTransactions,
+    unallocatedBreakdown,
+  };
+}
+
+/**
+ * Universal category metadata resolver (supports built-in and user-created custom categories)
+ */
+export function getCategoryMeta(
+  catId: string,
+  isOverall?: boolean,
+  customDef?: BudgetCustomCategory
+): { id: string; label: string; icon: string; color: string; isOverall?: boolean } {
+  if (isOverall) return BUDGET_DEBIT_CATEGORIES[0];
+  if (customDef) {
+    return {
+      id: catId,
+      label: customDef.label,
+      icon: customDef.icon,
+      color: customDef.color,
+    };
+  }
+  const cleanId = (catId || '').toLowerCase();
+  const found = BUDGET_DEBIT_CATEGORIES.find((c) => c.id === cleanId);
+  if (found) return found;
+  return {
+    id: catId,
+    label: catId ? catId.charAt(0).toUpperCase() + catId.slice(1) : 'Expense',
+    icon: 'pricetag-outline',
+    color: '#94a3b8',
   };
 }
 
@@ -646,6 +992,10 @@ export const budgetService = {
     endDate?: number;
     isOverall?: boolean;
     fixedObligations?: number;
+    parentBudgetId?: string;
+    isManuallyActivated?: boolean;
+    effectiveStartDate?: number;
+    customCategoryDef?: BudgetCustomCategory;
   }): Promise<BudgetCategory> {
     const token = await authService.getAccessToken();
     const id = 'budget_' + (payload.category || 'all') + '_' + Math.random().toString(36).substr(2, 9);
@@ -662,6 +1012,10 @@ export const budgetService = {
       endDate: payload.endDate,
       isOverall: payload.isOverall,
       fixedObligations: payload.fixedObligations || 0,
+      parentBudgetId: payload.parentBudgetId,
+      isManuallyActivated: payload.isManuallyActivated || false,
+      effectiveStartDate: payload.effectiveStartDate,
+      customCategoryDef: payload.customCategoryDef,
     };
 
     // Optimistically update local store
@@ -756,7 +1110,15 @@ export const budgetService = {
  * if a budget crosses 80% (Warning) or 100% (Breach), or if salary arrives.
  */
 export function checkAndDispatchBudgetAlert(
-  parsedTx: { amount: number; type: 'credit' | 'debit'; merchant: string; category?: string; isSalary?: boolean },
+  parsedTx: {
+    amount: number;
+    type: 'credit' | 'debit';
+    merchant: string;
+    category?: string;
+    isSalary?: boolean;
+    timestamp?: number;
+    date?: string;
+  },
   allTransactions: any[]
 ): void {
   const { useBudgetStore, useNotificationStore } = require('../store');
@@ -766,8 +1128,40 @@ export function checkAndDispatchBudgetAlert(
   // 1. Salary Credit Alert & Budget Cycle Rollover Nudge
   if (parsedTx.isSalary || parsedTx.type === 'credit') {
     if (parsedTx.isSalary || (parsedTx.merchant && parsedTx.merchant.toUpperCase().includes('SALARY'))) {
-      useNotificationStore.getState().addNotification({
-        id: 'notif_salary_' + Date.now(),
+      const notifStore = useNotificationStore.getState();
+      const existingNotifs = notifStore.notifications || [];
+
+      // Check if a salary notification already exists for this transaction or similar amount
+      const alreadyNotified = existingNotifs.some((n: any) => {
+        if (
+          n.payload?.isSalaryCycleNudge &&
+          Math.abs(Number(n.payload?.amount || 0) - parsedTx.amount) < 1
+        ) {
+          return true;
+        }
+        if (
+          n.title &&
+          n.title.includes('Salary Credit Detected') &&
+          (n.body?.includes(parsedTx.merchant) ||
+            Math.abs(Number(n.payload?.amount || 0) - parsedTx.amount) < 1)
+        ) {
+          return true;
+        }
+        return false;
+      });
+
+      if (alreadyNotified) {
+        return;
+      }
+
+      const notifId =
+        'notif_salary_' +
+        (parsedTx.merchant || 'merchant').replace(/[^a-zA-Z0-9]/g, '_') +
+        '_' +
+        Math.round(parsedTx.amount);
+
+      notifStore.addNotification({
+        id: notifId,
         userId: 'local',
         agentId: 'agent_budget',
         title: '💼 Salary Credit Detected!',
@@ -775,7 +1169,7 @@ export function checkAndDispatchBudgetAlert(
         type: 'recommendation',
         readStatus: false,
         payload: { isSalaryCycleNudge: true, amount: parsedTx.amount },
-        createdAt: Date.now(),
+        createdAt: parsedTx.timestamp || Date.now(),
       });
     }
     return;
@@ -788,6 +1182,7 @@ export function checkAndDispatchBudgetAlert(
   const txAmount = Math.abs(Number(parsedTx.amount || 0));
 
   for (const budget of budgets) {
+    if (budget.isPaused) continue;
     const isCategoryMatch = budget.isOverall || (budget.category || '').toLowerCase() === targetCategory;
     if (!isCategoryMatch) continue;
 
@@ -800,32 +1195,46 @@ export function checkAndDispatchBudgetAlert(
     if (newNetSpend >= limit) {
       // 100% Breach Alert
       const overAmount = newNetSpend - limit;
-      useNotificationStore.getState().addNotification({
-        id: 'notif_breach_' + budget.id + '_' + Date.now(),
-        userId: 'local',
-        agentId: 'agent_budget',
-        title: `🚨 Overbudget Alert: ${budget.name || budget.category}`,
-        body: `This ₹${txAmount.toLocaleString('en-IN')} spend at ${parsedTx.merchant} puts you ₹${overAmount.toLocaleString('en-IN')} over your budget limit.`,
-        type: 'budget_alert',
-        readStatus: false,
-        payload: { budgetId: budget.id, percentage, overAmount },
-        createdAt: Date.now(),
-      });
+      const notifStore = useNotificationStore.getState();
+      const existingNotifs = notifStore.notifications || [];
+      const alreadyHasBreach = existingNotifs.some(
+        (n: any) => n.type === 'budget_alert' && n.payload?.budgetId === budget.id && !n.readStatus
+      );
+      if (!alreadyHasBreach) {
+        notifStore.addNotification({
+          id: 'notif_breach_' + budget.id + '_' + Date.now(),
+          userId: 'local',
+          agentId: 'agent_budget',
+          title: `🚨 Overbudget Alert: ${budget.name || budget.category}`,
+          body: `This ₹${txAmount.toLocaleString('en-IN')} spend at ${parsedTx.merchant} puts you ₹${overAmount.toLocaleString('en-IN')} over your budget limit.`,
+          type: 'budget_alert',
+          readStatus: false,
+          payload: { budgetId: budget.id, percentage, overAmount },
+          createdAt: parsedTx.timestamp || Date.now(),
+        });
+      }
       break;
     } else if (percentage >= 80 && netData.netSpend < limit * 0.8) {
       // 80% Warning Threshold Nudge (Moment of spend)
-      const pacing = calculateBudgetPacing(budget, newNetSpend);
-      useNotificationStore.getState().addNotification({
-        id: 'notif_warning_' + budget.id + '_' + Date.now(),
-        userId: 'local',
-        agentId: 'agent_budget',
-        title: `⚠️ 80% Budget Warning: ${budget.name || budget.category}`,
-        body: `This ₹${txAmount.toLocaleString('en-IN')} spend at ${parsedTx.merchant} brings you to ${percentage}% of your limit (₹${remaining.toLocaleString('en-IN')} remaining for ${pacing.daysRemaining} days).`,
-        type: 'budget_alert',
-        readStatus: false,
-        payload: { budgetId: budget.id, percentage, remaining },
-        createdAt: Date.now(),
-      });
+      const notifStore = useNotificationStore.getState();
+      const existingNotifs = notifStore.notifications || [];
+      const alreadyHasWarning = existingNotifs.some(
+        (n: any) => n.type === 'budget_alert' && n.payload?.budgetId === budget.id && !n.readStatus
+      );
+      if (!alreadyHasWarning) {
+        const pacing = calculateBudgetPacing(budget, newNetSpend);
+        notifStore.addNotification({
+          id: 'notif_warning_' + budget.id + '_' + Date.now(),
+          userId: 'local',
+          agentId: 'agent_budget',
+          title: `⚠️ 80% Budget Warning: ${budget.name || budget.category}`,
+          body: `This ₹${txAmount.toLocaleString('en-IN')} spend at ${parsedTx.merchant} brings you to ${percentage}% of your limit (₹${remaining.toLocaleString('en-IN')} remaining for ${pacing.daysRemaining} days).`,
+          type: 'budget_alert',
+          readStatus: false,
+          payload: { budgetId: budget.id, percentage, remaining },
+          createdAt: parsedTx.timestamp || Date.now(),
+        });
+      }
       break;
     }
   }

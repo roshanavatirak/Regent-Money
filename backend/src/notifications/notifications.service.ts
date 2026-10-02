@@ -105,6 +105,15 @@ export class NotificationsService implements OnModuleInit {
     return this.notificationRepository.save(notification);
   }
 
+  async markAllAsRead(userId: string): Promise<{ success: boolean; count: number }> {
+    this.logger.log(`Marking all notifications as read for user ${userId}`);
+    const result = await this.notificationRepository.update(
+      { userId, readStatus: false, isDeleted: false },
+      { readStatus: true, updatedAt: Date.now() },
+    );
+    return { success: true, count: result.affected || 0 };
+  }
+
   async deleteNotification(userId: string, notificationId: string): Promise<{ success: boolean }> {
     this.logger.log(`Soft deleting notification ${notificationId} for user ${userId}`);
     const notification = await this.notificationRepository.findOne({

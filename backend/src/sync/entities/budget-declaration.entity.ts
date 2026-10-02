@@ -59,6 +59,21 @@ export class BudgetDeclaration {
   }})
   updatedAt: number;
 
+  @Column({ name: 'is_manually_activated', type: 'boolean', default: false })
+  isManuallyActivated: boolean;
+
+  @Column({ name: 'effective_start_date', type: 'bigint', nullable: true, transformer: {
+    to: (value: number | null) => value ? String(value) : null,
+    from: (value: string | null) => value ? Number(value) : null
+  }})
+  effectiveStartDate: number | null;
+
+  @Column({ name: 'parent_budget_id', type: 'text', nullable: true })
+  parentBudgetId: string | null;
+
+  @Column({ name: 'is_paused', type: 'boolean', default: false })
+  isPaused: boolean;
+
   @Column({ name: 'is_deleted', type: 'boolean', default: false })
   isDeleted: boolean;
 }

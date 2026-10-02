@@ -30,8 +30,24 @@ export const useTransactionStore = create<TransactionState>((set) => ({
   isLoading: false,
   filterCategory: null,
   setTransactions: (transactions) => {
-    mmkvStorage.setObject('cache_transactions', transactions);
-    set({ transactions });
+    const seen = new Set<string>();
+    const deduplicated: any[] = [];
+    for (const t of transactions) {
+      if (!t) continue;
+      if (t.id && seen.has(`id:${t.id}`)) continue;
+      if (t.id) seen.add(`id:${t.id}`);
+
+      const txDate = new Date(Number(t.timestamp) || 0);
+      const dayKey = `${txDate.getFullYear()}-${txDate.getMonth()}-${txDate.getDate()}`;
+      const normMerchant = (t.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const sig = `sig:${t.bankProfileId ?? t.bank_profile_id}_${Math.round(parseFloat(t.amount || 0) * 100)}_${normMerchant}_${dayKey}`;
+
+      if (seen.has(sig)) continue;
+      seen.add(sig);
+      deduplicated.push(t);
+    }
+    mmkvStorage.setObject('cache_transactions', deduplicated);
+    set({ transactions: deduplicated });
   },
   addTransactionState: (tx) =>
     set((state) => {
@@ -60,6 +76,7 @@ export const useTransactionStore = create<TransactionState>((set) => ({
 // 2. Budget Store
 export type BudgetPeriodType =
   | 'monthly'
+  | 'custom_event'
   | '1_week'
   | '2_week'
   | '3_week'
@@ -73,6 +90,13 @@ export type BudgetPeriodType =
   | 'salary_cycle'
   | 'custom';
 
+export interface BudgetCustomCategory {
+  id: string;
+  label: string;
+  icon: string;
+  color: string;
+}
+
 export interface BudgetCategory {
   id: string;
   name?: string;
@@ -85,19 +109,34 @@ export interface BudgetCategory {
   endDate?: number;
   isOverall?: boolean;
   fixedObligations?: number;
+  parentBudgetId?: string;
+  isManuallyActivated?: boolean;
+  effectiveStartDate?: number;
+  customCategoryDef?: BudgetCustomCategory;
+  isPaused?: boolean;
+  isDone?: boolean;
 }
 
 export interface BudgetState {
   budgets: BudgetCategory[];
+  customCategories: BudgetCustomCategory[];
+  excludedTransactionIds: string[];
   setBudgets: (budgets: BudgetCategory[]) => void;
   addBudget: (budget: BudgetCategory) => void;
   updateBudget: (id: string, budget: Partial<BudgetCategory>) => void;
   deleteBudget: (id: string) => void;
   updateSpent: (category: string, amount: number) => void;
+  addCustomCategory: (cat: BudgetCustomCategory) => void;
+  excludeTransactionFromBudget: (txId: string) => void;
+  restoreTransactionToBudget: (txId: string) => void;
+  clearAllExcludedTransactions: () => void;
+  markBudgetDone: (id: string, isDone?: boolean) => void;
 }
 
 export const useBudgetStore = create<BudgetState>((set) => ({
   budgets: loadCached<BudgetCategory[]>('cache_budgets', []),
+  customCategories: loadCached<BudgetCustomCategory[]>('cache_budget_custom_categories', []),
+  excludedTransactionIds: loadCached<string[]>('cache_budget_excluded_tx_ids', []),
   setBudgets: (budgets) => {
     mmkvStorage.setObject('cache_budgets', budgets);
     set({ budgets });
@@ -125,6 +164,42 @@ export const useBudgetStore = create<BudgetState>((set) => ({
       const updated = state.budgets.map((b) =>
         b.category === category ? { ...b, spentAmount: b.spentAmount + amount } : b
       );
+      mmkvStorage.setObject('cache_budgets', updated);
+      return { budgets: updated };
+    }),
+  addCustomCategory: (cat) =>
+    set((state) => {
+      const filtered = (state.customCategories || []).filter((c) => c.id !== cat.id);
+      const updated = [...filtered, cat];
+      mmkvStorage.setObject('cache_budget_custom_categories', updated);
+      return { customCategories: updated };
+    }),
+  excludeTransactionFromBudget: (txId) =>
+    set((state) => {
+      if (state.excludedTransactionIds.includes(txId)) return state;
+      const updated = [...state.excludedTransactionIds, txId];
+      mmkvStorage.setObject('cache_budget_excluded_tx_ids', updated);
+      return { excludedTransactionIds: updated };
+    }),
+  restoreTransactionToBudget: (txId) =>
+    set((state) => {
+      const updated = state.excludedTransactionIds.filter((id) => id !== txId);
+      mmkvStorage.setObject('cache_budget_excluded_tx_ids', updated);
+      return { excludedTransactionIds: updated };
+    }),
+  clearAllExcludedTransactions: () =>
+    set(() => {
+      mmkvStorage.setObject('cache_budget_excluded_tx_ids', []);
+      return { excludedTransactionIds: [] };
+    }),
+  markBudgetDone: (id, isDone = true) =>
+    set((state) => {
+      const updated = state.budgets.map((b) => {
+        if (b.id === id || b.parentBudgetId === id) {
+          return { ...b, isDone };
+        }
+        return b;
+      });
       mmkvStorage.setObject('cache_budgets', updated);
       return { budgets: updated };
     }),
@@ -424,21 +499,55 @@ export interface NotificationState {
   setLoading: (loading: boolean) => void;
   addNotification: (notification: NotificationType) => void;
   markAsReadState: (id: string) => void;
+  markAllAsReadState: () => void;
   deleteNotificationState: (id: string) => void;
 }
 
 export const useNotificationStore = create<NotificationState>((set) => ({
-  notifications: [],
-  unreadCount: 0,
+  notifications: loadCached<NotificationType[]>('cache_notifications', []),
+  unreadCount: (loadCached<NotificationType[]>('cache_notifications', [])).filter((n) => !n.readStatus).length,
   isLoading: false,
   setNotifications: (notifications) => {
-    const unreadCount = notifications.filter((n) => !n.readStatus).length;
-    set({ notifications, unreadCount });
+    // Deduplicate any existing duplicates (keep latest, unique by ID and title+body)
+    const seen = new Set<string>();
+    const deduplicated: NotificationType[] = [];
+    for (const n of notifications) {
+      const contentKey = `${n.type || ''}|${n.title}|${n.body}`;
+      if (!seen.has(contentKey) && !seen.has(n.id)) {
+        seen.add(contentKey);
+        seen.add(n.id);
+        deduplicated.push(n);
+      }
+    }
+    const unreadCount = deduplicated.filter((n) => !n.readStatus).length;
+    mmkvStorage.setObject('cache_notifications', deduplicated);
+    set({ notifications: deduplicated, unreadCount });
   },
   setLoading: (isLoading) => set({ isLoading }),
   addNotification: (notification) =>
     set((state) => {
+      // 1. Deduplicate by exact notification ID
+      if (state.notifications.some((n) => n.id === notification.id)) {
+        return state;
+      }
+      // 2. Deduplicate identical title and body
+      if (state.notifications.some((n) => n.title === notification.title && n.body === notification.body)) {
+        return state;
+      }
+      // 3. Deduplicate salary cycle nudge for same salary amount
+      if (
+        notification.payload?.isSalaryCycleNudge &&
+        state.notifications.some(
+          (n) =>
+            n.payload?.isSalaryCycleNudge &&
+            Math.abs(Number(n.payload?.amount || 0) - Number(notification.payload?.amount || 0)) < 1
+        )
+      ) {
+        return state;
+      }
+
       const updated = [notification, ...state.notifications];
+      mmkvStorage.setObject('cache_notifications', updated);
       return {
         notifications: updated,
         unreadCount: state.unreadCount + (notification.readStatus ? 0 : 1),
@@ -454,9 +563,19 @@ export const useNotificationStore = create<NotificationState>((set) => ({
         }
         return n;
       });
+      mmkvStorage.setObject('cache_notifications', updated);
       return {
         notifications: updated,
         unreadCount: isChanged ? Math.max(0, state.unreadCount - 1) : state.unreadCount,
+      };
+    }),
+  markAllAsReadState: () =>
+    set((state) => {
+      const updated = state.notifications.map((n) => ({ ...n, readStatus: true }));
+      mmkvStorage.setObject('cache_notifications', updated);
+      return {
+        notifications: updated,
+        unreadCount: 0,
       };
     }),
   deleteNotificationState: (id) =>
@@ -464,6 +583,7 @@ export const useNotificationStore = create<NotificationState>((set) => ({
       const target = state.notifications.find((n) => n.id === id);
       const isUnread = target ? !target.readStatus : false;
       const updated = state.notifications.filter((n) => n.id !== id);
+      mmkvStorage.setObject('cache_notifications', updated);
       return {
         notifications: updated,
         unreadCount: isUnread ? Math.max(0, state.unreadCount - 1) : state.unreadCount,
@@ -531,6 +651,11 @@ export const rehydrateAllStores = async () => {
 
     const inc = mmkvStorage.getNumber('cache_monthly_income');
     if (inc) useAnalyticsStore.getState().setIncomeCurrentMonth(inc);
+
+    const notifs = mmkvStorage.getObject<NotificationType[]>('cache_notifications');
+    if (notifs && Array.isArray(notifs) && notifs.length > 0) {
+      useNotificationStore.getState().setNotifications(notifs);
+    }
 
     await useSecurityStore.getState().rehydrateSecurity();
   } catch (e) {

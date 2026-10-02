@@ -30,7 +30,7 @@ graph TD
     B --> C[Phase 3: SMS Ingestion Pipeline]
     C --> D[Phase 4: Navigation & Zustand Stores]
     D --> E[Phase 5: GPU Charts & Dashboard Screens]
-    E --> F[Phase 6: AI Chat & Tax Assist]
+    E --> F[Phase 6: Regent AI & Tax Assist]
     F --> G[Phase 7: Background Workflows & Push]
 ```
 
@@ -70,7 +70,7 @@ Task: Write a premium, high-performance Dashboard screen using:
 Theme: Deep Space Bg (#0A0A0F), Card Surface (#12121A), border (#1E1E2C). Make it feel premium, high-contrast, with Outfitters font family if possible.
 ```
 
-### Prompt 2: AI Chatbot Screen with Groq and Context Sharing
+### Prompt 2: Regent AIbot Screen with Groq and Context Sharing
 ```markdown
 Context: Groq Llama 3 API client is ready in `src/services/aiService.ts`.
 Task: Build the Chat screen where the user chats with "Regent Money AI".

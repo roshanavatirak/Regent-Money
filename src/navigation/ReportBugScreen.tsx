@@ -20,7 +20,7 @@ const BUG_CATEGORIES = [
   'Display / UI Glitch',
   'SMS Sync Issue',
   'Bank Ledger / Balance',
-  'AI Chat Response',
+  'Regent AI Response',
   'Performance / Crash',
   'Other',
 ];
@@ -45,7 +45,7 @@ export const ReportBugScreen: React.FC = () => {
         message: 'Please provide a short description of the issue you experienced.',
         confirmText: 'OK',
         icon: 'alert-triangle',
-        onConfirm: () => {},
+        onConfirm: () => { },
       });
       return;
     }

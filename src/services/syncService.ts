@@ -9,6 +9,8 @@ import {
 import { mmkvStorage } from '../db/mmkv';
 import { getBackendUrl } from '../config/api';
 
+import { notificationService } from './notificationService';
+
 const BACKEND_URL = getBackendUrl();
 
 let isSyncing = false;
@@ -122,8 +124,9 @@ export const syncService = {
     }, 12000);
 
     try {
-      // Trigger analytics fetch concurrently
+      // Trigger analytics and notifications fetch concurrently
       this.fetchAnalytics(force).catch(() => {});
+      notificationService.fetchNotifications().catch(() => {});
 
       const response = await fetch(`${baseUrl}/sync`, {
         method: 'GET',
@@ -141,19 +144,36 @@ export const syncService = {
 
       const data = await response.json();
 
-      // 1. Map Transactions
+      // 1. Map Transactions and deduplicate any duplicates
       const sortedTxs = [...(data.transactions || [])].sort((a: any, b: any) => b.timestamp - a.timestamp);
-      const mappedTxs = sortedTxs.map((t: any) => ({
-        id: t.id,
-        amount: parseFloat(t.amount || 0),
-        category: t.category,
-        merchant: t.merchant,
-        timestamp: Number(t.timestamp || 0),
-        bankProfileId: t.bankProfileId ?? t.bank_profile_id,
-        smsId: t.smsId ?? t.sms_id,
-        isAnomaly: t.isAnomaly ?? t.is_anomaly,
-        status: t.status,
-      }));
+      const seenTx = new Set<string>();
+      const mappedTxs: any[] = [];
+      for (const t of sortedTxs) {
+        if (!t) continue;
+        if (t.id && seenTx.has(`id:${t.id}`)) continue;
+        if (t.id) seenTx.add(`id:${t.id}`);
+
+        const txDate = new Date(Number(t.timestamp) || 0);
+        const dayKey = `${txDate.getFullYear()}-${txDate.getMonth()}-${txDate.getDate()}`;
+        const normMerchant = (t.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const sig = `sig:${t.bankProfileId ?? t.bank_profile_id}_${Math.round(parseFloat(t.amount || 0) * 100)}_${normMerchant}_${dayKey}`;
+
+        if (seenTx.has(sig)) continue;
+        seenTx.add(sig);
+
+        mappedTxs.push({
+          id: t.id,
+          amount: parseFloat(t.amount || 0),
+          category: t.category,
+          merchant: t.merchant,
+          timestamp: Number(t.timestamp || 0),
+          bankProfileId: t.bankProfileId ?? t.bank_profile_id,
+          type: t.type || 'debit',
+          smsId: t.smsId ?? t.sms_id,
+          isAnomaly: t.isAnomaly ?? t.is_anomaly,
+          status: t.status,
+        });
+      }
       useTransactionStore.getState().setTransactions(mappedTxs);
 
       // 2. Map Budgets

@@ -262,9 +262,30 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
         .map((tx) => ({ ...tx, type: 'debit' }))
     : [];
 
-  const mergedList = [...bankDebits, ...incomeRecords].sort(
+  const rawMergedList = [...bankDebits, ...incomeRecords].sort(
     (a, b) => b.timestamp - a.timestamp
   );
+
+  // Deduplicate transactions by ID and signature (type + amount + merchant + date)
+  const mergedList = useMemo(() => {
+    const seen = new Set<string>();
+    const result: any[] = [];
+    for (const item of rawMergedList) {
+      if (!item) continue;
+      if (item.id && seen.has(`id:${item.id}`)) continue;
+      if (item.id) seen.add(`id:${item.id}`);
+
+      const itemDate = new Date(Number(item.timestamp) || Date.now());
+      const dayKey = `${itemDate.getFullYear()}-${itemDate.getMonth()}-${itemDate.getDate()}`;
+      const normMerchant = (item.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const sig = `sig:${item.type || 'debit'}_${Math.round(Number(item.amount) * 100)}_${normMerchant}_${dayKey}`;
+
+      if (seen.has(sig)) continue;
+      seen.add(sig);
+      result.push(item);
+    }
+    return result;
+  }, [rawMergedList]);
 
   const filteredData = mergedList.filter((item) => {
     if (activeTab === 'debits' && item.type !== 'debit') return false;

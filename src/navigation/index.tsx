@@ -45,8 +45,8 @@ import Animated, {
   withSpring,
   FadeIn
 } from 'react-native-reanimated';
-import { CartesianChart, Area, PolarChart, Pie, Line } from 'victory-native';
-import { Canvas, ImageSVG, useSVG, LinearGradient, vec, Group } from '@shopify/react-native-skia';
+import { CartesianChart, Area, Line } from 'victory-native';
+import { Canvas, ImageSVG, useSVG, LinearGradient, vec, Group, Path, Skia } from '@shopify/react-native-skia';
 
 import { mmkvStorage } from '../db/mmkv';
 import { useSyncDb } from '../services/useSyncDb';
@@ -506,312 +506,312 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
           style={{ width: '100%', alignItems: 'center', justifyContent: 'flex-end' }}
         >
           <View style={[styles.modalCardFull, { height: windowHeight * 0.85 }]}>
-          <View style={navStyles.modalHeader}>
-            <Text style={navStyles.modalTitle}>
-              {formStep === 1 ? 'Select Your Bank' : 'Bank Account Details'}
-            </Text>
-            <TouchableOpacity
-              onPress={() => {
-                resetForm();
-                onClose();
-              }}
-              style={navStyles.closeBtn}
-            >
-              <Feather name="x" size={20} color="#8E8E9F" />
-            </TouchableOpacity>
-          </View>
-
-          {formStep === 1 ? (
-            <View style={{ flex: 1 }}>
-              <View style={styles.searchBarContainer}>
-                <Feather name="search" size={18} color="#8E8E9F" style={styles.searchIcon} />
-                <TextInput
-                  style={styles.searchInput}
-                  placeholder="Enter the bank name"
-                  placeholderTextColor="rgba(250, 251, 252, 0.4)"
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                  autoCapitalize="none"
-                />
-              </View>
-
-              <FlatList
-                data={filteredBanks}
-                keyExtractor={(item, index) => item.code + '_' + index}
-                showsVerticalScrollIndicator={false}
-                contentContainerStyle={{ paddingBottom: 20 }}
-                ListHeaderComponent={renderPopularBanks}
-                initialNumToRender={50}
-                maxToRenderPerBatch={50}
-                windowSize={10}
-                removeClippedSubviews={true}
-                keyboardShouldPersistTaps="handled"
-                getItemLayout={(data, index) => (
-                  { length: 74, offset: 74 * index, index }
-                )}
-                ListEmptyComponent={
-                  <Text style={{ color: 'rgba(250, 251, 252, 0.5)', textAlign: 'center', marginTop: 30 }}>
-                    No banks found matching "{searchQuery}"
-                  </Text>
-                }
-                renderItem={({ item }) => {
-                  return (
-                    <TouchableOpacity
-                      style={styles.bankListItem}
-                      onPress={() => handleSelectBank(item)}
-                      activeOpacity={0.7}
-                    >
-                      <View style={styles.bankIconContainer}>
-                        <BankIcon code={item.code} name={item.name} size={40} />
-                      </View>
-                      <View style={styles.bankMeta}>
-                        <Text style={styles.bankNameText} numberOfLines={1} ellipsizeMode="tail">
-                          {item.name}
-                        </Text>
-                        <Text style={styles.bankCodeText}>
-                          {item.code}
-                        </Text>
-                      </View>
-                      <Feather name="chevron-right" size={16} color={colors.textTertiary || '#8E8E9F'} style={styles.bankChevron} />
-                    </TouchableOpacity>
-                  );
-                }}
-              />
-            </View>
-          ) : (
-            <ScrollView
-              showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
-              contentContainerStyle={{ paddingBottom: 120 }}
-            >
+            <View style={navStyles.modalHeader}>
+              <Text style={navStyles.modalTitle}>
+                {formStep === 1 ? 'Select Your Bank' : 'Bank Account Details'}
+              </Text>
               <TouchableOpacity
-                style={styles.formBackBtn}
                 onPress={() => {
-                  setFormStep(1);
-                  setFormError('');
+                  resetForm();
+                  onClose();
                 }}
+                style={navStyles.closeBtn}
               >
-                <Feather name="arrow-left" size={16} color="#2dba4e" />
-                <Text style={styles.formBackText}>Back to banks</Text>
+                <Feather name="x" size={20} color="#8E8E9F" />
               </TouchableOpacity>
+            </View>
 
-              <View style={styles.bankFormHeader}>
-                <View style={{ marginBottom: 12 }}>
-                  <BankIcon code={selectedBank?.code || ''} name={selectedBank?.name || ''} size={56} />
-                </View>
-                <Text style={styles.bankFormTitle}>{selectedBank?.name}</Text>
-                <Text style={styles.bankFormSubtitle}>Direct Mapping Setup</Text>
-              </View>
-
-              <View style={{ paddingHorizontal: 4 }}>
-                {/* Bank Name Input */}
-                <View style={styles.formFieldContainer}>
-                  <Text style={styles.formFieldLabel}>Bank Display Name</Text>
-                  <View style={styles.formInputGroup}>
-                    <Feather name="home" size={16} color={colors.textSecondary} style={styles.formInputIcon} />
-                    <TextInput
-                      style={styles.formInputField}
-                      placeholder="e.g. HDFC Bank"
-                      placeholderTextColor={isDark ? 'rgba(250, 251, 252, 0.4)' : colors.textTertiary}
-                      value={bankNameInput}
-                      onChangeText={setBankNameInput}
-                    />
-                  </View>
-                </View>
-
-                {/* Account Type Dropdown */}
-                <View style={styles.formFieldContainer}>
-                  <Text style={styles.formFieldLabel}>Account Type</Text>
-                  <TouchableOpacity
-                    style={[
-                      styles.formInputGroup,
-                      { justifyContent: 'space-between', paddingVertical: 13 },
-                      accountTypeDropdownOpen && { borderColor: colors.accent },
-                    ]}
-                    onPress={() => setAccountTypeDropdownOpen(!accountTypeDropdownOpen)}
-                    activeOpacity={0.7}
-                  >
-                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                      <Feather name="credit-card" size={16} color={colors.accent} style={styles.formInputIcon} />
-                      <Text style={{ fontSize: 14, color: colors.text, fontWeight: '600' }}>
-                        {ACCOUNT_TYPES.find((t) => t.id === accountType)?.label || `${accountType} Account`}
-                      </Text>
-                    </View>
-                    <Feather
-                      name={accountTypeDropdownOpen ? 'chevron-up' : 'chevron-down'}
-                      size={18}
-                      color={colors.textSecondary}
-                    />
-                  </TouchableOpacity>
-
-                  {accountTypeDropdownOpen && (
-                    <View
-                      style={{
-                        marginTop: 6,
-                        backgroundColor: isDark ? '#14141e' : '#f8fafc',
-                        borderWidth: 1,
-                        borderColor: colors.border,
-                        borderRadius: 14,
-                        overflow: 'hidden',
-                      }}
-                    >
-                      {ACCOUNT_TYPES.map((type, idx) => {
-                        const isSelected = accountType === type.id;
-                        return (
-                          <TouchableOpacity
-                            key={type.id}
-                            style={{
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              paddingVertical: 12,
-                              paddingHorizontal: 14,
-                              backgroundColor: isSelected
-                                ? isDark
-                                  ? 'rgba(45, 186, 78, 0.15)'
-                                  : 'rgba(22, 163, 74, 0.12)'
-                                : 'transparent',
-                              borderBottomWidth: idx < ACCOUNT_TYPES.length - 1 ? 1 : 0,
-                              borderBottomColor: isDark
-                                ? 'rgba(255, 255, 255, 0.06)'
-                                : colors.border,
-                            }}
-                            onPress={() => {
-                              setAccountType(type.id);
-                              setAccountTypeDropdownOpen(false);
-                            }}
-                            activeOpacity={0.7}
-                          >
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                              <Feather
-                                name={type.icon as any}
-                                size={15}
-                                color={isSelected ? colors.accent : colors.textSecondary}
-                                style={{ marginRight: 10 }}
-                              />
-                              <Text
-                                style={{
-                                  fontSize: 13,
-                                  fontWeight: isSelected ? '700' : '500',
-                                  color: isSelected ? colors.accent : colors.text,
-                                }}
-                              >
-                                {type.label}
-                              </Text>
-                            </View>
-                            {isSelected && <Feather name="check" size={16} color={colors.accent} />}
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
-                  )}
-                </View>
-
-                {/* Suffix Input */}
-                <View style={styles.formFieldContainer}>
-                  <Text style={styles.formFieldLabel}>Last 4 Digits of Account Number</Text>
-                  <View style={styles.formInputGroup}>
-                    <Feather name="hash" size={16} color={colors.textSecondary} style={styles.formInputIcon} />
-                    <TextInput
-                      style={styles.formInputField}
-                      placeholder="e.g. 5678"
-                      placeholderTextColor={isDark ? 'rgba(250, 251, 252, 0.4)' : colors.textTertiary}
-                      keyboardType="numeric"
-                      maxLength={4}
-                      value={accountSuffix}
-                      onChangeText={setAccountSuffix}
-                    />
-                  </View>
-                </View>
-
-                {/* Starting Balance Input */}
-                <View style={styles.formFieldContainer}>
-                  <Text style={styles.formFieldLabel}>Current / Starting Balance (INR)</Text>
-                  <View style={styles.formInputGroup}>
-                    <MaterialCommunityIcons name="currency-inr" size={16} color={colors.textSecondary} style={styles.formInputIcon} />
-                    <TextInput
-                      style={styles.formInputField}
-                      placeholder="e.g. 75000"
-                      placeholderTextColor={isDark ? 'rgba(250, 251, 252, 0.4)' : colors.textTertiary}
-                      keyboardType="numeric"
-                      value={balance}
-                      onChangeText={setBalance}
-                    />
-                  </View>
-                </View>
-
-                {/* SMS Sender Tags Manager */}
-                <View style={styles.formFieldContainer}>
-                  <SmsSenderTagsManager
-                    tags={smsSenderTags}
-                    onChangeTags={setSmsSenderTags}
-                    bankCodeOrName={selectedBank?.code || bankNameInput}
-                    colors={colors}
-                    isDark={isDark}
-                    label="SMS SENDER CODES / HEADERS"
-                    hint="Transactions from any of these sender codes (e.g. SBIPSG, SBIBNK) will be automatically read."
+            {formStep === 1 ? (
+              <View style={{ flex: 1 }}>
+                <View style={styles.searchBarContainer}>
+                  <Feather name="search" size={18} color="#8E8E9F" style={styles.searchIcon} />
+                  <TextInput
+                    style={styles.searchInput}
+                    placeholder="Enter the bank name"
+                    placeholderTextColor="rgba(250, 251, 252, 0.4)"
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                    autoCapitalize="none"
                   />
                 </View>
 
-                {/* UPI ID Input */}
-                <View style={styles.formFieldContainer}>
-                  <Text style={styles.formFieldLabel}>Associated UPI ID (Optional)</Text>
-                  <View style={styles.formInputGroup}>
-                    <Feather name="at-sign" size={16} color={colors.textSecondary} style={styles.formInputIcon} />
-                    <TextInput
-                      style={styles.formInputField}
-                      placeholder="e.g. success@okhdfcbank"
-                      placeholderTextColor={isDark ? 'rgba(250, 251, 252, 0.4)' : colors.textTertiary}
-                      value={upiId}
-                      onChangeText={setUpiId}
-                      autoCapitalize="none"
-                    />
-                  </View>
-                  <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 4, lineHeight: 15 }}>
-                    Used for mapping UPI payment transaction notifications.
-                  </Text>
-                </View>
-
-                {/* Custom Keywords Input */}
-                <View style={styles.formFieldContainer}>
-                  <Text style={styles.formFieldLabel}>Custom Matching Keywords (Optional)</Text>
-                  <View style={styles.formInputGroup}>
-                    <Feather name="key" size={16} color={colors.textSecondary} style={styles.formInputIcon} />
-                    <TextInput
-                      style={styles.formInputField}
-                      placeholder="e.g. HDFC, credit card, salary"
-                      placeholderTextColor={isDark ? 'rgba(250, 251, 252, 0.4)' : colors.textTertiary}
-                      value={customKeywords}
-                      onChangeText={setCustomKeywords}
-                    />
-                  </View>
-                  <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 4, lineHeight: 15 }}>
-                    Comma-separated words that must appear in messages or screenshots for auto-matching.
-                  </Text>
-                </View>
+                <FlatList
+                  data={filteredBanks}
+                  keyExtractor={(item, index) => item.code + '_' + index}
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={{ paddingBottom: 20 }}
+                  ListHeaderComponent={renderPopularBanks}
+                  initialNumToRender={50}
+                  maxToRenderPerBatch={50}
+                  windowSize={10}
+                  removeClippedSubviews={true}
+                  keyboardShouldPersistTaps="handled"
+                  getItemLayout={(data, index) => (
+                    { length: 74, offset: 74 * index, index }
+                  )}
+                  ListEmptyComponent={
+                    <Text style={{ color: 'rgba(250, 251, 252, 0.5)', textAlign: 'center', marginTop: 30 }}>
+                      No banks found matching "{searchQuery}"
+                    </Text>
+                  }
+                  renderItem={({ item }) => {
+                    return (
+                      <TouchableOpacity
+                        style={styles.bankListItem}
+                        onPress={() => handleSelectBank(item)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={styles.bankIconContainer}>
+                          <BankIcon code={item.code} name={item.name} size={40} />
+                        </View>
+                        <View style={styles.bankMeta}>
+                          <Text style={styles.bankNameText} numberOfLines={1} ellipsizeMode="tail">
+                            {item.name}
+                          </Text>
+                          <Text style={styles.bankCodeText}>
+                            {item.code}
+                          </Text>
+                        </View>
+                        <Feather name="chevron-right" size={16} color={colors.textTertiary || '#8E8E9F'} style={styles.bankChevron} />
+                      </TouchableOpacity>
+                    );
+                  }}
+                />
               </View>
-
-              {formError ? (
-                <View style={[styles.errorContainer, { marginVertical: 12, width: '100%' }]}>
-                  <Feather name="alert-circle" size={16} color="#fafbfc" style={{ marginRight: 8 }} />
-                  <Text style={styles.errorTextInline}>{formError}</Text>
-                </View>
-              ) : null}
-
-              {submitting ? (
-                <ActivityIndicator size="large" color="#2dba4e" style={{ marginTop: 24 }} />
-              ) : (
+            ) : (
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                contentContainerStyle={{ paddingBottom: 120 }}
+              >
                 <TouchableOpacity
-                  style={[styles.submitBankBtn, { marginTop: 24, width: '100%' }]}
-                  onPress={handleSubmitBank}
-                  activeOpacity={0.8}
+                  style={styles.formBackBtn}
+                  onPress={() => {
+                    setFormStep(1);
+                    setFormError('');
+                  }}
                 >
-                  <Text style={styles.submitBankBtnText}>Link Bank Account</Text>
+                  <Feather name="arrow-left" size={16} color="#2dba4e" />
+                  <Text style={styles.formBackText}>Back to banks</Text>
                 </TouchableOpacity>
-              )}
-            </ScrollView>
-          )}
-        </View>
+
+                <View style={styles.bankFormHeader}>
+                  <View style={{ marginBottom: 12 }}>
+                    <BankIcon code={selectedBank?.code || ''} name={selectedBank?.name || ''} size={56} />
+                  </View>
+                  <Text style={styles.bankFormTitle}>{selectedBank?.name}</Text>
+                  <Text style={styles.bankFormSubtitle}>Direct Mapping Setup</Text>
+                </View>
+
+                <View style={{ paddingHorizontal: 4 }}>
+                  {/* Bank Name Input */}
+                  <View style={styles.formFieldContainer}>
+                    <Text style={styles.formFieldLabel}>Bank Display Name</Text>
+                    <View style={styles.formInputGroup}>
+                      <Feather name="home" size={16} color={colors.textSecondary} style={styles.formInputIcon} />
+                      <TextInput
+                        style={styles.formInputField}
+                        placeholder="e.g. HDFC Bank"
+                        placeholderTextColor={isDark ? 'rgba(250, 251, 252, 0.4)' : colors.textTertiary}
+                        value={bankNameInput}
+                        onChangeText={setBankNameInput}
+                      />
+                    </View>
+                  </View>
+
+                  {/* Account Type Dropdown */}
+                  <View style={styles.formFieldContainer}>
+                    <Text style={styles.formFieldLabel}>Account Type</Text>
+                    <TouchableOpacity
+                      style={[
+                        styles.formInputGroup,
+                        { justifyContent: 'space-between', paddingVertical: 13 },
+                        accountTypeDropdownOpen && { borderColor: colors.accent },
+                      ]}
+                      onPress={() => setAccountTypeDropdownOpen(!accountTypeDropdownOpen)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <Feather name="credit-card" size={16} color={colors.accent} style={styles.formInputIcon} />
+                        <Text style={{ fontSize: 14, color: colors.text, fontWeight: '600' }}>
+                          {ACCOUNT_TYPES.find((t) => t.id === accountType)?.label || `${accountType} Account`}
+                        </Text>
+                      </View>
+                      <Feather
+                        name={accountTypeDropdownOpen ? 'chevron-up' : 'chevron-down'}
+                        size={18}
+                        color={colors.textSecondary}
+                      />
+                    </TouchableOpacity>
+
+                    {accountTypeDropdownOpen && (
+                      <View
+                        style={{
+                          marginTop: 6,
+                          backgroundColor: isDark ? '#14141e' : '#f8fafc',
+                          borderWidth: 1,
+                          borderColor: colors.border,
+                          borderRadius: 14,
+                          overflow: 'hidden',
+                        }}
+                      >
+                        {ACCOUNT_TYPES.map((type, idx) => {
+                          const isSelected = accountType === type.id;
+                          return (
+                            <TouchableOpacity
+                              key={type.id}
+                              style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                paddingVertical: 12,
+                                paddingHorizontal: 14,
+                                backgroundColor: isSelected
+                                  ? isDark
+                                    ? 'rgba(45, 186, 78, 0.15)'
+                                    : 'rgba(22, 163, 74, 0.12)'
+                                  : 'transparent',
+                                borderBottomWidth: idx < ACCOUNT_TYPES.length - 1 ? 1 : 0,
+                                borderBottomColor: isDark
+                                  ? 'rgba(255, 255, 255, 0.06)'
+                                  : colors.border,
+                              }}
+                              onPress={() => {
+                                setAccountType(type.id);
+                                setAccountTypeDropdownOpen(false);
+                              }}
+                              activeOpacity={0.7}
+                            >
+                              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                <Feather
+                                  name={type.icon as any}
+                                  size={15}
+                                  color={isSelected ? colors.accent : colors.textSecondary}
+                                  style={{ marginRight: 10 }}
+                                />
+                                <Text
+                                  style={{
+                                    fontSize: 13,
+                                    fontWeight: isSelected ? '700' : '500',
+                                    color: isSelected ? colors.accent : colors.text,
+                                  }}
+                                >
+                                  {type.label}
+                                </Text>
+                              </View>
+                              {isSelected && <Feather name="check" size={16} color={colors.accent} />}
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    )}
+                  </View>
+
+                  {/* Suffix Input */}
+                  <View style={styles.formFieldContainer}>
+                    <Text style={styles.formFieldLabel}>Last 4 Digits of Account Number</Text>
+                    <View style={styles.formInputGroup}>
+                      <Feather name="hash" size={16} color={colors.textSecondary} style={styles.formInputIcon} />
+                      <TextInput
+                        style={styles.formInputField}
+                        placeholder="e.g. 5678"
+                        placeholderTextColor={isDark ? 'rgba(250, 251, 252, 0.4)' : colors.textTertiary}
+                        keyboardType="numeric"
+                        maxLength={4}
+                        value={accountSuffix}
+                        onChangeText={setAccountSuffix}
+                      />
+                    </View>
+                  </View>
+
+                  {/* Starting Balance Input */}
+                  <View style={styles.formFieldContainer}>
+                    <Text style={styles.formFieldLabel}>Current / Starting Balance (INR)</Text>
+                    <View style={styles.formInputGroup}>
+                      <MaterialCommunityIcons name="currency-inr" size={16} color={colors.textSecondary} style={styles.formInputIcon} />
+                      <TextInput
+                        style={styles.formInputField}
+                        placeholder="e.g. 75000"
+                        placeholderTextColor={isDark ? 'rgba(250, 251, 252, 0.4)' : colors.textTertiary}
+                        keyboardType="numeric"
+                        value={balance}
+                        onChangeText={setBalance}
+                      />
+                    </View>
+                  </View>
+
+                  {/* SMS Sender Tags Manager */}
+                  <View style={styles.formFieldContainer}>
+                    <SmsSenderTagsManager
+                      tags={smsSenderTags}
+                      onChangeTags={setSmsSenderTags}
+                      bankCodeOrName={selectedBank?.code || bankNameInput}
+                      colors={colors}
+                      isDark={isDark}
+                      label="SMS SENDER CODES / HEADERS"
+                      hint="Transactions from any of these sender codes (e.g. SBIPSG, SBIBNK) will be automatically read."
+                    />
+                  </View>
+
+                  {/* UPI ID Input */}
+                  <View style={styles.formFieldContainer}>
+                    <Text style={styles.formFieldLabel}>Associated UPI ID (Optional)</Text>
+                    <View style={styles.formInputGroup}>
+                      <Feather name="at-sign" size={16} color={colors.textSecondary} style={styles.formInputIcon} />
+                      <TextInput
+                        style={styles.formInputField}
+                        placeholder="e.g. success@okhdfcbank"
+                        placeholderTextColor={isDark ? 'rgba(250, 251, 252, 0.4)' : colors.textTertiary}
+                        value={upiId}
+                        onChangeText={setUpiId}
+                        autoCapitalize="none"
+                      />
+                    </View>
+                    <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 4, lineHeight: 15 }}>
+                      Used for mapping UPI payment transaction notifications.
+                    </Text>
+                  </View>
+
+                  {/* Custom Keywords Input */}
+                  <View style={styles.formFieldContainer}>
+                    <Text style={styles.formFieldLabel}>Custom Matching Keywords (Optional)</Text>
+                    <View style={styles.formInputGroup}>
+                      <Feather name="key" size={16} color={colors.textSecondary} style={styles.formInputIcon} />
+                      <TextInput
+                        style={styles.formInputField}
+                        placeholder="e.g. HDFC, credit card, salary"
+                        placeholderTextColor={isDark ? 'rgba(250, 251, 252, 0.4)' : colors.textTertiary}
+                        value={customKeywords}
+                        onChangeText={setCustomKeywords}
+                      />
+                    </View>
+                    <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 4, lineHeight: 15 }}>
+                      Comma-separated words that must appear in messages or screenshots for auto-matching.
+                    </Text>
+                  </View>
+                </View>
+
+                {formError ? (
+                  <View style={[styles.errorContainer, { marginVertical: 12, width: '100%' }]}>
+                    <Feather name="alert-circle" size={16} color="#fafbfc" style={{ marginRight: 8 }} />
+                    <Text style={styles.errorTextInline}>{formError}</Text>
+                  </View>
+                ) : null}
+
+                {submitting ? (
+                  <ActivityIndicator size="large" color="#2dba4e" style={{ marginTop: 24 }} />
+                ) : (
+                  <TouchableOpacity
+                    style={[styles.submitBankBtn, { marginTop: 24, width: '100%' }]}
+                    onPress={handleSubmitBank}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.submitBankBtnText}>Link Bank Account</Text>
+                  </TouchableOpacity>
+                )}
+              </ScrollView>
+            )}
+          </View>
         </KeyboardAvoidingView>
       </View>
     </Modal>
@@ -900,12 +900,209 @@ const WebProjectionChart = ({ data }: { data: any[] }) => {
   );
 };
 
-const WebDonutChart = ({ data }: { data: any[] }) => {
-  const total = data.reduce((sum, item) => sum + (item.value || 0), 0) || 1;
+const SPENDING_CHART_COLORS: Record<string, string> = {
+  food: '#f59e0b',          // Warm Amber Orange
+  dining: '#f59e0b',
+  restaurant: '#f59e0b',
+  groceries: '#10b981',     // Vibrant Emerald Green
+  supermarket: '#10b981',
+  shopping: '#ec4899',      // Magenta / Vivid Pink
+  clothing: '#ec4899',
+  entertainment: '#a855f7', // Electric Purple
+  movies: '#a855f7',
+  travel: '#0284c7',        // Sky Blue
+  flight: '#0284c7',
+  transport: '#06b6d4',     // Cyan
+  cab: '#06b6d4',
+  fuel: '#f43f5e',          // Coral / Rose
+  bills: '#eab308',         // Gold / Yellow
+  utilities: '#eab308',     // Gold / Yellow
+  electricity: '#eab308',
+  recharge: '#06b6d4',      // Cyan
+  medical: '#ef4444',       // Crimson Red
+  health: '#ef4444',
+  education: '#14b8a6',     // Teal
+  investments: '#16a34a',   // Bright Green
+  self_transfer: '#6366f1', // Royal Indigo
+  services: '#8b5cf6',      // Violet
+  personal: '#d946ef',      // Fuchsia
+  miscellaneous: '#64748b', // Slate Gray
+  other: '#94a3b8',         // Neutral Slate
+};
+
+const PALETTE_FALLBACK = [
+  '#f59e0b', // Amber
+  '#6366f1', // Indigo
+  '#ec4899', // Pink
+  '#10b981', // Emerald
+  '#06b6d4', // Cyan
+  '#f43f5e', // Rose
+  '#a855f7', // Purple
+  '#eab308', // Gold
+  '#14b8a6', // Teal
+  '#3b82f6', // Blue
+  '#d946ef', // Fuchsia
+  '#64748b', // Slate
+];
+
+interface SpendingDonutChartProps {
+  data: { label: string; value: number; color: string }[];
+  size?: number;
+  strokeWidth?: number;
+}
+
+const SpendingDonutChart: React.FC<SpendingDonutChartProps> = ({
+  data,
+  size = 140,
+  strokeWidth = 16,
+}) => {
+  const { colors, isDark } = useTheme();
+
+  const total = useMemo(() => {
+    return data.reduce((sum, item) => sum + (item.value || 0), 0);
+  }, [data]);
+
+  const radius = (size - strokeWidth) / 2;
+  const cx = size / 2;
+  const cy = size / 2;
+  const rect = useMemo(() => ({
+    x: cx - radius,
+    y: cy - radius,
+    width: 2 * radius,
+    height: 2 * radius,
+  }), [cx, cy, radius]);
+
+  // Generate Skia Arc Paths for Native
+  const slicePaths = useMemo(() => {
+    if (Platform.OS === 'web' || !Skia?.Path || total <= 0) return null;
+    try {
+      let currentAngle = -90; // Start at 12 o'clock
+      const isSingleSlice = data.length === 1;
+      const gap = isSingleSlice ? 0 : 3; // 3-degree clean separation between slices
+
+      return data.map((item) => {
+        const path = Skia.Path.Make();
+        const sweepAngle = (item.value / total) * 360;
+
+        if (isSingleSlice || sweepAngle >= 359.5) {
+          path.addCircle(cx, cy, radius);
+        } else {
+          const effectiveSweep = Math.max(1, sweepAngle - gap);
+          path.addArc(rect, currentAngle + gap / 2, effectiveSweep);
+        }
+        currentAngle += sweepAngle;
+        return { path, color: item.color };
+      });
+    } catch (err) {
+      console.warn('Error generating Skia donut paths:', err);
+      return null;
+    }
+  }, [data, total, size, strokeWidth, rect, cx, cy, radius]);
+
+  const bgTrackPath = useMemo(() => {
+    if (Platform.OS === 'web' || !Skia?.Path) return null;
+    try {
+      const p = Skia.Path.Make();
+      p.addCircle(cx, cy, radius);
+      return p;
+    } catch {
+      return null;
+    }
+  }, [cx, cy, radius]);
+
+  // Web or Fallback conic gradient
+  const webGradient = useMemo(() => {
+    if (total <= 0) return colors.border;
+    let currentDeg = 0;
+    const stops: string[] = [];
+    data.forEach((d) => {
+      const sweep = (d.value / total) * 360;
+      const start = currentDeg;
+      const end = currentDeg + sweep;
+      stops.push(`${d.color} ${start.toFixed(1)}deg ${end.toFixed(1)}deg`);
+      currentDeg = end;
+    });
+    return stops.length > 0 ? `conic-gradient(${stops.join(', ')})` : colors.accent;
+  }, [data, total, colors.border, colors.accent]);
+
+  if (total <= 0) {
+    return null;
+  }
+
+  // Native rendering with Skia
+  if (Platform.OS !== 'web' && slicePaths) {
+    return (
+      <View style={{ width: size, height: size, justifyContent: 'center', alignItems: 'center' }}>
+        <Canvas style={{ width: size, height: size }}>
+          {bgTrackPath && (
+            <Path
+              path={bgTrackPath}
+              style="stroke"
+              strokeWidth={strokeWidth}
+              color={isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)'}
+            />
+          )}
+          {slicePaths.map((slice, i) => (
+            <Path
+              key={i}
+              path={slice.path}
+              style="stroke"
+              strokeWidth={strokeWidth}
+              color={slice.color}
+            />
+          ))}
+        </Canvas>
+        <View
+          style={[
+            StyleSheet.absoluteFill,
+            { justifyContent: 'center', alignItems: 'center' },
+          ]}
+          pointerEvents="none"
+        >
+          <Text style={{ fontSize: 9, fontWeight: '700', color: colors.textSecondary, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+            Spent
+          </Text>
+          <Text style={{ fontSize: 13, fontWeight: '800', color: colors.text, marginTop: 1 }}>
+            ₹{total >= 100000 ? `${(total / 1000).toFixed(1)}k` : total.toLocaleString('en-IN')}
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
+  // Web & Resilient Fallback rendering (CSS conic-gradient donut)
+  const innerCutout = size - strokeWidth * 2;
   return (
-    <View style={{ width: 130, height: 130, borderRadius: 65, borderWidth: 14, borderColor: '#2dba4e', justifyContent: 'center', alignItems: 'center' }}>
-      <Text style={{ color: '#fafbfc', fontSize: 11, fontWeight: '800' }}>₹{total.toLocaleString('en-IN')}</Text>
-      <Text style={{ color: 'rgba(250, 251, 252, 0.5)', fontSize: 9 }}>Total</Text>
+    <View style={{ width: size, height: size, justifyContent: 'center', alignItems: 'center' }}>
+      <View
+        style={{
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          // @ts-ignore
+          backgroundImage: webGradient,
+          justifyContent: 'center',
+          alignItems: 'center',
+        }}
+      >
+        <View
+          style={{
+            width: innerCutout,
+            height: innerCutout,
+            borderRadius: innerCutout / 2,
+            backgroundColor: colors.card,
+            justifyContent: 'center',
+            alignItems: 'center',
+          }}
+        >
+          <Text style={{ fontSize: 9, fontWeight: '700', color: colors.textSecondary, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+            Spent
+          </Text>
+          <Text style={{ fontSize: 13, fontWeight: '800', color: colors.text, marginTop: 1 }}>
+            ₹{total >= 100000 ? `${(total / 1000).toFixed(1)}k` : total.toLocaleString('en-IN')}
+          </Text>
+        </View>
+      </View>
     </View>
   );
 };
@@ -1267,11 +1464,18 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
   const unreadCount = useNotificationStore((state) => state.unreadCount);
 
   const handleMarkAllRead = async () => {
-    const unread = notifications.filter(n => !n.readStatus);
-    for (const item of unread) {
-      notificationService.markAsRead(item.id);
-    }
+    await notificationService.markAllAsRead();
   };
+
+  useEffect(() => {
+    if (visible && unreadCount > 0) {
+      // Automatically mark notifications as read when opening the notification box
+      const timer = setTimeout(() => {
+        notificationService.markAllAsRead();
+      }, 450);
+      return () => clearTimeout(timer);
+    }
+  }, [visible, unreadCount]);
 
   const handleAction = async (notification: any, actionName: 'approve' | 'keep_old') => {
     const payload = notification.payload;
@@ -1365,7 +1569,13 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
                 const isCorrection = item.payload?.action === 'category_correction';
 
                 return (
-                  <View
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={() => {
+                      if (isUnread) {
+                        notificationService.markAsRead(item.id);
+                      }
+                    }}
                     style={{
                       backgroundColor: colors.inputBackground,
                       borderWidth: 1,
@@ -1461,7 +1671,7 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
                         }} />
                       )}
                     </View>
-                  </View>
+                  </TouchableOpacity>
                 );
               }}
             />
@@ -1807,18 +2017,26 @@ const DashboardScreen = () => {
 
     const map: { [key: string]: number } = {};
     filteredTxs.forEach((tx) => {
-      const key = filterCategory === null ? tx.category : tx.merchant;
-      map[key] = (map[key] || 0) + tx.amount;
+      const key = (filterCategory === null ? tx.category : tx.merchant) || 'Other';
+      map[key] = (map[key] || 0) + Math.abs(tx.amount || 0);
     });
 
-    const chartColors = isDark
-      ? ['#2dba4e', 'rgba(45, 186, 78, 0.7)', '#fafbfc', 'rgba(250, 251, 252, 0.6)', 'rgba(45, 186, 78, 0.4)']
-      : ['#2dba4e', 'rgba(45, 186, 78, 0.7)', '#1a1f26', 'rgba(26, 31, 38, 0.6)', 'rgba(45, 186, 78, 0.4)'];
-    return Object.keys(map).map((key, index) => ({
-      label: key.charAt(0).toUpperCase() + key.slice(1),
-      value: map[key],
-      color: chartColors[index % chartColors.length],
-    }));
+    const entries = Object.entries(map).filter(([_, val]) => val > 0);
+    entries.sort((a, b) => b[1] - a[1]);
+
+    return entries.map(([key, value], index) => {
+      const formattedLabel = key
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, (c) => c.toUpperCase());
+      const cleanKey = key.toLowerCase().trim();
+      const color = SPENDING_CHART_COLORS[cleanKey] || PALETTE_FALLBACK[index % PALETTE_FALLBACK.length];
+
+      return {
+        label: formattedLabel,
+        value,
+        color,
+      };
+    });
   }, [transactions, filterCategory]);
 
   const recentTransactions = useMemo(() => {
@@ -1943,7 +2161,7 @@ const DashboardScreen = () => {
           </ScrollView>
         </View>
 
-        {/* Donut Chart (PolarChart) */}
+        {/* Spending Breakdown Donut Chart */}
         {donutData.length > 0 && (
           <View style={[styles.card, styles.donutCardContainer]}>
             <Text style={styles.chartTitle}>
@@ -1951,28 +2169,22 @@ const DashboardScreen = () => {
             </Text>
             <View style={styles.donutRow}>
               <View style={{ width: 140, height: 140, justifyContent: 'center', alignItems: 'center' }}>
-                {Platform.OS !== 'web' ? (
-                  <PolarChart
-                    data={donutData}
-                    labelKey="label"
-                    valueKey="value"
-                    colorKey="color"
-                  >
-                    <Pie.Chart innerRadius="65%" />
-                  </PolarChart>
-                ) : (
-                  <WebDonutChart data={donutData} />
-                )}
+                <SpendingDonutChart data={donutData} size={140} strokeWidth={16} />
               </View>
               <View style={styles.donutLegend}>
-                {donutData.slice(0, 4).map((item, index) => (
+                {donutData.slice(0, 5).map((item, index) => (
                   <View key={index} style={styles.legendItem}>
                     <View style={[styles.legendIndicator, { backgroundColor: item.color }]} />
-                    <Text style={styles.legendText} numberOfLines={1}>
-                      {item.label}: ₹{item.value}
+                    <Text style={[styles.legendText, { color: colors.textSecondary }]} numberOfLines={1}>
+                      {item.label}: <Text style={{ color: colors.text, fontWeight: '700' }}>₹{item.value.toLocaleString('en-IN')}</Text>
                     </Text>
                   </View>
                 ))}
+                {donutData.length > 5 && (
+                  <Text style={{ fontSize: 10, color: colors.textSecondary, marginTop: 2, fontStyle: 'italic' }}>
+                    +{donutData.length - 5} more categories
+                  </Text>
+                )}
               </View>
             </View>
           </View>
@@ -2016,7 +2228,7 @@ const DashboardScreen = () => {
 };
 
 // ----------------------------------------------------
-// 2. AI Chatbot Screen Component
+// 2. Regent AIbot Screen Component
 // ----------------------------------------------------
 const ChatScreen = () => {
   const { colors, isDark } = useTheme();
@@ -2656,7 +2868,7 @@ const BanksScreen = () => {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await smsCatchupService.reconcile(true).catch(() => {});
+      await smsCatchupService.reconcile(true).catch(() => { });
       await sync();
     } finally {
       setRefreshing(false);
@@ -2667,7 +2879,7 @@ const BanksScreen = () => {
     useCallback(() => {
       sync();
       if (Platform.OS === 'android') {
-        smsCatchupService.reconcile(false, 72).catch(() => {});
+        smsCatchupService.reconcile(false, 72).catch(() => { });
       }
     }, [sync])
   );
@@ -3045,8 +3257,8 @@ const TAB_CONFIG: { [key: string]: TabItemConfig } = {
     inactiveIcon: 'wallet-outline',
     size: 20,
   },
-  'AI Chat': {
-    label: 'AI Chat',
+  'Regent': {
+    label: 'Regent',
     activeIcon: 'sparkles',
     inactiveIcon: 'sparkles-outline',
     size: 20,
@@ -3276,7 +3488,7 @@ const CustomBottomTabBar = ({ state, descriptors, navigation, insets }: BottomTa
             if (Platform.OS === 'web' && typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
               try {
                 document.activeElement.blur();
-              } catch {}
+              } catch { }
             }
 
             const event = navigation.emit({
@@ -3329,7 +3541,7 @@ function TabNavigator() {
       <Tab.Screen name="Budgets" component={BudgetTabScreen} />
       <Tab.Screen name="Goals" component={GoalsTabScreen} />
       <Tab.Screen name="Banks" component={BanksScreen} />
-      <Tab.Screen name="AI Chat" component={ChatScreen} />
+      <Tab.Screen name="Regent" component={ChatScreen} />
       <Tab.Screen name="Settings" component={TabProfileScreen} />
     </Tab.Navigator>
   );
@@ -3632,6 +3844,8 @@ export default function AppNavigator() {
       // Restore persisted theme after MMKV async fallback loads
       await useThemeStore.getState().rehydrateTheme();
       await authService.checkSession();
+      // Sync notifications with backend
+      notificationService.fetchNotifications().catch(() => { });
       // Auto-scan recent SMS on Android once session and stores are completely hydrated
       if (Platform.OS === 'android') {
         setTimeout(() => {
@@ -3657,7 +3871,7 @@ export default function AppNavigator() {
 
       if (nextAppState === 'active') {
         // Automatic catch-up scan whenever user switches back into the app
-        smsCatchupService.reconcile(false, 72).catch(() => {});
+        smsCatchupService.reconcile(false, 72).catch(() => { });
       }
 
       if (!biometricsEnabled) return;

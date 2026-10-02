@@ -56,8 +56,8 @@ const TABS: TabItemConfig[] = [
     size: 20,
   },
   {
-    name: 'AI Chat',
-    label: 'AI Chat',
+    name: 'Regent',
+    label: 'Regent',
     activeIcon: 'sparkles',
     inactiveIcon: 'sparkles-outline',
     size: 20,
@@ -116,7 +116,7 @@ export const StandaloneBottomTabBar: React.FC<StandaloneBottomTabBarProps> = ({
     if (Platform.OS === 'web' && typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
       try {
         document.activeElement.blur();
-      } catch {}
+      } catch { }
     }
 
     if (navigation.canGoBack && activeTab === tabName) {

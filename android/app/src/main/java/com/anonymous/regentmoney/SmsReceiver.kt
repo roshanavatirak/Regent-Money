@@ -24,28 +24,36 @@ class SmsReceiver : BroadcastReceiver() {
                     Log.d("SmsReceiver", "Received SMS from $sender (length: ${body.length}): $body")
 
                     // 1. Direct Native Ingestion (<50ms, zero JS dependency)
+                    var nativeSyncHandled = false
                     try {
-                        SmsDirectSyncWorker.syncSms(context, sender, body, timestamp)
+                        val prefs = context.getSharedPreferences("regent_native_prefs", Context.MODE_PRIVATE)
+                        val token = prefs.getString("auth_access_token", null)
+                        if (!token.isNullOrBlank()) {
+                            SmsDirectSyncWorker.syncSms(context, sender, body, timestamp)
+                            nativeSyncHandled = true
+                        }
                     } catch (nativeEx: Exception) {
                         Log.e("SmsReceiver", "Native direct sync dispatch failed", nativeEx)
                     }
 
-                    // 2. Headless JS Task Service (kept as secondary fallback)
-                    val serviceIntent = Intent(context, SmsTaskService::class.java).apply {
-                        putExtra("sender", sender)
-                        putExtra("body", body)
-                    }
+                    // 2. Headless JS Task Service (ONLY fallback if native token is absent)
+                    if (!nativeSyncHandled) {
+                        val serviceIntent = Intent(context, SmsTaskService::class.java).apply {
+                            putExtra("sender", sender)
+                            putExtra("body", body)
+                        }
 
-                    try {
-                        HeadlessJsTaskService.acquireWakeLockNow(context)
-                        context.startService(serviceIntent)
-                    } catch (serviceEx: Exception) {
-                        Log.w("SmsReceiver", "startService failed, attempting foreground fallback", serviceEx)
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                            try {
-                                context.startForegroundService(serviceIntent)
-                            } catch (fgEx: Exception) {
-                                Log.e("SmsReceiver", "startForegroundService also failed", fgEx)
+                        try {
+                            HeadlessJsTaskService.acquireWakeLockNow(context)
+                            context.startService(serviceIntent)
+                        } catch (serviceEx: Exception) {
+                            Log.w("SmsReceiver", "startService failed, attempting foreground fallback", serviceEx)
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                try {
+                                    context.startForegroundService(serviceIntent)
+                                } catch (fgEx: Exception) {
+                                    Log.e("SmsReceiver", "startForegroundService also failed", fgEx)
+                                }
                             }
                         }
                     }

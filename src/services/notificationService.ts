@@ -216,6 +216,37 @@ export const notificationService = {
   },
 
   /**
+   * Mark all notifications as read.
+   */
+  async markAllAsRead(): Promise<void> {
+    // Optimistically update local store and persist to MMKV
+    useNotificationStore.getState().markAllAsReadState();
+
+    const accessToken = authService.getAccessToken();
+    if (!accessToken) return;
+
+    try {
+      const response = await fetch(`${BACKEND_URL}/notifications/read-all`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        // Fallback: loop through unread items if read-all fails
+        const unread = useNotificationStore.getState().notifications.filter((n) => !n.readStatus);
+        for (const item of unread) {
+          await this.markAsRead(item.id);
+        }
+      }
+    } catch (err: any) {
+      console.warn('[NotificationService] Failed to mark all notifications as read on server:', err.message);
+    }
+  },
+
+  /**
    * Delete a notification.
    */
   async deleteNotification(id: string): Promise<void> {

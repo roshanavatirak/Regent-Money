@@ -24,6 +24,13 @@ export class NotificationsController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Patch('read-all')
+  async markAllAsRead(@Req() req: any) {
+    const userId = req.user.id;
+    return this.notificationsService.markAllAsRead(userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Patch(':id/read')
   async markAsRead(
     @Req() req: any,

@@ -49,7 +49,7 @@ export const PrivacyCenterScreen: React.FC = () => {
   const handleClearAIChat = () => {
     showGlobalConfirm({
       title: 'Clear AI Memory',
-      message: 'This will reset your local AI chatbot conversation history. Your financial accounts and transactions will NOT be affected.',
+      message: 'This will reset your local Regent AIbot conversation history. Your financial accounts and transactions will NOT be affected.',
       confirmText: 'Clear Memory',
       cancelText: 'Cancel',
       isDestructive: true,
@@ -67,7 +67,7 @@ export const PrivacyCenterScreen: React.FC = () => {
       confirmText: 'Purge Cache',
       cancelText: 'Cancel',
       icon: 'info',
-      onConfirm: () => {},
+      onConfirm: () => { },
     });
   };
 
@@ -143,7 +143,7 @@ export const PrivacyCenterScreen: React.FC = () => {
               <Feather name="trash-2" size={15} color="#ef4444" />
             </View>
             <View style={{ flex: 1, marginRight: 8 }}>
-              <Text style={styles.actionTitle}>Clear AI Chat History</Text>
+              <Text style={styles.actionTitle}>Clear Regent AI History</Text>
               <Text style={styles.actionDesc}>Reset locally stored AI prompt memory and conversation context.</Text>
             </View>
             <Feather name="chevron-right" size={15} color={colors.textSecondary} />

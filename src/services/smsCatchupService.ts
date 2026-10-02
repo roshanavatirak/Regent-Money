@@ -208,20 +208,34 @@ export const smsCatchupService = {
           date: dateStr,
         });
 
-        // Trigger real-time budget nudge & salary cycle detection
-        try {
-          checkAndDispatchBudgetAlert(
-            {
-              amount: parsed.amount,
-              type: parsed.type,
-              merchant: parsed.merchant,
-              category: predictedCategory,
-              isSalary: parsed.isSalary,
-            },
-            useTransactionStore.getState().transactions
-          );
-        } catch (alertErr) {
-          console.warn('[Budget Nudge] Error checking budget alert:', alertErr);
+        // Check if this transaction already exists in our local store
+        const existingTransactions = useTransactionStore.getState().transactions || [];
+        const isTxExisting = existingTransactions.some((tx: any) => {
+          const txTime = Number(tx.timestamp || 0);
+          const sameAmount = Math.abs(Number(tx.amount || 0) - parsed.amount) < 0.01;
+          const sameType = tx.type === parsed.type;
+          const isDateClose = Math.abs(txTime - msgTimestamp) < 86400000 || tx.date === dateStr;
+          return sameAmount && sameType && isDateClose;
+        });
+
+        // Only trigger real-time budget nudge & salary cycle detection for NEW transactions
+        if (!isTxExisting) {
+          try {
+            checkAndDispatchBudgetAlert(
+              {
+                amount: parsed.amount,
+                type: parsed.type,
+                merchant: parsed.merchant,
+                category: predictedCategory,
+                isSalary: parsed.isSalary,
+                timestamp: msgTimestamp,
+                date: dateStr,
+              },
+              existingTransactions
+            );
+          } catch (alertErr) {
+            console.warn('[Budget Nudge] Error checking budget alert:', alertErr);
+          }
         }
       }
 
