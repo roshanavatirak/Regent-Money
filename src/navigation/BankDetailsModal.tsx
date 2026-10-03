@@ -947,6 +947,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
         visible={passwordModalVisible}
         transparent
         animationType="fade"
+        statusBarTranslucent
         onRequestClose={() => setPasswordModalVisible(false)}
       >
         <View style={styles.pwdOverlay}>

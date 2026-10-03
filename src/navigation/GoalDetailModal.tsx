@@ -18,7 +18,9 @@ import {
   generateProjectionCurve,
   getStrategyRecommendation,
   goalService,
+  GOAL_CATEGORIES,
 } from '../services/goalService';
+import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
 
 interface GoalDetailModalProps {
   goal: Goal | null;
@@ -35,12 +37,21 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
 }) => {
   const { colors, isDark } = useTheme();
   const { height: windowHeight } = useWindowDimensions();
+  const { keyboardHeight, isKeyboardVisible } = useKeyboardHeight();
 
   // Deposit input state
   const [depositAmount, setDepositAmount] = useState('');
   const [isDepositing, setIsDepositing] = useState(false);
   const [showDepositBox, setShowDepositBox] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
+
+  // Deploy Capital state (for Freedom Stash & open-ended wealth goals)
+  const [showDeployModal, setShowDeployModal] = useState(false);
+  const [deployAmount, setDeployAmount] = useState('');
+  const [deployName, setDeployName] = useState('');
+  const [deployCategory, setDeployCategory] = useState<string>('travel');
+  const [deployTarget, setDeployTarget] = useState('');
+  const [isDeploying, setIsDeploying] = useState(false);
 
 
 
@@ -119,6 +130,55 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
     }
   };
 
+  const handleAdvanceMilestone = async (increment: number = 100000) => {
+    try {
+      await goalService.advanceMilestone(goal.id, increment);
+      if (onUpdated) onUpdated();
+    } catch (e: any) {
+      alert('Failed to advance milestone: ' + (e?.message || e));
+    }
+  };
+
+  const handleDeployCapital = async () => {
+    const amt = parseFloat(deployAmount);
+    if (!amt || amt <= 0) {
+      alert('Please enter a valid amount to deploy');
+      return;
+    }
+    if (amt > goal.currentAmount) {
+      alert(`Cannot deploy more than available capital (₹${goal.currentAmount.toLocaleString('en-IN')})`);
+      return;
+    }
+    if (!deployName.trim()) {
+      alert('Please enter a title for your new goal');
+      return;
+    }
+
+    const catObj = GOAL_CATEGORIES.find((c) => c.id === deployCategory) || GOAL_CATEGORIES[0];
+    const targetAmt = parseFloat(deployTarget) || Math.max(amt, catObj.defaultAmount);
+
+    setIsDeploying(true);
+    try {
+      await goalService.deployCapital(goal.id, amt, {
+        name: deployName.trim(),
+        category: deployCategory,
+        targetAmount: targetAmt,
+        targetMonths: catObj.typicalMonths,
+        color: catObj.color,
+        icon: catObj.icon,
+      });
+      setShowDeployModal(false);
+      setDeployAmount('');
+      setDeployName('');
+      setDeployTarget('');
+      if (onUpdated) onUpdated();
+    } catch (e: any) {
+      alert('Failed to deploy capital: ' + (e?.message || e));
+    } finally {
+      setIsDeploying(false);
+    }
+  };
+
   // Milestone checks
   const milestones = [
     { label: '25%', unlocked: progressPercent >= 25, icon: 'shield-outline' },
@@ -135,14 +195,29 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
   const subTextColor = colors.textSecondary;
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+    <>
+      <Modal visible={visible} animationType="slide" transparent statusBarTranslucent onRequestClose={onClose}>
       <View style={styles.modalOverlay}>
         <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={styles.keyboardAvoidingWrap}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={[
+            styles.keyboardAvoidingWrap,
+            Platform.OS === 'android' && isKeyboardVisible && { paddingBottom: keyboardHeight },
+          ]}
         >
-          <View style={[styles.modalContent, { backgroundColor: bgModal, borderColor, maxHeight: windowHeight * 0.92 }]}>
+          <View
+            style={[
+              styles.modalContent,
+              {
+                backgroundColor: bgModal,
+                borderColor,
+                maxHeight: isKeyboardVisible
+                  ? Math.max(300, windowHeight - keyboardHeight - (Platform.OS === 'android' ? 36 : 20))
+                  : windowHeight * 0.92,
+              },
+            ]}
+          >
             {/* Header */}
             <View style={styles.modalHeader}>
               <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
@@ -187,12 +262,16 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
             <View style={[styles.heroSummaryCard, { backgroundColor: cardBg, borderColor }]}>
               <View style={styles.heroRow}>
                 <View>
-                  <Text style={[styles.metricLabel, { color: subTextColor }]}>Saved Toward Goal</Text>
+                  <Text style={[styles.metricLabel, { color: subTextColor }]}>
+                    {goal.category === 'wealth_stash' || goal.isMilestoneBased ? 'Accumulated Capital' : 'Saved Toward Goal'}
+                  </Text>
                   <Text style={[styles.metricBig, { color: goalColor }]}>
                     ₹{goal.currentAmount.toLocaleString('en-IN')}
                   </Text>
                   <Text style={[styles.metricSub, { color: subTextColor }]}>
-                    Target: ₹{goal.targetAmount.toLocaleString('en-IN')} • {pacing.daysLeft} days left
+                    {goal.category === 'wealth_stash' || goal.isMilestoneBased
+                      ? `Milestone ${goal.milestoneStep || 1}: ₹${goal.targetAmount.toLocaleString('en-IN')}`
+                      : `Target: ₹${goal.targetAmount.toLocaleString('en-IN')} • ${pacing.daysLeft} days left`}
                   </Text>
                 </View>
 
@@ -242,18 +321,61 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
               </View>
             </View>
 
-            {/* Quick Action: Add Funds / Deposit */}
+            {/* Milestone Reached Banner for Freedom Stash */}
+            {(goal.category === 'wealth_stash' || goal.isMilestoneBased) && progressPercent >= 100 && (
+              <View style={[styles.milestoneAchievedBanner, { backgroundColor: `${goalColor}15`, borderColor: goalColor }]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <Ionicons name="trophy" size={24} color={goalColor} />
+                  <View style={{ marginLeft: 10, flex: 1 }}>
+                    <Text style={[styles.bannerTitle, { color: textColor }]}>Milestone {goal.milestoneStep || 1} Achieved!</Text>
+                    <Text style={[styles.bannerSub, { color: subTextColor }]}>
+                      You've accumulated ₹{goal.currentAmount.toLocaleString('en-IN')}. Level up your milestone or deploy capital to a specific goal.
+                    </Text>
+                  </View>
+                </View>
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+                  <TouchableOpacity
+                    onPress={() => handleAdvanceMilestone(100000)}
+                    style={[styles.bannerActionBtn, { backgroundColor: goalColor }]}
+                  >
+                    <Text style={styles.bannerActionBtnText}>Level Up (+₹1L)</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => setShowDeployModal(true)}
+                    style={[styles.bannerActionBtn, { backgroundColor: cardBg, borderWidth: 1, borderColor: goalColor }]}
+                  >
+                    <Text style={[styles.bannerActionBtnText, { color: goalColor }]}>Deploy Capital</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
+            {/* Quick Action: Add Funds / Deploy */}
             {!showDepositBox ? (
-              <TouchableOpacity
-                activeOpacity={0.8}
-                onPress={() => setShowDepositBox(true)}
-                style={[styles.depositPromptBtn, { backgroundColor: `${goalColor}15`, borderColor: `${goalColor}40` }]}
-              >
-                <Ionicons name="add-circle" size={20} color={goalColor} />
-                <Text style={[styles.depositPromptText, { color: goalColor }]}>
-                  + Add Savings to this Goal
-                </Text>
-              </TouchableOpacity>
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => setShowDepositBox(true)}
+                  style={[styles.depositPromptBtn, { flex: 1, backgroundColor: `${goalColor}15`, borderColor: `${goalColor}40`, marginTop: 0 }]}
+                >
+                  <Ionicons name="add-circle" size={18} color={goalColor} />
+                  <Text style={[styles.depositPromptText, { color: goalColor }]}>
+                    + Add Savings
+                  </Text>
+                </TouchableOpacity>
+                {(goal.category === 'wealth_stash' || goal.isMilestoneBased) && goal.currentAmount > 0 && (
+                  <TouchableOpacity
+                    activeOpacity={0.8}
+                    onPress={() => setShowDeployModal(true)}
+                    style={[styles.depositPromptBtn, { flex: 1, backgroundColor: cardBg, borderColor: `${goalColor}60`, marginTop: 0 }]}
+                  >
+                    <Ionicons name="rocket-outline" size={18} color={goalColor} />
+                    <Text style={[styles.depositPromptText, { color: goalColor }]}>
+                      Deploy Capital
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
             ) : (
               <View style={[styles.depositBox, { backgroundColor: cardBg, borderColor }]}>
                 <Text style={[styles.boxTitle, { color: textColor }]}>Deposit Funds to Goal</Text>
@@ -404,6 +526,115 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
         </KeyboardAvoidingView>
       </View>
     </Modal>
+
+    {/* Sub-modal: Deploy Capital */}
+    <Modal visible={showDeployModal} animationType="slide" transparent statusBarTranslucent onRequestClose={() => setShowDeployModal(false)}>
+      <View style={styles.modalOverlay}>
+        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setShowDeployModal(false)} />
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={[
+            styles.keyboardAvoidingWrap,
+            Platform.OS === 'android' && isKeyboardVisible && { paddingBottom: keyboardHeight },
+          ]}
+        >
+          <View
+            style={[
+              styles.modalContent,
+              {
+                backgroundColor: bgModal,
+                borderColor,
+                maxHeight: isKeyboardVisible
+                  ? Math.max(280, windowHeight - keyboardHeight - (Platform.OS === 'android' ? 36 : 20))
+                  : windowHeight * 0.88,
+                paddingBottom: 24,
+              },
+            ]}
+          >
+            <View style={styles.modalHeader}>
+              <View>
+                <Text style={[styles.goalTitle, { color: textColor }]}>Deploy Capital</Text>
+                <Text style={{ fontSize: 12, color: subTextColor, marginTop: 2 }}>
+                  From {goal.name} (Available: ₹{goal.currentAmount.toLocaleString('en-IN')})
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowDeployModal(false)} style={[styles.actionIconBtn, { backgroundColor: cardBg }]}>
+                <Ionicons name="close" size={20} color={textColor} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ paddingHorizontal: 20 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              <Text style={[styles.deployInputLabel, { color: textColor, marginTop: 8 }]}>Amount to Deploy (₹)</Text>
+              <View style={[styles.customDepositRow, { borderColor, backgroundColor: cardBg }]}>
+                <Text style={[styles.currencyPrefix, { color: goalColor }]}>₹</Text>
+                <TextInput
+                  style={[styles.depositInput, { color: textColor }]}
+                  value={deployAmount}
+                  onChangeText={setDeployAmount}
+                  keyboardType="numeric"
+                  placeholder="e.g. 50000"
+                  placeholderTextColor={subTextColor}
+                />
+              </View>
+
+              <Text style={[styles.deployInputLabel, { color: textColor, marginTop: 14 }]}>New Goal Title</Text>
+              <TextInput
+                style={[styles.deployTextInput, { backgroundColor: cardBg, color: textColor, borderColor }]}
+                value={deployName}
+                onChangeText={setDeployName}
+                placeholder="e.g. Europe Trip or Gold Sovereign"
+                placeholderTextColor={subTextColor}
+              />
+
+              <Text style={[styles.deployInputLabel, { color: textColor, marginTop: 14 }]}>Total Target for New Goal (₹)</Text>
+              <View style={[styles.customDepositRow, { borderColor, backgroundColor: cardBg }]}>
+                <Text style={[styles.currencyPrefix, { color: goalColor }]}>₹</Text>
+                <TextInput
+                  style={[styles.depositInput, { color: textColor }]}
+                  value={deployTarget}
+                  onChangeText={setDeployTarget}
+                  keyboardType="numeric"
+                  placeholder="e.g. 150000"
+                  placeholderTextColor={subTextColor}
+                />
+              </View>
+
+              <Text style={[styles.deployInputLabel, { color: textColor, marginTop: 14 }]}>Goal Category</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
+                {GOAL_CATEGORIES.filter((c) => c.id !== 'wealth_stash').map((cat) => (
+                  <TouchableOpacity
+                    key={cat.id}
+                    onPress={() => setDeployCategory(cat.id)}
+                    style={[
+                      styles.deployCatPill,
+                      {
+                        backgroundColor: deployCategory === cat.id ? `${cat.color}25` : cardBg,
+                        borderColor: deployCategory === cat.id ? cat.color : borderColor,
+                      },
+                    ]}
+                  >
+                    <Ionicons name={cat.icon as any} size={14} color={deployCategory === cat.id ? cat.color : subTextColor} />
+                    <Text style={{ fontSize: 11.5, fontWeight: '600', color: deployCategory === cat.id ? cat.color : textColor, marginLeft: 4 }}>
+                      {cat.name}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <TouchableOpacity
+                onPress={handleDeployCapital}
+                disabled={isDeploying || !deployAmount || !deployName}
+                style={[styles.deploySubmitBtn, { backgroundColor: goalColor, opacity: isDeploying ? 0.7 : 1 }]}
+              >
+                <Text style={styles.deploySubmitBtnText}>{isDeploying ? 'Deploying Capital...' : 'Deploy & Create Goal'}</Text>
+                <Ionicons name="arrow-forward" size={16} color="#ffffff" style={{ marginLeft: 6 }} />
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </View>
+    </Modal>
+    </>
   );
 };
 
@@ -720,6 +951,68 @@ const styles = StyleSheet.create({
   doneBtnText: {
     color: '#ffffff',
     fontSize: 15,
+    fontWeight: '700',
+  },
+  milestoneAchievedBanner: {
+    borderRadius: 16,
+    borderWidth: 1.5,
+    padding: 14,
+    marginTop: 12,
+  },
+  bannerTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  bannerSub: {
+    fontSize: 11.5,
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  bannerActionBtn: {
+    flex: 1,
+    height: 38,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bannerActionBtnText: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  deployInputLabel: {
+    fontSize: 12.5,
+    fontWeight: '600',
+    marginBottom: 6,
+  },
+  deployTextInput: {
+    height: 46,
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  deployCatPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  deploySubmitBtn: {
+    height: 46,
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 18,
+    marginBottom: 12,
+  },
+  deploySubmitBtnText: {
+    color: '#ffffff',
+    fontSize: 14,
     fontWeight: '700',
   },
 });

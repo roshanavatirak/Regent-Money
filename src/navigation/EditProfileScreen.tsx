@@ -17,6 +17,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useTheme, useAuthStore } from '../store';
 import { authService } from '../services/authService';
 import { DobDatePickerModal, calculateAge } from '../components/DobDatePickerModal';
+import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
 
 export const EditProfileScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
@@ -32,6 +33,7 @@ export const EditProfileScreen: React.FC = () => {
   const [income, setIncome] = useState(user?.currentIncome ? String(user.currentIncome) : '75000');
   const [sourcesCount, setSourcesCount] = useState(user?.incomeSourcesCount || 1);
   const [loading, setLoading] = useState(false);
+  const { scrollBottomPadding } = useKeyboardHeight(40);
 
 
   const handleSave = async () => {
@@ -99,7 +101,8 @@ export const EditProfileScreen: React.FC = () => {
         <ScrollView
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 40 }]}
+          keyboardDismissMode="on-drag"
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPadding }]}
         >
           {/* Full Name */}
           <Text style={styles.formFieldLabel}>FULL NAME</Text>

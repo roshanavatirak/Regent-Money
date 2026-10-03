@@ -19,6 +19,7 @@ import { getBackendUrl } from '../config/api';
 import { BankIcon } from '../components/BankIcon';
 import { SmsSenderTagsManager } from '../components/SmsSenderTagsManager';
 import { formatSmsSenderTags, parseSmsSenderTags } from '../constants/bankSmsSenders';
+import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
 
 const BACKEND_URL = getBackendUrl();
 
@@ -51,6 +52,7 @@ export const EditBankScreen: React.FC = () => {
 
   const [formError, setFormError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const { scrollBottomPadding } = useKeyboardHeight(40);
 
   if (!bank) {
     navigation.goBack();
@@ -150,7 +152,8 @@ export const EditBankScreen: React.FC = () => {
         <ScrollView
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 40 }]}
+          keyboardDismissMode="on-drag"
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPadding }]}
         >
           {/* Bank Icon & Hero Header */}
           <View style={styles.bankFormHeader}>

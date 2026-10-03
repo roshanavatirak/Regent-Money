@@ -240,4 +240,24 @@ export class SyncController {
     const userId = req.user.id;
     return this.syncService.deleteBudget(userId, id);
   }
+
+  @Post('budget/exclude-transaction')
+  @HttpCode(HttpStatus.OK)
+  async excludeTransactionFromBudget(
+    @Req() req: any,
+    @Body() body: { transactionId: string; budgetId?: string },
+  ) {
+    const userId = req.user.id;
+    return this.syncService.excludeTransactionFromBudget(userId, body);
+  }
+
+  @Post('budget/restore-transaction')
+  @HttpCode(HttpStatus.OK)
+  async restoreTransactionToBudget(
+    @Req() req: any,
+    @Body() body: { transactionId: string },
+  ) {
+    const userId = req.user.id;
+    return this.syncService.restoreTransactionToBudget(userId, body);
+  }
 }

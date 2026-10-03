@@ -8,12 +8,14 @@ import { SavingsGoal } from './entities/savings-goal.entity';
 import { NetWorthSnapshot } from './entities/net-worth-snapshot.entity';
 import { IncomeRecord } from './entities/income-record.entity';
 import { UserMerchantTag } from './entities/user-merchant-tag.entity';
+import { BudgetTransactionExclusion } from './entities/budget-exclusion.entity';
 import { User } from '../users/entities/user.entity';
 import { OcrSyncDto } from './dto/ocr-sync.dto';
 import { ManualTransactionDto } from './dto/manual-transaction.dto';
 import { PDFExtract, PDFExtractOptions } from 'pdf.js-extract';
 import { AiService } from '../ai/ai.service';
 import { parseSMS } from './sms-parser.util';
+import { RedisService } from '../redis/redis.service';
 
 @Injectable()
 export class SyncService implements OnModuleInit {
@@ -34,10 +36,13 @@ export class SyncService implements OnModuleInit {
     private readonly incomeRecordRepository: Repository<IncomeRecord>,
     @InjectRepository(UserMerchantTag)
     private readonly userMerchantTagRepository: Repository<UserMerchantTag>,
+    @InjectRepository(BudgetTransactionExclusion)
+    private readonly budgetExclusionRepository: Repository<BudgetTransactionExclusion>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly dataSource: DataSource,
     private readonly aiService: AiService,
+    private readonly redisService: RedisService,
   ) {}
 
   async onModuleInit() {
@@ -136,7 +141,23 @@ export class SyncService implements OnModuleInit {
       await this.dataSource.query(`
         ALTER TABLE finance.budget_declarations ADD COLUMN IF NOT EXISTS fixed_obligations NUMERIC DEFAULT 0;
       `);
-      this.logger.log('BankProfile, SavingsGoal & Budget schema checks completed successfully.');
+      // Budget transaction exclusions persistence table
+      await this.dataSource.query(`
+        CREATE TABLE IF NOT EXISTS finance.budget_transaction_exclusions (
+          id TEXT PRIMARY KEY,
+          user_id UUID NOT NULL,
+          transaction_id TEXT NOT NULL,
+          budget_id TEXT,
+          created_at BIGINT NOT NULL,
+          updated_at BIGINT NOT NULL,
+          is_deleted BOOLEAN DEFAULT FALSE,
+          CONSTRAINT uq_budget_user_tx UNIQUE(user_id, transaction_id)
+        );
+      `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_budget_exclusions_user ON finance.budget_transaction_exclusions(user_id, is_deleted);
+      `);
+      this.logger.log('BankProfile, SavingsGoal, Budget & Exclusion schema checks completed successfully.');
     } catch (e: any) {
       this.logger.error(`Error checking/updating schema: ${e.message}`, e.stack);
     }
@@ -164,20 +185,43 @@ export class SyncService implements OnModuleInit {
     }
   }
 
+  async invalidateUserSyncCache(userId: string) {
+    if (!userId) return;
+    try {
+      await this.redisService.del(`user:${userId}:sync`);
+    } catch (err: any) {
+      this.logger.warn(`Failed to invalidate sync cache for user ${userId}: ${err.message}`);
+    }
+  }
+
   async sync(userId: string) {
+    const cacheKey = `user:${userId}:sync`;
+    try {
+      const cached = await this.redisService.get(cacheKey);
+      if (cached) {
+        this.logger.log(`[SyncService] Cache HIT for user: ${userId}`);
+        return JSON.parse(cached);
+      }
+    } catch (err: any) {
+      this.logger.warn(`[SyncService] Cache lookup error: ${err.message}`);
+    }
+
     this.logger.log(`Performing data synchronization for user: ${userId}`);
 
-    const [rawTransactions, budgets, goals, bankProfiles, incomeRecords] = await Promise.all([
+    const [rawTransactions, budgets, goals, bankProfiles, incomeRecords, exclusions] = await Promise.all([
       this.transactionRepository.find({ where: { userId, isDeleted: false }, order: { timestamp: 'DESC' } }),
       this.budgetDeclarationRepository.find({ where: { userId, isDeleted: false } }),
       this.savingsGoalRepository.find({ where: { userId, isDeleted: false } }),
       this.bankProfileRepository.find({ where: { userId, isDeleted: false } }),
       this.incomeRecordRepository.find({ where: { userId, isDeleted: false } }),
+      this.budgetExclusionRepository.find({ where: { userId, isDeleted: false } }),
     ]);
+
+    const excludedTransactionIds = (exclusions || []).map((e) => e.transactionId);
 
     // Deduplicate any duplicate transactions before returning
     const seenTx = new Set<string>();
-    const transactions: Transaction[] = [];
+    const transactions: any[] = [];
     const duplicateIdsToDelete: string[] = [];
 
     for (const tx of rawTransactions) {
@@ -191,6 +235,7 @@ export class SyncService implements OnModuleInit {
         continue;
       }
       seenTx.add(sig);
+      (tx as any).excludedFromBudget = excludedTransactionIds.includes(tx.id);
       transactions.push(tx);
     }
 
@@ -205,16 +250,29 @@ export class SyncService implements OnModuleInit {
     const now = Date.now();
     for (const bank of bankProfiles) {
       bank.lastSyncTimestamp = now;
+      if (bank.accountType === 'Savings' && Number(bank.currentBalance) < 0) {
+        bank.currentBalance = 0;
+        this.bankProfileRepository.save(bank).catch(() => {});
+      }
     }
 
-    return {
+    const result = {
       transactions,
       body: bankProfiles, // Keep matching controller structures if they expect specific returns
       budgets,
       goals,
       bankProfiles,
       incomeRecords,
+      excludedTransactionIds,
     };
+
+    try {
+      await this.redisService.set(cacheKey, JSON.stringify(result), 30);
+    } catch (err: any) {
+      this.logger.warn(`[SyncService] Cache store error: ${err.message}`);
+    }
+
+    return result;
   }
 
   async createBankProfile(
@@ -249,6 +307,7 @@ export class SyncService implements OnModuleInit {
         existing.smsConsent = data.smsConsent;
       }
       existing.updatedAt = Date.now();
+      await this.invalidateUserSyncCache(userId);
       return this.bankProfileRepository.save(existing);
     }
 
@@ -267,6 +326,7 @@ export class SyncService implements OnModuleInit {
       updatedAt: Date.now(),
       isDeleted: false,
     });
+    await this.invalidateUserSyncCache(userId);
     return this.bankProfileRepository.save(bankProfile);
   }
 
@@ -286,6 +346,7 @@ export class SyncService implements OnModuleInit {
     bankProfile.isDeleted = true;
     bankProfile.updatedAt = Date.now();
     await this.bankProfileRepository.save(bankProfile);
+    await this.invalidateUserSyncCache(userId);
     return { success: true, message: 'Bank account unlinked successfully.' };
   }
 
@@ -527,6 +588,7 @@ export class SyncService implements OnModuleInit {
     tx.category = category;
     tx.updatedAt = Date.now();
     await this.transactionRepository.save(tx);
+    await this.invalidateUserSyncCache(userId);
 
     const targetMerchant = merchant || tx.merchant;
     if (targetMerchant) {
@@ -584,10 +646,10 @@ export class SyncService implements OnModuleInit {
 
       const [existingTxs, existingIncome] = await Promise.all([
         this.transactionRepository.find({
-          where: { userId, bankProfileId: data.bankProfileId, isDeleted: false },
+          where: { userId, bankProfileId: data.bankProfileId },
         }),
         this.incomeRecordRepository.find({
-          where: { userId, bankProfileId: data.bankProfileId, isDeleted: false },
+          where: { userId, bankProfileId: data.bankProfileId },
         }),
       ]);
 
@@ -602,7 +664,7 @@ export class SyncService implements OnModuleInit {
         const amount = parseFloat(String(item.amount));
         if (isNaN(amount) || amount <= 0) continue;
 
-        const parsedDate = new Date(item.date);
+        const parsedDate = item.date ? new Date(item.date) : new Date();
         if (isNaN(parsedDate.getTime())) continue;
 
         const startOfDay = new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate(), 0, 0, 0, 0).getTime();
@@ -629,7 +691,7 @@ export class SyncService implements OnModuleInit {
             amount,
             category: item.category || (item.merchant ? await this.classifyCategory(item.merchant, userId) : 'miscellaneous'),
             merchant: item.merchant || 'Merchant',
-            timestamp: parsedDate.getTime(),
+            timestamp: item.timestamp && !isNaN(Number(item.timestamp)) ? Number(item.timestamp) : parsedDate.getTime(),
             bankProfileId: data.bankProfileId,
             smsId: 'ocr_extracted',
             isAnomaly: amount > 5000,
@@ -661,7 +723,7 @@ export class SyncService implements OnModuleInit {
             userId,
             amount,
             source: item.merchant || 'Direct Credit',
-            timestamp: parsedDate.getTime(),
+            timestamp: item.timestamp && !isNaN(Number(item.timestamp)) ? Number(item.timestamp) : parsedDate.getTime(),
             bankProfileId: data.bankProfileId,
             updatedAt: Date.now(),
             isDeleted: false,
@@ -681,16 +743,36 @@ export class SyncService implements OnModuleInit {
     }
 
     if (data.updatedBalance !== undefined && data.updatedBalance !== null && !isNaN(Number(data.updatedBalance))) {
-      bank.currentBalance = parseFloat(String(data.updatedBalance));
+      // Direct authoritative balance from bank SMS
+      bank.currentBalance = Math.max(0, parseFloat(String(data.updatedBalance)));
       bank.lastSyncTimestamp = Date.now();
       bank.updatedAt = Date.now();
       await this.bankProfileRepository.save(bank);
     } else if (addedTransactionsCount > 0 || addedIncomeCount > 0) {
-      bank.currentBalance = parseFloat(String(bank.currentBalance)) + netBalanceChange;
-      bank.lastSyncTimestamp = Date.now();
-      bank.updatedAt = Date.now();
-      await this.bankProfileRepository.save(bank);
+      // Only apply net balance change if these new transactions occurred AFTER bank profile baseline (creation/update)
+      const bankBaseline = Math.max(Number(bank.updatedAt || 0), Number(bank.lastSyncTimestamp || 0));
+      let applicableChange = 0;
+      for (const tx of newTransactions) {
+        if (!bankBaseline || tx.timestamp >= bankBaseline) {
+          applicableChange -= tx.amount;
+        }
+      }
+      for (const inc of newIncomeRecords) {
+        if (!bankBaseline || inc.timestamp >= bankBaseline) {
+          applicableChange += inc.amount;
+        }
+      }
+
+      if (applicableChange !== 0) {
+        const updatedBal = parseFloat(String(bank.currentBalance || 0)) + applicableChange;
+        bank.currentBalance = bank.accountType === 'Savings' ? Math.max(0, updatedBal) : updatedBal;
+        bank.lastSyncTimestamp = Date.now();
+        bank.updatedAt = Date.now();
+        await this.bankProfileRepository.save(bank);
+      }
     }
+
+    await this.invalidateUserSyncCache(userId);
 
     return {
       success: true,
@@ -1047,6 +1129,8 @@ export class SyncService implements OnModuleInit {
     bank.lastSyncTimestamp = Date.now();
     bank.updatedAt = Date.now();
     await this.bankProfileRepository.save(bank);
+
+    await this.invalidateUserSyncCache(userId);
 
     return {
       success: true,
@@ -1557,10 +1641,10 @@ export class SyncService implements OnModuleInit {
 
     const [existingTxs, existingIncome] = await Promise.all([
       this.transactionRepository.find({
-        where: { userId, bankProfileId: matchedBank.id, isDeleted: false },
+        where: { userId, bankProfileId: matchedBank.id },
       }),
       this.incomeRecordRepository.find({
-        where: { userId, bankProfileId: matchedBank.id, isDeleted: false },
+        where: { userId, bankProfileId: matchedBank.id },
       }),
     ]);
 
@@ -1576,7 +1660,7 @@ export class SyncService implements OnModuleInit {
       });
 
       if (isDuplicate) {
-        return { success: true, duplicate: true, message: 'Transaction already recorded' };
+        return { success: true, duplicate: true, message: 'Transaction already recorded or intentionally deleted' };
       }
 
       const txId = 'tx_direct_' + Math.random().toString(36).substr(2, 9);
@@ -1600,7 +1684,11 @@ export class SyncService implements OnModuleInit {
       });
 
       await this.transactionRepository.save(newTx);
-      newBalance = Math.max(0, newBalance - parsed.amount);
+      if (parsed.availableBalance !== undefined && !isNaN(parsed.availableBalance) && parsed.availableBalance >= 0) {
+        newBalance = parsed.availableBalance;
+      } else {
+        newBalance = Math.max(0, newBalance - parsed.amount);
+      }
       ingested = true;
     } else {
       const isDuplicate = existingIncome.some((inc) => {
@@ -1611,7 +1699,7 @@ export class SyncService implements OnModuleInit {
       });
 
       if (isDuplicate) {
-        return { success: true, duplicate: true, message: 'Income already recorded' };
+        return { success: true, duplicate: true, message: 'Income already recorded or intentionally deleted' };
       }
 
       const incId = 'income_direct_' + Math.random().toString(36).substr(2, 9);
@@ -1628,15 +1716,22 @@ export class SyncService implements OnModuleInit {
       });
 
       await this.incomeRecordRepository.save(newInc);
-      newBalance += parsed.amount;
+      if (parsed.availableBalance !== undefined && !isNaN(parsed.availableBalance) && parsed.availableBalance >= 0) {
+        newBalance = parsed.availableBalance;
+      } else {
+        newBalance += parsed.amount;
+      }
       ingested = true;
     }
 
     if (ingested) {
-      matchedBank.currentBalance = newBalance;
+      matchedBank.currentBalance = matchedBank.accountType === 'Savings' ? Math.max(0, newBalance) : newBalance;
       matchedBank.lastSyncTimestamp = Date.now();
+      matchedBank.updatedAt = Date.now();
       await this.bankProfileRepository.save(matchedBank);
     }
+
+    await this.invalidateUserSyncCache(userId);
 
     return {
       success: true,
@@ -1672,5 +1767,57 @@ export class SyncService implements OnModuleInit {
     return tags.some(
       (tag) => cleanSender === tag || cleanSender.includes(tag) || tag.includes(cleanSender),
     );
+  }
+
+  /**
+   * Persistently excludes a transaction from budget calculations without deleting it from bank statements.
+   */
+  async excludeTransactionFromBudget(userId: string, data: { transactionId: string; budgetId?: string }) {
+    if (!data.transactionId) {
+      throw new BadRequestException('Transaction ID is required.');
+    }
+    const existing = await this.budgetExclusionRepository.findOne({
+      where: { userId, transactionId: data.transactionId },
+    });
+    const now = Date.now();
+    if (existing) {
+      existing.isDeleted = false;
+      existing.budgetId = data.budgetId || existing.budgetId;
+      existing.updatedAt = now;
+      await this.budgetExclusionRepository.save(existing);
+      await this.invalidateUserSyncCache(userId);
+      return { success: true, exclusion: existing };
+    }
+    const exclusion = this.budgetExclusionRepository.create({
+      id: 'b_excl_' + Math.random().toString(36).substr(2, 9),
+      userId,
+      transactionId: data.transactionId,
+      budgetId: data.budgetId || null,
+      createdAt: now,
+      updatedAt: now,
+      isDeleted: false,
+    });
+    await this.budgetExclusionRepository.save(exclusion);
+    await this.invalidateUserSyncCache(userId);
+    return { success: true, exclusion };
+  }
+
+  /**
+   * Restores a previously excluded transaction back to budget calculations.
+   */
+  async restoreTransactionToBudget(userId: string, data: { transactionId: string }) {
+    if (!data.transactionId) {
+      throw new BadRequestException('Transaction ID is required.');
+    }
+    const existing = await this.budgetExclusionRepository.findOne({
+      where: { userId, transactionId: data.transactionId, isDeleted: false },
+    });
+    if (existing) {
+      existing.isDeleted = true;
+      existing.updatedAt = Date.now();
+      await this.budgetExclusionRepository.save(existing);
+    }
+    await this.invalidateUserSyncCache(userId);
+    return { success: true, restoredId: data.transactionId };
   }
 }

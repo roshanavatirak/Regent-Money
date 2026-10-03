@@ -3,7 +3,20 @@ import { authService } from './authService';
 import { useGoalsStore, Goal } from '../store';
 
 export interface GoalCategoryOption {
-  id: 'bike' | 'car' | 'home' | 'travel' | 'wedding' | 'education' | 'emergency' | 'gadget' | 'custom';
+  id:
+    | 'wealth_stash'
+    | 'bike'
+    | 'car'
+    | 'home'
+    | 'travel'
+    | 'wedding'
+    | 'education'
+    | 'emergency'
+    | 'gadget'
+    | 'gold'
+    | 'business'
+    | 'fire'
+    | 'custom';
   name: string;
   defaultTitle: string;
   defaultAmount: number;
@@ -14,7 +27,35 @@ export interface GoalCategoryOption {
   description: string;
 }
 
+export const formatIndianCompactAmount = (amount: number): string => {
+  if (!amount || isNaN(amount)) return '₹0';
+  if (amount >= 10000000) {
+    const cr = amount / 10000000;
+    return `₹${cr % 1 === 0 ? cr.toFixed(0) : cr.toFixed(1)}Cr`;
+  }
+  if (amount >= 100000) {
+    const l = amount / 100000;
+    return `₹${l % 1 === 0 ? l.toFixed(0) : l.toFixed(1)}L`;
+  }
+  if (amount >= 1000) {
+    const k = amount / 1000;
+    return `₹${k % 1 === 0 ? k.toFixed(0) : k.toFixed(0)}K`;
+  }
+  return `₹${amount.toLocaleString('en-IN')}`;
+};
+
 export const GOAL_CATEGORIES: GoalCategoryOption[] = [
+  {
+    id: 'wealth_stash',
+    name: 'Freedom Stash',
+    defaultTitle: 'Freedom Stash (Save & Decide)',
+    defaultAmount: 100000,
+    typicalMonths: 12,
+    icon: 'infinite',
+    color: '#0ea5e9',
+    suggestedReturn: 7.2,
+    description: 'No fixed target. Accumulate capital, earn liquid returns, and decide later.',
+  },
   {
     id: 'bike',
     name: 'Bike / Two-Wheeler',
@@ -94,7 +135,7 @@ export const GOAL_CATEGORIES: GoalCategoryOption[] = [
   },
   {
     id: 'gadget',
-    name: 'Gadget & Gear',
+    name: 'Gadget & Tech',
     defaultTitle: 'Pro Workstation / Phone',
     defaultAmount: 90000,
     typicalMonths: 6,
@@ -102,6 +143,39 @@ export const GOAL_CATEGORIES: GoalCategoryOption[] = [
     color: '#ec4899',
     suggestedReturn: 6.5,
     description: 'Planned tech upgrade without credit card debt',
+  },
+  {
+    id: 'gold',
+    name: 'Gold & Jewellery',
+    defaultTitle: 'Gold Asset Accumulation',
+    defaultAmount: 300000,
+    typicalMonths: 18,
+    icon: 'sparkles',
+    color: '#eab308',
+    suggestedReturn: 8.5,
+    description: 'Sovereign gold & bullion wealth reserve',
+  },
+  {
+    id: 'business',
+    name: 'Startup & Business',
+    defaultTitle: 'Business Seed Capital',
+    defaultAmount: 500000,
+    typicalMonths: 36,
+    icon: 'rocket',
+    color: '#6366f1',
+    suggestedReturn: 11.0,
+    description: 'Fueling your venture and independent income',
+  },
+  {
+    id: 'fire',
+    name: 'Retirement (FIRE)',
+    defaultTitle: 'Early Financial Freedom',
+    defaultAmount: 10000000,
+    typicalMonths: 120,
+    icon: 'trending-up',
+    color: '#059669',
+    suggestedReturn: 12.0,
+    description: 'Long-horizon compounding for life independence',
   },
   {
     id: 'custom',
@@ -125,9 +199,19 @@ export interface InvestmentStrategy {
 }
 
 /**
- * Returns financial instrument recommendation based on investment horizon (in months)
+ * Returns financial instrument recommendation based on investment horizon (in months) or category
  */
-export function getStrategyRecommendation(months: number): InvestmentStrategy {
+export function getStrategyRecommendation(months: number, category?: string): InvestmentStrategy {
+  if (category === 'wealth_stash') {
+    return {
+      title: 'Instant-Access Arbitrage & Liquid',
+      expectedReturn: 7.2,
+      risk: 'Minimal',
+      assetVehicle: 'Arbitrage Funds / Ultra-Short Term Debt / Sweep FD',
+      rationale: 'Open-ended wealth building. Zero lock-in, safe from stock drops, beats inflation, and ready to deploy whenever opportunity strikes.',
+    };
+  }
+
   if (months <= 12) {
     return {
       title: 'High-Yield Liquid & Arbitrage',
@@ -161,6 +245,46 @@ export function getStrategyRecommendation(months: number): InvestmentStrategy {
       rationale: 'Over 5+ years, equities historically beat all inflation and create serious compounding alpha.',
     };
   }
+}
+
+export interface ProjectionPoint {
+  period: string;
+  months: number;
+  totalInvested: number;
+  futureValue: number;
+  gains: number;
+}
+
+/**
+ * Solves compound wealth growth across 1, 3, and 5 years for open-ended wealth accumulation
+ */
+export function calculateCompoundProjections(
+  monthlyContribution: number,
+  currentAmount: number = 0,
+  annualReturnRate: number = 7.2
+): ProjectionPoint[] {
+  const monthlyRate = annualReturnRate / 100 / 12;
+  const periods = [
+    { period: '1 Year', months: 12 },
+    { period: '3 Years', months: 36 },
+    { period: '5 Years', months: 60 },
+  ];
+
+  return periods.map(({ period, months }) => {
+    let fv = currentAmount;
+    for (let i = 0; i < months; i++) {
+      fv = (fv + monthlyContribution) * (1 + monthlyRate);
+    }
+    const totalInvested = currentAmount + monthlyContribution * months;
+    const gains = Math.max(0, fv - totalInvested);
+    return {
+      period,
+      months,
+      totalInvested: Math.round(totalInvested),
+      futureValue: Math.round(fv),
+      gains: Math.round(gains),
+    };
+  });
 }
 
 /**
@@ -309,10 +433,12 @@ export const goalService = {
     priority?: string;
     color?: string;
     icon?: string;
+    isMilestoneBased?: boolean;
+    milestoneStep?: number;
   }): Promise<Goal> {
     const id = 'goal_' + Math.random().toString(36).substr(2, 9);
     const months = Math.max(1, Math.ceil((data.targetDate - Date.now()) / (1000 * 60 * 60 * 24 * 30)));
-    const strategy = getStrategyRecommendation(months).title;
+    const strategy = getStrategyRecommendation(months, data.category).title;
 
     const newGoal: Goal = {
       id,
@@ -329,6 +455,8 @@ export const goalService = {
       strategy,
       streakMonths: 0,
       status: 'active',
+      isMilestoneBased: data.isMilestoneBased ?? (data.category === 'wealth_stash'),
+      milestoneStep: data.milestoneStep ?? 1,
     };
 
     // Optimistic local update
@@ -352,6 +480,71 @@ export const goalService = {
     }
 
     return newGoal;
+  },
+
+  /**
+   * Advance milestone target for open-ended / milestone-based goals
+   */
+  async advanceMilestone(goalId: string, incrementAmount: number = 100000): Promise<Goal> {
+    const goal = useGoalsStore.getState().goals.find((g) => g.id === goalId);
+    if (!goal) throw new Error('Goal not found');
+    const newTarget = (goal.targetAmount || 0) + incrementAmount;
+    const newStep = (goal.milestoneStep || 1) + 1;
+    await this.updateGoal(goalId, {
+      targetAmount: newTarget,
+      milestoneStep: newStep,
+    });
+    return (useGoalsStore.getState().goals.find((g) => g.id === goalId) || goal);
+  },
+
+  /**
+   * Deploy capital from an open-ended goal (Freedom Stash) to a new goal
+   */
+  async deployCapital(
+    sourceGoalId: string,
+    amountToTransfer: number,
+    newGoalPayload: {
+      name: string;
+      category: string;
+      targetAmount: number;
+      monthlyContribution?: number;
+      targetMonths?: number;
+      priority?: string;
+      color?: string;
+      icon?: string;
+    }
+  ): Promise<{ sourceGoal: Goal | null; createdGoal: Goal }> {
+    const goals = useGoalsStore.getState().goals;
+    const source = goals.find((g) => g.id === sourceGoalId);
+    if (!source) throw new Error('Source goal not found');
+    if (source.currentAmount < amountToTransfer) {
+      throw new Error(`Insufficient funds in ${source.name} (Available: ₹${source.currentAmount})`);
+    }
+
+    // 1. Deduct from source goal
+    const updatedSourceAmount = Math.max(0, source.currentAmount - amountToTransfer);
+    await this.updateGoal(sourceGoalId, { currentAmount: updatedSourceAmount });
+
+    // 2. Create target goal funded with the deployed amount
+    const targetMonths = newGoalPayload.targetMonths || 12;
+    const targetDate = Date.now() + targetMonths * 30 * 24 * 60 * 60 * 1000;
+    const strategyObj = getStrategyRecommendation(targetMonths, newGoalPayload.category);
+
+    const createdGoal = await this.createGoal({
+      name: newGoalPayload.name,
+      category: newGoalPayload.category,
+      targetAmount: newGoalPayload.targetAmount,
+      currentAmount: amountToTransfer,
+      monthlyContribution: newGoalPayload.monthlyContribution || 0,
+      expectedReturnRate: strategyObj.expectedReturn,
+      targetDate,
+      priority: newGoalPayload.priority || 'medium',
+      color: newGoalPayload.color,
+      icon: newGoalPayload.icon,
+    });
+
+    const updatedSource = useGoalsStore.getState().goals.find((g) => g.id === sourceGoalId) || null;
+    return { sourceGoal: updatedSource, createdGoal };
   },
 
   /**

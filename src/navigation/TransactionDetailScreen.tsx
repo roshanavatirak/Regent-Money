@@ -20,6 +20,7 @@ import { getBackendUrl } from '../config/api';
 import { TagPaymentModal } from '../components/TagPaymentModal';
 import { getTagDef } from '../constants/transactionTags';
 import { tagLearningService } from '../services/tagLearningService';
+import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
 
 const BACKEND_URL = getBackendUrl();
 
@@ -76,6 +77,7 @@ export const TransactionDetailScreen: React.FC = () => {
   const [deleting, setDeleting] = useState(false);
   const [tagModalVisible, setTagModalVisible] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
+  const { scrollBottomPadding } = useKeyboardHeight(40);
 
   if (!transaction) {
     navigation.goBack();
@@ -282,7 +284,8 @@ export const TransactionDetailScreen: React.FC = () => {
           ref={scrollViewRef}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 40 }]}
+          keyboardDismissMode="on-drag"
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPadding }]}
         >
           {/* Type Indicator Banner */}
           <View

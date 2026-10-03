@@ -180,7 +180,12 @@ export const notificationService = {
         createdAt: Number(n.createdAt ?? n.created_at ?? Date.now()),
       }));
 
-      useNotificationStore.getState().setNotifications(mapped);
+      // Retain local notifications so locally-generated alerts are not wiped
+      const current = useNotificationStore.getState().notifications || [];
+      const localOnly = current.filter((c) => c.userId === 'local' || !c.userId || c.id.startsWith('notif_'));
+      const combined = [...mapped, ...localOnly];
+
+      useNotificationStore.getState().setNotifications(combined);
     } catch (err: any) {
       console.error('[NotificationService] Error syncing notifications:', err.message);
     } finally {

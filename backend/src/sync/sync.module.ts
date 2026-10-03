@@ -9,9 +9,11 @@ import { SavingsGoal } from './entities/savings-goal.entity';
 import { NetWorthSnapshot } from './entities/net-worth-snapshot.entity';
 import { IncomeRecord } from './entities/income-record.entity';
 import { UserMerchantTag } from './entities/user-merchant-tag.entity';
+import { BudgetTransactionExclusion } from './entities/budget-exclusion.entity';
 import { AuthModule } from '../auth/auth.module';
 import { User } from '../users/entities/user.entity';
 import { AiModule } from '../ai/ai.module';
+import { RedisModule } from '../redis/redis.module';
 
 @Module({
   imports: [
@@ -23,10 +25,12 @@ import { AiModule } from '../ai/ai.module';
       NetWorthSnapshot,
       IncomeRecord,
       UserMerchantTag,
+      BudgetTransactionExclusion,
       User,
     ]),
     AuthModule,
     AiModule,
+    RedisModule,
   ],
   providers: [SyncService],
   controllers: [SyncController],

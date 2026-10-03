@@ -39,6 +39,8 @@ import {
   isExcludedFromBudget,
 } from '../services/budgetService';
 import { StandaloneBottomTabBar } from './StandaloneBottomTabBar';
+import { getBackendUrl } from '../config/api';
+import { authService } from '../services/authService';
 
 export interface BudgetScreenProps {
   AppTopBarComponent?: React.ComponentType;
@@ -92,20 +94,7 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
     }));
   };
 
-  const handleExcludeTransaction = (tx: any) => {
-    const merchantName = tx.merchant || 'this transaction';
-    const amountStr = `₹${Math.abs(parseFloat(tx.amount || 0)).toLocaleString('en-IN')}`;
-    showGlobalConfirm({
-      title: 'Remove from Budget?',
-      message: `Remove "${merchantName}" (${amountStr}) from this budget?\n\nThis will NOT delete the transaction from your Home screen or Bank accounts. It only removes it from your budget spending calculations.`,
-      confirmText: 'Remove',
-      cancelText: 'Cancel',
-      isDestructive: true,
-      onConfirm: () => {
-        excludeTransactionFromBudget(tx.id);
-      },
-    });
-  };
+
 
   const excludedTransactionsList = useMemo(() => {
     return transactions.filter((t) => excludedTransactionIds.includes(t.id));
@@ -220,6 +209,71 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
     });
     return active || allMonthlyOverallBudgets[0] || null;
   }, [allMonthlyOverallBudgets, selectedMonthlyBudgetId]);
+
+  const handleExcludeTransaction = (tx: any) => {
+    const merchantName = tx.merchant || 'this transaction';
+    const amountStr = `₹${Math.abs(parseFloat(tx.amount || 0)).toLocaleString('en-IN')}`;
+    showGlobalConfirm({
+      title: 'Remove from Budget',
+      message: `Exclude "${merchantName}" (${amountStr}) from this budget? Your transaction history won't be deleted.`,
+      confirmText: 'Remove',
+      cancelText: 'Cancel',
+      isDestructive: true,
+      onConfirm: () => {
+        excludeTransactionFromBudget(tx.id);
+        const token = authService.getAccessToken();
+        const backendUrl = getBackendUrl();
+        if (token && backendUrl) {
+          fetch(`${backendUrl}/sync/budget/exclude-transaction`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              transactionId: tx.id,
+              budgetId: monthlyOverallBudget?.id,
+            }),
+          }).catch((err) => console.warn('[Budget] Exclude error:', err?.message));
+        }
+      },
+    });
+  };
+
+  const handleRestoreTransaction = (txId: string) => {
+    restoreTransactionToBudget(txId);
+    const token = authService.getAccessToken();
+    const backendUrl = getBackendUrl();
+    if (token && backendUrl) {
+      fetch(`${backendUrl}/sync/budget/restore-transaction`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ transactionId: txId }),
+      }).catch((err) => console.warn('[Budget] Restore error:', err?.message));
+    }
+  };
+
+  const handleClearAllExcluded = () => {
+    const idsToRestore = [...excludedTransactionIds];
+    clearAllExcludedTransactions();
+    const token = authService.getAccessToken();
+    const backendUrl = getBackendUrl();
+    if (token && backendUrl) {
+      idsToRestore.forEach((txId) => {
+        fetch(`${backendUrl}/sync/budget/restore-transaction`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ transactionId: txId }),
+        }).catch((err) => console.warn('[Budget] Restore error:', err?.message));
+      });
+    }
+  };
 
   // Sub-categories scoped strictly to the selected monthly overall budget
   const monthlyCategoryBudgets = useMemo(() => {
@@ -1480,9 +1534,9 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
       </ScrollView>
 
       {/* CAN I AFFORD THIS MODAL */}
-      <Modal visible={affordModalVisible} transparent animationType="fade">
+      <Modal visible={affordModalVisible} transparent animationType="fade" statusBarTranslucent>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.modalOverlay}
         >
           <View style={[styles.modalContent, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -1567,10 +1621,11 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
         visible={!!menuBudget}
         transparent
         animationType="fade"
+        statusBarTranslucent
         onRequestClose={() => setMenuBudget(null)}
       >
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.modalOverlay}
         >
           <TouchableOpacity
@@ -1868,7 +1923,7 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
                         ₹{Math.abs(parseFloat(tx.amount || 0)).toLocaleString('en-IN')}
                       </Text>
                       <TouchableOpacity
-                        onPress={() => restoreTransactionToBudget(tx.id)}
+                        onPress={() => handleRestoreTransaction(tx.id)}
                         style={{
                           backgroundColor: `${colors.accent}20`,
                           paddingHorizontal: 8,
@@ -1890,7 +1945,7 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
             {excludedTransactionsList.length > 1 && (
               <TouchableOpacity
                 onPress={() => {
-                  clearAllExcludedTransactions();
+                  handleClearAllExcluded();
                   setExcludedModalVisible(false);
                 }}
                 style={{

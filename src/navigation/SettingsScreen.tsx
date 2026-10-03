@@ -17,6 +17,15 @@ import { biometricService } from '../services/biometricService';
 import { authService } from '../services/authService';
 import { smsPermissionService } from '../services/smsPermissionService';
 import { notificationService } from '../services/notificationService';
+import { smsCatchupService } from '../services/smsCatchupService';
+
+const SYNC_RANGES = [
+  { label: '1 Hr', hours: 1 },
+  { label: '4 Hrs', hours: 4 },
+  { label: '12 Hrs', hours: 12 },
+  { label: '24 Hrs', hours: 24 },
+  { label: '7 Days', hours: 168 },
+];
 
 export const SettingsScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
@@ -35,6 +44,45 @@ export const SettingsScreen: React.FC = () => {
   const [smsChecking, setSmsChecking] = useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [notificationLoading, setNotificationLoading] = useState(false);
+
+  // Manual SMS Sync
+  const [selectedLookback, setSelectedLookback] = useState(24);
+  const [manualSyncing, setManualSyncing] = useState(false);
+  const [syncFeedback, setSyncFeedback] = useState<{ message: string; isSuccess: boolean } | null>(null);
+
+  const handleManualSync = async () => {
+    if (Platform.OS !== 'android') return;
+    setManualSyncing(true);
+    setSyncFeedback(null);
+    try {
+      const res = await smsCatchupService.reconcile(true, selectedLookback);
+      if (res) {
+        if (res.syncedCount > 0) {
+          setSyncFeedback({
+            message: `Successfully backfilled ${res.syncedCount} new transaction${res.syncedCount > 1 ? 's' : ''}!`,
+            isSuccess: true,
+          });
+        } else {
+          setSyncFeedback({
+            message: 'All bank records are up to date. No new SMS detected.',
+            isSuccess: true,
+          });
+        }
+      } else {
+        setSyncFeedback({
+          message: 'Sync completed. Up to date.',
+          isSuccess: true,
+        });
+      }
+    } catch (e: any) {
+      setSyncFeedback({
+        message: e?.message || 'Error occurred during sync.',
+        isSuccess: false,
+      });
+    } finally {
+      setManualSyncing(false);
+    }
+  };
 
   useEffect(() => {
     checkPermissions();
@@ -271,7 +319,85 @@ export const SettingsScreen: React.FC = () => {
           </View>
         </View>
 
-        {/* 4. Financial Preferences */}
+        {/* 4. SMS Catchup Synchronization */}
+        {Platform.OS === 'android' && (
+          <View style={styles.card}>
+            <View style={styles.cardHeader}>
+              <Feather name="refresh-cw" size={14} color={colors.accent} style={{ marginRight: 6 }} />
+              <Text style={styles.cardKicker}>SMS SYNCHRONIZATION</Text>
+            </View>
+            <Text style={styles.cardDescription}>
+              Scan Android SMS inbox to discover and backfill transactions missed while offline, in battery saver, or in airplane mode.
+            </Text>
+
+            <View style={{ marginTop: 8 }}>
+              <Text style={[styles.toggleSubtitle, { marginBottom: 8, fontWeight: '700' }]}>
+                SCAN TIMEFRAME:
+              </Text>
+              <View style={styles.syncPillRow}>
+                {SYNC_RANGES.map((range) => {
+                  const isSelected = selectedLookback === range.hours;
+                  return (
+                    <TouchableOpacity
+                      key={range.hours}
+                      onPress={() => setSelectedLookback(range.hours)}
+                      disabled={manualSyncing}
+                      style={[styles.syncPill, isSelected && styles.syncPillActive]}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={[styles.syncPillText, isSelected && styles.syncPillTextActive]}>
+                        {range.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+
+            <View style={{ marginTop: 14 }}>
+              <TouchableOpacity
+                style={[
+                  styles.syncNowBtn,
+                  manualSyncing && { opacity: 0.7 },
+                  { backgroundColor: colors.accent },
+                ]}
+                onPress={handleManualSync}
+                disabled={manualSyncing}
+                activeOpacity={0.85}
+              >
+                {manualSyncing ? (
+                  <ActivityIndicator size="small" color="#ffffff" style={{ marginRight: 8 }} />
+                ) : (
+                  <Feather name="refresh-cw" size={14} color="#ffffff" style={{ marginRight: 8 }} />
+                )}
+                <Text style={styles.syncNowBtnText}>
+                  {manualSyncing ? 'Scanning Inbox...' : 'Sync Now'}
+                </Text>
+              </TouchableOpacity>
+
+              {syncFeedback ? (
+                <View style={styles.feedbackRow}>
+                  <Feather
+                    name={syncFeedback.isSuccess ? 'check-circle' : 'alert-circle'}
+                    size={13}
+                    color={syncFeedback.isSuccess ? '#10B981' : '#EF4444'}
+                    style={{ marginRight: 6 }}
+                  />
+                  <Text
+                    style={[
+                      styles.feedbackText,
+                      { color: syncFeedback.isSuccess ? '#10B981' : '#EF4444' },
+                    ]}
+                  >
+                    {syncFeedback.message}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+          </View>
+        )}
+
+        {/* 5. Financial Preferences */}
         <View style={styles.card}>
           <View style={styles.cardHeader}>
             <Feather name="globe" size={14} color={colors.accent} style={{ marginRight: 6 }} />
@@ -467,5 +593,53 @@ const getStyles = (colors: any, isDark: boolean) =>
       fontSize: 11.5,
       fontWeight: '700',
       color: colors.textSecondary,
+    },
+    syncPillRow: {
+      flexDirection: 'row',
+      gap: 6,
+    },
+    syncPill: {
+      flex: 1,
+      paddingVertical: 8,
+      borderRadius: 8,
+      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : '#f8fafc',
+      borderWidth: 1,
+      borderColor: colors.border,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    syncPillActive: {
+      backgroundColor: colors.accent,
+      borderColor: colors.accent,
+    },
+    syncPillText: {
+      fontSize: 11.5,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    syncPillTextActive: {
+      color: '#ffffff',
+    },
+    syncNowBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: 11,
+      borderRadius: 10,
+    },
+    syncNowBtnText: {
+      color: '#ffffff',
+      fontSize: 13,
+      fontWeight: '700',
+    },
+    feedbackRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginTop: 10,
+      paddingHorizontal: 4,
+    },
+    feedbackText: {
+      fontSize: 12,
+      fontWeight: '600',
     },
   });

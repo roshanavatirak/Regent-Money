@@ -31,7 +31,7 @@ export class NotificationsService implements OnModuleInit {
       await this.dataSource.query(`
         CREATE TABLE IF NOT EXISTS core.notifications (
           id TEXT PRIMARY KEY,
-          user_id UUID REFERENCES auth.users NOT NULL,
+          user_id TEXT REFERENCES core.users(id) NOT NULL,
           agent_id TEXT,
           title TEXT NOT NULL,
           body TEXT NOT NULL,
@@ -57,7 +57,7 @@ export class NotificationsService implements OnModuleInit {
             SELECT 1 FROM pg_policies 
             WHERE schemaname = 'core' AND tablename = 'notifications' AND policyname = 'Users can manage their own notifications'
           ) THEN
-            CREATE POLICY "Users can manage their own notifications" ON core.notifications FOR ALL USING (auth.uid() = user_id);
+            CREATE POLICY "Users can manage their own notifications" ON core.notifications FOR ALL USING (auth.uid()::text = user_id);
           END IF;
         END
         $$;
@@ -253,7 +253,11 @@ export class NotificationsService implements OnModuleInit {
       }),
     );
 
-    await this.notificationRepository.save(notificationsToSave);
+    try {
+      await this.notificationRepository.save(notificationsToSave);
+    } catch (saveErr: any) {
+      this.logger.warn(`[Broadcast] Could not batch save notifications to history: ${saveErr.message}`);
+    }
 
     // 2. Dispatch push notifications for users with registered push tokens
     const pushMessages = users

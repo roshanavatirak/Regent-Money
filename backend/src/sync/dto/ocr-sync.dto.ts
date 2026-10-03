@@ -5,6 +5,7 @@ export class OcrSyncTransactionDto {
   merchant: string;
   category?: string;
   balanceAfter?: number | null;
+  timestamp?: number;
 }
 
 export class OcrSyncDto {

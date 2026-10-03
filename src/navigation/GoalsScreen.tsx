@@ -306,9 +306,15 @@ export const GoalsScreen: React.FC<GoalsScreenProps> = ({ AppTopBarComponent }) 
                         <Text style={[styles.cardPacingBadge, { backgroundColor: `${pacing.statusColor}18`, color: pacing.statusColor }]}>
                           {pacing.statusText}
                         </Text>
-                        <Text style={[styles.cardDaysText, { color: colors.textTertiary }]}>
-                          • {pacing.daysLeft}d left
-                        </Text>
+                        {goal.category === 'wealth_stash' || goal.isMilestoneBased ? (
+                          <Text style={[styles.cardDaysText, { color: colors.textTertiary }]}>
+                            • Milestone {goal.milestoneStep || 1}
+                          </Text>
+                        ) : (
+                          <Text style={[styles.cardDaysText, { color: colors.textTertiary }]}>
+                            • {pacing.daysLeft}d left
+                          </Text>
+                        )}
                       </View>
                     </View>
                   </View>
@@ -326,7 +332,9 @@ export const GoalsScreen: React.FC<GoalsScreenProps> = ({ AppTopBarComponent }) 
                   <Text style={[styles.cardSavedAmount, { color: colors.text }]}>
                     ₹{goal.currentAmount.toLocaleString('en-IN')}{' '}
                     <Text style={[styles.cardTargetText, { color: colors.textSecondary }]}>
-                      of ₹{goal.targetAmount.toLocaleString('en-IN')}
+                      {goal.category === 'wealth_stash' || goal.isMilestoneBased
+                        ? `(Milestone: ₹${goal.targetAmount.toLocaleString('en-IN')})`
+                        : `of ₹${goal.targetAmount.toLocaleString('en-IN')}`}
                     </Text>
                   </Text>
                   {goal.monthlyContribution ? (

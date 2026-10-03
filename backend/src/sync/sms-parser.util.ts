@@ -5,6 +5,7 @@ export interface ParsedTransaction {
   accountSuffix: string;
   bankName: string;
   isSalary: boolean;
+  availableBalance?: number;
 }
 
 export function parseSMS(sender: string, body: string): ParsedTransaction | null {
@@ -58,6 +59,17 @@ export function parseSMS(sender: string, body: string): ParsedTransaction | null
 
   if (!type) {
     return null;
+  }
+
+  // 3.5. Extract Authoritative Available / Closing Balance if explicitly mentioned in SMS
+  let availableBalance: number | undefined;
+  const balanceRx = /(?:avl\s*bal(?:ance)?|available\s*balance|avail\s*bal|clear\s*bal|total\s*bal|closing\s*bal|ledger\s*bal|\bbal(?:ance)?\s*(?:is)?)\s*[:\-]?\s*(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d{1,2})?)/i;
+  const balMatch = clean.match(balanceRx);
+  if (balMatch && balMatch[1]) {
+    const parsedBal = parseFloat(balMatch[1].replace(/,/g, ''));
+    if (!isNaN(parsedBal) && parsedBal >= 0) {
+      availableBalance = parsedBal;
+    }
   }
 
   // 4. Extract Amount (Mask available/ledger balance to prevent picking up balance amount)
@@ -230,6 +242,7 @@ export function parseSMS(sender: string, body: string): ParsedTransaction | null
     accountSuffix,
     bankName,
     isSalary,
+    availableBalance,
   };
 }
 

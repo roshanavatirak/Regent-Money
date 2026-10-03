@@ -130,6 +130,7 @@ export interface BudgetState {
   excludeTransactionFromBudget: (txId: string) => void;
   restoreTransactionToBudget: (txId: string) => void;
   clearAllExcludedTransactions: () => void;
+  setExcludedTransactionIds: (ids: string[]) => void;
   markBudgetDone: (id: string, isDone?: boolean) => void;
 }
 
@@ -140,6 +141,10 @@ export const useBudgetStore = create<BudgetState>((set) => ({
   setBudgets: (budgets) => {
     mmkvStorage.setObject('cache_budgets', budgets);
     set({ budgets });
+  },
+  setExcludedTransactionIds: (ids) => {
+    mmkvStorage.setObject('cache_budget_excluded_tx_ids', ids);
+    set({ excludedTransactionIds: ids });
   },
   addBudget: (budget) =>
     set((state) => {
@@ -205,11 +210,10 @@ export const useBudgetStore = create<BudgetState>((set) => ({
     }),
 }));
 
-// 3. Savings Goals Store
 export interface Goal {
   id: string;
   name: string;
-  category?: 'bike' | 'car' | 'home' | 'travel' | 'wedding' | 'education' | 'emergency' | 'gadget' | 'custom' | string;
+  category?: 'bike' | 'car' | 'home' | 'travel' | 'wedding' | 'education' | 'emergency' | 'gadget' | 'gold' | 'business' | 'fire' | 'wealth_stash' | 'custom' | string;
   targetAmount: number;
   currentAmount: number;
   monthlyContribution?: number;
@@ -221,6 +225,8 @@ export interface Goal {
   strategy?: string;
   streakMonths?: number;
   status: string;
+  isMilestoneBased?: boolean;
+  milestoneStep?: number;
 }
 
 export interface GoalsState {
@@ -508,15 +514,21 @@ export const useNotificationStore = create<NotificationState>((set) => ({
   unreadCount: (loadCached<NotificationType[]>('cache_notifications', [])).filter((n) => !n.readStatus).length,
   isLoading: false,
   setNotifications: (notifications) => {
+    // Preserve local read status if a notification was already read
+    const existing = mmkvStorage.getObject<NotificationType[]>('cache_notifications') || [];
+    const readIds = new Set(existing.filter((n) => n.readStatus).map((n) => n.id));
+
     // Deduplicate any existing duplicates (keep latest, unique by ID and title+body)
     const seen = new Set<string>();
     const deduplicated: NotificationType[] = [];
     for (const n of notifications) {
+      const isRead = !!(n.readStatus || readIds.has(n.id));
+      const updatedN = { ...n, readStatus: isRead };
       const contentKey = `${n.type || ''}|${n.title}|${n.body}`;
       if (!seen.has(contentKey) && !seen.has(n.id)) {
         seen.add(contentKey);
         seen.add(n.id);
-        deduplicated.push(n);
+        deduplicated.push(updatedN);
       }
     }
     const unreadCount = deduplicated.filter((n) => !n.readStatus).length;
@@ -526,6 +538,15 @@ export const useNotificationStore = create<NotificationState>((set) => ({
   setLoading: (isLoading) => set({ isLoading }),
   addNotification: (notification) =>
     set((state) => {
+      // 0. If notification or identical content was already marked as read, do NOT recreate as unread
+      const existing = mmkvStorage.getObject<NotificationType[]>('cache_notifications') || state.notifications || [];
+      const wasAlreadyRead = existing.some(
+        (n) => (n.id === notification.id || (n.title === notification.title && n.body === notification.body)) && n.readStatus
+      );
+      if (wasAlreadyRead) {
+        return state;
+      }
+
       // 1. Deduplicate by exact notification ID
       if (state.notifications.some((n) => n.id === notification.id)) {
         return state;

@@ -17,6 +17,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { useTheme, useBankStore } from '../store';
 import { authService } from '../services/authService';
 import { getBackendUrl } from '../config/api';
+import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
 
 const BACKEND_URL = getBackendUrl();
 
@@ -64,6 +65,7 @@ export const ManualTransactionScreen: React.FC = () => {
   const [note, setNote] = useState('');
   const [loading, setLoading] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
+  const { scrollBottomPadding } = useKeyboardHeight(40);
 
   if (!bank) {
     navigation.goBack();
@@ -197,7 +199,8 @@ export const ManualTransactionScreen: React.FC = () => {
           ref={scrollViewRef}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 40 }]}
+          keyboardDismissMode="on-drag"
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPadding }]}
         >
           {/* Type Switcher Tabs */}
           <View style={styles.typeSwitcherContainer}>

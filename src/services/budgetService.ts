@@ -1198,11 +1198,12 @@ export function checkAndDispatchBudgetAlert(
       const notifStore = useNotificationStore.getState();
       const existingNotifs = notifStore.notifications || [];
       const alreadyHasBreach = existingNotifs.some(
-        (n: any) => n.type === 'budget_alert' && n.payload?.budgetId === budget.id && !n.readStatus
+        (n: any) => n.type === 'budget_alert' && n.payload?.budgetId === budget.id
       );
       if (!alreadyHasBreach) {
+        const notifId = `notif_breach_${budget.id}_${budget.period || 'current'}`;
         notifStore.addNotification({
-          id: 'notif_breach_' + budget.id + '_' + Date.now(),
+          id: notifId,
           userId: 'local',
           agentId: 'agent_budget',
           title: `🚨 Overbudget Alert: ${budget.name || budget.category}`,
@@ -1219,12 +1220,13 @@ export function checkAndDispatchBudgetAlert(
       const notifStore = useNotificationStore.getState();
       const existingNotifs = notifStore.notifications || [];
       const alreadyHasWarning = existingNotifs.some(
-        (n: any) => n.type === 'budget_alert' && n.payload?.budgetId === budget.id && !n.readStatus
+        (n: any) => n.type === 'budget_alert' && n.payload?.budgetId === budget.id
       );
       if (!alreadyHasWarning) {
         const pacing = calculateBudgetPacing(budget, newNetSpend);
+        const notifId = `notif_warning_${budget.id}_${budget.period || 'current'}`;
         notifStore.addNotification({
-          id: 'notif_warning_' + budget.id + '_' + Date.now(),
+          id: notifId,
           userId: 'local',
           agentId: 'agent_budget',
           title: `⚠️ 80% Budget Warning: ${budget.name || budget.category}`,

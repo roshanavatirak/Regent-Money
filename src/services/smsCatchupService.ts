@@ -8,13 +8,61 @@ import { matchesSmsSender } from '../constants/bankSmsSenders';
 import { tagLearningService } from './tagLearningService';
 import { checkAndDispatchBudgetAlert } from './budgetService';
 
+import { mmkvStorage } from '../db/mmkv';
+
 const BACKEND_URL = getBackendUrl();
+const SMS_LAST_APP_OPEN_KEY = 'sms_last_app_open_timestamp';
 let isReconciling = false;
 let lastReconcileTime = 0;
 
 export const smsCatchupService = {
   /**
-   * Scans Android SMS Inbox for recent financial SMS messages (last 48 hours by default)
+   * Records the current timestamp as the last time the app was opened or active.
+   */
+  recordLastOpenTime(): void {
+    try {
+      mmkvStorage.setNumber(SMS_LAST_APP_OPEN_KEY, Date.now());
+    } catch (e) {
+      console.warn('[SMS Catch-up] Failed to record last open time:', e);
+    }
+  },
+
+  /**
+   * Retrieves the last recorded open timestamp or undefined.
+   */
+  getLastOpenTime(): number | undefined {
+    try {
+      return mmkvStorage.getNumber(SMS_LAST_APP_OPEN_KEY);
+    } catch {
+      return undefined;
+    }
+  },
+
+  /**
+   * Computes the dynamic lookback hours needed on app startup or resume.
+   * - If user opened the app at 11 AM and opens again at 2 PM, elapsed time is 3 hours -> scans 3 hours (+15m buffer).
+   * - If user last opened 30 days ago, scans 30 days.
+   * - If first install / no record, defaults to 720 hours (30 days).
+   * Clamped between 0.25h (15 minutes) and 720h (30 days).
+   */
+  getDynamicStartupLookback(): number {
+    const lastOpen = this.getLastOpenTime();
+    const now = Date.now();
+
+    if (!lastOpen || isNaN(lastOpen)) {
+      return 720; // 30 days on first run
+    }
+
+    const elapsedMs = Math.max(0, now - lastOpen);
+    const elapsedHours = elapsedMs / (1000 * 60 * 60);
+    // Add 15-minute safety buffer (+0.25 hr) so no transaction right around app close/kill is missed
+    const bufferedHours = elapsedHours + 0.25;
+
+    return Math.min(720, Math.max(0.25, bufferedHours));
+  },
+
+  /**
+   * Scans Android SMS Inbox for recent financial SMS messages
    * and syncs any missing transactions that arrived while the app was asleep or killed.
    * Can be invoked manually for a specific bank profile or across all banks.
    */
@@ -65,10 +113,16 @@ export const smsCatchupService = {
 
     try {
       const minDate = now - lookbackHours * 60 * 60 * 1000;
+      // Dynamically scale maxCount based on lookback timeframe
+      // 10 minutes (~0.17h) -> 100 max
+      // 24 hours -> 500 max
+      // 30 days (720h) -> up to 2500 max
+      const maxCount = Math.min(2500, Math.max(100, Math.ceil(lookbackHours * 40)));
+
       const filter = JSON.stringify({
         box: 'inbox',
         minDate,
-        maxCount: 500,
+        maxCount,
       });
 
       const rawMessages: any[] = await new Promise((resolve) => {
@@ -206,6 +260,8 @@ export const smsCatchupService = {
           merchant: parsed.merchant,
           category: predictedCategory,
           date: dateStr,
+          timestamp: msgTimestamp,
+          availableBalance: parsed.availableBalance,
         });
 
         // Check if this transaction already exists in our local store
@@ -245,9 +301,24 @@ export const smsCatchupService = {
         totalCandidates += list.length;
       }
 
-      // Submit extracted transactions to backend (backend deduplicates by date + amount)
+      // Submit extracted transactions to backend (backend deduplicates against active AND soft-deleted transactions)
       for (const [bankProfileId, txList] of bankTxsMap.entries()) {
         if (txList.length === 0) continue;
+
+        // If any transaction in this bank batch has an authoritative available balance from SMS,
+        // take the newest one by timestamp to anchor the bank's live balance.
+        const txsWithBal = txList
+          .filter((t: any) => t.availableBalance !== undefined && !isNaN(t.availableBalance) && t.availableBalance >= 0)
+          .sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0));
+        const latestAvailableBalance = txsWithBal.length > 0 ? txsWithBal[0].availableBalance : undefined;
+
+        const bodyPayload: any = {
+          bankProfileId,
+          transactions: txList,
+        };
+        if (latestAvailableBalance !== undefined) {
+          bodyPayload.updatedBalance = latestAvailableBalance;
+        }
 
         try {
           const res = await fetch(`${BACKEND_URL}/sync/ocr-sync`, {
@@ -256,10 +327,7 @@ export const smsCatchupService = {
               Authorization: `Bearer ${token}`,
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify({
-              bankProfileId,
-              transactions: txList,
-            }),
+            body: JSON.stringify(bodyPayload),
           });
 
           if (res.ok) {
@@ -291,6 +359,7 @@ export const smsCatchupService = {
         await syncService.sync().catch(() => {});
       }
 
+      this.recordLastOpenTime();
       return { syncedCount: totalIngested, matchedCandidateCount: totalCandidates };
     } catch (err: any) {
       console.warn('[SMS Catch-up] Error during reconciliation:', err?.message || err);

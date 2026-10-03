@@ -490,6 +490,7 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
       visible={visible}
       transparent
       animationType="slide"
+      statusBarTranslucent
       onRequestClose={() => {
         if (formStep === 2) {
           setFormStep(1);
@@ -1469,11 +1470,7 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
 
   useEffect(() => {
     if (visible && unreadCount > 0) {
-      // Automatically mark notifications as read when opening the notification box
-      const timer = setTimeout(() => {
-        notificationService.markAllAsRead();
-      }, 450);
-      return () => clearTimeout(timer);
+      notificationService.markAllAsRead();
     }
   }, [visible, unreadCount]);
 
@@ -2307,16 +2304,13 @@ const ChatScreen = () => {
     setContainerHeight(h);
   };
 
-  // Determine whether Android's OS window actually resized
-  const containerDidShrink =
-    initialContainerHeightRef.current > 0 &&
-    containerHeight > 0 &&
-    initialContainerHeightRef.current - containerHeight > 120;
-
   // Responsive bottom clearance:
   // - On iOS: KeyboardAvoidingView handles the lift, so bottom spacing is 8px.
-  // - On Android: If container resized, bottom spacing is 8px. If container did NOT resize, lift by keyboardHeight!
-  // - When keyboard is closed: Bottom spacing rests cleanly above the floating bottom tab bar.
+  // - On Android edge-to-edge: When the soft keyboard opens, it sits over Android's transparent system navigation bar (insets.bottom).
+  //   Even when the container shrinks via adjustResize, the container's bottom edge still aligns beneath the keyboard
+  //   by the height of insets.bottom. Setting bottom clearance to 8px caused the bottom half of the input capsule to be hidden.
+  //   We calculate safeClearance = insets.bottom + 10px, plus any uncompensated keyboard height if adjustResize is partial or disabled.
+  // - When keyboard is closed: Bottom spacing rests cleanly above the floating bottom tab bar (navBarClearance + 8).
   const dynamicBottomPadding = useMemo(() => {
     if (Platform.OS === 'web') {
       return navBarClearance + 8;
@@ -2325,13 +2319,18 @@ const ChatScreen = () => {
       if (Platform.OS === 'ios') {
         return 8;
       }
-      if (containerDidShrink) {
-        return 8;
-      }
-      return Math.max(keyboardHeight, 0) + 8;
+      const shrinkAmount =
+        initialContainerHeightRef.current > 0 && containerHeight > 0
+          ? Math.max(0, initialContainerHeightRef.current - containerHeight)
+          : 0;
+
+      const uncompensated = Math.max(0, keyboardHeight - shrinkAmount);
+      const safeClearance = Math.max(insets.bottom, 12) + 10;
+
+      return Math.max(safeClearance, uncompensated + 10);
     }
     return navBarClearance + 8;
-  }, [isKeyboardVisible, keyboardHeight, containerDidShrink, navBarClearance]);
+  }, [isKeyboardVisible, keyboardHeight, containerHeight, insets.bottom, navBarClearance]);
 
   // Sync DB on screen focus
   useFocusEffect(
@@ -2868,7 +2867,8 @@ const BanksScreen = () => {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await smsCatchupService.reconcile(true).catch(() => { });
+      // Home screen pull-to-refresh: fast scan of the last 10 minutes only
+      await smsCatchupService.reconcile(true, 10 / 60).catch(() => { });
       await sync();
     } finally {
       setRefreshing(false);
@@ -2879,7 +2879,8 @@ const BanksScreen = () => {
     useCallback(() => {
       sync();
       if (Platform.OS === 'android') {
-        smsCatchupService.reconcile(false, 72).catch(() => { });
+        const dynamicHours = smsCatchupService.getDynamicStartupLookback();
+        smsCatchupService.reconcile(false, dynamicHours).catch(() => { });
       }
     }, [sync])
   );
@@ -3599,21 +3600,25 @@ const GlobalConfirmModal = () => {
   const hideConfirm = useConfirmStore((state) => state.hideConfirm);
   const setLoading = useConfirmStore((state) => state.setLoading);
 
-  const isDestructive = !!options?.isDestructive;
-  const title = options?.title;
-  const message = options?.message;
-  const confirmText = options?.confirmText;
-  const cancelText = options?.cancelText;
+  if (!visible || !options) {
+    return null;
+  }
+
+  const isDestructive = !!options.isDestructive;
+  const title = options.title;
+  const message = options.message;
+  const confirmText = options.confirmText;
+  const cancelText = options.cancelText;
 
   const handleCancel = () => {
-    if (options?.onCancel) {
+    if (options.onCancel) {
       options.onCancel();
     }
     hideConfirm();
   };
 
   const handleConfirm = async () => {
-    if (!options?.onConfirm) return;
+    if (!options.onConfirm) return;
     setLoading(true);
     try {
       await options.onConfirm();
@@ -3626,103 +3631,111 @@ const GlobalConfirmModal = () => {
 
   return (
     <Modal
-      visible={visible && !!options}
+      visible={true}
       transparent
-      animationType="fade"
+      animationType={Platform.OS === 'web' ? 'none' : 'fade'}
       onRequestClose={loading ? undefined : handleCancel}
     >
       <View style={{
         flex: 1,
-        backgroundColor: 'rgba(0, 0, 0, 0.85)',
+        backgroundColor: 'rgba(0, 0, 0, 0.65)',
         justifyContent: 'center',
         alignItems: 'center',
-        padding: 20,
+        padding: 24,
       }}>
         <Pressable
           style={StyleSheet.absoluteFill}
           onPress={loading ? undefined : handleCancel}
         />
         <View style={{
-          width: '92%',
-          maxWidth: 380,
-          backgroundColor: isDark ? '#1c2128' : '#ffffff',
-          borderRadius: 24,
-          padding: 24,
+          width: '84%',
+          maxWidth: 310,
+          backgroundColor: colors.card,
+          borderRadius: 18,
+          paddingTop: 18,
+          paddingBottom: 16,
+          paddingHorizontal: 18,
           alignItems: 'center',
-          borderWidth: 1.5,
-          borderColor: isDestructive ? 'rgba(255, 82, 82, 0.4)' : 'rgba(45, 186, 78, 0.4)',
+          borderWidth: 1,
+          borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
           shadowColor: '#000000',
-          shadowOffset: { width: 0, height: 12 },
-          shadowOpacity: 0.5,
-          shadowRadius: 24,
-          elevation: 20,
+          shadowOffset: { width: 0, height: 8 },
+          shadowOpacity: isDark ? 0.4 : 0.12,
+          shadowRadius: 16,
+          elevation: 10,
         }}>
           {/* Top Icon Badge */}
           <View style={{
-            width: 64,
-            height: 64,
-            borderRadius: 32,
-            backgroundColor: isDestructive ? 'rgba(255, 82, 82, 0.12)' : 'rgba(45, 186, 78, 0.12)',
-            borderWidth: 1.5,
-            borderColor: isDestructive ? 'rgba(255, 82, 82, 0.3)' : 'rgba(45, 186, 78, 0.3)',
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            backgroundColor: isDestructive
+              ? (isDark ? 'rgba(239, 68, 68, 0.12)' : '#FEE2E2')
+              : (isDark ? 'rgba(16, 185, 129, 0.12)' : '#D1FAE5'),
+            borderWidth: 1,
+            borderColor: isDestructive
+              ? (isDark ? 'rgba(239, 68, 68, 0.25)' : '#FCA5A5')
+              : (isDark ? 'rgba(16, 185, 129, 0.25)' : '#A7F3D0'),
             justifyContent: 'center',
             alignItems: 'center',
-            marginBottom: 16,
+            marginBottom: 10,
           }}>
             <Feather
               name={(options?.icon as any) || (isDestructive ? 'trash-2' : 'alert-circle')}
-              size={28}
-              color={isDestructive ? '#FF5252' : colors.accent}
+              size={18}
+              color={isDestructive ? '#EF4444' : colors.accent}
             />
           </View>
 
           {/* Title */}
-          <Text style={{
-            fontSize: 20,
-            fontWeight: '800',
-            color: isDark ? '#ffffff' : '#24292e',
-            textAlign: 'center',
-            marginBottom: 10,
-            letterSpacing: -0.3,
-          }}>
-            {title}
-          </Text>
+          {!!title && (
+            <Text style={{
+              fontSize: 15,
+              fontWeight: '700',
+              color: colors.text,
+              textAlign: 'center',
+              marginBottom: 5,
+              letterSpacing: -0.2,
+            }}>
+              {title}
+            </Text>
+          )}
 
           {/* Message */}
           <Text style={{
-            fontSize: 14,
-            color: isDark ? 'rgba(250, 251, 252, 0.75)' : '#57606a',
+            fontSize: 12.5,
+            lineHeight: 18,
+            color: colors.textSecondary,
             textAlign: 'center',
-            lineHeight: 22,
-            marginBottom: 24,
-            paddingHorizontal: 8,
+            marginBottom: 16,
+            paddingHorizontal: 2,
           }}>
             {message}
           </Text>
 
           {/* Action Buttons */}
-          <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
+          <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
             {/* Cancel Button - only rendered when cancelText is specified */}
             {!!cancelText && (
               <TouchableOpacity
                 style={{
                   flex: 1,
-                  paddingVertical: 14,
-                  borderRadius: 14,
-                  backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
+                  height: 38,
+                  borderRadius: 10,
+                  backgroundColor: colors.buttonSecondaryBackground,
                   borderWidth: 1,
-                  borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.1)',
+                  borderColor: colors.border,
                   justifyContent: 'center',
                   alignItems: 'center',
                 }}
                 onPress={handleCancel}
-                activeOpacity={0.7}
+                activeOpacity={0.75}
                 disabled={loading}
               >
                 <Text style={{
-                  fontSize: 14,
-                  fontWeight: '700',
-                  color: isDark ? 'rgba(250, 251, 252, 0.8)' : '#57606a',
+                  fontSize: 12.5,
+                  fontWeight: '600',
+                  color: colors.text,
                 }}>
                   {cancelText}
                 </Text>
@@ -3733,16 +3746,11 @@ const GlobalConfirmModal = () => {
             <TouchableOpacity
               style={{
                 flex: 1,
-                paddingVertical: 14,
-                borderRadius: 14,
-                backgroundColor: isDestructive ? '#FF5252' : colors.accent,
+                height: 38,
+                borderRadius: 10,
+                backgroundColor: isDestructive ? '#EF4444' : colors.accent,
                 justifyContent: 'center',
                 alignItems: 'center',
-                shadowColor: isDestructive ? '#FF5252' : colors.accent,
-                shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.35,
-                shadowRadius: 8,
-                elevation: 4,
               }}
               onPress={handleConfirm}
               activeOpacity={0.8}
@@ -3752,8 +3760,8 @@ const GlobalConfirmModal = () => {
                 <ActivityIndicator size="small" color="#ffffff" />
               ) : (
                 <Text style={{
-                  fontSize: 14,
-                  fontWeight: '700',
+                  fontSize: 12.5,
+                  fontWeight: '600',
                   color: '#ffffff',
                 }}>
                   {confirmText || 'OK'}
@@ -3849,7 +3857,8 @@ export default function AppNavigator() {
       // Auto-scan recent SMS on Android once session and stores are completely hydrated
       if (Platform.OS === 'android') {
         setTimeout(() => {
-          smsCatchupService.reconcile(false, 168).catch((err) => {
+          const dynamicHours = smsCatchupService.getDynamicStartupLookback();
+          smsCatchupService.reconcile(false, dynamicHours).catch((err) => {
             console.warn('[AppRoot] Initial SMS catchup notice:', err);
           });
         }, 1500);
@@ -3870,8 +3879,9 @@ export default function AppNavigator() {
       } = useSecurityStore.getState();
 
       if (nextAppState === 'active') {
-        // Automatic catch-up scan whenever user switches back into the app
-        smsCatchupService.reconcile(false, 72).catch(() => { });
+        // Automatic catch-up scan dynamically calculated from last active time
+        const dynamicHours = smsCatchupService.getDynamicStartupLookback();
+        smsCatchupService.reconcile(false, dynamicHours).catch(() => { });
       }
 
       if (!biometricsEnabled) return;

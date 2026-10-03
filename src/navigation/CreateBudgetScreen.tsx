@@ -1352,9 +1352,9 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
       />
 
       {/* SEARCHABLE CATEGORY PICKER DROPDOWN MODAL */}
-      <Modal visible={categoryPickerModalVisible} transparent animationType="slide">
+      <Modal visible={categoryPickerModalVisible} transparent animationType="slide" statusBarTranslucent>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.modalOverlay}
         >
           <View style={[styles.pickerModalCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -1462,9 +1462,9 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
       </Modal>
 
       {/* CREATE CUSTOM CATEGORY MODAL */}
-      <Modal visible={customCatModalVisible} transparent animationType="fade">
+      <Modal visible={customCatModalVisible} transparent animationType="fade" statusBarTranslucent>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.modalOverlay}
         >
           <View style={[styles.modalCard, { backgroundColor: colors.card, borderColor: colors.border }]}>

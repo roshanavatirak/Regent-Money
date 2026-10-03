@@ -191,6 +191,9 @@ export const syncService = {
         fixedObligations: parseFloat(b.fixedObligations ?? b.fixed_obligations ?? 0),
       }));
       useBudgetStore.getState().setBudgets(mappedBudgets);
+      if (Array.isArray(data.excludedTransactionIds)) {
+        useBudgetStore.getState().setExcludedTransactionIds(data.excludedTransactionIds);
+      }
 
       // 3. Map Goals
       const mappedGoals = (data.goals || []).map((g: any) => ({
