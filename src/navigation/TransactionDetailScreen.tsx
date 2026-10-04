@@ -248,13 +248,28 @@ export const TransactionDetailScreen: React.FC = () => {
           <Text style={styles.headerTitle}>Transaction Details</Text>
           <Text style={styles.headerSubtitle} numberOfLines={1}>
             {transaction.timestamp
-              ? new Date(transaction.timestamp).toLocaleDateString('en-IN', {
-                  day: 'numeric',
-                  month: 'short',
-                  year: 'numeric',
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })
+              ? (() => {
+                  const d = new Date(transaction.timestamp);
+                  const isUtcMidnight =
+                    d.getUTCHours() === 0 &&
+                    d.getUTCMinutes() === 0 &&
+                    d.getUTCSeconds() === 0 &&
+                    d.getUTCMilliseconds() === 0;
+                  if (isUtcMidnight) {
+                    return d.toLocaleDateString('en-IN', {
+                      day: 'numeric',
+                      month: 'short',
+                      year: 'numeric',
+                    });
+                  }
+                  return d.toLocaleDateString('en-IN', {
+                    day: 'numeric',
+                    month: 'short',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  });
+                })()
               : 'Transaction Record'}
             {bankName ? ` • ${bankName}` : ''}
           </Text>

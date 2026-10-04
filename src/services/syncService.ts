@@ -8,8 +8,8 @@ import {
 } from '../store';
 import { mmkvStorage } from '../db/mmkv';
 import { getBackendUrl } from '../config/api';
-
 import { notificationService } from './notificationService';
+import { tokenStore } from './tokenStore';
 
 const BACKEND_URL = getBackendUrl();
 
@@ -28,7 +28,7 @@ export const syncService = {
     }
 
     const user = useAuthStore.getState().user;
-    const token = mmkvStorage.getString('auth_access_token') || null;
+    const token = tokenStore.getAccessToken();
     if (!user || !token) return;
 
     const baseUrl = getBackendUrl();
@@ -102,7 +102,7 @@ export const syncService = {
       return;
     }
 
-    const token = mmkvStorage.getString('auth_access_token') || null;
+    const token = tokenStore.getAccessToken();
     if (!token) {
       return;
     }

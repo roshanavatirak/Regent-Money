@@ -4,10 +4,10 @@ import { useAuthStore, UserProfile, useSecurityStore, AutoLockTimeout } from '..
 import { syncService } from './syncService';
 import { getGoogleWebClientId } from './supabaseClient';
 import { BACKEND_URL, getBackendUrl } from '../config/api';
+import { tokenStore } from './tokenStore';
 
 const SESSION_KEY = 'auth_user_id';
 const USER_PROFILE_KEY = 'auth_user_profile';
-const TOKEN_KEY = 'auth_access_token';
 
 function formatPhoneNumber(phone: string): string {
   const clean = phone.replace(/\s+/g, '');
@@ -41,7 +41,7 @@ export const authService = {
    * Retrieves the saved access token from local MMKV storage
    */
   getAccessToken(): string | null {
-    return mmkvStorage.getString(TOKEN_KEY) || null;
+    return tokenStore.getAccessToken();
   },
 
   /**
@@ -52,7 +52,7 @@ export const authService = {
     const cachedProfile =
       mmkvStorage.getObject<UserProfile>(USER_PROFILE_KEY) ||
       mmkvStorage.getObject<UserProfile>('user_profile');
-    const token = mmkvStorage.getString(TOKEN_KEY);
+    const token = tokenStore.getAccessToken();
 
     if (!cachedProfile) {
       useAuthStore.getState().setUser(null);
@@ -119,7 +119,7 @@ export const authService = {
       // Save profile cache and token locally
       mmkvStorage.setString(SESSION_KEY, profile.id);
       mmkvStorage.setObject(USER_PROFILE_KEY, profile);
-      mmkvStorage.setString(TOKEN_KEY, data.accessToken);
+      tokenStore.setAccessToken(data.accessToken);
       mmkvStorage.setBoolean('auth_remember_me', true); // Sign up auto-remembers
       useAuthStore.getState().setUser(profile);
       syncNativeAuthCredentials(data.accessToken);
@@ -159,7 +159,7 @@ export const authService = {
     // Save profile cache and token locally
     mmkvStorage.setString(SESSION_KEY, profile.id);
     mmkvStorage.setObject(USER_PROFILE_KEY, profile);
-    mmkvStorage.setString(TOKEN_KEY, data.accessToken);
+    tokenStore.setAccessToken(data.accessToken);
     mmkvStorage.setBoolean('auth_remember_me', rememberMe);
     useAuthStore.getState().setUser(profile);
     syncNativeAuthCredentials(data.accessToken);
@@ -221,7 +221,7 @@ export const authService = {
       // Save profile cache and token locally
       mmkvStorage.setString(SESSION_KEY, profile.id);
       mmkvStorage.setObject(USER_PROFILE_KEY, profile);
-      mmkvStorage.setString(TOKEN_KEY, data.accessToken);
+      tokenStore.setAccessToken(data.accessToken);
       useAuthStore.getState().setUser(profile);
       syncNativeAuthCredentials(data.accessToken);
 
@@ -262,7 +262,7 @@ export const authService = {
     // Save profile cache and token locally
     mmkvStorage.setString(SESSION_KEY, profile.id);
     mmkvStorage.setObject(USER_PROFILE_KEY, profile);
-    mmkvStorage.setString(TOKEN_KEY, data.accessToken);
+    tokenStore.setAccessToken(data.accessToken);
     useAuthStore.getState().setUser(profile);
     syncNativeAuthCredentials(data.accessToken);
 
@@ -427,7 +427,7 @@ export const authService = {
     try {
       mmkvStorage.delete(SESSION_KEY);
       mmkvStorage.delete(USER_PROFILE_KEY);
-      mmkvStorage.delete(TOKEN_KEY);
+      tokenStore.clearAccessToken();
       mmkvStorage.delete('auth_remember_me');
     } catch (e: any) {
       console.error('[Auth] Failed to delete MMKV session keys:', e.message);

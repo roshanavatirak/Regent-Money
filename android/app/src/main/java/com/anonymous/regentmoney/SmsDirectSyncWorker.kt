@@ -3,6 +3,7 @@ package com.anonymous.regentmoney
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -130,13 +131,25 @@ object SmsDirectSyncWorker {
                 "New Balance: ₹${String.format("%.2f", updatedBal)}"
             }
 
-            val notification = NotificationCompat.Builder(context, ALERT_CHANNEL_ID)
-                .setSmallIcon(R.mipmap.ic_launcher)
+            val largeIcon = try {
+                BitmapFactory.decodeResource(context.resources, R.mipmap.ic_launcher)
+            } catch (e: Exception) {
+                null
+            }
+
+            val notificationBuilder = NotificationCompat.Builder(context, ALERT_CHANNEL_ID)
+                .setSmallIcon(R.mipmap.ic_launcher_monochrome)
+                .setColor(0xFF10B981.toInt())
                 .setContentTitle(title)
                 .setContentText(body)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setAutoCancel(true)
-                .build()
+
+            if (largeIcon != null) {
+                notificationBuilder.setLargeIcon(largeIcon)
+            }
+
+            val notification = notificationBuilder.build()
 
             val notificationId = (System.currentTimeMillis() % 100000).toInt()
             notificationManager.notify(notificationId, notification)

@@ -51,20 +51,29 @@ export function useKeyboardHeight(defaultScrollPadding = 40): KeyboardState {
     };
   }, []);
 
+  const [cachedBottomInset, setCachedBottomInset] = useState(insets.bottom);
+
+  useEffect(() => {
+    if (!isKeyboardVisible && insets.bottom > 0) {
+      setCachedBottomInset(insets.bottom);
+    }
+  }, [isKeyboardVisible, insets.bottom]);
+
   // Safe bottom clearance that lifts above the keyboard while factoring in
   // Android's transparent system navigation bar (insets.bottom)
   const keyboardBottomClearance = useMemo(() => {
     if (!isKeyboardVisible) return 0;
-    const navBarHeight = Math.max(insets.bottom, 0);
+    const navBarHeight = Math.max(insets.bottom, cachedBottomInset, Platform.OS === 'android' ? 24 : 0);
     return Math.max(navBarHeight, 12) + 8;
-  }, [isKeyboardVisible, insets.bottom]);
+  }, [isKeyboardVisible, insets.bottom, cachedBottomInset]);
 
   const scrollBottomPadding = useMemo(() => {
     if (isKeyboardVisible) {
-      return insets.bottom + Math.max(keyboardHeight, 0) + 16;
+      const navBarHeight = Math.max(insets.bottom, cachedBottomInset, Platform.OS === 'android' ? 24 : 0);
+      return navBarHeight + Math.max(keyboardHeight, 0) + 16;
     }
     return insets.bottom + defaultScrollPadding;
-  }, [isKeyboardVisible, keyboardHeight, insets.bottom, defaultScrollPadding]);
+  }, [isKeyboardVisible, keyboardHeight, insets.bottom, cachedBottomInset, defaultScrollPadding]);
 
   return { keyboardHeight, isKeyboardVisible, keyboardBottomClearance, scrollBottomPadding };
 }

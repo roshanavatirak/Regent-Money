@@ -99,7 +99,19 @@ export class SyncService implements OnModuleInit {
         CREATE INDEX IF NOT EXISTS idx_transactions_user_active ON finance.transactions(user_id, is_deleted);
       `);
       await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_transactions_user_timestamp_desc ON finance.transactions(user_id, is_deleted, timestamp DESC);
+      `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_transactions_user_bank ON finance.transactions(user_id, bank_profile_id, is_deleted);
+      `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_transactions_user_sms_id ON finance.transactions(user_id, sms_id);
+      `);
+      await this.dataSource.query(`
         CREATE INDEX IF NOT EXISTS idx_income_records_user_active ON finance.income_records(user_id, is_deleted);
+      `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_income_records_user_timestamp_desc ON finance.income_records(user_id, is_deleted, timestamp DESC);
       `);
       await this.dataSource.query(`
         CREATE INDEX IF NOT EXISTS idx_bank_profiles_user_active ON core.bank_profiles(user_id, is_deleted);
@@ -107,6 +119,25 @@ export class SyncService implements OnModuleInit {
       await this.dataSource.query(`
         CREATE INDEX IF NOT EXISTS idx_savings_goals_user_active ON wealth.savings_goals(user_id, is_deleted);
       `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_net_worth_snapshots_user_timestamp ON wealth.net_worth_snapshots(user_id, is_deleted, timestamp ASC);
+      `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_budget_declarations_user ON finance.budget_declarations(user_id, is_deleted);
+      `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_notifications_user_created_desc ON core.notifications(user_id, is_deleted, created_at DESC);
+      `);
+      try {
+        await this.dataSource.query(`CREATE EXTENSION IF NOT EXISTS pg_trgm;`);
+        await this.dataSource.query(`
+          CREATE INDEX IF NOT EXISTS idx_transactions_merchant_trgm ON finance.transactions USING gin (merchant gin_trgm_ops);
+        `);
+      } catch {
+        await this.dataSource.query(`
+          CREATE INDEX IF NOT EXISTS idx_transactions_merchant ON finance.transactions(merchant);
+        `);
+      }
       // User merchant learning table
       await this.dataSource.query(`
         CREATE TABLE IF NOT EXISTS finance.user_merchant_tags (
@@ -213,28 +244,49 @@ export class SyncService implements OnModuleInit {
       this.budgetDeclarationRepository.find({ where: { userId, isDeleted: false } }),
       this.savingsGoalRepository.find({ where: { userId, isDeleted: false } }),
       this.bankProfileRepository.find({ where: { userId, isDeleted: false } }),
-      this.incomeRecordRepository.find({ where: { userId, isDeleted: false } }),
+      this.incomeRecordRepository.find({ where: { userId, isDeleted: false }, order: { timestamp: 'DESC' } }),
       this.budgetExclusionRepository.find({ where: { userId, isDeleted: false } }),
     ]);
 
     const excludedTransactionIds = (exclusions || []).map((e) => e.transactionId);
 
-    // Deduplicate any duplicate transactions before returning
+    // Deduplicate only true duplicate records (identical reference ID, identical SMS hash, or exact-second collision)
     const seenTx = new Set<string>();
     const transactions: any[] = [];
     const duplicateIdsToDelete: string[] = [];
 
     for (const tx of rawTransactions) {
-      const txDate = new Date(Number(tx.timestamp) || 0);
-      const dayKey = `${txDate.getUTCFullYear()}-${txDate.getUTCMonth()}-${txDate.getUTCDate()}`;
-      const normMerchant = (tx.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-      const sig = `${tx.bankProfileId}_${Math.round(Number(tx.amount) * 100)}_${normMerchant}_${dayKey}`;
+      let isDuplicate = false;
+      if (tx.smsId && tx.smsId.startsWith('ref_')) {
+        const refKey = `ref_${tx.bankProfileId}_${tx.smsId}`;
+        if (seenTx.has(refKey)) {
+          isDuplicate = true;
+        } else {
+          seenTx.add(refKey);
+        }
+      } else if (tx.smsId && tx.smsId.startsWith('sms_')) {
+        const hashKey = `sms_${tx.bankProfileId}_${tx.smsId}`;
+        if (seenTx.has(hashKey)) {
+          isDuplicate = true;
+        } else {
+          seenTx.add(hashKey);
+        }
+      } else {
+        // Fallback: only duplicate if identical bank, amount, merchant, and exact timestamp (within 2 seconds)
+        const tRounded = Math.floor(Number(tx.timestamp || 0) / 2000);
+        const normMerchant = (tx.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const exactSig = `${tx.bankProfileId}_${Math.round(Number(tx.amount) * 100)}_${normMerchant}_${tRounded}`;
+        if (seenTx.has(exactSig)) {
+          isDuplicate = true;
+        } else {
+          seenTx.add(exactSig);
+        }
+      }
 
-      if (seenTx.has(sig)) {
+      if (isDuplicate) {
         duplicateIdsToDelete.push(tx.id);
         continue;
       }
-      seenTx.add(sig);
       (tx as any).excludedFromBudget = excludedTransactionIds.includes(tx.id);
       transactions.push(tx);
     }
@@ -660,6 +712,11 @@ export class SyncService implements OnModuleInit {
       const newTransactions: Transaction[] = [];
       const newIncomeRecords: IncomeRecord[] = [];
 
+      // Pre-fetch user merchant tag rules once to eliminate N+1 queries in the loop
+      const preloadedRules = userId
+        ? await this.userMerchantTagRepository.find({ where: { userId } }).catch(() => [])
+        : [];
+
       for (const item of data.transactions) {
         const amount = parseFloat(String(item.amount));
         if (isNaN(amount) || amount <= 0) continue;
@@ -670,69 +727,105 @@ export class SyncService implements OnModuleInit {
         const startOfDay = new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate(), 0, 0, 0, 0).getTime();
         const endOfDay = new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate(), 23, 59, 59, 999).getTime();
 
+        const itemRef = item.referenceId;
+        const itemSmsId = item.smsId || (itemRef ? `ref_${itemRef}` : undefined);
+        const normItemMerchant = (item.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
         if (item.type === 'debit') {
           const isDuplicate = existingTxs.some((tx) => {
+            if (itemRef && (tx.smsId === `ref_${itemRef}` || tx.smsId === itemRef)) return true;
+            if (itemSmsId && tx.smsId && tx.smsId === itemSmsId) return true;
+            if (itemRef && tx.smsId && tx.smsId.startsWith('ref_') && tx.smsId !== `ref_${itemRef}`) return false;
+
             const txTime = Number(tx.timestamp);
             const sameAmount = Math.abs(tx.amount - amount) < 0.01;
             const isSameDay = (txTime >= startOfDay && txTime <= endOfDay) || Math.abs(txTime - parsedDate.getTime()) < 86400000;
-            return sameAmount && isSameDay;
+            if (!sameAmount || !isSameDay) return false;
+
+            const normTxMerchant = (tx.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (normTxMerchant && normItemMerchant && normTxMerchant !== normItemMerchant) return false;
+
+            if (item.timestamp && txTime && Math.abs(txTime - item.timestamp) > 5000) return false;
+            return true;
           }) || newTransactions.some((tx) => {
+            if (itemRef && (tx.smsId === `ref_${itemRef}` || tx.smsId === itemRef)) return true;
+            if (itemSmsId && tx.smsId && tx.smsId === itemSmsId) return true;
+            if (itemRef && tx.smsId && tx.smsId.startsWith('ref_') && tx.smsId !== `ref_${itemRef}`) return false;
+
             const txTime = Number(tx.timestamp);
             const sameAmount = Math.abs(tx.amount - amount) < 0.01;
             const isSameDay = (txTime >= startOfDay && txTime <= endOfDay) || Math.abs(txTime - parsedDate.getTime()) < 86400000;
-            return sameAmount && isSameDay;
+            if (!sameAmount || !isSameDay) return false;
+
+            const normTxMerchant = (tx.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (normTxMerchant && normItemMerchant && normTxMerchant !== normItemMerchant) return false;
+
+            if (item.timestamp && txTime && Math.abs(txTime - item.timestamp) > 5000) return false;
+            return true;
           });
 
-        if (!isDuplicate) {
-          const txId = 'tx_ocr_' + Math.random().toString(36).substr(2, 9);
-          const newTx = this.transactionRepository.create({
-            id: txId,
-            userId,
-            amount,
-            category: item.category || (item.merchant ? await this.classifyCategory(item.merchant, userId) : 'miscellaneous'),
-            merchant: item.merchant || 'Merchant',
-            timestamp: item.timestamp && !isNaN(Number(item.timestamp)) ? Number(item.timestamp) : parsedDate.getTime(),
-            bankProfileId: data.bankProfileId,
-            smsId: 'ocr_extracted',
-            isAnomaly: amount > 5000,
-            status: 'cleared',
-            updatedAt: Date.now(),
-            isDeleted: false,
-          });
-          newTransactions.push(newTx);
-          addedTransactionsCount++;
-          netBalanceChange -= amount;
-        }
-      } else if (item.type === 'credit') {
-        const isDuplicate = existingIncome.some((inc) => {
-          const incTime = Number(inc.timestamp);
-          const sameAmount = Math.abs(inc.amount - amount) < 0.01;
-          const isSameDay = (incTime >= startOfDay && incTime <= endOfDay) || Math.abs(incTime - parsedDate.getTime()) < 86400000;
-          return sameAmount && isSameDay;
-        }) || newIncomeRecords.some((inc) => {
-          const incTime = Number(inc.timestamp);
-          const sameAmount = Math.abs(inc.amount - amount) < 0.01;
-          const isSameDay = (incTime >= startOfDay && incTime <= endOfDay) || Math.abs(incTime - parsedDate.getTime()) < 86400000;
-          return sameAmount && isSameDay;
-        });
+          if (!isDuplicate) {
+            const txId = 'tx_ocr_' + Math.random().toString(36).substr(2, 9);
+            const newTx = this.transactionRepository.create({
+              id: txId,
+              userId,
+              amount,
+              category: item.category || (item.merchant ? await this.classifyCategory(item.merchant, userId, preloadedRules) : 'miscellaneous'),
+              merchant: item.merchant || 'Merchant',
+              timestamp: item.timestamp && !isNaN(Number(item.timestamp)) ? Number(item.timestamp) : parsedDate.getTime(),
+              bankProfileId: data.bankProfileId,
+              smsId: itemSmsId || 'ocr_extracted',
+              isAnomaly: amount > 5000,
+              status: 'cleared',
+              updatedAt: Date.now(),
+              isDeleted: false,
+            });
+            newTransactions.push(newTx);
+            addedTransactionsCount++;
+            netBalanceChange -= amount;
+          }
+        } else if (item.type === 'credit') {
+          const isDuplicate = existingIncome.some((inc) => {
+            const incTime = Number(inc.timestamp);
+            const sameAmount = Math.abs(inc.amount - amount) < 0.01;
+            const isSameDay = (incTime >= startOfDay && incTime <= endOfDay) || Math.abs(incTime - parsedDate.getTime()) < 86400000;
+            if (!sameAmount || !isSameDay) return false;
 
-        if (!isDuplicate) {
-          const incId = 'income_ocr_' + Math.random().toString(36).substr(2, 9);
-          const newInc = this.incomeRecordRepository.create({
-            id: incId,
-            userId,
-            amount,
-            source: item.merchant || 'Direct Credit',
-            timestamp: item.timestamp && !isNaN(Number(item.timestamp)) ? Number(item.timestamp) : parsedDate.getTime(),
-            bankProfileId: data.bankProfileId,
-            updatedAt: Date.now(),
-            isDeleted: false,
+            const normIncSource = (inc.source || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (normIncSource && normItemMerchant && normIncSource !== normItemMerchant) return false;
+
+            if (item.timestamp && incTime && Math.abs(incTime - item.timestamp) > 5000) return false;
+            return true;
+          }) || newIncomeRecords.some((inc) => {
+            const incTime = Number(inc.timestamp);
+            const sameAmount = Math.abs(inc.amount - amount) < 0.01;
+            const isSameDay = (incTime >= startOfDay && incTime <= endOfDay) || Math.abs(incTime - parsedDate.getTime()) < 86400000;
+            if (!sameAmount || !isSameDay) return false;
+
+            const normIncSource = (inc.source || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (normIncSource && normItemMerchant && normIncSource !== normItemMerchant) return false;
+
+            if (item.timestamp && incTime && Math.abs(incTime - item.timestamp) > 5000) return false;
+            return true;
           });
-          newIncomeRecords.push(newInc);
-          addedIncomeCount++;
-          netBalanceChange += amount;
+
+          if (!isDuplicate) {
+            const incId = 'income_ocr_' + Math.random().toString(36).substr(2, 9);
+            const newInc = this.incomeRecordRepository.create({
+              id: incId,
+              userId,
+              amount,
+              source: item.merchant || 'Direct Credit',
+              timestamp: item.timestamp && !isNaN(Number(item.timestamp)) ? Number(item.timestamp) : parsedDate.getTime(),
+              bankProfileId: data.bankProfileId,
+              updatedAt: Date.now(),
+              isDeleted: false,
+            });
+            newIncomeRecords.push(newInc);
+            addedIncomeCount++;
+            netBalanceChange += amount;
+          }
         }
-      }
     }
 
     if (newTransactions.length > 0) {
@@ -783,7 +876,11 @@ export class SyncService implements OnModuleInit {
     });
   }
 
-  private async classifyCategory(merchantName: string, userId?: string): Promise<string> {
+  private async classifyCategory(
+    merchantName: string,
+    userId?: string,
+    preloadedUserRules?: Array<{ merchantNormalized: string; tag: string }>
+  ): Promise<string> {
     const name = (merchantName || '')
       .toLowerCase()
       .replace(/[^\w\s]/g, ' ')
@@ -792,8 +889,20 @@ export class SyncService implements OnModuleInit {
 
     if (!name) return 'miscellaneous';
 
-    // 1. Check user learned memory if userId provided
-    if (userId) {
+    // 1. Check preloaded user rules (in-memory to eliminate N+1 database queries)
+    if (preloadedUserRules && preloadedUserRules.length > 0) {
+      const direct = preloadedUserRules.find((r) => r.merchantNormalized === name);
+      if (direct && direct.tag) {
+        return direct.tag;
+      }
+      const fuzzy = preloadedUserRules.find(
+        (r) => name.includes(r.merchantNormalized) || r.merchantNormalized.includes(name)
+      );
+      if (fuzzy && fuzzy.tag) {
+        return fuzzy.tag;
+      }
+    } else if (userId) {
+      // Fallback: Check user learned memory if userId provided and no preloaded rules
       try {
         const learned = await this.userMerchantTagRepository.findOne({
           where: { userId, merchantNormalized: name },
@@ -902,19 +1011,27 @@ export class SyncService implements OnModuleInit {
       throw new BadRequestException(errorMsg);
     }
 
-    return {
-      success: true,
-      bankProfileId,
-      detectedFinalBalance: ocrResult.finalDetectedBalance ?? null,
-      transactions: ocrResult.transactions.map((tx, idx) => ({
+    const userRules = await this.userMerchantTagRepository.find({
+      where: { userId },
+    }).catch(() => []);
+
+    const enrichedTransactions = await Promise.all(
+      ocrResult.transactions.map(async (tx, idx) => ({
         id: `extracted_${Date.now()}_${idx}`,
         date: tx.date,
         amount: tx.amount,
         type: tx.type,
         merchant: tx.merchant,
-        category: tx.category || this.classifyCategory(tx.merchant),
+        category: tx.category || (await this.classifyCategory(tx.merchant, userId, userRules)),
         balanceAfter: tx.balanceAfter ?? null,
-      })),
+      }))
+    );
+
+    return {
+      success: true,
+      bankProfileId,
+      detectedFinalBalance: ocrResult.finalDetectedBalance ?? null,
+      transactions: enrichedTransactions,
     };
   }
 
@@ -970,19 +1087,27 @@ export class SyncService implements OnModuleInit {
       detectedFinalBalance = statementResult.finalDetectedBalance ?? null;
     }
 
-    return {
-      success: true,
-      bankProfileId,
-      detectedFinalBalance,
-      transactions: transactions.map((tx, idx) => ({
+    const userRules = await this.userMerchantTagRepository.find({
+      where: { userId },
+    }).catch(() => []);
+
+    const enrichedTransactions = await Promise.all(
+      transactions.map(async (tx, idx) => ({
         id: `extracted_${Date.now()}_${idx}`,
         date: tx.date,
         amount: tx.amount,
         type: tx.type,
         merchant: tx.merchant,
-        category: tx.category || this.classifyCategory(tx.merchant),
+        category: tx.category || (await this.classifyCategory(tx.merchant, userId, userRules)),
         balanceAfter: tx.balanceAfter ?? null,
-      })),
+      }))
+    );
+
+    return {
+      success: true,
+      bankProfileId,
+      detectedFinalBalance,
+      transactions: enrichedTransactions,
     };
   }
 
@@ -999,9 +1124,10 @@ export class SyncService implements OnModuleInit {
         if (err) {
           const errMsg = err.message || '';
           if (errMsg.includes('Password') || errMsg.includes('password') || errMsg.includes('decrypt') || errMsg.includes('Exception') || errMsg.includes('Incorrect') || errMsg.includes('Invalid')) {
+            const isInvalidPassword = !!password;
             return reject(new BadRequestException({
-              error: 'PASSWORD_REQUIRED',
-              message: 'Password is required or incorrect for this PDF statement.',
+              error: isInvalidPassword ? 'INVALID_PASSWORD' : 'PASSWORD_REQUIRED',
+              message: isInvalidPassword ? 'Incorrect password for this PDF statement.' : 'Password is required to decrypt this PDF statement.',
             }));
           }
           return reject(new BadRequestException(`Failed to read PDF: ${errMsg}`));
@@ -1648,15 +1774,45 @@ export class SyncService implements OnModuleInit {
       }),
     ]);
 
+    const incomingRef = parsed.referenceId;
+    const cleanBody = (data.body || '').replace(/\s+/g, ' ').trim();
+    let bodyHash = 0;
+    for (let i = 0; i < cleanBody.length; i++) {
+      bodyHash = ((bodyHash << 5) - bodyHash) + cleanBody.charCodeAt(i);
+      bodyHash |= 0;
+    }
+    const directSmsId = incomingRef ? `ref_${incomingRef}` : `sms_${Math.abs(bodyHash)}`;
+
     let ingested = false;
     let newBalance = parseFloat(String(matchedBank.currentBalance || 0));
 
     if (parsed.type === 'debit') {
       const isDuplicate = existingTxs.some((tx) => {
+        // 1. Authoritative UPI Ref / RRN comparison
+        if (incomingRef && (tx.smsId === `ref_${incomingRef}` || (tx as any).referenceId === incomingRef)) {
+          return true;
+        }
+        if (tx.smsId && tx.smsId === directSmsId) {
+          return true;
+        }
+        if (incomingRef && tx.smsId && tx.smsId.startsWith('ref_') && tx.smsId !== `ref_${incomingRef}`) {
+          return false;
+        }
+
         const t = Number(tx.timestamp);
         const sameAmount = Math.abs(tx.amount - parsed.amount) < 0.01;
         const isSameDay = (t >= startOfDay && t <= endOfDay) || Math.abs(t - txTime) < 86400000;
-        return sameAmount && isSameDay;
+        if (!sameAmount || !isSameDay) return false;
+
+        // 2. Different merchant is NEVER a duplicate
+        const normExisting = (tx.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const normIncoming = (parsed.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (normExisting && normIncoming && normExisting !== normIncoming) {
+          return false;
+        }
+
+        // 3. If same merchant and same amount, only duplicate if timestamps are within 5 seconds with same SMS ID
+        return Math.abs(t - txTime) < 5000 && tx.smsId === directSmsId;
       });
 
       if (isDuplicate) {
@@ -1676,7 +1832,7 @@ export class SyncService implements OnModuleInit {
         merchant: parsed.merchant,
         timestamp: txTime,
         bankProfileId: matchedBank.id,
-        smsId: 'direct_sms_ingest',
+        smsId: directSmsId,
         isAnomaly: parsed.amount > 5000,
         status: 'cleared',
         updatedAt: Date.now(),
@@ -1692,10 +1848,28 @@ export class SyncService implements OnModuleInit {
       ingested = true;
     } else {
       const isDuplicate = existingIncome.some((inc) => {
+        if (incomingRef && ((inc as any).smsId === `ref_${incomingRef}` || (inc as any).referenceId === incomingRef)) {
+          return true;
+        }
+        if ((inc as any).smsId && (inc as any).smsId === directSmsId) {
+          return true;
+        }
+        if (incomingRef && (inc as any).smsId && (inc as any).smsId.startsWith('ref_') && (inc as any).smsId !== `ref_${incomingRef}`) {
+          return false;
+        }
+
         const t = Number(inc.timestamp);
         const sameAmount = Math.abs(inc.amount - parsed.amount) < 0.01;
         const isSameDay = (t >= startOfDay && t <= endOfDay) || Math.abs(t - txTime) < 86400000;
-        return sameAmount && isSameDay;
+        if (!sameAmount || !isSameDay) return false;
+
+        const normExisting = (inc.source || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const normIncoming = (parsed.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (normExisting && normIncoming && normExisting !== normIncoming) {
+          return false;
+        }
+
+        return Math.abs(t - txTime) < 5000 && (inc as any).smsId === directSmsId;
       });
 
       if (isDuplicate) {

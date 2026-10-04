@@ -961,13 +961,13 @@ const getStyles = (colors: any) => StyleSheet.create({
   welcomeHeaderBig: {
     fontSize: 34,
     fontWeight: '900',
-    color: '#FFFFFF',
+    color: colors.text,
     letterSpacing: 2,
     textAlign: 'center',
   },
   welcomeSlogan: {
     fontSize: 15,
-    color: '#94A3B8',
+    color: colors.textSecondary,
     marginTop: 8,
     fontWeight: '500',
     letterSpacing: 0.3,
@@ -1028,7 +1028,7 @@ const getStyles = (colors: any) => StyleSheet.create({
     fontWeight: '700',
   },
   legalNotice: {
-    color: '#64748B',
+    color: colors.textTertiary,
     fontSize: 11,
     fontWeight: '600',
     textAlign: 'center',

@@ -254,6 +254,8 @@ export const smsCatchupService = {
           parsed.isSalary
         );
 
+        const candidateSmsId = msg.id ? `sms_${msg.id}` : (parsed.referenceId ? `ref_${parsed.referenceId}` : undefined);
+
         bankTxsMap.get(matchedBank.id)!.push({
           amount: parsed.amount,
           type: parsed.type,
@@ -262,16 +264,35 @@ export const smsCatchupService = {
           date: dateStr,
           timestamp: msgTimestamp,
           availableBalance: parsed.availableBalance,
+          referenceId: parsed.referenceId,
+          smsId: candidateSmsId,
         });
 
         // Check if this transaction already exists in our local store
         const existingTransactions = useTransactionStore.getState().transactions || [];
+        const normIncoming = (parsed.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
         const isTxExisting = existingTransactions.some((tx: any) => {
+          if (parsed.referenceId && (tx.smsId === `ref_${parsed.referenceId}` || (tx as any).referenceId === parsed.referenceId)) {
+            return true;
+          }
+          if (candidateSmsId && tx.smsId && tx.smsId === candidateSmsId) {
+            return true;
+          }
+          if (parsed.referenceId && tx.smsId && tx.smsId.startsWith('ref_') && tx.smsId !== `ref_${parsed.referenceId}`) {
+            return false;
+          }
+
           const txTime = Number(tx.timestamp || 0);
           const sameAmount = Math.abs(Number(tx.amount || 0) - parsed.amount) < 0.01;
           const sameType = tx.type === parsed.type;
           const isDateClose = Math.abs(txTime - msgTimestamp) < 86400000 || tx.date === dateStr;
-          return sameAmount && sameType && isDateClose;
+          if (!sameAmount || !sameType || !isDateClose) return false;
+
+          const normTx = (tx.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          if (normTx && normIncoming && normTx !== normIncoming) return false;
+
+          if (Math.abs(txTime - msgTimestamp) > 5000) return false;
+          return true;
         });
 
         // Only trigger real-time budget nudge & salary cycle detection for NEW transactions

@@ -1,13 +1,15 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import { useNotificationStore, useAuthStore } from '../store';
-import { authService } from './authService';
 import { getBackendUrl } from '../config/api';
 import { mmkvStorage } from '../db/mmkv';
+import { tokenStore } from './tokenStore';
 
 const BACKEND_URL = getBackendUrl();
 const PROMPTED_KEY = 'notification_permission_prompted';
 const TOKEN_KEY = 'saved_expo_push_token';
+
+const getAuthToken = (): string | null => tokenStore.getAccessToken();
 
 // Set notification handler for foreground notifications on mobile
 if (Platform.OS !== 'web') {
@@ -123,7 +125,7 @@ export const notificationService = {
    * Upload push token to NestJS backend (or clear if null).
    */
   async registerTokenOnBackend(token: string | null): Promise<void> {
-    const accessToken = authService.getAccessToken();
+    const accessToken = getAuthToken();
     if (!accessToken) return;
 
     try {
@@ -149,7 +151,7 @@ export const notificationService = {
    * Fetch all notifications from the backend database.
    */
   async fetchNotifications(): Promise<void> {
-    const accessToken = authService.getAccessToken();
+    const accessToken = getAuthToken();
     if (!accessToken) return;
 
     useNotificationStore.getState().setLoading(true);
@@ -197,7 +199,7 @@ export const notificationService = {
    * Mark a notification as read.
    */
   async markAsRead(id: string): Promise<void> {
-    const accessToken = authService.getAccessToken();
+    const accessToken = getAuthToken();
     if (!accessToken) return;
 
     // Optimistically update store
@@ -227,7 +229,7 @@ export const notificationService = {
     // Optimistically update local store and persist to MMKV
     useNotificationStore.getState().markAllAsReadState();
 
-    const accessToken = authService.getAccessToken();
+    const accessToken = getAuthToken();
     if (!accessToken) return;
 
     try {
@@ -255,7 +257,7 @@ export const notificationService = {
    * Delete a notification.
    */
   async deleteNotification(id: string): Promise<void> {
-    const accessToken = authService.getAccessToken();
+    const accessToken = getAuthToken();
     if (!accessToken) return;
 
     // Optimistically update store

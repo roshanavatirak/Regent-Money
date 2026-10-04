@@ -33,6 +33,7 @@ import { ReviewTransactionsModal } from './ReviewTransactionsModal';
 import { smsCatchupService } from '../services/smsCatchupService';
 import { smsPermissionService } from '../services/smsPermissionService';
 import { parseSmsSenderTags } from '../constants/bankSmsSenders';
+import { uploadFile, UploadError, isPasswordRequired } from '../services/uploadFile';
 
 const BACKEND_URL = getBackendUrl();
 
@@ -67,6 +68,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
   // Password protected PDF flow states
   const [passwordModalVisible, setPasswordModalVisible] = useState(false);
   const [pdfPassword, setPdfPassword] = useState('');
+  const [passwordError, setPasswordError] = useState<string | null>(null);
   const [pendingPdf, setPendingPdf] = useState<{ uri: string; name: string; type: string } | null>(null);
   const [uploadErrorModal, setUploadErrorModal] = useState<{ title: string; message: string } | null>(null);
   const [reviewModalVisible, setReviewModalVisible] = useState(false);
@@ -262,11 +264,13 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
         .map((tx) => ({ ...tx, type: 'debit' }))
     : [];
 
-  const rawMergedList = [...bankDebits, ...incomeRecords].sort(
-    (a, b) => b.timestamp - a.timestamp
-  );
+  const rawMergedList = [...bankDebits, ...incomeRecords].sort((a, b) => {
+    const diff = (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0);
+    if (diff !== 0) return diff;
+    return (Number(b.updatedAt || 0)) - (Number(a.updatedAt || 0));
+  });
 
-  // Deduplicate transactions by ID and signature (type + amount + merchant + date)
+  // Deduplicate transactions by unique database ID or reference ID without dropping legitimate same-day payments
   const mergedList = useMemo(() => {
     const seen = new Set<string>();
     const result: any[] = [];
@@ -275,11 +279,16 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
       if (item.id && seen.has(`id:${item.id}`)) continue;
       if (item.id) seen.add(`id:${item.id}`);
 
-      const itemDate = new Date(Number(item.timestamp) || Date.now());
-      const dayKey = `${itemDate.getFullYear()}-${itemDate.getMonth()}-${itemDate.getDate()}`;
-      const normMerchant = (item.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-      const sig = `sig:${item.type || 'debit'}_${Math.round(Number(item.amount) * 100)}_${normMerchant}_${dayKey}`;
+      const refId = item.referenceId || (item.smsId && item.smsId.startsWith('ref_') ? item.smsId : null);
+      if (refId) {
+        if (seen.has(`ref:${refId}`)) continue;
+        seen.add(`ref:${refId}`);
+        result.push(item);
+        continue;
+      }
 
+      // Fallback: only skip if identical type, amount, merchant and millisecond timestamp
+      const sig = `sig:${item.type || 'debit'}_${Math.round(Number(item.amount) * 100)}_${item.timestamp}`;
       if (seen.has(sig)) continue;
       seen.add(sig);
       result.push(item);
@@ -465,67 +474,50 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
 
     try {
       const token = authService.getAccessToken();
-      if (!token) throw new Error('Session credentials missing.');
+      if (!token) throw new UploadError('Session credentials missing.', 401);
 
-      const formData = new FormData();
-      formData.append('bankProfileId', (activeBank || bank)?.id);
-      if (password) {
-        formData.append('password', password);
-      }
-
-      if (Platform.OS === 'web' && fileAsset.file) {
-        formData.append('file', fileAsset.file);
-      } else {
-        formData.append('file', {
-          uri: fileAsset.uri,
-          name: fileAsset.name || 'statement.pdf',
-          type: fileAsset.mimeType || 'application/pdf',
-        } as any);
-      }
-
-      const response = await fetch(`${BACKEND_URL}/sync/upload-statement`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
+      const responseJson = await uploadFile({
+        url: `${BACKEND_URL}/sync/upload-statement`,
+        fileUri: fileAsset.uri,
+        fileName: fileAsset.name || 'statement.pdf',
+        webFile: fileAsset.file,
+        fields: {
+          bankProfileId: (activeBank || bank)?.id,
+          password: password || undefined,
         },
-        body: formData,
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        maxBytes: 25 * 1024 * 1024,
+        timeoutMs: 120_000,
       });
-
-      const responseJson = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        // Check for password protected PDF indicator
-        if (responseJson.message && (
-          responseJson.message.error === 'PASSWORD_REQUIRED' || 
-          responseJson.error === 'PASSWORD_REQUIRED' ||
-          JSON.stringify(responseJson).includes('PASSWORD_REQUIRED')
-        )) {
-          setProcessingOcr(false);
-          setPendingPdf(fileAsset);
-          setPasswordModalVisible(true);
-          return;
-        }
-        const errorMsg = Array.isArray(responseJson.message)
-          ? responseJson.message.join('\n')
-          : (responseJson.message || responseJson.error || 'Statement extraction failed.');
-        throw new Error(errorMsg);
-      }
 
       const txs = responseJson.transactions || [];
       if (txs.length === 0) {
-        throw new Error('No transactions could be extracted from this statement.');
+        throw new UploadError('No transactions could be extracted from this statement.', 422);
       }
 
       setExtractedTransactions(txs);
       setDetectedFinalBalance(responseJson.detectedFinalBalance ?? null);
+      setPasswordError(null);
       setReviewModalVisible(true);
     } catch (e: any) {
-      const msg = e.message || 'Unable to process statement.';
+      if (e instanceof UploadError && isPasswordRequired(e.body)) {
+        setPasswordError(password ? 'Incorrect password for this PDF statement. Please try again.' : null);
+        setPendingPdf(fileAsset);
+        setPasswordModalVisible(true);
+        return;
+      }
+
+      const msg = e?.message || 'Unable to process statement.';
+      const isValidation = e instanceof UploadError && e.status != null && e.status >= 400 && e.status < 500;
+      const title = isValidation ? 'Statement Import Issue' : 'Upload Failed';
+
       setUploadErrorModal({
-        title: 'Statement Import Issue',
+        title,
         message: msg,
       });
-      Alert.alert('Statement Import Issue', msg);
+      Alert.alert(title, msg);
     } finally {
       setProcessingOcr(false);
       setOcrStatusText('');
@@ -567,41 +559,27 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
       setOcrStatusText('Processing screenshot on server...');
 
       const token = authService.getAccessToken();
-      if (!token) throw new Error('Session authentication missing.');
+      if (!token) throw new UploadError('Session authentication missing.', 401);
 
       const asset = result.assets[0];
-      const formData = new FormData();
-      formData.append('bankProfileId', (activeBank || bank)?.id);
-
-      if (Platform.OS === 'web' && (asset as any).file) {
-        formData.append('file', (asset as any).file);
-      } else {
-        formData.append('file', {
-          uri: asset.uri,
-          name: asset.fileName || 'screenshot.jpg',
-          type: asset.mimeType || 'image/jpeg',
-        } as any);
-      }
-
-      const response = await fetch(`${BACKEND_URL}/sync/upload-screenshot`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
+      const responseJson = await uploadFile({
+        url: `${BACKEND_URL}/sync/upload-screenshot`,
+        fileUri: asset.uri,
+        fileName: asset.fileName || 'screenshot.jpg',
+        webFile: (asset as any).file,
+        fields: {
+          bankProfileId: (activeBank || bank)?.id,
         },
-        body: formData,
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        maxBytes: 15 * 1024 * 1024,
+        timeoutMs: 60_000,
       });
-
-      const responseJson = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        const errorMsg = Array.isArray(responseJson.message)
-          ? responseJson.message.join('\n')
-          : (responseJson.message || responseJson.error || 'Failed to process screenshot on server.');
-        throw new Error(errorMsg);
-      }
 
       const txs = responseJson.transactions || [];
       if (txs.length === 0) {
-        throw new Error('No transactions could be detected in this screenshot.');
+        throw new UploadError('No transactions could be detected in this screenshot.', 422);
       }
 
       setExtractedTransactions(txs);
@@ -642,6 +620,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
 
       if (doc.canceled || !doc.assets?.[0]?.uri) return;
 
+      setPasswordError(null);
       await uploadStatementFile(doc.assets[0]);
     } catch (e: any) {
       setProcessingOcr(false);
@@ -948,7 +927,12 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
         transparent
         animationType="fade"
         statusBarTranslucent
-        onRequestClose={() => setPasswordModalVisible(false)}
+        onRequestClose={() => {
+          setPasswordModalVisible(false);
+          setPendingPdf(null);
+          setPdfPassword('');
+          setPasswordError(null);
+        }}
       >
         <View style={styles.pwdOverlay}>
           <KeyboardAvoidingView
@@ -957,20 +941,33 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
           >
             <View style={styles.pwdCard}>
               <View style={styles.pwdHeader}>
-                <Feather name="lock" size={24} color="#FFD700" style={{ marginBottom: 10 }} />
-                <Text style={styles.pwdTitle}>Statement is Locked</Text>
-                <Text style={styles.pwdSubtitle}>
-                  Please enter the PDF password to open and extract transaction records.
+                <Feather
+                  name={passwordError ? "alert-circle" : "lock"}
+                  size={24}
+                  color={passwordError ? "#ef4444" : "#FFD700"}
+                  style={{ marginBottom: 10 }}
+                />
+                <Text style={[styles.pwdTitle, passwordError ? { color: '#ef4444' } : null]}>
+                  {passwordError ? 'Incorrect Password' : 'Statement is Locked'}
+                </Text>
+                <Text style={[styles.pwdSubtitle, passwordError ? { color: '#ef4444' } : null]}>
+                  {passwordError || 'Please enter the PDF password to open and extract transaction records.'}
                 </Text>
               </View>
 
               <TextInput
-                style={styles.pwdInput}
+                style={[
+                  styles.pwdInput,
+                  passwordError ? { borderColor: '#ef4444', borderWidth: 1 } : null,
+                ]}
                 placeholder="Enter PDF password"
                 placeholderTextColor={colors.textTertiary}
                 secureTextEntry
                 value={pdfPassword}
-                onChangeText={setPdfPassword}
+                onChangeText={(val) => {
+                  setPdfPassword(val);
+                  if (passwordError) setPasswordError(null);
+                }}
                 autoFocus
               />
 
@@ -981,6 +978,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
                     setPasswordModalVisible(false);
                     setPendingPdf(null);
                     setPdfPassword('');
+                    setPasswordError(null);
                   }}
                 >
                   <Text style={styles.pwdCancelText}>Cancel</Text>

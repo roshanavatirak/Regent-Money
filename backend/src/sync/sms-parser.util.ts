@@ -6,6 +6,7 @@ export interface ParsedTransaction {
   bankName: string;
   isSalary: boolean;
   availableBalance?: number;
+  referenceId?: string;
 }
 
 export function parseSMS(sender: string, body: string): ParsedTransaction | null {
@@ -228,6 +229,14 @@ export function parseSMS(sender: string, body: string): ParsedTransaction | null
     bankName = 'Yes Bank';
   }
 
+  // 7.5 Extract UPI Reference / RRN / Bank Ref Number
+  let referenceId: string | undefined;
+  const refRx = /(?:upi\s*ref(?:\s*no\.?)?|rrn|ref\s*no\.?|reference(?:\s*no\.?)?|txn\s*(?:id|no)|imps\s*ref)\s*[:\-]?\s*([A-Za-z0-9]{8,22})/i;
+  const refMatch = clean.match(refRx);
+  if (refMatch && refMatch[1]) {
+    referenceId = refMatch[1].trim();
+  }
+
   const isSalary =
     type === 'credit' &&
     (lower.includes('salary') ||
@@ -243,6 +252,7 @@ export function parseSMS(sender: string, body: string): ParsedTransaction | null
     bankName,
     isSalary,
     availableBalance,
+    referenceId,
   };
 }
 

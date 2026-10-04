@@ -1,0 +1,8 @@
+{
+  "depth": "comprehensive",
+  "commit_docs": true,
+  "workflow": {
+    "research": true,
+    "verification": true
+  }
+}

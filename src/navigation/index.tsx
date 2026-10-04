@@ -62,6 +62,7 @@ import bankNamesJson from './banknames.json';
 import { getExecutiveGreeting, getSessionGreeting } from '../constants/aiGreetings';
 import { SmsSenderTagsManager } from '../components/SmsSenderTagsManager';
 import { getSmsSenderSuggestions, formatSmsSenderTags } from '../constants/bankSmsSenders';
+import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
 
 const POPULAR_BANKS = [
   { code: 'SBIN', name: 'State Bank of India', short: 'SBI Bank' },
@@ -335,6 +336,8 @@ const ALL_BANKS_SORTED: { code: string; name: string }[] = Object.entries(
 const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
   const { colors, isDark } = useTheme();
   const { height: windowHeight } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const { keyboardHeight, isKeyboardVisible } = useKeyboardHeight();
   const styles = getStyles(colors);
   const navStyles = getNavStyles(colors);
   const user = useAuthStore((state) => state.user);
@@ -503,10 +506,23 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
     >
       <View style={styles.modalOverlayFull}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={{ width: '100%', alignItems: 'center', justifyContent: 'flex-end' }}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={[
+            { width: '100%', alignItems: 'center', justifyContent: 'flex-end' },
+            Platform.OS === 'android' && isKeyboardVisible && { paddingBottom: keyboardHeight },
+          ]}
         >
-          <View style={[styles.modalCardFull, { height: windowHeight * 0.85 }]}>
+          <View
+            style={[
+              styles.modalCardFull,
+              {
+                maxHeight: isKeyboardVisible
+                  ? Math.max(280, windowHeight - keyboardHeight - (Platform.OS === 'android' ? Math.max(insets.top, 36) : 20))
+                  : windowHeight * 0.85,
+                height: isKeyboardVisible ? undefined : windowHeight * 0.85,
+              },
+            ]}
+          >
             <View style={navStyles.modalHeader}>
               <Text style={navStyles.modalTitle}>
                 {formStep === 1 ? 'Select Your Bank' : 'Bank Account Details'}
@@ -581,9 +597,10 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
               </View>
             ) : (
               <ScrollView
+                style={{ flex: 1 }}
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
-                contentContainerStyle={{ paddingBottom: 120 }}
+                contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 24) + 24 }}
               >
                 <TouchableOpacity
                   style={styles.formBackBtn}
@@ -901,7 +918,7 @@ const WebProjectionChart = ({ data }: { data: any[] }) => {
   );
 };
 
-const SPENDING_CHART_COLORS: Record<string, string> = {
+export const SPENDING_CHART_COLORS: Record<string, string> = {
   food: '#f59e0b',          // Warm Amber Orange
   dining: '#f59e0b',
   restaurant: '#f59e0b',
@@ -931,7 +948,7 @@ const SPENDING_CHART_COLORS: Record<string, string> = {
   other: '#94a3b8',         // Neutral Slate
 };
 
-const PALETTE_FALLBACK = [
+export const PALETTE_FALLBACK = [
   '#f59e0b', // Amber
   '#6366f1', // Indigo
   '#ec4899', // Pink
@@ -941,10 +958,14 @@ const PALETTE_FALLBACK = [
   '#a855f7', // Purple
   '#eab308', // Gold
   '#14b8a6', // Teal
-  '#3b82f6', // Blue
-  '#d946ef', // Fuchsia
-  '#64748b', // Slate
+  '#0284c7', // Sky Blue
+  '#64748b', // Slate Gray
 ];
+
+export const getSpendingCategoryColor = (categoryKey: string, _isDark?: boolean, index = 0): string => {
+  const cleanKey = categoryKey.toLowerCase().trim();
+  return SPENDING_CHART_COLORS[cleanKey] || PALETTE_FALLBACK[index % PALETTE_FALLBACK.length];
+};
 
 interface SpendingDonutChartProps {
   data: { label: string; value: number; color: string }[];
@@ -954,8 +975,8 @@ interface SpendingDonutChartProps {
 
 const SpendingDonutChart: React.FC<SpendingDonutChartProps> = ({
   data,
-  size = 140,
-  strokeWidth = 16,
+  size = 156,
+  strokeWidth = 14,
 }) => {
   const { colors, isDark } = useTheme();
 
@@ -963,7 +984,9 @@ const SpendingDonutChart: React.FC<SpendingDonutChartProps> = ({
     return data.reduce((sum, item) => sum + (item.value || 0), 0);
   }, [data]);
 
-  const radius = (size - strokeWidth) / 2;
+  // Leave room for outer percentage badges around the ring
+  const ringPadding = 44;
+  const radius = (size - ringPadding) / 2;
   const cx = size / 2;
   const cy = size / 2;
   const rect = useMemo(() => ({
@@ -998,7 +1021,7 @@ const SpendingDonutChart: React.FC<SpendingDonutChartProps> = ({
       console.warn('Error generating Skia donut paths:', err);
       return null;
     }
-  }, [data, total, size, strokeWidth, rect, cx, cy, radius]);
+  }, [data, total, rect, cx, cy, radius]);
 
   const bgTrackPath = useMemo(() => {
     if (Platform.OS === 'web' || !Skia?.Path) return null;
@@ -1010,6 +1033,79 @@ const SpendingDonutChart: React.FC<SpendingDonutChartProps> = ({
       return null;
     }
   }, [cx, cy, radius]);
+
+  // Calculate percentage badges positioned right outside each ring section
+  const percentageLabels = useMemo(() => {
+    if (total <= 0 || data.length === 0) return [];
+
+    let currentAngle = -90;
+    const rawBadges: Array<{
+      pctText: string;
+      color: string;
+      angle: number;
+      label: string;
+    }> = [];
+
+    // Provide percentage badges for all slices up to top 5 (matching the legend)
+    data.forEach((item, index) => {
+      const sweepAngle = (item.value / total) * 360;
+      const pct = (item.value / total) * 100;
+      const midAngleDeg = currentAngle + sweepAngle / 2;
+
+      if (index < 5 && item.value > 0) {
+        // Exact decimal percentage up to 2 decimal places (e.g. 52.10%, 28.76%, 16.81%, 2.12%, 0.21%)
+        const pctText = pct <= 0 ? '0%' : (pct % 1 === 0 ? `${pct}%` : `${pct.toFixed(2)}%`);
+        rawBadges.push({
+          pctText,
+          color: item.color,
+          angle: midAngleDeg,
+          label: item.label,
+        });
+      }
+
+      currentAngle += sweepAngle;
+    });
+
+    if (rawBadges.length === 0) return [];
+
+    // Multi-pass angular relaxation to guarantee adjacent badges never overlap
+    const minGapDeg = 30;
+    const adjustedAngles = rawBadges.map((b) => b.angle);
+
+    for (let pass = 0; pass < 12; pass++) {
+      for (let i = 0; i < adjustedAngles.length; i++) {
+        for (let j = i + 1; j < adjustedAngles.length; j++) {
+          let diff = adjustedAngles[j] - adjustedAngles[i];
+          while (diff > 180) diff -= 360;
+          while (diff < -180) diff += 360;
+
+          if (Math.abs(diff) < minGapDeg) {
+            const overlap = minGapDeg - Math.abs(diff);
+            const push = overlap / 2;
+            if (diff >= 0) {
+              adjustedAngles[i] -= push;
+              adjustedAngles[j] += push;
+            } else {
+              adjustedAngles[i] += push;
+              adjustedAngles[j] += push;
+            }
+          }
+        }
+      }
+    }
+
+    const labelRadius = radius + strokeWidth / 2 + 10;
+    return rawBadges.map((badge, idx) => {
+      const rad = (adjustedAngles[idx] * Math.PI) / 180;
+      return {
+        pctText: badge.pctText,
+        color: badge.color,
+        x: cx + labelRadius * Math.cos(rad),
+        y: cy + labelRadius * Math.sin(rad),
+        label: badge.label,
+      };
+    });
+  }, [data, total, radius, strokeWidth, cx, cy]);
 
   // Web or Fallback conic gradient
   const webGradient = useMemo(() => {
@@ -1033,7 +1129,7 @@ const SpendingDonutChart: React.FC<SpendingDonutChartProps> = ({
   // Native rendering with Skia
   if (Platform.OS !== 'web' && slicePaths) {
     return (
-      <View style={{ width: size, height: size, justifyContent: 'center', alignItems: 'center' }}>
+      <View style={{ width: size, height: size, justifyContent: 'center', alignItems: 'center', position: 'relative' }}>
         <Canvas style={{ width: size, height: size }}>
           {bgTrackPath && (
             <Path
@@ -1053,6 +1149,8 @@ const SpendingDonutChart: React.FC<SpendingDonutChartProps> = ({
             />
           ))}
         </Canvas>
+
+        {/* Center Spent Amount Label */}
         <View
           style={[
             StyleSheet.absoluteFill,
@@ -1067,19 +1165,61 @@ const SpendingDonutChart: React.FC<SpendingDonutChartProps> = ({
             ₹{total >= 100000 ? `${(total / 1000).toFixed(1)}k` : total.toLocaleString('en-IN')}
           </Text>
         </View>
+
+        {/* Outer Percentage Badges */}
+        {percentageLabels.map((lbl, i) => (
+          <View
+            key={`pct-${i}`}
+            style={{
+              position: 'absolute',
+              left: lbl.x,
+              top: lbl.y,
+              transform: [{ translateX: -17 }, { translateY: -9 }],
+              backgroundColor: isDark ? 'rgba(15, 23, 42, 0.95)' : '#ffffff',
+              borderColor: lbl.color,
+              borderWidth: 1.5,
+              borderRadius: 8,
+              paddingHorizontal: 4,
+              paddingVertical: 1,
+              minWidth: 32,
+              alignItems: 'center',
+              justifyContent: 'center',
+              shadowColor: isDark ? lbl.color : '#000',
+              shadowOffset: { width: 0, height: 1 },
+              shadowOpacity: isDark ? 0.35 : 0.12,
+              shadowRadius: 3,
+              elevation: 4,
+              zIndex: 10,
+            }}
+            pointerEvents="none"
+          >
+            <Text
+              numberOfLines={1}
+              style={{
+                fontSize: 8.5,
+                fontWeight: '800',
+                color: lbl.color,
+                letterSpacing: -0.2,
+              }}
+            >
+              {lbl.pctText}
+            </Text>
+          </View>
+        ))}
       </View>
     );
   }
 
   // Web & Resilient Fallback rendering (CSS conic-gradient donut)
-  const innerCutout = size - strokeWidth * 2;
+  const ringDiameter = radius * 2 + strokeWidth;
+  const innerCutout = radius * 2 - strokeWidth;
   return (
-    <View style={{ width: size, height: size, justifyContent: 'center', alignItems: 'center' }}>
+    <View style={{ width: size, height: size, justifyContent: 'center', alignItems: 'center', position: 'relative' }}>
       <View
         style={{
-          width: size,
-          height: size,
-          borderRadius: size / 2,
+          width: ringDiameter,
+          height: ringDiameter,
+          borderRadius: ringDiameter / 2,
           // @ts-ignore
           backgroundImage: webGradient,
           justifyContent: 'center',
@@ -1104,6 +1244,47 @@ const SpendingDonutChart: React.FC<SpendingDonutChartProps> = ({
           </Text>
         </View>
       </View>
+
+      {/* Outer Percentage Badges */}
+      {percentageLabels.map((lbl, i) => (
+        <View
+          key={`pct-web-${i}`}
+          style={{
+            position: 'absolute',
+            left: lbl.x,
+            top: lbl.y,
+            transform: [{ translateX: -17 }, { translateY: -9 }],
+            backgroundColor: isDark ? 'rgba(15, 23, 42, 0.95)' : '#ffffff',
+            borderColor: lbl.color,
+            borderWidth: 1.5,
+            borderRadius: 8,
+            paddingHorizontal: 4,
+            paddingVertical: 1,
+            minWidth: 32,
+            alignItems: 'center',
+            justifyContent: 'center',
+            shadowColor: isDark ? lbl.color : '#000',
+            shadowOffset: { width: 0, height: 1 },
+            shadowOpacity: isDark ? 0.35 : 0.12,
+            shadowRadius: 3,
+            elevation: 4,
+            zIndex: 10,
+          }}
+          pointerEvents="none"
+        >
+          <Text
+            numberOfLines={1}
+            style={{
+              fontSize: 8.5,
+              fontWeight: '800',
+              color: lbl.color,
+              letterSpacing: -0.2,
+            }}
+          >
+            {lbl.pctText}
+          </Text>
+        </View>
+      ))}
     </View>
   );
 };
@@ -2026,7 +2207,7 @@ const DashboardScreen = () => {
         .replace(/_/g, ' ')
         .replace(/\b\w/g, (c) => c.toUpperCase());
       const cleanKey = key.toLowerCase().trim();
-      const color = SPENDING_CHART_COLORS[cleanKey] || PALETTE_FALLBACK[index % PALETTE_FALLBACK.length];
+      const color = getSpendingCategoryColor(cleanKey, isDark, index);
 
       return {
         label: formattedLabel,
@@ -2034,7 +2215,7 @@ const DashboardScreen = () => {
         color,
       };
     });
-  }, [transactions, filterCategory]);
+  }, [transactions, filterCategory, isDark]);
 
   const recentTransactions = useMemo(() => {
     return transactions
@@ -2165,8 +2346,8 @@ const DashboardScreen = () => {
               {filterCategory === null ? 'Spending breakdown' : `${filterCategory.toUpperCase()} breakdown`}
             </Text>
             <View style={styles.donutRow}>
-              <View style={{ width: 140, height: 140, justifyContent: 'center', alignItems: 'center' }}>
-                <SpendingDonutChart data={donutData} size={140} strokeWidth={16} />
+              <View style={{ width: 156, height: 156, justifyContent: 'center', alignItems: 'center' }}>
+                <SpendingDonutChart data={donutData} size={156} strokeWidth={14} />
               </View>
               <View style={styles.donutLegend}>
                 {donutData.slice(0, 5).map((item, index) => (
@@ -2266,8 +2447,15 @@ const ChatScreen = () => {
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [containerHeight, setContainerHeight] = useState(0);
   const initialContainerHeightRef = React.useRef(0);
+  const cachedNavBottomInset = React.useRef(insets.bottom);
   const flatListRef = React.useRef<FlatList>(null);
   const inputRef = React.useRef<TextInput>(null);
+
+  useEffect(() => {
+    if (!isKeyboardVisible && insets.bottom > 0) {
+      cachedNavBottomInset.current = insets.bottom;
+    }
+  }, [isKeyboardVisible, insets.bottom]);
 
   useEffect(() => {
     const onShow = (e: any) => {
@@ -2298,18 +2486,18 @@ const ChatScreen = () => {
 
   const handleContainerLayout = (e: any) => {
     const h = e.nativeEvent.layout.height;
-    if (initialContainerHeightRef.current === 0 && h > 0) {
-      initialContainerHeightRef.current = h;
+    if (!isKeyboardVisible && h > 0) {
+      initialContainerHeightRef.current = Math.max(initialContainerHeightRef.current, h);
     }
     setContainerHeight(h);
   };
 
   // Responsive bottom clearance:
   // - On iOS: KeyboardAvoidingView handles the lift, so bottom spacing is 8px.
-  // - On Android edge-to-edge: When the soft keyboard opens, it sits over Android's transparent system navigation bar (insets.bottom).
-  //   Even when the container shrinks via adjustResize, the container's bottom edge still aligns beneath the keyboard
-  //   by the height of insets.bottom. Setting bottom clearance to 8px caused the bottom half of the input capsule to be hidden.
-  //   We calculate safeClearance = insets.bottom + 10px, plus any uncompensated keyboard height if adjustResize is partial or disabled.
+  // - On Android edge-to-edge: When the soft keyboard opens, it sits over Android's transparent system navigation bar.
+  //   In edge-to-edge mode, insets.bottom drops to 0, but the window layout bottom remains positioned behind the IME
+  //   by the height of the navigation bar (typically 24-48px).
+  //   We compensate with the cached system navigation bar inset plus breathing room for the input capsule and disclaimer text.
   // - When keyboard is closed: Bottom spacing rests cleanly above the floating bottom tab bar (navBarClearance + 8).
   const dynamicBottomPadding = useMemo(() => {
     if (Platform.OS === 'web') {
@@ -2325,9 +2513,9 @@ const ChatScreen = () => {
           : 0;
 
       const uncompensated = Math.max(0, keyboardHeight - shrinkAmount);
-      const safeClearance = Math.max(insets.bottom, 12) + 10;
+      const navClearanceAndroid = Math.max(cachedNavBottomInset.current, insets.bottom, 28) + 16;
 
-      return Math.max(safeClearance, uncompensated + 10);
+      return Math.max(navClearanceAndroid, uncompensated + 16);
     }
     return navBarClearance + 8;
   }, [isKeyboardVisible, keyboardHeight, containerHeight, insets.bottom, navBarClearance]);
@@ -2778,40 +2966,47 @@ const ChatScreen = () => {
             { paddingBottom: dynamicBottomPadding },
           ]}
         >
-          <TextInput
-            ref={inputRef}
-            style={styles.chatTextInput}
-            placeholder="Ask Regent AI..."
-            placeholderTextColor="#8E8E9F"
-            value={chatInput}
-            onChangeText={setChatInput}
-            editable={!isThinking}
-            returnKeyType="send"
-            onSubmitEditing={() => handleSendQuery()}
-            onFocus={() => {
-              setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 150);
-            }}
-          />
+          <View style={styles.inputAreaRow}>
+            <TextInput
+              ref={inputRef}
+              style={styles.chatTextInput}
+              placeholder="Ask Regent AI..."
+              placeholderTextColor="#8E8E9F"
+              value={chatInput}
+              onChangeText={setChatInput}
+              editable={!isThinking}
+              returnKeyType="send"
+              onSubmitEditing={() => handleSendQuery()}
+              onFocus={() => {
+                setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 150);
+              }}
+            />
 
-          <TouchableOpacity
-            style={[
-              styles.sendBtn,
-              (!chatInput.trim() || isThinking) && styles.sendBtnDisabled,
-            ]}
-            onPress={() => handleSendQuery()}
-            disabled={!chatInput.trim() || isThinking}
-            activeOpacity={0.8}
-          >
-            {isThinking ? (
-              <ActivityIndicator size="small" color="#24292e" />
-            ) : (
-              <Feather
-                name="send"
-                size={18}
-                color={!chatInput.trim() ? colors.textSecondary : '#24292e'}
-              />
-            )}
-          </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.sendBtn,
+                (!chatInput.trim() || isThinking) && styles.sendBtnDisabled,
+              ]}
+              onPress={() => handleSendQuery()}
+              disabled={!chatInput.trim() || isThinking}
+              activeOpacity={0.8}
+            >
+              {isThinking ? (
+                <ActivityIndicator size="small" color="#24292e" />
+              ) : (
+                <Feather
+                  name="send"
+                  size={18}
+                  color={!chatInput.trim() ? colors.textSecondary : '#24292e'}
+                />
+              )}
+            </TouchableOpacity>
+          </View>
+
+          {/* AI Disclaimer below search bar */}
+          <Text style={styles.aiDisclaimerText}>
+            Regent can make mistakes. Please check info.
+          </Text>
         </View>
       </KeyboardAvoidingView>
     </View>
@@ -4472,32 +4667,35 @@ const getStyles = (colors: any) => StyleSheet.create({
     color: colors.buttonSecondaryText,
   },
   donutCardContainer: {
-    paddingBottom: 12,
+    paddingBottom: 14,
   },
   donutRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 10,
+    marginTop: 12,
   },
   donutLegend: {
     flex: 1,
-    marginLeft: 16,
+    marginLeft: 28,
+    justifyContent: 'center',
   },
   legendItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 6,
+    marginBottom: 7,
   },
   legendIndicator: {
     width: 10,
     height: 10,
     borderRadius: 5,
-    marginRight: 8,
+    marginRight: 10,
+    flexShrink: 0,
   },
   legendText: {
     color: colors.textSecondary,
     fontSize: 12,
     fontWeight: '600',
+    flexShrink: 1,
   },
   txItem: {
     flexDirection: 'row',
@@ -4840,13 +5038,23 @@ const getStyles = (colors: any) => StyleSheet.create({
     color: colors.text,
   },
   inputArea: {
-    flexDirection: 'row',
     paddingHorizontal: 16,
-    paddingTop: 10,
+    paddingTop: 8,
     backgroundColor: colors.card,
-    alignItems: 'center',
     borderTopWidth: 1,
     borderTopColor: colors.border,
+  },
+  inputAreaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  aiDisclaimerText: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    marginTop: 6,
+    marginBottom: 2,
+    letterSpacing: 0.1,
   },
   chatTextInput: {
     flex: 1,

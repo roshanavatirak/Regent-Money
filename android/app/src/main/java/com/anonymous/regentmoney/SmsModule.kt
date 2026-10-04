@@ -32,11 +32,12 @@ class SmsModule(private val reactContext: ReactApplicationContext) : ReactContex
                 Telephony.Sms._ID,
                 Telephony.Sms.ADDRESS,
                 Telephony.Sms.BODY,
-                Telephony.Sms.DATE
+                Telephony.Sms.DATE,
+                Telephony.Sms.DATE_SENT
             )
 
-            val selection = if (minDate > 0) "${Telephony.Sms.DATE} >= ?" else null
-            val selectionArgs = if (minDate > 0) arrayOf(minDate.toString()) else null
+            val selection = if (minDate > 0) "${Telephony.Sms.DATE} >= ? OR ${Telephony.Sms.DATE_SENT} >= ?" else null
+            val selectionArgs = if (minDate > 0) arrayOf(minDate.toString(), minDate.toString()) else null
             val sortOrder = "${Telephony.Sms.DATE} DESC"
 
             val cursor = reactContext.contentResolver.query(
@@ -49,20 +50,30 @@ class SmsModule(private val reactContext: ReactApplicationContext) : ReactContex
 
             val smsList = JSONArray()
             cursor?.use {
+                val idIdx = it.getColumnIndex(Telephony.Sms._ID)
                 val addressIdx = it.getColumnIndex(Telephony.Sms.ADDRESS)
                 val bodyIdx = it.getColumnIndex(Telephony.Sms.BODY)
                 val dateIdx = it.getColumnIndex(Telephony.Sms.DATE)
+                val dateSentIdx = it.getColumnIndex(Telephony.Sms.DATE_SENT)
 
                 var count = 0
                 while (it.moveToNext() && count < maxCount) {
+                    val id = if (idIdx != -1) it.getString(idIdx) ?: "" else ""
                     val address = if (addressIdx != -1) it.getString(addressIdx) ?: "" else ""
                     val body = if (bodyIdx != -1) it.getString(bodyIdx) ?: "" else ""
                     val date = if (dateIdx != -1) it.getLong(dateIdx) else 0L
+                    val dateSent = if (dateSentIdx != -1) it.getLong(dateSentIdx) else 0L
+
+                    // Prioritize bank dispatch time (dateSent) over device reception time (date)
+                    val effectiveDate = if (dateSent > 0L) dateSent else date
 
                     val msgObj = JSONObject().apply {
+                        put("id", id)
                         put("address", address)
                         put("body", body)
-                        put("date", date)
+                        put("date", effectiveDate)
+                        put("dateReceived", date)
+                        put("dateSent", dateSent)
                     }
                     smsList.put(msgObj)
                     count++

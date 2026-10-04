@@ -6,6 +6,7 @@ export interface ParsedTransaction {
   bankName: string;
   isSalary: boolean;
   availableBalance?: number;
+  referenceId?: string;
 }
 
 /**
@@ -254,6 +255,14 @@ export const parseSMS = (sender: string, body: string): ParsedTransaction | null
     bankName = 'Yes Bank';
   }
 
+  // 7.5 Extract UPI Reference / RRN / Bank Ref Number
+  let referenceId: string | undefined;
+  const refRx = /(?:upi\s*ref(?:\s*no\.?)?|rrn|ref\s*no\.?|reference(?:\s*no\.?)?|txn\s*(?:id|no)|imps\s*ref)\s*[:\-]?\s*([A-Za-z0-9]{8,22})/i;
+  const refMatch = clean.match(refRx);
+  if (refMatch && refMatch[1]) {
+    referenceId = refMatch[1].trim();
+  }
+
   // 8. Heuristic for Salary credit detection
   const isSalary =
     type === 'credit' &&
@@ -270,6 +279,7 @@ export const parseSMS = (sender: string, body: string): ParsedTransaction | null
     bankName,
     isSalary,
     availableBalance,
+    referenceId,
   };
 };
 

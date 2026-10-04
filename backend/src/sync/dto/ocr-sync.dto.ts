@@ -6,6 +6,8 @@ export class OcrSyncTransactionDto {
   category?: string;
   balanceAfter?: number | null;
   timestamp?: number;
+  referenceId?: string;
+  smsId?: string;
 }
 
 export class OcrSyncDto {
