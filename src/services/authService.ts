@@ -67,8 +67,8 @@ export const authService = {
     // Sync in background if token exists
     if (token) {
       syncNativeAuthCredentials(token);
-      this.fetchProfile().catch(() => {});
-      syncService.sync().catch((e) => 
+      this.fetchProfile().catch(() => { });
+      syncService.sync().catch((e) =>
         console.log('[Auth] Background sync on session check notice:', e.message)
       );
     }
@@ -81,7 +81,7 @@ export const authService = {
           useSecurityStore.getState().setAutoLockTimeout(settings.autoLockTimeout as AutoLockTimeout);
         }
       }
-    }).catch(() => {});
+    }).catch(() => { });
 
     return cachedProfile;
   },
@@ -181,10 +181,10 @@ export const authService = {
 
     try {
       const { GoogleSignin } = require('@react-native-google-signin/google-signin');
-      
+
       GoogleSignin.configure({
         webClientId,
-        offlineAccess: true,
+        offlineAccess: false,
       });
 
       await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
@@ -195,19 +195,11 @@ export const authService = {
         throw new Error('No ID token returned from Google Sign-In.');
       }
 
-      // Extract user info from ID token or profile details to pass to backend
-      const userEmail = signInResult?.data?.user?.email || signInResult?.user?.email || '';
-      const userName = signInResult?.data?.user?.name || signInResult?.user?.name || userEmail.split('@')[0];
-      const userAvatar = signInResult?.data?.user?.photo || signInResult?.user?.photo || '';
-
+      // Send idToken to backend for cryptographic verification and account linking
       const response = await fetch(`${BACKEND_URL}/auth/google`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: userEmail,
-          name: userName,
-          avatarUrl: userAvatar,
-        }),
+        body: JSON.stringify({ idToken }),
       });
 
       if (!response.ok) {
@@ -216,7 +208,7 @@ export const authService = {
       }
 
       const data = await response.json();
-      const profile: UserProfile = data.profile;
+      const profile: UserProfile = data.user || data.profile;
 
       // Save profile cache and token locally
       mmkvStorage.setString(SESSION_KEY, profile.id);

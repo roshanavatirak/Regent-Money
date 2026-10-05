@@ -1,15 +1,15 @@
 // Auth Screens - Login, Signup & Welcome (Regent Money)
 import React, { useState, useRef, useEffect } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  TextInput, 
-  TouchableOpacity, 
-  ScrollView, 
-  ActivityIndicator, 
-  Platform, 
-  KeyboardAvoidingView, 
+import {
+  View,
+  Text,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
+  ScrollView,
+  ActivityIndicator,
+  Platform,
+  KeyboardAvoidingView,
   Keyboard,
   Modal,
   Dimensions,
@@ -63,7 +63,7 @@ const GoogleAccountModal = ({ visible, onClose, onSelectAccount }: GoogleModalPr
       setError('Please enter a valid Google Email address');
       return;
     }
-    
+
     setError('');
     onSelectAccount({
       name: customName.trim(),
@@ -86,17 +86,17 @@ const GoogleAccountModal = ({ visible, onClose, onSelectAccount }: GoogleModalPr
               <Feather name="x" size={20} color="#8E8E9F" />
             </TouchableOpacity>
           </View>
-          
+
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
           {!customMode ? (
             <View>
               <Text style={styles.modalSubtitle}>Choose an account to continue to Regent Money</Text>
-              
+
               {MOCK_GOOGLE_ACCOUNTS.map((acc, index) => (
-                <TouchableOpacity 
-                  key={index} 
-                  style={styles.googleAccountItem} 
+                <TouchableOpacity
+                  key={index}
+                  style={styles.googleAccountItem}
                   onPress={() => onSelectAccount(acc)}
                   activeOpacity={0.7}
                 >
@@ -111,8 +111,8 @@ const GoogleAccountModal = ({ visible, onClose, onSelectAccount }: GoogleModalPr
                 </TouchableOpacity>
               ))}
 
-              <TouchableOpacity 
-                style={styles.customGoogleBtn} 
+              <TouchableOpacity
+                style={styles.customGoogleBtn}
                 onPress={() => setCustomMode(true)}
                 activeOpacity={0.7}
               >
@@ -123,9 +123,9 @@ const GoogleAccountModal = ({ visible, onClose, onSelectAccount }: GoogleModalPr
           ) : (
             <View>
               <Text style={styles.modalSubtitle}>Enter details to simulate custom Google OAuth</Text>
-              
+
               <Text style={styles.inputLabel}>Full Name</Text>
-              <TextInput 
+              <TextInput
                 style={styles.input}
                 placeholder="Google Account Name (e.g. John Doe)"
                 placeholderTextColor="#666"
@@ -134,7 +134,7 @@ const GoogleAccountModal = ({ visible, onClose, onSelectAccount }: GoogleModalPr
               />
 
               <Text style={styles.inputLabel}>Google Email</Text>
-              <TextInput 
+              <TextInput
                 style={styles.input}
                 placeholder="Google Email (e.g. john.doe@gmail.com)"
                 placeholderTextColor="#666"
@@ -188,11 +188,9 @@ export const WelcomeScreen = ({ navigation }: { navigation: any }) => {
         setLoading(false);
       }
     } else {
-      let warningMsg = 'Google Web Client ID is not configured in Settings. ';
-      if (Platform.OS === 'web') {
-        warningMsg = 'Native Google Sign-In is not supported on Web. ';
+      if (Platform.OS !== 'web' && !webClientId) {
+        alert('Google Web Client ID is not configured in Settings.');
       }
-      alert(warningMsg + 'Launching simulated Google accounts chooser.');
       setGoogleVisible(true);
     }
   };
@@ -218,8 +216,8 @@ export const WelcomeScreen = ({ navigation }: { navigation: any }) => {
         {/* Top/Center Branding */}
         <Animated.View entering={FadeIn.delay(100).duration(800)} style={styles.welcomeBranding}>
           <View style={styles.logoBadgeLuxury}>
-            <Image 
-              source={require('../../assets/insideicon.png')} 
+            <Image
+              source={require('../../assets/insideicon.png')}
               style={styles.logoImageInside}
               resizeMode="contain"
             />
@@ -235,16 +233,16 @@ export const WelcomeScreen = ({ navigation }: { navigation: any }) => {
             <ActivityIndicator size="large" color="#2dba4e" style={{ marginVertical: 24 }} />
           ) : (
             <>
-              <TouchableOpacity 
-                style={styles.primaryBtnLuxury} 
+              <TouchableOpacity
+                style={styles.primaryBtnLuxury}
                 onPress={() => navigation.navigate('Signup')}
                 activeOpacity={0.85}
               >
                 <Text style={styles.primaryBtnLuxuryText}>Create Account</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity 
-                style={styles.secondaryBtnLuxury} 
+              <TouchableOpacity
+                style={styles.secondaryBtnLuxury}
                 onPress={() => navigation.navigate('Login')}
                 activeOpacity={0.85}
               >
@@ -257,8 +255,8 @@ export const WelcomeScreen = ({ navigation }: { navigation: any }) => {
                 <View style={styles.dividerLine} />
               </View>
 
-              <TouchableOpacity 
-                style={styles.googleBtnLuxury} 
+              <TouchableOpacity
+                style={styles.googleBtnLuxury}
                 onPress={handleGooglePress}
                 activeOpacity={0.85}
               >
@@ -274,10 +272,10 @@ export const WelcomeScreen = ({ navigation }: { navigation: any }) => {
         </Animated.View>
       </View>
 
-      <GoogleAccountModal 
-        visible={googleVisible} 
-        onClose={() => setGoogleVisible(false)} 
-        onSelectAccount={handleGoogleSelect} 
+      <GoogleAccountModal
+        visible={googleVisible}
+        onClose={() => setGoogleVisible(false)}
+        onSelectAccount={handleGoogleSelect}
       />
     </View>
   );
@@ -313,11 +311,9 @@ export const AuthLandingScreen = ({ navigation }: { navigation: any }) => {
         setLoading(false);
       }
     } else {
-      let warningMsg = 'Google Web Client ID is not configured in Settings. ';
-      if (Platform.OS === 'web') {
-        warningMsg = 'Native Google Sign-In is not supported on Web. ';
+      if (Platform.OS !== 'web' && !webClientId) {
+        alert('Google Web Client ID is not configured in Settings.');
       }
-      alert(warningMsg + 'Launching simulated Google accounts chooser.');
       setGoogleVisible(true);
     }
   };
@@ -343,8 +339,8 @@ export const AuthLandingScreen = ({ navigation }: { navigation: any }) => {
         {/* Top/Center Branding - NO "WELCOME TO" message! */}
         <Animated.View entering={FadeIn.delay(100).duration(800)} style={styles.welcomeBranding}>
           <View style={styles.logoBadgeLuxury}>
-            <Image 
-              source={require('../../assets/insideicon.png')} 
+            <Image
+              source={require('../../assets/insideicon.png')}
               style={styles.logoImageInside}
               resizeMode="contain"
             />
@@ -359,16 +355,16 @@ export const AuthLandingScreen = ({ navigation }: { navigation: any }) => {
             <ActivityIndicator size="large" color="#2dba4e" style={{ marginVertical: 24 }} />
           ) : (
             <>
-              <TouchableOpacity 
-                style={styles.primaryBtnLuxury} 
+              <TouchableOpacity
+                style={styles.primaryBtnLuxury}
                 onPress={() => navigation.navigate('Login')}
                 activeOpacity={0.85}
               >
                 <Text style={styles.primaryBtnLuxuryText}>Log In</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity 
-                style={styles.secondaryBtnLuxury} 
+              <TouchableOpacity
+                style={styles.secondaryBtnLuxury}
                 onPress={() => navigation.navigate('Signup')}
                 activeOpacity={0.85}
               >
@@ -381,8 +377,8 @@ export const AuthLandingScreen = ({ navigation }: { navigation: any }) => {
                 <View style={styles.dividerLine} />
               </View>
 
-              <TouchableOpacity 
-                style={styles.googleBtnLuxury} 
+              <TouchableOpacity
+                style={styles.googleBtnLuxury}
                 onPress={handleGooglePress}
                 activeOpacity={0.85}
               >
@@ -398,10 +394,10 @@ export const AuthLandingScreen = ({ navigation }: { navigation: any }) => {
         </Animated.View>
       </View>
 
-      <GoogleAccountModal 
-        visible={googleVisible} 
-        onClose={() => setGoogleVisible(false)} 
-        onSelectAccount={handleGoogleSelect} 
+      <GoogleAccountModal
+        visible={googleVisible}
+        onClose={() => setGoogleVisible(false)}
+        onSelectAccount={handleGoogleSelect}
       />
     </View>
   );
@@ -455,17 +451,17 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
   };
 
   return (
-    <KeyboardAvoidingView 
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined} 
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       style={styles.container}
     >
-      <ScrollView 
+      <ScrollView
         ref={scrollViewRef}
         contentContainerStyle={[
-          styles.formScrollContent, 
-          { 
-            paddingTop: insets.top + 20, 
-            paddingBottom: insets.bottom + (keyboardVisible ? 220 : 36) 
+          styles.formScrollContent,
+          {
+            paddingTop: insets.top + 20,
+            paddingBottom: insets.bottom + (keyboardVisible ? 220 : 36)
           }
         ]}
         showsVerticalScrollIndicator={false}
@@ -478,8 +474,8 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
 
         <View style={styles.authHeaderSection}>
           <View style={[styles.logoBadgeSmall, { alignSelf: 'flex-start' }]}>
-            <Image 
-              source={require('../../assets/icon.png')} 
+            <Image
+              source={require('../../assets/icon.png')}
               style={styles.logoImageSmall}
             />
           </View>
@@ -498,7 +494,7 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
           <Text style={styles.inputLabel}>Email or Mobile Number</Text>
           <View style={styles.inputContainer}>
             <Feather name="mail" size={16} color="#8E8E9F" style={styles.inputIcon} />
-            <TextInput 
+            <TextInput
               style={styles.formInput}
               placeholder="e.g. name@domain.com or 9876543210"
               placeholderTextColor="#555"
@@ -512,7 +508,7 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
           <Text style={styles.inputLabel}>Password</Text>
           <View style={styles.inputContainer}>
             <Feather name="lock" size={16} color="#8E8E9F" style={styles.inputIcon} />
-            <TextInput 
+            <TextInput
               style={styles.formInput}
               placeholder="••••••••"
               placeholderTextColor="#555"
@@ -531,8 +527,8 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
             </TouchableOpacity>
           </View>
 
-          <TouchableOpacity 
-            style={styles.rememberMeRow} 
+          <TouchableOpacity
+            style={styles.rememberMeRow}
             onPress={() => setRememberMe(!rememberMe)}
             activeOpacity={0.8}
           >
@@ -545,7 +541,7 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
           {loading ? (
             <ActivityIndicator size="large" color="#2dba4e" style={{ marginTop: 24 }} />
           ) : (
-            <TouchableOpacity 
+            <TouchableOpacity
               style={[styles.primaryBtn, styles.submitBtnMargin, styles.neonBorder]}
               onPress={handleLogin}
               activeOpacity={0.8}
@@ -574,13 +570,13 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
   const styles = getStyles(colors);
   const insets = useSafeAreaInsets();
   const scrollViewRef = useRef<ScrollView>(null);
-  
+
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  
+
   const [secureText, setSecureText] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -624,7 +620,7 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
       setError('Passwords do not match');
       return;
     }
-    
+
     setError('');
     setLoading(true);
     try {
@@ -641,17 +637,17 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
   };
 
   return (
-    <KeyboardAvoidingView 
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined} 
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       style={styles.container}
     >
-      <ScrollView 
+      <ScrollView
         ref={scrollViewRef}
         contentContainerStyle={[
-          styles.formScrollContent, 
-          { 
-            paddingTop: insets.top + 20, 
-            paddingBottom: insets.bottom + (keyboardVisible ? 240 : 36) 
+          styles.formScrollContent,
+          {
+            paddingTop: insets.top + 20,
+            paddingBottom: insets.bottom + (keyboardVisible ? 240 : 36)
           }
         ]}
         showsVerticalScrollIndicator={false}
@@ -664,8 +660,8 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
 
         <View style={styles.authHeaderSection}>
           <View style={[styles.logoBadgeSmall, { alignSelf: 'flex-start' }]}>
-            <Image 
-              source={require('../../assets/icon.png')} 
+            <Image
+              source={require('../../assets/icon.png')}
               style={styles.logoImageSmall}
             />
           </View>
@@ -684,7 +680,7 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
           <Text style={styles.inputLabel}>Full Name</Text>
           <View style={styles.inputContainer}>
             <Feather name="user" size={16} color="#8E8E9F" style={styles.inputIcon} />
-            <TextInput 
+            <TextInput
               style={styles.formInput}
               placeholder="e.g. John Doe"
               placeholderTextColor="#555"
@@ -696,7 +692,7 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
           <Text style={styles.inputLabel}>Email Address</Text>
           <View style={styles.inputContainer}>
             <Feather name="mail" size={16} color="#8E8E9F" style={styles.inputIcon} />
-            <TextInput 
+            <TextInput
               style={styles.formInput}
               placeholder="e.g. name@domain.com"
               placeholderTextColor="#555"
@@ -710,7 +706,7 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
           <Text style={styles.inputLabel}>Mobile Number</Text>
           <View style={styles.inputContainer}>
             <Feather name="phone" size={16} color="#8E8E9F" style={styles.inputIcon} />
-            <TextInput 
+            <TextInput
               style={styles.formInput}
               placeholder="e.g. 9876543210"
               placeholderTextColor="#555"
@@ -724,7 +720,7 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
           <Text style={styles.inputLabel}>Password (Min 6 chars)</Text>
           <View style={styles.inputContainer}>
             <Feather name="lock" size={16} color="#8E8E9F" style={styles.inputIcon} />
-            <TextInput 
+            <TextInput
               style={styles.formInput}
               placeholder="••••••••"
               placeholderTextColor="#555"
@@ -746,7 +742,7 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
           <Text style={styles.inputLabel}>Confirm Password</Text>
           <View style={styles.inputContainer}>
             <Feather name="shield" size={16} color="#8E8E9F" style={styles.inputIcon} />
-            <TextInput 
+            <TextInput
               style={styles.formInput}
               placeholder="••••••••"
               placeholderTextColor="#555"
@@ -765,7 +761,7 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
           {loading ? (
             <ActivityIndicator size="large" color="#2dba4e" style={{ marginTop: 24 }} />
           ) : (
-            <TouchableOpacity 
+            <TouchableOpacity
               style={[styles.primaryBtn, styles.submitBtnMargin, styles.neonBorder]}
               onPress={handleSignup}
               activeOpacity={0.8}
@@ -797,17 +793,17 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Verify Your Email</Text>
-              <TouchableOpacity 
+              <TouchableOpacity
                 onPress={() => {
                   setShowVerifyModal(false);
                   navigation.navigate('Login');
-                }} 
+                }}
                 style={styles.closeBtn}
               >
                 <Feather name="x" size={20} color="#8E8E9F" />
               </TouchableOpacity>
             </View>
-            
+
             <View style={{ alignItems: 'center', marginVertical: 20 }}>
               <View style={{
                 width: 60,
@@ -831,8 +827,8 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
               </Text>
             </View>
 
-            <TouchableOpacity 
-              style={[styles.primaryBtn, { width: '100%', marginVertical: 10 }]} 
+            <TouchableOpacity
+              style={[styles.primaryBtn, { width: '100%', marginVertical: 10 }]}
               onPress={() => {
                 setShowVerifyModal(false);
                 navigation.navigate('Login');

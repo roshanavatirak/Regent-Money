@@ -72,7 +72,7 @@ export function initializeSupabase() {
             const { GoogleSignin } = require('@react-native-google-signin/google-signin');
             GoogleSignin.configure({
               webClientId,
-              offlineAccess: true,
+              offlineAccess: false,
             });
             console.log('[Supabase] Google Sign-In configured successfully.');
           } catch (e: any) {

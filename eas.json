@@ -14,13 +14,15 @@
       },
       "env": {
         "EXPO_PUBLIC_BACKEND_URL": "https://regent-money.onrender.com",
-        "EXPO_PUBLIC_SUPABASE_URL": "https://crwbdvenezmpnbsmpxhm.supabase.co"
+        "EXPO_PUBLIC_SUPABASE_URL": "https://crwbdvenezmpnbsmpxhm.supabase.co",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "55231273460-epfomp35a43c6d15bhilb92i6btl6jt9.apps.googleusercontent.com"
       }
     },
     "production": {
       "env": {
         "EXPO_PUBLIC_BACKEND_URL": "https://regent-money.onrender.com",
-        "EXPO_PUBLIC_SUPABASE_URL": "https://crwbdvenezmpnbsmpxhm.supabase.co"
+        "EXPO_PUBLIC_SUPABASE_URL": "https://crwbdvenezmpnbsmpxhm.supabase.co",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "55231273460-epfomp35a43c6d15bhilb92i6btl6jt9.apps.googleusercontent.com"
       }
     }
   },

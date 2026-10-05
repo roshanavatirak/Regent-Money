@@ -6,6 +6,7 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import { v2 as cloudinary } from 'cloudinary';
+import { OAuth2Client } from 'google-auth-library';
 import { User } from '../users/entities/user.entity';
 import { MailService } from '../mail/mail.service';
 
@@ -17,7 +18,7 @@ export class AuthService implements OnModuleInit {
     private readonly jwtService: JwtService,
     private readonly mailService: MailService,
     private readonly configService: ConfigService,
-  ) {}
+  ) { }
 
   async onModuleInit() {
     try {
@@ -113,7 +114,7 @@ export class AuthService implements OnModuleInit {
     // 5. Send verification email asynchronously in the background (DO NOT await it!)
     const backendUrl = this.configService.get<string>('BACKEND_URL') || 'http://localhost:3000';
     const verificationLink = `${backendUrl}/auth/verify?token=${verificationToken}`;
-    
+
     this.mailService.sendVerificationEmail(email, dto.name, verificationToken).catch((err) => {
       console.error(`[AuthService] Background verification email dispatch failed: ${err.message}`);
     });
@@ -206,9 +207,102 @@ export class AuthService implements OnModuleInit {
     };
   }
 
+  private googleClient: OAuth2Client;
+
+  private getGoogleClient(): OAuth2Client {
+    if (!this.googleClient) {
+      const clientId = this.configService?.get<string>('GOOGLE_CLIENT_ID') || process.env.GOOGLE_CLIENT_ID;
+      this.googleClient = new OAuth2Client(clientId);
+    }
+    return this.googleClient;
+  }
+
+  async googleAuthWithToken(idToken: string) {
+    if (!idToken) {
+      throw new UnauthorizedException('Google ID token is required');
+    }
+
+    const clientId = this.configService?.get<string>('GOOGLE_CLIENT_ID') || process.env.GOOGLE_CLIENT_ID;
+
+    // 1. Cryptographically verify the Google idToken
+    let payload;
+    try {
+      const ticket = await this.getGoogleClient().verifyIdToken({
+        idToken,
+        audience: clientId,
+      });
+      payload = ticket.getPayload();
+    } catch (error: any) {
+      console.error('[AuthService] Google token verification error:', error?.message || error);
+      throw new UnauthorizedException('Invalid or expired Google token');
+    }
+
+    if (!payload || !payload.email) {
+      throw new UnauthorizedException('Google token does not contain a valid email address');
+    }
+
+    const email = payload.email.trim().toLowerCase();
+    const name = payload.name || payload.given_name || 'Google User';
+    const avatarUrl = payload.picture || '';
+    const now = Date.now();
+
+    // 2. Check if a user with this email already exists (e.g. registered with password)
+    let user = await this.userRepository.findOne({
+      where: { email, isDeleted: false },
+    });
+
+    if (user) {
+      // ✅ Same person, same account: Link existing account!
+      user.isVerified = true; // Auto-verify email via Google
+      if (!user.name && name) user.name = name;
+      if (!user.avatarUrl && avatarUrl) user.avatarUrl = avatarUrl;
+      user.updatedAt = now;
+      user = (await this.userRepository.save(user)) as User;
+    } else {
+      // 🆕 Brand new user: Create fresh account
+      const userId = crypto.randomUUID();
+      user = this.userRepository.create({
+        id: userId,
+        userId: userId,
+        email,
+        phone: '',
+        name,
+        authProvider: 'google',
+        avatarUrl,
+        createdAt: now,
+        updatedAt: now,
+        isDeleted: false,
+        isVerified: true,
+        verificationToken: null,
+      });
+      user = (await this.userRepository.save(user)) as User;
+    }
+
+    // 3. Issue the standard Regent Money JWT token
+    const tokenPayload = { sub: user.id, email: user.email };
+    const accessToken = this.jwtService.sign(tokenPayload);
+
+    const userProfile = {
+      id: user.id,
+      email: user.email,
+      phone: user.phone,
+      name: user.name,
+      authProvider: user.authProvider,
+      avatarUrl: user.avatarUrl,
+      createdAt: user.createdAt,
+      isVerified: user.isVerified,
+    };
+
+    return {
+      accessToken,
+      user: userProfile,
+      profile: userProfile,
+    };
+  }
+
   async googleAuth(dto: { email: string; name: string; avatarUrl?: string }) {
     const email = dto.email.trim().toLowerCase();
-    
+
     // Check if user already exists
     let user = await this.userRepository.findOne({
       where: { email, isDeleted: false },
@@ -259,8 +353,9 @@ export class AuthService implements OnModuleInit {
     };
 
     return {
-      profile,
       accessToken,
+      user: profile,
+      profile,
     };
   }
 

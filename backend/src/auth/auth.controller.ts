@@ -1,11 +1,11 @@
-import { Controller, Post, Get, Patch, Body, Query, Res, Req, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
+import { Controller, Post, Get, Patch, Body, Query, Res, Req, HttpCode, HttpStatus, UseGuards, BadRequestException } from '@nestjs/common';
 import type { Response } from 'express';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(private readonly authService: AuthService) { }
 
   @Post('signup')
   @HttpCode(HttpStatus.CREATED)
@@ -21,8 +21,22 @@ export class AuthController {
 
   @Post('google')
   @HttpCode(HttpStatus.OK)
-  async googleAuth(@Body() body: { email: string; name: string; avatarUrl?: string }) {
-    return this.authService.googleAuth(body);
+  async googleAuth(
+    @Body('idToken') idToken?: string,
+    @Body() body?: { idToken?: string; email?: string; name?: string; avatarUrl?: string },
+  ) {
+    const token = idToken || body?.idToken;
+    if (token) {
+      return this.authService.googleAuthWithToken(token);
+    }
+    if (body?.email) {
+      return this.authService.googleAuth({
+        email: body.email,
+        name: body.name || 'Google User',
+        avatarUrl: body.avatarUrl,
+      });
+    }
+    throw new BadRequestException('Google ID token is required');
   }
 
   @UseGuards(JwtAuthGuard)
@@ -77,7 +91,7 @@ export class AuthController {
   async verify(@Query('token') token: string, @Res() res: Response) {
     try {
       await this.authService.verifyEmail(token);
-      
+
       // Return a premium, beautiful glassmorphism styled success page
       res.setHeader('Content-Type', 'text/html');
       res.send(`
