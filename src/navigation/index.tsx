@@ -488,6 +488,15 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
     }
   };
 
+  const modalHeight = useMemo(() => {
+    if (isKeyboardVisible) {
+      const topOffset = Platform.OS === 'android' ? Math.max(insets.top, 36) : (insets.top + 20);
+      const availableHeight = windowHeight - keyboardHeight - topOffset;
+      return Math.min(windowHeight * 0.85, Math.max(280, availableHeight));
+    }
+    return windowHeight * 0.85;
+  }, [isKeyboardVisible, windowHeight, keyboardHeight, insets.top]);
+
   return (
     <Modal
       visible={visible}
@@ -505,8 +514,26 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
       }}
     >
       <View style={styles.modalOverlayFull}>
+        <TouchableOpacity
+          style={StyleSheet.absoluteFill}
+          activeOpacity={1}
+          onPress={() => {
+            if (isKeyboardVisible) {
+              Keyboard.dismiss();
+            } else {
+              if (formStep === 2) {
+                setFormStep(1);
+                setFormError('');
+              } else {
+                resetForm();
+                onClose();
+              }
+            }
+          }}
+        />
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          pointerEvents="box-none"
           style={[
             { width: '100%', alignItems: 'center', justifyContent: 'flex-end' },
             Platform.OS === 'android' && isKeyboardVisible && { paddingBottom: keyboardHeight },
@@ -516,10 +543,10 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
             style={[
               styles.modalCardFull,
               {
-                maxHeight: isKeyboardVisible
-                  ? Math.max(280, windowHeight - keyboardHeight - (Platform.OS === 'android' ? Math.max(insets.top, 36) : 20))
-                  : windowHeight * 0.85,
-                height: isKeyboardVisible ? undefined : windowHeight * 0.85,
+                height: modalHeight,
+                maxHeight: modalHeight,
+                paddingTop: isKeyboardVisible ? 16 : 24,
+                paddingBottom: isKeyboardVisible ? 12 : 24,
               },
             ]}
           >
@@ -556,7 +583,8 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
                   data={filteredBanks}
                   keyExtractor={(item, index) => item.code + '_' + index}
                   showsVerticalScrollIndicator={false}
-                  contentContainerStyle={{ paddingBottom: 20 }}
+                  contentContainerStyle={{ paddingBottom: isKeyboardVisible ? 40 : 20 }}
+                  keyboardDismissMode="on-drag"
                   ListHeaderComponent={renderPopularBanks}
                   initialNumToRender={50}
                   maxToRenderPerBatch={50}
@@ -600,7 +628,8 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
                 style={{ flex: 1 }}
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
-                contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 24) + 24 }}
+                keyboardDismissMode="on-drag"
+                contentContainerStyle={{ paddingBottom: isKeyboardVisible ? 60 : Math.max(insets.bottom, 24) + 24 }}
               >
                 <TouchableOpacity
                   style={styles.formBackBtn}

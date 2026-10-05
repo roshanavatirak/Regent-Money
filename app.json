@@ -2,7 +2,7 @@
   "expo": {
     "name": "Regent Money",
     "slug": "regent-money",
-    "version": "1.0.27",
+    "version": "1.0.28",
     "orientation": "portrait",
     "icon": "./assets/appicon.png",
     "notification": {
