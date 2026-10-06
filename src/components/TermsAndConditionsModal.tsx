@@ -10,7 +10,6 @@ import {
   ActivityIndicator,
   Platform,
 } from 'react-native';
-import type { NativeSyntheticEvent, NativeScrollEvent } from 'react-native';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme, useAuthStore } from '../store';
 import { authService } from '../services/authService';
@@ -39,7 +38,7 @@ export const TermsAndConditionsModal: React.FC<TermsAndConditionsModalProps> = (
 
   if (!visible) return null;
 
-  const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+  const handleScroll = (event: any) => {
     if (hasScrolledToBottom) return;
 
     const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
