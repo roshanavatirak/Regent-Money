@@ -303,9 +303,11 @@ export class NotificationsService implements OnModuleInit {
   ): Promise<void> {
     if (!messages || messages.length === 0) return;
 
-    // Filter valid ExponentPushToken
+    // Filter valid ExponentPushToken or ExpoPushToken
     const validMessages = messages.filter((m) => {
-      const isValid = typeof m.token === 'string' && m.token.startsWith('ExponentPushToken[');
+      const isValid =
+        typeof m.token === 'string' &&
+        (m.token.startsWith('ExponentPushToken[') || m.token.startsWith('ExpoPushToken['));
       if (!isValid) {
         this.logger.warn(`Invalid Expo Push Token: "${m.token}". Skipping.`);
       }
@@ -322,6 +324,8 @@ export class NotificationsService implements OnModuleInit {
         sound: 'default',
         title: m.title,
         body: m.body,
+        channelId: 'daily_alerts',
+        priority: 'high',
         data: m.payload || {},
       }));
 

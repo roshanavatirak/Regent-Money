@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { Ionicons, Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useTheme, useAuthStore, useSidebarStore, useAppUpdateStore, showGlobalConfirm } from '../store';
+import { useTheme, useAuthStore, useSidebarStore, useAppUpdateStore, useTermsModalStore, showGlobalConfirm } from '../store';
 import { getAppCurrentVersion } from '../services/updateService';
 import { authService } from '../services/authService';
 import { navigationRef } from '../navigation/navigationRef';
@@ -31,6 +31,7 @@ export const AppSidebarDrawer: React.FC = () => {
 
   const updateInfo = useAppUpdateStore((state) => state.updateInfo);
   const openUpdateModal = useAppUpdateStore((state) => state.openUpdateModal);
+  const openTermsModal = useTermsModalStore((state) => state.openTermsModal);
 
   const currentVersion = getAppCurrentVersion();
 
@@ -251,6 +252,23 @@ export const AppSidebarDrawer: React.FC = () => {
                     <Ionicons name="shield-checkmark-outline" size={15} color={colors.text} />
                   </View>
                   <Text style={[styles.menuTitle, { color: colors.text }]}>Privacy Center</Text>
+                </TouchableOpacity>
+
+                {/* Terms & Conditions */}
+                <TouchableOpacity
+                  style={styles.menuItem}
+                  onPress={() => {
+                    closeSidebar();
+                    setTimeout(() => {
+                      openTermsModal(true);
+                    }, 150);
+                  }}
+                  activeOpacity={0.65}
+                >
+                  <View style={[styles.menuIconBox, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)' }]}>
+                    <Ionicons name="document-text-outline" size={15} color={colors.text} />
+                  </View>
+                  <Text style={[styles.menuTitle, { color: colors.text }]}>Terms & Conditions</Text>
                 </TouchableOpacity>
               </View>
 

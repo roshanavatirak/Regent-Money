@@ -321,6 +321,8 @@ export interface UserProfile {
   occupation?: string | null;
   currentIncome?: number | null;
   incomeSourcesCount?: number | null;
+  termsAccepted?: boolean;
+  termsAcceptedAt?: number | null;
 }
 
 export interface AuthState {
@@ -814,5 +816,21 @@ export const useAppUpdateStore = create<AppUpdateStoreState>((set) => ({
   openUpdateModal: () => set({ updateModalVisible: true }),
   closeUpdateModal: () => set({ updateModalVisible: false }),
 }));
+
+// 13. Terms & Conditions Modal Store
+export interface TermsModalState {
+  isOpen: boolean;
+  isReadOnly: boolean;
+  openTermsModal: (readOnly?: boolean) => void;
+  closeTermsModal: () => void;
+}
+
+export const useTermsModalStore = create<TermsModalState>((set) => ({
+  isOpen: false,
+  isReadOnly: false,
+  openTermsModal: (readOnly = false) => set({ isOpen: true, isReadOnly: readOnly }),
+  closeTermsModal: () => set({ isOpen: false, isReadOnly: false }),
+}));
+
 
 

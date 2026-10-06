@@ -70,4 +70,13 @@ export class User {
 
   @Column({ name: 'income_sources_count', type: 'int', default: 1, nullable: true })
   incomeSourcesCount?: number | null;
+
+  @Column({ name: 'terms_accepted', type: 'boolean', default: false, nullable: true })
+  termsAccepted?: boolean;
+
+  @Column({ name: 'terms_accepted_at', type: 'bigint', nullable: true, transformer: {
+    to: (value: number) => value ? String(value) : null,
+    from: (value: string) => value ? Number(value) : null
+  }})
+  termsAcceptedAt?: number | null;
 }

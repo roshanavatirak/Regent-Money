@@ -132,16 +132,17 @@ object SmsDirectSyncWorker {
             }
 
             val largeIcon = try {
-                BitmapFactory.decodeResource(context.resources, R.mipmap.ic_launcher)
+                BitmapFactory.decodeResource(context.resources, R.drawable.ic_notification_large)
             } catch (e: Exception) {
                 null
             }
 
             val notificationBuilder = NotificationCompat.Builder(context, ALERT_CHANNEL_ID)
-                .setSmallIcon(R.mipmap.ic_launcher_monochrome)
+                .setSmallIcon(R.drawable.ic_notification)
                 .setColor(0xFF10B981.toInt())
                 .setContentTitle(title)
                 .setContentText(body)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(body))
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setAutoCancel(true)
 

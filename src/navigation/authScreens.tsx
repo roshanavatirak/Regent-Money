@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
-import { authService } from '../services/authService';
+import { authService, LastGoogleUser } from '../services/authService';
 import { getGoogleWebClientId } from '../services/supabaseClient';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { useTheme } from '../store';
@@ -160,25 +160,44 @@ const GoogleAccountModal = ({ visible, onClose, onSelectAccount }: GoogleModalPr
   );
 };
 
+// // ----------------------------------------------------
+// Google Auth Button with LinkedIn-Style "Last Used" Card
 // ----------------------------------------------------
-// 1. Welcome Screen
-// ----------------------------------------------------
-export const WelcomeScreen = ({ navigation }: { navigation: any }) => {
-  const { colors } = useTheme();
-  const styles = getStyles(colors);
-  const insets = useSafeAreaInsets();
-  const [googleVisible, setGoogleVisible] = useState(false);
-  const [loading, setLoading] = useState(false);
+interface GoogleAuthButtonProps {
+  styles: any;
+  loading: boolean;
+  setLoading: (val: boolean) => void;
+  onOpenMockModal: () => void;
+}
 
-  const handleGooglePress = async () => {
+const GoogleAuthButton: React.FC<GoogleAuthButtonProps> = ({
+  styles,
+  loading,
+  setLoading,
+  onOpenMockModal,
+}) => {
+  const [lastGoogleUser, setLastGoogleUser] = useState<LastGoogleUser | null>(() => authService.getLastGoogleUser());
+
+  useEffect(() => {
+    setLastGoogleUser(authService.getLastGoogleUser());
+  }, []);
+
+  const handleGooglePress = async (forceSwitch: boolean = false) => {
     const webClientId = getGoogleWebClientId();
     if (Platform.OS !== 'web' && webClientId) {
       setLoading(true);
       try {
-        await authService.signInWithGoogleNative();
+        await authService.signInWithGoogleNative(forceSwitch);
+        setLastGoogleUser(authService.getLastGoogleUser());
       } catch (e: any) {
-        if (e.message?.includes('developer error') || e.code === 'DEVELOPER_ERROR') {
-          alert('Google Sign-In Developer Error: This usually means your Google Web Client ID is mismatching, or your SHA-1 fingerprint is not configured in the Google Cloud Console for Android Package Name (com.anonymous.regentmoney). Please check settings.');
+        if (
+          e.message?.includes('developer error') ||
+          e.code === 'DEVELOPER_ERROR' ||
+          e.message?.includes('DEVELOPER_ERROR')
+        ) {
+          alert(
+            'Google Sign-In Developer Error: This usually means your Google Web Client ID is mismatching, or your SHA-1 fingerprint is not configured in the Google Cloud Console for Android Package Name (com.anonymous.regentmoney). Please check settings.'
+          );
         } else if (e.code === 'SIGN_IN_CANCELLED' || e.message?.includes('cancelled')) {
           console.log('[Auth] Google Sign-In cancelled.');
         } else {
@@ -191,9 +210,85 @@ export const WelcomeScreen = ({ navigation }: { navigation: any }) => {
       if (Platform.OS !== 'web' && !webClientId) {
         alert('Google Web Client ID is not configured in Settings.');
       }
-      setGoogleVisible(true);
+      onOpenMockModal();
     }
   };
+
+  if (lastGoogleUser?.email) {
+    const displayName = lastGoogleUser.name || lastGoogleUser.email.split('@')[0];
+    const initial = (lastGoogleUser.name || lastGoogleUser.email).charAt(0).toUpperCase();
+
+    return (
+      <View style={styles.linkedInGoogleContainer}>
+        {/* Main 1-Tap Google Button */}
+        <TouchableOpacity
+          style={styles.linkedInGoogleCard}
+          onPress={() => handleGooglePress(false)}
+          activeOpacity={0.85}
+        >
+          <View style={styles.linkedInAvatarWrap}>
+            {lastGoogleUser.photo ? (
+              <Image source={{ uri: lastGoogleUser.photo }} style={styles.linkedInAvatarImage} />
+            ) : (
+              <View style={styles.linkedInAvatarFallback}>
+                <Text style={styles.linkedInAvatarInitial}>{initial}</Text>
+              </View>
+            )}
+          </View>
+
+          <View style={styles.linkedInMeta}>
+            <View style={styles.linkedInNameRow}>
+              <Text style={styles.linkedInContinueText} numberOfLines={1}>
+                Continue as {displayName.split(' ')[0]}
+              </Text>
+              <View style={styles.lastUsedBadge}>
+                <Text style={styles.lastUsedBadgeText}>Last used</Text>
+              </View>
+            </View>
+            <Text style={styles.linkedInEmailText} numberOfLines={1}>
+              {lastGoogleUser.email}
+            </Text>
+          </View>
+
+          <View style={styles.googleIconBadge}>
+            <Ionicons name="logo-google" size={18} color="#FFFFFF" />
+          </View>
+        </TouchableOpacity>
+
+        {/* Change / Switch Account Option */}
+        <TouchableOpacity
+          style={styles.switchAccountBtn}
+          onPress={() => handleGooglePress(true)}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="swap-horizontal" size={14} color="#10B981" style={{ marginRight: 6 }} />
+          <Text style={styles.switchAccountBtnText}>Switch Google account</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  return (
+    <TouchableOpacity
+      style={styles.googleBtnLuxury}
+      onPress={() => handleGooglePress(false)}
+      activeOpacity={0.85}
+    >
+      <Ionicons name="logo-google" size={18} color="#FFFFFF" style={{ marginRight: 10 }} />
+      <Text style={styles.googleBtnLuxuryText}>Continue with Google</Text>
+    </TouchableOpacity>
+  );
+};
+
+// ----------------------------------------------------
+// 1. Welcome Screen
+// ----------------------------------------------------
+export const WelcomeScreen = ({ navigation }: { navigation: any }) => {
+  const { colors } = useTheme();
+  const styles = getStyles(colors);
+  const insets = useSafeAreaInsets();
+  const [googleVisible, setGoogleVisible] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const handleGoogleSelect = async (account: GoogleAccount) => {
     setGoogleVisible(false);
@@ -255,19 +350,17 @@ export const WelcomeScreen = ({ navigation }: { navigation: any }) => {
                 <View style={styles.dividerLine} />
               </View>
 
-              <TouchableOpacity
-                style={styles.googleBtnLuxury}
-                onPress={handleGooglePress}
-                activeOpacity={0.85}
-              >
-                <Ionicons name="logo-google" size={18} color="#FFFFFF" style={{ marginRight: 10 }} />
-                <Text style={styles.googleBtnLuxuryText}>Continue with Google</Text>
-              </TouchableOpacity>
+              <GoogleAuthButton
+                styles={styles}
+                loading={loading}
+                setLoading={setLoading}
+                onOpenMockModal={() => setGoogleVisible(true)}
+              />
             </>
           )}
 
           <Text style={styles.legalNotice}>
-            End-to-End Encryption
+            End-to-End Encrypted
           </Text>
         </Animated.View>
       </View>
@@ -292,31 +385,6 @@ export const AuthLandingScreen = ({ navigation }: { navigation: any }) => {
   const insets = useSafeAreaInsets();
   const [googleVisible, setGoogleVisible] = useState(false);
   const [loading, setLoading] = useState(false);
-
-  const handleGooglePress = async () => {
-    const webClientId = getGoogleWebClientId();
-    if (Platform.OS !== 'web' && webClientId) {
-      setLoading(true);
-      try {
-        await authService.signInWithGoogleNative();
-      } catch (e: any) {
-        if (e.message?.includes('developer error') || e.code === 'DEVELOPER_ERROR') {
-          alert('Google Sign-In Developer Error: This usually means your Google Web Client ID is mismatching, or your SHA-1 fingerprint is not configured in the Google Cloud Console for Android Package Name (com.anonymous.regentmoney). Please check settings.');
-        } else if (e.code === 'SIGN_IN_CANCELLED' || e.message?.includes('cancelled')) {
-          console.log('[Auth] Google Sign-In cancelled.');
-        } else {
-          alert('Native Google Sign-In failed: ' + e.message);
-        }
-      } finally {
-        setLoading(false);
-      }
-    } else {
-      if (Platform.OS !== 'web' && !webClientId) {
-        alert('Google Web Client ID is not configured in Settings.');
-      }
-      setGoogleVisible(true);
-    }
-  };
 
   const handleGoogleSelect = async (account: GoogleAccount) => {
     setGoogleVisible(false);
@@ -377,19 +445,17 @@ export const AuthLandingScreen = ({ navigation }: { navigation: any }) => {
                 <View style={styles.dividerLine} />
               </View>
 
-              <TouchableOpacity
-                style={styles.googleBtnLuxury}
-                onPress={handleGooglePress}
-                activeOpacity={0.85}
-              >
-                <Ionicons name="logo-google" size={18} color="#FFFFFF" style={{ marginRight: 10 }} />
-                <Text style={styles.googleBtnLuxuryText}>Continue with Google</Text>
-              </TouchableOpacity>
+              <GoogleAuthButton
+                styles={styles}
+                loading={loading}
+                setLoading={setLoading}
+                onOpenMockModal={() => setGoogleVisible(true)}
+              />
             </>
           )}
 
           <Text style={styles.legalNotice}>
-            End-to-End Encryption
+            End-to-End Encrypted
           </Text>
         </Animated.View>
       </View>
@@ -1022,6 +1088,109 @@ const getStyles = (colors: any) => StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '700',
+  },
+  linkedInGoogleContainer: {
+    width: '100%',
+    alignItems: 'center',
+    marginVertical: 4,
+  },
+  linkedInGoogleCard: {
+    width: '100%',
+    backgroundColor: '#161B22',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    borderRadius: 24,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  linkedInAvatarWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    marginRight: 12,
+    overflow: 'hidden',
+  },
+  linkedInAvatarImage: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+  },
+  linkedInAvatarFallback: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#10B981',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  linkedInAvatarInitial: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 16,
+  },
+  linkedInMeta: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  linkedInNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  linkedInContinueText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+    flexShrink: 1,
+  },
+  lastUsedBadge: {
+    backgroundColor: 'rgba(16, 185, 129, 0.18)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    marginLeft: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.35)',
+  },
+  lastUsedBadgeText: {
+    color: '#10B981',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  linkedInEmailText: {
+    color: '#8E8E9F',
+    fontSize: 12,
+    marginTop: 2,
+  },
+  googleIconBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
+  },
+  switchAccountBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginTop: 8,
+  },
+  switchAccountBtnText: {
+    color: '#10B981',
+    fontSize: 13,
+    fontWeight: '600',
+    letterSpacing: 0.2,
   },
   legalNotice: {
     color: colors.textTertiary,

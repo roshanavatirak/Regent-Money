@@ -4,6 +4,7 @@ import { useNotificationStore, useAuthStore } from '../store';
 import { getBackendUrl } from '../config/api';
 import { mmkvStorage } from '../db/mmkv';
 import { tokenStore } from './tokenStore';
+import { getDailyHumorMessage } from './humorousMessages';
 
 const BACKEND_URL = getBackendUrl();
 const PROMPTED_KEY = 'notification_permission_prompted';
@@ -25,6 +26,124 @@ if (Platform.OS !== 'web') {
 }
 
 export const notificationService = {
+  /**
+   * Sets up high-priority Android notification channels with sound, vibration, and light
+   */
+  async setupChannels(): Promise<void> {
+    if (Platform.OS !== 'android') return;
+
+    try {
+      await Notifications.setNotificationChannelAsync('daily_alerts', {
+        name: 'Daily Check-ins & Reminders',
+        description: 'Morning and evening humorous wealth updates and check-ins',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#10B981',
+        sound: 'default',
+        enableLights: true,
+        enableVibrate: true,
+        showBadge: true,
+      });
+
+      await Notifications.setNotificationChannelAsync('default', {
+        name: 'General Alerts',
+        description: 'Standard system and account notifications',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#10B981',
+        sound: 'default',
+        enableLights: true,
+        enableVibrate: true,
+        showBadge: true,
+      });
+    } catch (e: any) {
+      console.warn('[NotificationService] Failed to configure Android channels:', e.message);
+    }
+  },
+
+  /**
+   * Schedules recurring 9:00 AM and 9:00 PM native device notifications directly with Android OS.
+   * This guarantees status-bar / heads-up banners even if backend is sleeping or device is offline.
+   */
+  async scheduleDailyHumorNotifications(): Promise<void> {
+    if (Platform.OS === 'web') return;
+
+    try {
+      const granted = await this.isPermissionGranted();
+      if (!granted) {
+        console.log('[NotificationService] Permission not granted. Skipping daily notification schedule.');
+        return;
+      }
+
+      await this.setupChannels();
+
+      // Cancel previous scheduled daily humor notifications to prevent duplicates
+      const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+      for (const item of scheduled) {
+        if (item.identifier.startsWith('daily_humor_')) {
+          await Notifications.cancelScheduledNotificationAsync(item.identifier);
+        }
+      }
+
+      const morningMsg = getDailyHumorMessage('morning');
+      const eveningMsg = getDailyHumorMessage('evening');
+
+      // 1. Schedule 9:00 AM Morning Notification (Local device time)
+      await Notifications.scheduleNotificationAsync({
+        identifier: 'daily_humor_morning',
+        content: {
+          title: morningMsg.title,
+          body: morningMsg.body,
+          sound: 'default',
+          color: '#10B981',
+          data: { slot: 'morning', type: 'daily_humor' },
+        },
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.DAILY,
+          channelId: 'daily_alerts',
+          hour: 9,
+          minute: 0,
+        },
+      });
+
+      // 2. Schedule 9:00 PM Evening Notification (21:00 Local device time)
+      await Notifications.scheduleNotificationAsync({
+        identifier: 'daily_humor_evening',
+        content: {
+          title: eveningMsg.title,
+          body: eveningMsg.body,
+          sound: 'default',
+          color: '#10B981',
+          data: { slot: 'evening', type: 'daily_humor' },
+        },
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.DAILY,
+          channelId: 'daily_alerts',
+          hour: 21,
+          minute: 0,
+        },
+      });
+
+      console.log('[NotificationService] Successfully scheduled native 9:00 AM & 9:00 PM daily notifications.');
+    } catch (err: any) {
+      console.warn('[NotificationService] Failed to schedule native daily notifications:', err.message);
+    }
+  },
+
+  /**
+   * Cancels scheduled native daily notifications
+   */
+  async cancelDailyScheduledNotifications(): Promise<void> {
+    if (Platform.OS === 'web') return;
+    try {
+      await Notifications.cancelScheduledNotificationAsync('daily_humor_morning');
+      await Notifications.cancelScheduledNotificationAsync('daily_humor_evening');
+      console.log('[NotificationService] Daily scheduled notifications cancelled.');
+    } catch (e: any) {
+      console.warn('[NotificationService] Error cancelling scheduled notifications:', e.message);
+    }
+  },
+
   /**
    * Check whether OS push notification permission is currently granted.
    */
@@ -53,7 +172,7 @@ export const notificationService = {
   },
 
   /**
-   * Request permissions and retrieve Expo Push Token, then send it to the backend.
+   * Request permissions, configure channels, schedule native daily alerts, and register token.
    */
   async registerForPushNotifications(): Promise<string | null> {
     const user = useAuthStore.getState().user;
@@ -82,42 +201,41 @@ export const notificationService = {
         return null;
       }
 
-      // Configure Android Channel
-      if (Platform.OS === 'android') {
-        await Notifications.setNotificationChannelAsync('default', {
-          name: 'default',
-          importance: Notifications.AndroidImportance.MAX,
-          vibrationPattern: [0, 250, 250, 250],
-          lightColor: '#03DAC6',
+      // Configure Android Channels and schedule direct 9 AM & 9 PM local alarms
+      await this.setupChannels();
+      await this.scheduleDailyHumorNotifications();
+
+      // Retrieve Expo Push token for remote backend broadcasts
+      try {
+        const tokenData = await Notifications.getExpoPushTokenAsync({
+          projectId: '9dfdd6a4-7f59-4983-8722-0eaa4eb83e78',
         });
+        const token = tokenData.data;
+        console.log('[NotificationService] Expo Push Token obtained:', token);
+        mmkvStorage.setString(TOKEN_KEY, token);
+
+        // Send token to backend
+        await this.registerTokenOnBackend(token);
+        return token;
+      } catch (tokenErr: any) {
+        console.warn(
+          '[NotificationService] Remote push token unavailable in this build (standalone FCM not attached). Native scheduled alarms are active:',
+          tokenErr.message,
+        );
+        return 'local_scheduled_active';
       }
-
-      // Retrieve token (EAS projectId is from app.json)
-      const tokenData = await Notifications.getExpoPushTokenAsync({
-        projectId: '9dfdd6a4-7f59-4983-8722-0eaa4eb83e78',
-      });
-      const token = tokenData.data;
-      console.log('[NotificationService] Expo Push Token obtained:', token);
-      mmkvStorage.setString(TOKEN_KEY, token);
-
-      // Send token to backend
-      await this.registerTokenOnBackend(token);
-
-      return token;
     } catch (error: any) {
-      console.warn(
-        '[NotificationService] Failed to register push token (FCM/Expo Push may not be configured in this build):',
-        error.message,
-      );
+      console.warn('[NotificationService] Error in registerForPushNotifications:', error.message);
       return null;
     }
   },
 
   /**
-   * Unregister / remove push token from backend and local cache.
+   * Unregister / remove push token from backend and local cache, and cancel local alarms.
    */
   async unregisterPushToken(): Promise<void> {
     mmkvStorage.delete(TOKEN_KEY);
+    await this.cancelDailyScheduledNotifications();
     await this.registerTokenOnBackend(null);
   },
 

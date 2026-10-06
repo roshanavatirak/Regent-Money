@@ -129,6 +129,8 @@ export class AuthService implements OnModuleInit {
       avatarUrl: savedUser.avatarUrl,
       createdAt: savedUser.createdAt,
       isVerified: savedUser.isVerified,
+      termsAccepted: savedUser.termsAccepted ?? false,
+      termsAcceptedAt: savedUser.termsAcceptedAt ?? null,
     };
 
     return {
@@ -199,6 +201,8 @@ export class AuthService implements OnModuleInit {
       avatarUrl: user.avatarUrl,
       createdAt: user.createdAt,
       isVerified: user.isVerified,
+      termsAccepted: user.termsAccepted ?? false,
+      termsAcceptedAt: user.termsAcceptedAt ?? null,
     };
 
     return {
@@ -291,6 +295,8 @@ export class AuthService implements OnModuleInit {
       avatarUrl: user.avatarUrl,
       createdAt: user.createdAt,
       isVerified: user.isVerified,
+      termsAccepted: user.termsAccepted ?? false,
+      termsAcceptedAt: user.termsAcceptedAt ?? null,
     };
 
     return {
@@ -350,6 +356,8 @@ export class AuthService implements OnModuleInit {
       avatarUrl: user.avatarUrl,
       createdAt: user.createdAt,
       isVerified: user.isVerified,
+      termsAccepted: user.termsAccepted ?? false,
+      termsAcceptedAt: user.termsAcceptedAt ?? null,
     };
 
     return {
@@ -470,6 +478,8 @@ export class AuthService implements OnModuleInit {
       authProvider: user.authProvider,
       biometricsEnabled: user.biometricsEnabled ?? false,
       autoLockTimeout: user.autoLockTimeout ?? 1,
+      termsAccepted: user.termsAccepted ?? false,
+      termsAcceptedAt: user.termsAcceptedAt ?? null,
     };
   }
 
@@ -542,5 +552,46 @@ export class AuthService implements OnModuleInit {
     user.updatedAt = Date.now();
     await this.userRepository.save(user);
     return { avatarUrl: fileData };
+  }
+
+  async acceptTerms(userId: string) {
+    try {
+      const user = await this.userRepository.findOne({
+        where: { id: userId, isDeleted: false },
+      });
+      if (!user) {
+        throw new UnauthorizedException('User not found.');
+      }
+      const now = Date.now();
+      user.termsAccepted = true;
+      user.termsAcceptedAt = now;
+      user.updatedAt = now;
+      await this.userRepository.save(user);
+
+      return {
+        success: true,
+        termsAccepted: true,
+        termsAcceptedAt: now,
+      };
+    } catch (err: any) {
+      if (err?.message?.includes('terms_accepted')) {
+        await this.userRepository.query(`ALTER TABLE core.users ADD COLUMN IF NOT EXISTS terms_accepted BOOLEAN DEFAULT FALSE;`);
+        await this.userRepository.query(`ALTER TABLE core.users ADD COLUMN IF NOT EXISTS terms_accepted_at BIGINT;`);
+        const user = await this.userRepository.findOne({ where: { id: userId, isDeleted: false } });
+        if (user) {
+          const now = Date.now();
+          user.termsAccepted = true;
+          user.termsAcceptedAt = now;
+          user.updatedAt = now;
+          await this.userRepository.save(user);
+          return {
+            success: true,
+            termsAccepted: true,
+            termsAcceptedAt: now,
+          };
+        }
+      }
+      throw err;
+    }
   }
 }

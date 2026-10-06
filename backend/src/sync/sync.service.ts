@@ -632,7 +632,13 @@ export class SyncService implements OnModuleInit {
     };
   }
 
-  async updateTransactionCategory(userId: string, id: string, category: string, merchant?: string) {
+  async updateTransactionCategory(
+    userId: string,
+    id: string,
+    category: string,
+    merchant?: string,
+    updateMerchantRule: boolean = false,
+  ) {
     const tx = await this.transactionRepository.findOne({ where: { id, userId, isDeleted: false } });
     if (!tx) {
       throw new BadRequestException('Transaction not found or deleted.');
@@ -643,7 +649,7 @@ export class SyncService implements OnModuleInit {
     await this.invalidateUserSyncCache(userId);
 
     const targetMerchant = merchant || tx.merchant;
-    if (targetMerchant) {
+    if (targetMerchant && updateMerchantRule === true) {
       await this.saveMerchantTagRule(userId, targetMerchant, category).catch(() => {});
     }
 
@@ -1275,6 +1281,7 @@ export class SyncService implements OnModuleInit {
       amount: number;
       category: string;
       note?: string;
+      updateMerchantRule?: boolean;
     },
   ) {
     this.logger.log(`Updating ${data.type} transaction entry ${data.id} for user ${userId}`);
@@ -1308,7 +1315,7 @@ export class SyncService implements OnModuleInit {
       tx.updatedAt = Date.now();
       await this.transactionRepository.save(tx);
 
-      if (note) {
+      if (note && data.updateMerchantRule === true) {
         await this.saveMerchantTagRule(userId, note, cleanCategory.toLowerCase()).catch(() => {});
       }
 

@@ -76,6 +76,7 @@ export const TransactionDetailScreen: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [tagModalVisible, setTagModalVisible] = useState(false);
+  const [updatePayeeRule, setUpdatePayeeRule] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
   const { scrollBottomPadding } = useKeyboardHeight(40);
 
@@ -118,6 +119,7 @@ export const TransactionDetailScreen: React.FC = () => {
           amount: parsedAmount,
           category: selectedCategory,
           note: note.trim() || undefined,
+          updateMerchantRule: updatePayeeRule,
         }),
       });
 
@@ -144,9 +146,9 @@ export const TransactionDetailScreen: React.FC = () => {
         // Store might not track all modal transactions
       }
 
-      // Save user learning rule for this merchant!
+      // Save user learning rule for this merchant ONLY if user opted to update default!
       const targetMerchant = note.trim() || transaction.merchant;
-      if (targetMerchant) {
+      if (targetMerchant && updatePayeeRule) {
         await tagLearningService.saveLearnedTag(targetMerchant, selectedCategory).catch(() => {});
       }
 
@@ -432,11 +434,28 @@ export const TransactionDetailScreen: React.FC = () => {
                       >
                         {currentTagDef.label}
                       </Text>
-                      <Text style={styles.selectedTagSub}>
-                        {note || transaction.merchant
-                          ? `Auto-learned for "${note || transaction.merchant}"`
-                          : 'Tap to change category'}
-                      </Text>
+                      {(() => {
+                        const targetName = note.trim() || transaction.merchant;
+                        const defaultTag = targetName ? tagLearningService.getPrimaryTag(targetName, transaction.type) : null;
+                        const isDifferent = defaultTag && defaultTag.toLowerCase() !== selectedCategory.toLowerCase();
+
+                        if (isDifferent) {
+                          return (
+                            <Text style={[styles.selectedTagSub, { color: updatePayeeRule ? '#818CF8' : '#10B981', fontWeight: '600' }]}>
+                              {updatePayeeRule
+                                ? `🔄 Changing default rule for "${targetName}"`
+                                : `⚡ One-time tag (Default: ${getTagDef(defaultTag).label})`}
+                            </Text>
+                          );
+                        }
+                        return (
+                          <Text style={styles.selectedTagSub}>
+                            {targetName
+                              ? `Payee Default: ${currentTagDef.label}`
+                              : 'Tap to change category'}
+                          </Text>
+                        );
+                      })()}
                     </View>
 
                     <View
@@ -485,7 +504,10 @@ export const TransactionDetailScreen: React.FC = () => {
                                 : 'transparent',
                             },
                           ]}
-                          onPress={() => setSelectedCategory(def.id)}
+                          onPress={() => {
+                            setSelectedCategory(def.id);
+                            setUpdatePayeeRule(false); // Quick tags default to this transaction only
+                          }}
                           activeOpacity={0.7}
                         >
                           <Text
@@ -530,6 +552,75 @@ export const TransactionDetailScreen: React.FC = () => {
                       </Text>
                     </TouchableOpacity>
                   </View>
+
+                  {/* Scope Explainer / Switcher if category differs from payee default */}
+                  {(() => {
+                    const targetName = note.trim() || transaction.merchant;
+                    const defaultTag = targetName ? tagLearningService.getPrimaryTag(targetName, transaction.type) : null;
+                    const isDifferent = defaultTag && defaultTag.toLowerCase() !== selectedCategory.toLowerCase();
+
+                    if (!isDifferent || !targetName) return null;
+
+                    return (
+                      <View
+                        style={[
+                          styles.ruleToggleCard,
+                          {
+                            backgroundColor: isDark ? '#1C1F2B' : '#F8FAFC',
+                            borderColor: isDark ? '#2D3446' : '#E2E8F0',
+                          },
+                        ]}
+                      >
+                        <View style={{ flex: 1, marginRight: 8 }}>
+                          <Text style={[styles.ruleToggleTitle, { color: isDark ? '#F1F5F9' : '#0F172A' }]}>
+                            {updatePayeeRule
+                              ? `Set ${currentTagDef.label} as default for "${targetName}"`
+                              : `Keep "${targetName}" default as ${getTagDef(defaultTag).label}`}
+                          </Text>
+                          <Text style={[styles.ruleToggleSub, { color: isDark ? '#94A3B8' : '#64748B' }]}>
+                            {updatePayeeRule
+                              ? `All future transactions will automatically use ${currentTagDef.label}.`
+                              : `This transaction will use ${currentTagDef.label}, but future transactions will remain ${getTagDef(defaultTag).label}.`}
+                          </Text>
+                        </View>
+
+                        <TouchableOpacity
+                          style={[
+                            styles.ruleTogglePill,
+                            {
+                              backgroundColor: updatePayeeRule
+                                ? isDark ? 'rgba(99, 102, 241, 0.2)' : '#EEF2FF'
+                                : isDark ? 'rgba(16, 185, 129, 0.15)' : '#ECFDF5',
+                              borderColor: updatePayeeRule
+                                ? isDark ? '#818CF8' : '#002E6E'
+                                : '#10B981',
+                            },
+                          ]}
+                          onPress={() => setUpdatePayeeRule(!updatePayeeRule)}
+                          activeOpacity={0.7}
+                        >
+                          <Feather
+                            name={updatePayeeRule ? 'repeat' : 'zap'}
+                            size={12}
+                            color={updatePayeeRule ? (isDark ? '#818CF8' : '#002E6E') : '#10B981'}
+                            style={{ marginRight: 4 }}
+                          />
+                          <Text
+                            style={[
+                              styles.ruleTogglePillText,
+                              {
+                                color: updatePayeeRule
+                                  ? isDark ? '#818CF8' : '#002E6E'
+                                  : '#10B981',
+                              },
+                            ]}
+                          >
+                            {updatePayeeRule ? 'Always' : 'This Only'}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })()}
                 </>
               );
             })()}
@@ -596,7 +687,12 @@ export const TransactionDetailScreen: React.FC = () => {
         visible={tagModalVisible}
         onClose={() => setTagModalVisible(false)}
         selectedTag={selectedCategory}
-        onSelectTag={(tag) => setSelectedCategory(tag)}
+        onSelectTag={(tag, updateRule) => {
+          setSelectedCategory(tag);
+          if (updateRule !== undefined) {
+            setUpdatePayeeRule(Boolean(updateRule));
+          }
+        }}
         merchantName={note.trim() || transaction.merchant}
         isDark={isDark}
         colors={colors}
@@ -826,5 +922,34 @@ const getStyles = (colors: any, isDark: boolean) =>
     },
     quickTagChipText: {
       fontSize: 11,
+    },
+    ruleToggleCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginTop: 12,
+      padding: 12,
+      borderRadius: 12,
+      borderWidth: 1,
+    },
+    ruleToggleTitle: {
+      fontSize: 12,
+      fontWeight: '700',
+      marginBottom: 3,
+    },
+    ruleToggleSub: {
+      fontSize: 11,
+      lineHeight: 15,
+    },
+    ruleTogglePill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 6,
+      paddingHorizontal: 10,
+      borderRadius: 14,
+      borderWidth: 1,
+    },
+    ruleTogglePillText: {
+      fontSize: 11.5,
+      fontWeight: '700',
     },
   });

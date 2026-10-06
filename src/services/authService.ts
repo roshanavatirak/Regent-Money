@@ -8,6 +8,13 @@ import { tokenStore } from './tokenStore';
 
 const SESSION_KEY = 'auth_user_id';
 const USER_PROFILE_KEY = 'auth_user_profile';
+const LAST_GOOGLE_USER_KEY = 'last_google_user';
+
+export interface LastGoogleUser {
+  email: string;
+  name: string;
+  photo?: string;
+}
 
 function formatPhoneNumber(phone: string): string {
   const clean = phone.replace(/\s+/g, '');
@@ -42,6 +49,34 @@ export const authService = {
    */
   getAccessToken(): string | null {
     return tokenStore.getAccessToken();
+  },
+
+  /**
+   * Returns remembered last used Google Account for LinkedIn-style 1-tap display
+   */
+  getLastGoogleUser(): LastGoogleUser | null {
+    const direct = mmkvStorage.getObject<LastGoogleUser>(LAST_GOOGLE_USER_KEY);
+    if (direct && direct.email) return direct;
+
+    // Fallback: Check cached user profile if previously authenticated with Google
+    const cached =
+      mmkvStorage.getObject<UserProfile>(USER_PROFILE_KEY) ||
+      mmkvStorage.getObject<UserProfile>('user_profile');
+    if (cached?.email && (cached.email.toLowerCase().includes('@gmail.com') || cached.avatarUrl?.includes('google'))) {
+      return {
+        email: cached.email,
+        name: cached.name || cached.email.split('@')[0],
+        photo: cached.avatarUrl || undefined,
+      };
+    }
+    return null;
+  },
+
+  /**
+   * Clears remembered last Google user
+   */
+  clearLastGoogleUser(): void {
+    mmkvStorage.delete(LAST_GOOGLE_USER_KEY);
   },
 
   /**
@@ -173,7 +208,7 @@ export const authService = {
   /**
    * Native Google Login flow (stub or bridged verification via ID token)
    */
-  async signInWithGoogleNative(): Promise<UserProfile> {
+  async signInWithGoogleNative(forceAccountPicker: boolean = false): Promise<UserProfile> {
     const webClientId = getGoogleWebClientId();
     if (!webClientId) {
       throw new Error('Google Web Client ID is not configured.');
@@ -188,6 +223,14 @@ export const authService = {
       });
 
       await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+
+      // If switching account or forceAccountPicker is requested, sign out of Google Play Services session first
+      if (forceAccountPicker) {
+        try {
+          await GoogleSignin.signOut();
+        } catch (_) {}
+      }
+
       const signInResult = await GoogleSignin.signIn();
       const idToken = signInResult?.data?.idToken || signInResult?.idToken;
 
@@ -209,6 +252,20 @@ export const authService = {
 
       const data = await response.json();
       const profile: UserProfile = data.user || data.profile;
+
+      // Remember Google user details for LinkedIn-style 1-tap display
+      const googleUser = signInResult?.data?.user || signInResult?.user;
+      const gEmail = googleUser?.email || profile.email;
+      const gName = googleUser?.name || profile.name;
+      const gPhoto = googleUser?.photo || profile.avatarUrl;
+
+      if (gEmail) {
+        mmkvStorage.setObject(LAST_GOOGLE_USER_KEY, {
+          email: gEmail,
+          name: gName || gEmail.split('@')[0],
+          photo: gPhoto || '',
+        });
+      }
 
       // Save profile cache and token locally
       mmkvStorage.setString(SESSION_KEY, profile.id);
@@ -250,6 +307,14 @@ export const authService = {
 
     const data = await response.json();
     const profile: UserProfile = data.profile;
+
+    if (sanitizedEmail) {
+      mmkvStorage.setObject(LAST_GOOGLE_USER_KEY, {
+        email: sanitizedEmail,
+        name: profile.name || name || sanitizedEmail.split('@')[0],
+        photo: profile.avatarUrl || avatarUrl || '',
+      });
+    }
 
     // Save profile cache and token locally
     mmkvStorage.setString(SESSION_KEY, profile.id);
@@ -399,6 +464,48 @@ export const authService = {
     // Fallback: save locally
     useAuthStore.getState().updateUser({ avatarUrl: fileData });
     return fileData;
+  },
+
+  /**
+   * Accept Terms & Conditions and persist status locally and in database
+   */
+  async acceptTerms(): Promise<boolean> {
+    const now = Date.now();
+    // 1. Immediately update Zustand store for instant, reactive UI dismissal
+    useAuthStore.getState().updateUser({
+      termsAccepted: true,
+      termsAcceptedAt: now,
+    });
+
+    // 2. Persist to MMKV cached profile so it never pops up again across restarts
+    const currentProfile = mmkvStorage.getObject<UserProfile>(USER_PROFILE_KEY);
+    if (currentProfile) {
+      mmkvStorage.setObject(USER_PROFILE_KEY, {
+        ...currentProfile,
+        termsAccepted: true,
+        termsAcceptedAt: now,
+      });
+    }
+
+    // 3. Persist to backend database via PATCH /auth/accept-terms
+    const token = this.getAccessToken();
+    if (!token) return true;
+
+    try {
+      const res = await fetch(`${BACKEND_URL}/auth/accept-terms`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (!res.ok) {
+        console.warn('[AuthService] Backend accept-terms responded with status:', res.status);
+      }
+    } catch (err) {
+      console.warn('[AuthService] Failed to sync accept-terms with backend:', err);
+    }
+    return true;
   },
 
   /**

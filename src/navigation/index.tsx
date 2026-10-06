@@ -55,6 +55,7 @@ import { UpdateModal } from './UpdateModal';
 import { AppSplashScreen } from '../components/AppSplashScreen';
 import { NotificationPermissionModal } from '../components/NotificationPermissionModal';
 import { SmsPermissionModal } from '../components/SmsPermissionModal';
+import { TermsAndConditionsModal } from '../components/TermsAndConditionsModal';
 import { smsPermissionService } from '../services/smsPermissionService';
 import { updateService, UpdateInfo } from '../services/updateService';
 import { ACCOUNT_TYPES } from './EditBankScreen';
@@ -223,6 +224,7 @@ import {
   AutoLockTimeout,
   useSidebarStore,
   useAppUpdateStore,
+  useTermsModalStore,
 } from '../store';
 import { biometricService } from '../services/biometricService';
 import { BiometricLockOverlay } from '../components/BiometricLockOverlay';
@@ -4014,8 +4016,14 @@ export default function AppNavigator() {
   const [notificationModalVisible, setNotificationModalVisible] = useState(false);
   const [smsModalVisible, setSmsModalVisible] = useState(false);
 
+  const termsModalState = useTermsModalStore();
+  const isTermsAccepted = Boolean(user?.termsAccepted);
+  const showMandatoryTerms = Boolean(user && !isTermsAccepted && splashFinished && !isLoading);
+  const showTermsModal = showMandatoryTerms || termsModalState.isOpen;
+  const isReadOnlyTerms = Boolean(isTermsAccepted && termsModalState.isOpen);
+
   useEffect(() => {
-    if (!splashFinished || isLoading || !user || Platform.OS === 'web') return;
+    if (!splashFinished || isLoading || !user || !user.termsAccepted || Platform.OS === 'web') return;
 
     let timer: any = null;
     const checkPermissionsFlow = async () => {
@@ -4290,6 +4298,11 @@ export default function AppNavigator() {
           updateInfo={updateInfo}
           visible={updateModalVisible}
           onDismiss={() => setUpdateModalVisible(false)}
+        />
+        <TermsAndConditionsModal
+          visible={showTermsModal}
+          readOnly={isReadOnlyTerms}
+          onDismiss={() => termsModalState.closeTermsModal()}
         />
         <NotificationPermissionModal
           visible={notificationModalVisible}

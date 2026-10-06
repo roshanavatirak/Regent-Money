@@ -68,6 +68,17 @@ class TagLearningService {
   }
 
   /**
+   * Retrieves the primary/default tag for a merchant/payee.
+   * Checks learned user map first, then falls back to semantic prediction.
+   */
+  getPrimaryTag(merchant: string, type: 'debit' | 'credit' = 'debit'): string {
+    if (!merchant) return type === 'credit' ? 'salary' : 'food';
+    const learned = this.getLearnedTag(merchant);
+    if (learned) return learned;
+    return this.predict(merchant, undefined, type);
+  }
+
+  /**
    * Saves a user-chosen tag for a merchant.
    * Updates local MMKV immediately and syncs with backend database.
    */

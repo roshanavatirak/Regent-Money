@@ -35,7 +35,7 @@ class SmsTaskService : HeadlessJsTaskService() {
             val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("Regent Money")
                 .setContentText("Syncing transaction...")
-                .setSmallIcon(R.mipmap.ic_launcher_monochrome)
+                .setSmallIcon(R.drawable.ic_notification)
                 .setColor(0xFF10B981.toInt())
                 .setPriority(NotificationCompat.PRIORITY_MIN)
                 .setSilent(true)

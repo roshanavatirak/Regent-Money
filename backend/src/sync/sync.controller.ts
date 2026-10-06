@@ -78,10 +78,16 @@ export class SyncController {
   async updateCategory(
     @Req() req: any,
     @Param('id') id: string,
-    @Body() body: { category: string; merchant?: string },
+    @Body() body: { category: string; merchant?: string; updateMerchantRule?: boolean },
   ) {
     const userId = req.user.id;
-    return this.syncService.updateTransactionCategory(userId, id, body.category, body.merchant);
+    return this.syncService.updateTransactionCategory(
+      userId,
+      id,
+      body.category,
+      body.merchant,
+      body.updateMerchantRule,
+    );
   }
 
   @Post('merchant-tag-rule')
@@ -134,6 +140,7 @@ export class SyncController {
       amount: number;
       category: string;
       note?: string;
+      updateMerchantRule?: boolean;
     },
   ) {
     const userId = req.user.id;
