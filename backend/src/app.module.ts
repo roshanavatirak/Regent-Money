@@ -11,6 +11,7 @@ import { BankProfile } from './sync/entities/bank-profile.entity';
 import { Transaction } from './sync/entities/transaction.entity';
 import { BudgetDeclaration } from './sync/entities/budget-declaration.entity';
 import { SavingsGoal } from './sync/entities/savings-goal.entity';
+import { GoalHistory } from './sync/entities/goal-history.entity';
 import { NetWorthSnapshot } from './sync/entities/net-worth-snapshot.entity';
 import { IncomeRecord } from './sync/entities/income-record.entity';
 import { UserMerchantTag } from './sync/entities/user-merchant-tag.entity';
@@ -58,6 +59,7 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
             Transaction,
             BudgetDeclaration,
             SavingsGoal,
+            GoalHistory,
             NetWorthSnapshot,
             IncomeRecord,
             UserMerchantTag,

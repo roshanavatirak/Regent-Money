@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { ChatMessage } from '../services/aiService';
 import { mmkvStorage } from '../db/mmkv';
 import { useColorScheme } from 'react-native';
+import { migrateGoalsV1toV2 } from '../features/goals/services/goalsMigration';
+import type { Goal, SavingsEntry } from '../features/goals/services/goalPacingService';
 
 function loadCached<T>(key: string, fallback: T): T {
   try {
@@ -210,24 +212,7 @@ export const useBudgetStore = create<BudgetState>((set) => ({
     }),
 }));
 
-export interface Goal {
-  id: string;
-  name: string;
-  category?: 'bike' | 'car' | 'home' | 'travel' | 'wedding' | 'education' | 'emergency' | 'gadget' | 'gold' | 'business' | 'fire' | 'wealth_stash' | 'custom' | string;
-  targetAmount: number;
-  currentAmount: number;
-  monthlyContribution?: number;
-  expectedReturnRate?: number;
-  targetDate: number;
-  priority?: 'high' | 'medium' | 'low' | string;
-  color?: string;
-  icon?: string;
-  strategy?: string;
-  streakMonths?: number;
-  status: string;
-  isMilestoneBased?: boolean;
-  milestoneStep?: number;
-}
+export type { Goal, SavingsEntry };
 
 export interface GoalsState {
   goals: Goal[];
@@ -235,26 +220,63 @@ export interface GoalsState {
   addGoal: (goal: Goal) => void;
   updateGoal: (id: string, updates: Partial<Goal>) => void;
   deleteGoal: (id: string) => void;
-  contributeToGoal: (id: string, amount: number) => void;
+  contributeToGoal: (id: string, amount: number, note?: string) => void;
+  withdrawFromGoal: (id: string, amount: number, note?: string) => void;
+  deleteGoalEntry: (goalId: string, entryId: string) => void;
 }
 
 export const useGoalsStore = create<GoalsState>((set) => ({
-  goals: loadCached<Goal[]>('cache_goals', []),
-  setGoals: (goals) => {
-    mmkvStorage.setObject('cache_goals', goals);
-    set({ goals });
+  goals: migrateGoalsV1toV2(loadCached<any[]>('cache_goals', [])),
+  setGoals: (rawGoals) => {
+    set((state) => {
+      const existingMap = new Map((state.goals || []).map((g) => [g.id, g]));
+      const mergedIncoming = (rawGoals || []).map((incoming: any) => {
+        const local = existingMap.get(incoming.id);
+        if (!local) return incoming;
+        return {
+          ...local,
+          ...incoming,
+          // Retain local cover selection and rich properties if incoming doesn't define them
+          coverPresetKey: incoming.coverPresetKey !== undefined ? incoming.coverPresetKey : local.coverPresetKey,
+          coverImageUri: incoming.coverImageUri !== undefined ? incoming.coverImageUri : local.coverImageUri,
+          linkedBankId: incoming.linkedBankId !== undefined ? incoming.linkedBankId : (incoming.linked_bank_id !== undefined ? incoming.linked_bank_id : local.linkedBankId),
+          entries: (incoming.entries && incoming.entries.length > 0) ? incoming.entries : (local.entries || []),
+          reminder: incoming.reminder ?? local.reminder,
+          committedMonthly: incoming.committedMonthly ?? local.committedMonthly,
+          adjustForInflation: incoming.adjustForInflation ?? local.adjustForInflation,
+        };
+      });
+      const goals = migrateGoalsV1toV2(mergedIncoming);
+      mmkvStorage.setObject('cache_goals', goals);
+      return { goals };
+    });
   },
   addGoal: (goal) =>
     set((state) => {
-      const updated = [goal, ...state.goals.filter((g) => g.id !== goal.id)];
+      const migrated = migrateGoalsV1toV2([goal])[0];
+      const updated = [migrated, ...state.goals.filter((g) => g.id !== goal.id)];
       mmkvStorage.setObject('cache_goals', updated);
       return { goals: updated };
     }),
   updateGoal: (id, updates) =>
     set((state) => {
-      const updated = state.goals.map((g) =>
-        g.id === id ? { ...g, ...updates } : g
-      );
+      const updated = state.goals.map((g) => {
+        if (g.id !== id) return g;
+        const merged: any = { ...g, ...updates };
+        if (updates.coverImageUri === undefined && 'coverImageUri' in updates) {
+          delete merged.coverImageUri;
+        }
+        if (updates.coverPresetKey === undefined && 'coverPresetKey' in updates) {
+          delete merged.coverPresetKey;
+        }
+        if (updates.linkedBankId === undefined && 'linkedBankId' in updates) {
+          delete merged.linkedBankId;
+        }
+        if (merged.entries) {
+          merged.currentAmount = Math.max(0, merged.entries.reduce((sum: number, e: SavingsEntry) => sum + (e.type === 'withdraw' ? -e.amount : e.amount), 0));
+        }
+        return merged;
+      });
       mmkvStorage.setObject('cache_goals', updated);
       return { goals: updated };
     }),
@@ -264,16 +286,66 @@ export const useGoalsStore = create<GoalsState>((set) => ({
       mmkvStorage.setObject('cache_goals', updated);
       return { goals: updated };
     }),
-  contributeToGoal: (id, amount) =>
+  contributeToGoal: (id, amount, note) =>
     set((state) => {
+      const todayStr = new Date().toISOString().slice(0, 10);
       const updated = state.goals.map((g) => {
         if (g.id !== id) return g;
-        const newCurrent = g.currentAmount + amount;
+        const newEntry: SavingsEntry = {
+          id: `entry_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          amount,
+          at: todayStr,
+          type: 'save',
+          note: note || 'Logged savings',
+        };
+        const entries = [newEntry, ...(g.entries || [])];
+        const newCurrent = Math.max(0, entries.reduce((acc, e) => acc + (e.type === 'withdraw' ? -e.amount : e.amount), 0));
         return {
           ...g,
+          entries,
           currentAmount: newCurrent,
           streakMonths: (g.streakMonths || 0) + 1,
-          status: newCurrent >= g.targetAmount ? 'achieved' : g.status,
+          status: newCurrent >= g.targetAmount ? 'completed' : g.status,
+        };
+      });
+      mmkvStorage.setObject('cache_goals', updated);
+      return { goals: updated };
+    }),
+  withdrawFromGoal: (id, amount, note) =>
+    set((state) => {
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const updated = state.goals.map((g) => {
+        if (g.id !== id) return g;
+        const newEntry: SavingsEntry = {
+          id: `entry_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          amount,
+          at: todayStr,
+          type: 'withdraw',
+          note: note || 'Goal withdrawal',
+        };
+        const entries = [newEntry, ...(g.entries || [])];
+        const newCurrent = Math.max(0, entries.reduce((acc, e) => acc + (e.type === 'withdraw' ? -e.amount : e.amount), 0));
+        return {
+          ...g,
+          entries,
+          currentAmount: newCurrent,
+          status: newCurrent >= g.targetAmount ? 'completed' : (g.status === 'completed' || g.status === 'achieved' ? 'active' : g.status),
+        };
+      });
+      mmkvStorage.setObject('cache_goals', updated);
+      return { goals: updated };
+    }),
+  deleteGoalEntry: (goalId, entryId) =>
+    set((state) => {
+      const updated = state.goals.map((g) => {
+        if (g.id !== goalId) return g;
+        const remainingEntries = (g.entries || []).filter((e) => e.id !== entryId);
+        const newCurrent = Math.max(0, remainingEntries.reduce((acc, e) => acc + (e.type === 'withdraw' ? -e.amount : e.amount), 0));
+        return {
+          ...g,
+          entries: remainingEntries,
+          currentAmount: newCurrent,
+          status: newCurrent >= g.targetAmount ? (g.status || 'completed') : (g.status === 'completed' || g.status === 'achieved' ? 'active' : g.status),
         };
       });
       mmkvStorage.setObject('cache_goals', updated);

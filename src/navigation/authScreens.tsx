@@ -262,7 +262,7 @@ const GoogleAuthButton: React.FC<GoogleAuthButtonProps> = ({
           activeOpacity={0.7}
         >
           <Ionicons name="swap-horizontal" size={14} color="#10B981" style={{ marginRight: 6 }} />
-          <Text style={styles.switchAccountBtnText}>Switch Google account</Text>
+          {/* <Text style={styles.switchAccountBtnText}>Switch Google account</Text> */}
         </TouchableOpacity>
       </View>
     );

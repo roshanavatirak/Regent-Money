@@ -203,6 +203,9 @@ export const syncService = {
         currentAmount: parseFloat(g.currentAmount ?? g.current_amount ?? 0),
         targetDate: Number(g.targetDate ?? g.target_date ?? 0),
         status: g.status,
+        category: g.category,
+        coverPresetKey: g.coverPresetKey ?? g.cover_preset_key,
+        coverImageUri: g.coverImageUri ?? g.cover_image_uri,
       }));
       useGoalsStore.getState().setGoals(mappedGoals);
 

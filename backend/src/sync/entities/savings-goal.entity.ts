@@ -62,6 +62,18 @@ export class SavingsGoal {
   @Column({ name: 'streak_months', type: 'integer', nullable: true, default: 0 })
   streakMonths: number;
 
+  @Column({ name: 'cover_preset_key', type: 'text', nullable: true })
+  coverPresetKey: string;
+
+  @Column({ name: 'cover_image_uri', type: 'text', nullable: true })
+  coverImageUri: string;
+
+  @Column({ name: 'linked_bank_id', type: 'text', nullable: true })
+  linkedBankId: string | null;
+
+  @Column({ name: 'entries', type: 'jsonb', nullable: true, default: () => "'[]'" })
+  entries: any[];
+
   @Column({ name: 'updated_at', type: 'bigint', transformer: {
     to: (value: number) => value ? String(value) : null,
     from: (value: string) => value ? Number(value) : null

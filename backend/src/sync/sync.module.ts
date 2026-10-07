@@ -6,6 +6,7 @@ import { BankProfile } from './entities/bank-profile.entity';
 import { Transaction } from './entities/transaction.entity';
 import { BudgetDeclaration } from './entities/budget-declaration.entity';
 import { SavingsGoal } from './entities/savings-goal.entity';
+import { GoalHistory } from './entities/goal-history.entity';
 import { NetWorthSnapshot } from './entities/net-worth-snapshot.entity';
 import { IncomeRecord } from './entities/income-record.entity';
 import { UserMerchantTag } from './entities/user-merchant-tag.entity';
@@ -22,6 +23,7 @@ import { RedisModule } from '../redis/redis.module';
       Transaction,
       BudgetDeclaration,
       SavingsGoal,
+      GoalHistory,
       NetWorthSnapshot,
       IncomeRecord,
       UserMerchantTag,

@@ -382,9 +382,20 @@ export function generateProjectionCurve(
  */
 export function getGoalPacing(goal: Goal) {
   const now = Date.now();
-  const targetTime = goal.targetDate || now + 365 * 24 * 3600 * 1000;
+  let targetTime = now + 365 * 24 * 3600 * 1000;
+  if (typeof goal.targetDate === 'number' && !isNaN(goal.targetDate)) {
+    targetTime = goal.targetDate;
+  } else if (typeof goal.targetDate === 'string' && goal.targetDate.trim()) {
+    const raw = goal.targetDate.trim();
+    const dateStr = raw.length === 7 ? `${raw}-01` : raw;
+    const parsed = new Date(dateStr).getTime();
+    if (!isNaN(parsed)) {
+      targetTime = parsed;
+    }
+  }
+
   const daysLeft = Math.max(0, Math.ceil((targetTime - now) / (1000 * 60 * 60 * 24)));
-  const progressPercent = Math.min(100, Math.round((goal.currentAmount / (goal.targetAmount || 1)) * 100));
+  const progressPercent = Math.min(100, Math.round(((goal.currentAmount || 0) / (goal.targetAmount || 1)) * 100));
 
   // Determine whether ahead/behind based on linear pacing benchmark
   const assumedDurationDays = 365; // fallback
@@ -410,7 +421,7 @@ export function getGoalPacing(goal: Goal) {
 
   return {
     daysLeft,
-    monthsLeft: Math.ceil(daysLeft / 30),
+    monthsLeft: Math.max(1, Math.ceil(daysLeft / 30)),
     progressPercent,
     status,
     statusText,
@@ -435,6 +446,7 @@ export const goalService = {
     icon?: string;
     isMilestoneBased?: boolean;
     milestoneStep?: number;
+    linkedBankId?: string;
   }): Promise<Goal> {
     const id = 'goal_' + Math.random().toString(36).substr(2, 9);
     const months = Math.max(1, Math.ceil((data.targetDate - Date.now()) / (1000 * 60 * 60 * 24 * 30)));
@@ -457,6 +469,21 @@ export const goalService = {
       status: 'active',
       isMilestoneBased: data.isMilestoneBased ?? (data.category === 'wealth_stash'),
       milestoneStep: data.milestoneStep ?? 1,
+      committedMonthly: data.monthlyContribution,
+      linkedBankId: data.linkedBankId,
+      createdAt: new Date().toISOString().slice(0, 10),
+      entries:
+        data.currentAmount > 0
+          ? [
+              {
+                id: 'init_' + id,
+                amount: data.currentAmount,
+                at: new Date().toISOString().slice(0, 10),
+                type: 'opening',
+                note: 'Opening balance',
+              },
+            ]
+          : [],
     };
 
     // Optimistic local update
@@ -550,8 +577,8 @@ export const goalService = {
   /**
    * Contribute funds to a goal
    */
-  async contribute(id: string, amount: number): Promise<void> {
-    useGoalsStore.getState().contributeToGoal(id, amount);
+  async contribute(id: string, amount: number, note?: string): Promise<void> {
+    useGoalsStore.getState().contributeToGoal(id, amount, note);
 
     const token = authService.getAccessToken();
     if (token) {
@@ -562,12 +589,77 @@ export const goalService = {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${token}`,
           },
-          body: JSON.stringify({ amount }),
+          body: JSON.stringify({ amount, note }),
         });
       } catch (err) {
         console.warn('[GoalService] Failed to sync contribution to backend:', err);
       }
     }
+  },
+
+  /**
+   * Withdraw funds from a goal
+   */
+  async withdraw(id: string, amount: number, note?: string): Promise<void> {
+    useGoalsStore.getState().withdrawFromGoal(id, amount, note);
+
+    const token = authService.getAccessToken();
+    if (token) {
+      try {
+        await fetch(`${BACKEND_URL}/sync/goal/${id}/withdraw`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ amount, note }),
+        });
+      } catch (err) {
+        console.warn('[GoalService] Failed to sync withdrawal to backend:', err);
+      }
+    }
+  },
+
+  /**
+   * Delete an entry from a goal's history and reverse its financial effect
+   */
+  async deleteEntry(goalId: string, entryId: string): Promise<void> {
+    useGoalsStore.getState().deleteGoalEntry(goalId, entryId);
+
+    const token = authService.getAccessToken();
+    if (token) {
+      try {
+        await fetch(`${BACKEND_URL}/sync/goal/${goalId}/entry/${entryId}`, {
+          method: 'DELETE',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+      } catch (err) {
+        console.warn('[GoalService] Failed to sync entry deletion to backend:', err);
+      }
+    }
+  },
+
+  /**
+   * Fetch transaction history for a goal
+   */
+  async getGoalHistory(goalId: string): Promise<any[]> {
+    const token = authService.getAccessToken();
+    if (!token) return [];
+    try {
+      const res = await fetch(`${BACKEND_URL}/sync/goal/${goalId}/history`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (err) {
+      console.warn('[GoalService] Failed to fetch goal history:', err);
+    }
+    return [];
   },
 
   /**

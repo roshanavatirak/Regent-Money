@@ -215,9 +215,44 @@ export class SyncController {
 
   @Post('goal/:id/contribute')
   @HttpCode(HttpStatus.OK)
-  async contributeToGoal(@Req() req: any, @Param('id') id: string, @Body('amount') amount: number) {
+  async contributeToGoal(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body('amount') amount: number,
+    @Body('note') note?: string,
+  ) {
     const userId = req.user.id;
-    return this.syncService.contributeToGoal(userId, id, amount);
+    return this.syncService.contributeToGoal(userId, id, amount, note);
+  }
+
+  @Post('goal/:id/withdraw')
+  @HttpCode(HttpStatus.OK)
+  async withdrawFromGoal(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body('amount') amount: number,
+    @Body('note') note?: string,
+  ) {
+    const userId = req.user.id;
+    return this.syncService.withdrawFromGoal(userId, id, amount, note);
+  }
+
+  @Delete('goal/:id/entry/:entryId')
+  @HttpCode(HttpStatus.OK)
+  async deleteGoalEntry(
+    @Req() req: any,
+    @Param('id') goalId: string,
+    @Param('entryId') entryId: string,
+  ) {
+    const userId = req.user.id;
+    return this.syncService.deleteGoalEntry(userId, goalId, entryId);
+  }
+
+  @Get('goal/:id/history')
+  @HttpCode(HttpStatus.OK)
+  async getGoalHistory(@Req() req: any, @Param('id') goalId: string) {
+    const userId = req.user.id;
+    return this.syncService.getGoalHistory(userId, goalId);
   }
 
   @Delete('goal/:id')

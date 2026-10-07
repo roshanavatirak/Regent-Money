@@ -13,7 +13,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme } from '../store';
+import { useTheme, useBankStore, useGoalsStore } from '../store';
 import {
   GOAL_CATEGORIES,
   GoalCategoryOption,
@@ -24,6 +24,15 @@ import {
   goalService,
   formatIndianCompactAmount,
 } from '../services/goalService';
+import {
+  getBankAllocationSummary,
+  validateBankDeposit,
+  formatBankOptionSubtitle,
+} from '../features/goals/services/goalBankAllocationService';
+import {
+  formatIndianFullRupees,
+  formatIndianCompactRupees,
+} from '../features/goals/services/goalNudgeTemplates';
 import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
 
 const { width } = Dimensions.get('window');
@@ -57,8 +66,20 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
   const [monthlyContribution, setMonthlyContribution] = useState('');
   const [solverMode, setSolverMode] = useState<'by_date' | 'by_monthly'>('by_date');
   const [priority, setPriority] = useState<'high' | 'medium' | 'low'>('medium');
+  const [selectedBankId, setSelectedBankId] = useState<string | undefined>(undefined);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
+
+  // Bank Profiles & Goals for envelope accounting
+  const bankProfiles = useBankStore((state) => state.bankProfiles);
+  const allGoals = useGoalsStore((state) => state.goals);
+
+  // Auto-select first bank account if available and none selected
+  useEffect(() => {
+    if (!selectedBankId && bankProfiles && bankProfiles.length > 0) {
+      setSelectedBankId(bankProfiles[0].id);
+    }
+  }, [bankProfiles]);
 
   // Category selection handler
   const handleSelectCategory = (cat: GoalCategoryOption) => {
@@ -74,6 +95,16 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
 
   const parsedTarget = Math.max(1000, parseFloat(targetAmount) || 0);
   const parsedCurrent = Math.max(0, parseFloat(currentAmount) || 0);
+
+  // Selected bank and allocation validation
+  const selectedBank = useMemo(() => {
+    return bankProfiles.find((b) => b.id === selectedBankId);
+  }, [bankProfiles, selectedBankId]);
+
+  const bankValidation = useMemo(() => {
+    if (!selectedBank) return { valid: true, maxAllowed: Infinity };
+    return validateBankDeposit(selectedBank, allGoals, parsedCurrent);
+  }, [selectedBank, allGoals, parsedCurrent]);
 
   // Investment strategy recommendation based on months and category
   const strategy = useMemo(() => {
@@ -104,6 +135,10 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
 
   const handleSave = async () => {
     if (!name.trim() || parsedTarget <= 0) return;
+    if (!bankValidation.valid) {
+      alert(bankValidation.errorMessage || 'Initial savings exceeds available balance in the linked bank account.');
+      return;
+    }
     setIsSubmitting(true);
     try {
       const targetDate = Date.now() + effectiveMonths * 30 * 24 * 60 * 60 * 1000;
@@ -120,6 +155,7 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
         icon: selectedCat.icon,
         isMilestoneBased: selectedCat.id === 'wealth_stash',
         milestoneStep: 1,
+        linkedBankId: selectedBankId,
       });
 
       // Reset & Close
@@ -326,12 +362,144 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
                   </TouchableOpacity>
                 </View>
 
+                {/* Linked Bank Account Selector */}
+                <View style={{ marginTop: 18 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <Text style={[styles.inputLabel, { color: textColor, marginBottom: 0 }]}>
+                      Backed By Bank Account (Savings)
+                    </Text>
+                    {selectedBank ? (
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: colors.accent }}>
+                        Verified Balance
+                      </Text>
+                    ) : null}
+                  </View>
+                  <Text style={{ fontSize: 11.5, color: subTextColor, marginBottom: 10, lineHeight: 16 }}>
+                    Goals act as virtual envelopes. Linking an account guarantees your goals never exceed your actual savings balance.
+                  </Text>
+
+                  {bankProfiles.length === 0 ? (
+                    <View
+                      style={[
+                        styles.bankEmptyCard,
+                        { backgroundColor: cardBg, borderColor },
+                      ]}
+                    >
+                      <Ionicons name="card-outline" size={24} color={subTextColor} style={{ marginRight: 12 }} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.bankEmptyTitle, { color: textColor }]}>
+                          No bank accounts connected
+                        </Text>
+                        <Text style={[styles.bankEmptySub, { color: subTextColor }]}>
+                          Connect an account in settings for automatic balance checks, or continue unlinked.
+                        </Text>
+                      </View>
+                    </View>
+                  ) : (
+                    <View style={styles.bankListWrap}>
+                      {bankProfiles.map((b) => {
+                        const isSelected = selectedBankId === b.id;
+                        const summary = getBankAllocationSummary(b, allGoals);
+                        const sub = formatBankOptionSubtitle(summary);
+
+                        return (
+                          <TouchableOpacity
+                            key={b.id}
+                            activeOpacity={0.8}
+                            onPress={() => setSelectedBankId(b.id)}
+                            style={[
+                              styles.bankOptionCard,
+                              {
+                                backgroundColor: isSelected ? (isDark ? 'rgba(45, 186, 78, 0.12)' : 'rgba(22, 163, 74, 0.08)') : cardBg,
+                                borderColor: isSelected ? colors.accent : borderColor,
+                              },
+                              isSelected && { borderWidth: 1.5 },
+                            ]}
+                          >
+                            <View style={[styles.bankIconCircle, { backgroundColor: isSelected ? colors.accent : (isDark ? 'rgba(255,255,255,0.08)' : '#E2E8F0') }]}>
+                              <Ionicons name="business" size={14} color={isSelected ? '#FFFFFF' : textColor} />
+                            </View>
+
+                            <View style={{ flex: 1, marginRight: 8 }}>
+                              <Text style={[styles.bankOptionTitle, { color: textColor }]} numberOfLines={1}>
+                                {b.bankName || 'Bank Account'} {b.accountNumberSuffix ? `•••• ${b.accountNumberSuffix}` : ''}
+                              </Text>
+                              <Text
+                                style={[
+                                  styles.bankOptionSub,
+                                  { color: summary.isOverallocated ? colors.warning : subTextColor },
+                                ]}
+                                numberOfLines={1}
+                              >
+                                {sub}
+                              </Text>
+                            </View>
+
+                            <View
+                              style={[
+                                styles.radioCircle,
+                                {
+                                  borderColor: isSelected ? colors.accent : subTextColor,
+                                  backgroundColor: isSelected ? colors.accent : 'transparent',
+                                },
+                              ]}
+                            >
+                              {isSelected ? <Ionicons name="checkmark" size={11} color="#FFFFFF" /> : null}
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      })}
+
+                      {/* Option to create without bank account */}
+                      <TouchableOpacity
+                        activeOpacity={0.8}
+                        onPress={() => setSelectedBankId(undefined)}
+                        style={[
+                          styles.bankOptionCard,
+                          {
+                            backgroundColor: selectedBankId === undefined ? (isDark ? 'rgba(45, 186, 78, 0.12)' : 'rgba(22, 163, 74, 0.08)') : cardBg,
+                            borderColor: selectedBankId === undefined ? colors.accent : borderColor,
+                          },
+                          selectedBankId === undefined && { borderWidth: 1.5 },
+                        ]}
+                      >
+                        <View style={[styles.bankIconCircle, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#E2E8F0' }]}>
+                          <Ionicons name="wallet-outline" size={14} color={textColor} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.bankOptionTitle, { color: textColor }]}>
+                            No Linked Bank Account
+                          </Text>
+                          <Text style={[styles.bankOptionSub, { color: subTextColor }]}>
+                            Manual tracking without balance cap
+                          </Text>
+                        </View>
+                        <View
+                          style={[
+                            styles.radioCircle,
+                            {
+                              borderColor: selectedBankId === undefined ? colors.accent : subTextColor,
+                              backgroundColor: selectedBankId === undefined ? colors.accent : 'transparent',
+                            },
+                          ]}
+                        >
+                          {selectedBankId === undefined ? <Ionicons name="checkmark" size={11} color="#FFFFFF" /> : null}
+                        </View>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+
                 {/* Initial Savings */}
-                <Text style={[styles.inputLabel, { color: textColor, marginTop: 16 }]}>
+                <Text style={[styles.inputLabel, { color: textColor, marginTop: 18 }]}>
                   Current Savings Already Saved (₹)
                 </Text>
-                <View style={[styles.amountInputRow, { backgroundColor: cardBg, borderColor }]}>
-                  <Text style={[styles.currencyPrefix, { color: subTextColor }]}>₹</Text>
+                <View style={[
+                  styles.amountInputRow,
+                  { backgroundColor: cardBg, borderColor: !bankValidation.valid ? colors.danger : borderColor },
+                  !bankValidation.valid && { borderWidth: 1.5 },
+                ]}>
+                  <Text style={[styles.currencyPrefix, { color: !bankValidation.valid ? colors.danger : subTextColor }]}>₹</Text>
                   <TextInput
                     style={[styles.amountInput, { color: textColor }]}
                     value={currentAmount}
@@ -344,6 +512,39 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
                     }}
                   />
                 </View>
+
+                {/* Real-time Allocation Validation Feedback */}
+                {selectedBank ? (
+                  !bankValidation.valid ? (
+                    <View style={[styles.validationWarningBox, { backgroundColor: isDark ? 'rgba(255, 82, 82, 0.12)' : '#FEE2E2', borderColor: colors.danger }]}>
+                      <Ionicons name="alert-circle" size={16} color={colors.danger} style={{ marginRight: 6 }} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.validationWarningText, { color: colors.danger }]}>
+                          {bankValidation.errorMessage}
+                        </Text>
+                        <TouchableOpacity
+                          onPress={() => setCurrentAmount(String(bankValidation.maxAllowed))}
+                          style={{ marginTop: 4 }}
+                        >
+                          <Text style={{ fontSize: 11.5, fontWeight: '700', color: colors.danger, textDecorationLine: 'underline' }}>
+                            Use max available ({formatIndianFullRupees(bankValidation.maxAllowed)})
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ) : parsedCurrent > 0 ? (
+                    <View style={[styles.validationSuccessBox, { backgroundColor: isDark ? 'rgba(45, 186, 78, 0.10)' : 'rgba(22, 163, 74, 0.08)', borderColor: colors.accent }]}>
+                      <Ionicons name="checkmark-circle" size={14} color={colors.accent} style={{ marginRight: 6 }} />
+                      <Text style={[styles.validationSuccessText, { color: colors.accent }]}>
+                        {formatIndianFullRupees(parsedCurrent)} allocated · {formatIndianCompactRupees(bankValidation.maxAllowed - parsedCurrent)} will remain unallocated in {selectedBank.bankName || 'account'}.
+                      </Text>
+                    </View>
+                  ) : (
+                    <Text style={{ fontSize: 11, color: subTextColor, marginTop: 4, marginLeft: 2 }}>
+                      Max available to allocate from this account: {formatIndianCompactRupees(bankValidation.maxAllowed)}
+                    </Text>
+                  )
+                ) : null}
               </View>
             )}
 
@@ -534,7 +735,13 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
 
             {step < 3 ? (
               <TouchableOpacity
-                onPress={() => setStep((s) => (s + 1) as any)}
+                onPress={() => {
+                  if (step === 2 && !bankValidation.valid) {
+                    alert(bankValidation.errorMessage || 'Initial savings exceeds available balance in the linked bank account.');
+                    return;
+                  }
+                  setStep((s) => (s + 1) as any);
+                }}
                 style={[styles.nextBtn, { backgroundColor: selectedCat.color }]}
               >
                 <Text style={styles.nextBtnText}>Continue</Text>
@@ -901,5 +1108,81 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 14,
     fontWeight: '700',
+  },
+  bankListWrap: {
+    gap: 8,
+  },
+  bankOptionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  bankIconCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  bankOptionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  bankOptionSub: {
+    fontSize: 11,
+    marginTop: 2,
+  },
+  radioCircle: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bankEmptyCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  bankEmptyTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 2,
+  },
+  bankEmptySub: {
+    fontSize: 11.5,
+    lineHeight: 16,
+  },
+  validationWarningBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    marginTop: 8,
+  },
+  validationWarningText: {
+    fontSize: 11.5,
+    lineHeight: 16,
+    fontWeight: '600',
+  },
+  validationSuccessBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: 8,
+  },
+  validationSuccessText: {
+    fontSize: 11.5,
+    fontWeight: '600',
+    flex: 1,
   },
 });

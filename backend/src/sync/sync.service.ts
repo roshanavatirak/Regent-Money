@@ -5,6 +5,7 @@ import { BankProfile } from './entities/bank-profile.entity';
 import { Transaction } from './entities/transaction.entity';
 import { BudgetDeclaration } from './entities/budget-declaration.entity';
 import { SavingsGoal } from './entities/savings-goal.entity';
+import { GoalHistory } from './entities/goal-history.entity';
 import { NetWorthSnapshot } from './entities/net-worth-snapshot.entity';
 import { IncomeRecord } from './entities/income-record.entity';
 import { UserMerchantTag } from './entities/user-merchant-tag.entity';
@@ -30,6 +31,8 @@ export class SyncService implements OnModuleInit {
     private readonly budgetDeclarationRepository: Repository<BudgetDeclaration>,
     @InjectRepository(SavingsGoal)
     private readonly savingsGoalRepository: Repository<SavingsGoal>,
+    @InjectRepository(GoalHistory)
+    private readonly goalHistoryRepository: Repository<GoalHistory>,
     @InjectRepository(NetWorthSnapshot)
     private readonly netWorthSnapshotRepository: Repository<NetWorthSnapshot>,
     @InjectRepository(IncomeRecord)
@@ -93,6 +96,38 @@ export class SyncService implements OnModuleInit {
       `);
       await this.dataSource.query(`
         ALTER TABLE wealth.savings_goals ADD COLUMN IF NOT EXISTS streak_months INTEGER DEFAULT 0;
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE wealth.savings_goals ADD COLUMN IF NOT EXISTS cover_preset_key TEXT;
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE wealth.savings_goals ADD COLUMN IF NOT EXISTS cover_image_uri TEXT;
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE wealth.savings_goals ADD COLUMN IF NOT EXISTS linked_bank_id TEXT;
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE wealth.savings_goals ADD COLUMN IF NOT EXISTS entries JSONB DEFAULT '[]';
+      `);
+      await this.dataSource.query(`
+        CREATE TABLE IF NOT EXISTS wealth.goal_history (
+          id TEXT PRIMARY KEY,
+          user_id UUID NOT NULL,
+          goal_id TEXT NOT NULL,
+          type TEXT NOT NULL,
+          amount NUMERIC NOT NULL,
+          note TEXT,
+          at TEXT NOT NULL,
+          created_at BIGINT NOT NULL,
+          updated_at BIGINT NOT NULL,
+          is_deleted BOOLEAN DEFAULT FALSE
+        );
+      `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_goal_history_goal_user ON wealth.goal_history(goal_id, user_id, is_deleted);
+      `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_goal_history_created ON wealth.goal_history(goal_id, created_at DESC);
       `);
       // Performance indexes for scale (millions of records per user)
       await this.dataSource.query(`
@@ -1469,15 +1504,30 @@ export class SyncService implements OnModuleInit {
       color?: string;
       icon?: string;
       strategy?: string;
+      linkedBankId?: string;
+      entries?: any[];
     },
   ) {
+    const goalId = dto.id || 'goal_' + Math.random().toString(36).substr(2, 9);
+    const initialAmount = parseFloat(String(dto.currentAmount || 0));
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const now = Date.now();
+
+    const initialEntries = dto.entries || (initialAmount > 0 ? [{
+      id: 'init_' + goalId,
+      amount: initialAmount,
+      at: todayStr,
+      type: 'opening',
+      note: 'Opening balance',
+    }] : []);
+
     const goal = this.savingsGoalRepository.create({
-      id: dto.id || 'goal_' + Math.random().toString(36).substr(2, 9),
+      id: goalId,
       userId,
       name: dto.name,
       category: dto.category || 'custom',
       targetAmount: parseFloat(String(dto.targetAmount || 0)),
-      currentAmount: parseFloat(String(dto.currentAmount || 0)),
+      currentAmount: initialAmount,
       monthlyContribution: parseFloat(String(dto.monthlyContribution || 0)),
       expectedReturnRate: parseFloat(String(dto.expectedReturnRate || 10)),
       targetDate: dto.targetDate || Date.now() + 365 * 24 * 60 * 60 * 1000,
@@ -1485,13 +1535,37 @@ export class SyncService implements OnModuleInit {
       color: dto.color || '#2dba4e',
       icon: dto.icon || 'trophy',
       strategy: dto.strategy || 'equity_sip',
+      linkedBankId: dto.linkedBankId || null,
+      entries: initialEntries,
       streakMonths: 0,
       status: 'active',
-      updatedAt: Date.now(),
+      updatedAt: now,
       isDeleted: false,
     });
 
     const saved = await this.savingsGoalRepository.save(goal);
+
+    // Record initial opening balance in history table if present
+    if (initialAmount > 0) {
+      try {
+        const hist = this.goalHistoryRepository.create({
+          id: 'init_' + goalId,
+          userId,
+          goalId,
+          type: 'opening',
+          amount: initialAmount,
+          note: 'Opening balance',
+          at: todayStr,
+          createdAt: now,
+          updatedAt: now,
+          isDeleted: false,
+        });
+        await this.goalHistoryRepository.save(hist);
+      } catch (e: any) {
+        this.logger.warn(`Failed to write initial goal history: ${e.message}`);
+      }
+    }
+
     return saved;
   }
 
@@ -1514,6 +1588,10 @@ export class SyncService implements OnModuleInit {
       icon: string;
       strategy: string;
       status: string;
+      coverPresetKey: string;
+      coverImageUri: string;
+      linkedBankId: string | null;
+      entries: any[];
     }>,
   ) {
     const goal = await this.savingsGoalRepository.findOne({
@@ -1535,6 +1613,16 @@ export class SyncService implements OnModuleInit {
     if (dto.icon !== undefined) goal.icon = dto.icon;
     if (dto.strategy !== undefined) goal.strategy = dto.strategy;
     if (dto.status !== undefined) goal.status = dto.status;
+    if (dto.coverPresetKey !== undefined) goal.coverPresetKey = dto.coverPresetKey;
+    if (dto.coverImageUri !== undefined) goal.coverImageUri = dto.coverImageUri;
+    if (dto.linkedBankId !== undefined) goal.linkedBankId = dto.linkedBankId || null;
+    if (dto.entries !== undefined) {
+      goal.entries = dto.entries;
+      goal.currentAmount = Math.max(0, goal.entries.reduce((acc: number, e: any) => {
+        const val = parseFloat(String(e.amount || 0));
+        return acc + (e.type === 'withdraw' ? -val : val);
+      }, 0));
+    }
     goal.updatedAt = Date.now();
 
     const saved = await this.savingsGoalRepository.save(goal);
@@ -1544,7 +1632,7 @@ export class SyncService implements OnModuleInit {
   /**
    * Add contribution / funds to a goal
    */
-  async contributeToGoal(userId: string, id: string, amount: number) {
+  async contributeToGoal(userId: string, id: string, amount: number, note?: string) {
     const goal = await this.savingsGoalRepository.findOne({
       where: { id, userId, isDeleted: false },
     });
@@ -1552,17 +1640,198 @@ export class SyncService implements OnModuleInit {
       throw new BadRequestException('Goal not found.');
     }
 
-    const cur = parseFloat(String(goal.currentAmount || 0));
     const add = parseFloat(String(amount || 0));
-    goal.currentAmount = cur + add;
+    if (add <= 0) {
+      throw new BadRequestException('Contribution amount must be greater than 0.');
+    }
+
+    const now = Date.now();
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const entryId = `entry_${now}_${Math.random().toString(36).substr(2, 6)}`;
+
+    const newEntry = {
+      id: entryId,
+      amount: add,
+      at: todayStr,
+      type: 'save',
+      note: note || 'Logged savings',
+    };
+
+    const currentEntries = Array.isArray(goal.entries) ? goal.entries : [];
+    goal.entries = [newEntry, ...currentEntries];
+
+    // Recalculate current amount dynamically
+    goal.currentAmount = Math.max(0, goal.entries.reduce((acc: number, e: any) => {
+      const val = parseFloat(String(e.amount || 0));
+      return acc + (e.type === 'withdraw' ? -val : val);
+    }, 0));
+
     goal.streakMonths = (goal.streakMonths || 0) + 1;
     if (goal.currentAmount >= parseFloat(String(goal.targetAmount))) {
       goal.status = 'achieved';
     }
-    goal.updatedAt = Date.now();
+    goal.updatedAt = now;
+
+    // Save in history table
+    try {
+      const hist = this.goalHistoryRepository.create({
+        id: entryId,
+        userId,
+        goalId: id,
+        type: 'save',
+        amount: add,
+        note: note || 'Logged savings',
+        at: todayStr,
+        createdAt: now,
+        updatedAt: now,
+        isDeleted: false,
+      });
+      await this.goalHistoryRepository.save(hist);
+    } catch (e: any) {
+      this.logger.warn(`Failed to save goal history entry: ${e.message}`);
+    }
 
     const saved = await this.savingsGoalRepository.save(goal);
     return saved;
+  }
+
+  /**
+   * Withdraw funds from a goal
+   */
+  async withdrawFromGoal(userId: string, id: string, amount: number, note?: string) {
+    try {
+      this.logger.log(`[withdrawFromGoal] User: ${userId}, Goal: ${id}, Amount: ${amount}`);
+      const goal = await this.savingsGoalRepository.findOne({
+        where: { id, userId, isDeleted: false },
+      });
+      if (!goal) {
+        this.logger.warn(`[withdrawFromGoal] Goal ${id} not found for user ${userId}`);
+        throw new BadRequestException('Goal not found.');
+      }
+
+      const cur = parseFloat(String(goal.currentAmount || 0));
+      const withdrawAmt = parseFloat(String(amount || 0));
+      if (withdrawAmt <= 0) {
+        throw new BadRequestException('Withdrawal amount must be greater than 0.');
+      }
+      if (withdrawAmt > cur) {
+        this.logger.warn(`[withdrawFromGoal] withdrawAmt (${withdrawAmt}) > cur (${cur}) for goal ${id}`);
+        throw new BadRequestException(`Withdrawal amount (₹${withdrawAmt}) exceeds available savings (₹${cur}).`);
+      }
+
+    const now = Date.now();
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const entryId = `entry_${now}_${Math.random().toString(36).substr(2, 6)}`;
+
+    const newEntry = {
+      id: entryId,
+      amount: withdrawAmt,
+      at: todayStr,
+      type: 'withdraw',
+      note: note || 'Goal withdrawal',
+    };
+
+    const currentEntries = Array.isArray(goal.entries) ? goal.entries : [];
+    goal.entries = [newEntry, ...currentEntries];
+
+    // Recalculate current amount dynamically
+    goal.currentAmount = Math.max(0, goal.entries.reduce((acc: number, e: any) => {
+      const val = parseFloat(String(e.amount || 0));
+      return acc + (e.type === 'withdraw' ? -val : val);
+    }, 0));
+
+    if (goal.currentAmount < parseFloat(String(goal.targetAmount)) && goal.status === 'achieved') {
+      goal.status = 'active';
+    }
+    goal.updatedAt = now;
+
+    // Save in history table
+    try {
+      const hist = this.goalHistoryRepository.create({
+        id: entryId,
+        userId,
+        goalId: id,
+        type: 'withdraw',
+        amount: withdrawAmt,
+        note: note || 'Goal withdrawal',
+        at: todayStr,
+        createdAt: now,
+        updatedAt: now,
+        isDeleted: false,
+      });
+      await this.goalHistoryRepository.save(hist);
+    } catch (e: any) {
+      this.logger.warn(`Failed to save goal withdrawal history entry: ${e.message}`);
+    }
+
+    const saved = await this.savingsGoalRepository.save(goal);
+    return saved;
+  } catch (err: any) {
+    this.logger.error(`[withdrawFromGoal] Error: ${err.message}`, err.stack);
+    throw err;
+  }
+}
+
+  /**
+   * Delete an entry from a goal's history and reverse its financial effect:
+   * - Deleting an added amount ('save' or 'opening') deducts that amount from current balance
+   * - Deleting a withdrawal ('withdraw') restores that withdrawn amount back into current balance
+   */
+  async deleteGoalEntry(userId: string, goalId: string, entryId: string) {
+    const goal = await this.savingsGoalRepository.findOne({
+      where: { id: goalId, userId, isDeleted: false },
+    });
+    if (!goal) {
+      throw new BadRequestException('Goal not found.');
+    }
+
+    const currentEntries = Array.isArray(goal.entries) ? goal.entries : [];
+    const remainingEntries = currentEntries.filter((e: any) => e.id !== entryId);
+    goal.entries = remainingEntries;
+
+    // Recalculate current amount strictly based on remaining entries
+    goal.currentAmount = Math.max(0, goal.entries.reduce((acc: number, e: any) => {
+      const val = parseFloat(String(e.amount || 0));
+      return acc + (e.type === 'withdraw' ? -val : val);
+    }, 0));
+
+    const target = parseFloat(String(goal.targetAmount || 0));
+    if (goal.currentAmount < target && goal.status === 'achieved') {
+      goal.status = 'active';
+    } else if (goal.currentAmount >= target && goal.status === 'active') {
+      goal.status = 'achieved';
+    }
+    goal.updatedAt = Date.now();
+
+    // Mark as deleted in GoalHistory table
+    try {
+      await this.goalHistoryRepository.update(
+        { id: entryId, userId, goalId },
+        { isDeleted: true, updatedAt: Date.now() },
+      );
+    } catch (e: any) {
+      this.logger.warn(`Failed to soft-delete from goalHistoryRepository: ${e.message}`);
+    }
+
+    const saved = await this.savingsGoalRepository.save(goal);
+    return saved;
+  }
+
+  /**
+   * Retrieve full audit history of goal transactions
+   */
+  async getGoalHistory(userId: string, goalId: string) {
+    try {
+      this.logger.log(`[getGoalHistory] Fetching history for user: ${userId}, goal: ${goalId}`);
+      const history = await this.goalHistoryRepository.find({
+        where: { userId, goalId, isDeleted: false },
+        order: { createdAt: 'DESC' },
+      });
+      return history;
+    } catch (err: any) {
+      this.logger.error(`[getGoalHistory] Error: ${err.message}`, err.stack);
+      throw err;
+    }
   }
 
   /**
