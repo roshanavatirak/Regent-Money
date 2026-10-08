@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, useGoalsStore, useBankStore } from '../../../store';
+import { BankIcon } from '../../../components/BankIcon';
 import type { Goal } from '../services/goalPacingService';
 import {
   getGoalPacing,
@@ -220,10 +221,10 @@ export const LogSavingsBottomSheet: React.FC<LogSavingsBottomSheetProps> = ({
                 },
               ]}
             >
-              <Ionicons
-                name="business-outline"
-                size={13}
-                color={bankSummary.isOverallocated ? colors.danger : colors.accent}
+              <BankIcon
+                name={linkedBank.bankName}
+                code={linkedBank.smsSenderId || linkedBank.bankName}
+                size={18}
                 style={{ marginRight: 6 }}
               />
               <Text

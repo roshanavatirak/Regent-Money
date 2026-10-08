@@ -34,6 +34,7 @@ import {
   formatIndianCompactRupees,
 } from '../features/goals/services/goalNudgeTemplates';
 import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
+import { BankIcon } from '../components/BankIcon';
 
 const { width } = Dimensions.get('window');
 
@@ -416,9 +417,12 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
                               isSelected && { borderWidth: 1.5 },
                             ]}
                           >
-                            <View style={[styles.bankIconCircle, { backgroundColor: isSelected ? colors.accent : (isDark ? 'rgba(255,255,255,0.08)' : '#E2E8F0') }]}>
-                              <Ionicons name="business" size={14} color={isSelected ? '#FFFFFF' : textColor} />
-                            </View>
+                            <BankIcon
+                              name={b.bankName}
+                              code={b.smsSenderId || b.bankName}
+                              size={32}
+                              style={{ marginRight: 10 }}
+                            />
 
                             <View style={{ flex: 1, marginRight: 8 }}>
                               <Text style={[styles.bankOptionTitle, { color: textColor }]} numberOfLines={1}>
@@ -1120,9 +1124,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   bankIconCircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 10,

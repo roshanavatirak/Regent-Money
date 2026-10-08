@@ -11,6 +11,10 @@ import {
   Platform,
   useWindowDimensions,
   Image,
+  ActivityIndicator,
+  Keyboard,
+  BackHandler,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -32,6 +36,7 @@ import {
 import { GoalImagePickerModal } from '../features/goals/components/GoalImagePickerModal';
 import { getCoverImageUri } from '../features/goals/services/goalIllustrationMap';
 import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
+import { BankIcon } from '../components/BankIcon';
 
 const formatEntryDate = (dateVal: string | number | undefined) => {
   if (!dateVal) return '—';
@@ -40,6 +45,18 @@ const formatEntryDate = (dateVal: string | number | undefined) => {
     const d = new Date(raw.length === 10 ? `${raw}T00:00:00` : raw);
     if (isNaN(d.getTime())) return String(dateVal);
     return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  } catch {
+    return String(dateVal);
+  }
+};
+
+const formatFullEntryDate = (dateVal: string | number | undefined) => {
+  if (!dateVal) return '—';
+  try {
+    const raw = String(dateVal).trim();
+    const d = new Date(raw.length === 10 ? `${raw}T00:00:00` : raw);
+    if (isNaN(d.getTime())) return String(dateVal);
+    return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
   } catch {
     return String(dateVal);
   }
@@ -62,18 +79,35 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
   const { height: windowHeight } = useWindowDimensions();
   const { keyboardHeight, isKeyboardVisible } = useKeyboardHeight();
 
-  // Deposit input state
-  const [depositAmount, setDepositAmount] = useState('');
-  const [depositNote, setDepositNote] = useState('');
-  const [isDepositing, setIsDepositing] = useState(false);
-  const [showDepositBox, setShowDepositBox] = useState(false);
+  // Action Modal state (Add Savings / Withdraw)
+  const [actionModalType, setActionModalType] = useState<'deposit' | 'withdraw' | null>(null);
+  const [actionAmount, setActionAmount] = useState('');
+  const [actionNote, setActionNote] = useState('');
+  const [isSubmittingAction, setIsSubmittingAction] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
 
-  // Withdraw input state
-  const [withdrawAmount, setWithdrawAmount] = useState('');
-  const [withdrawNote, setWithdrawNote] = useState('');
-  const [isWithdrawing, setIsWithdrawing] = useState(false);
-  const [showWithdrawBox, setShowWithdrawBox] = useState(false);
+  // Selected Transaction for Detail & Delete view
+  const [selectedEntry, setSelectedEntry] = useState<SavingsEntry | null>(null);
+  const [isDeletingEntry, setIsDeletingEntry] = useState(false);
+
+  // Android hardware back button handler when Action Sheet or Transaction Detail is open
+  useEffect(() => {
+    if ((actionModalType !== null || selectedEntry !== null) && Platform.OS === 'android') {
+      const backSub = BackHandler.addEventListener('hardwareBackPress', () => {
+        if (selectedEntry !== null) {
+          setSelectedEntry(null);
+          return true;
+        }
+        if (actionModalType !== null) {
+          Keyboard.dismiss();
+          setActionModalType(null);
+          return true;
+        }
+        return false;
+      });
+      return () => backSub.remove();
+    }
+  }, [actionModalType, selectedEntry]);
 
   // Deploy Capital state (for Freedom Stash & open-ended wealth goals)
   const [showDeployModal, setShowDeployModal] = useState(false);
@@ -88,6 +122,7 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
 
   // Cover image picker state
   const [showImagePickerModal, setShowImagePickerModal] = useState(false);
+  const [heroWidth, setHeroWidth] = useState<number>(0);
 
   const bankProfiles = useBankStore((state) => state.bankProfiles);
   const allGoals = useGoalsStore((state) => state.goals);
@@ -204,52 +239,49 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
     if (onUpdated) onUpdated();
   };
 
-  const handleDeposit = async (amt?: number) => {
-    const value = amt !== undefined ? amt : parseFloat(depositAmount);
+  const handleConfirmAction = async () => {
+    const value = parseFloat(actionAmount);
     if (!value || value <= 0) return;
 
-    if (linkedBank) {
-      const validation = validateBankDeposit(linkedBank, allGoals, value, activeGoal.id);
-      if (!validation.valid) {
-        alert(validation.errorMessage || 'Deposit exceeds available balance in the linked bank account.');
+    if (actionModalType === 'deposit') {
+      if (linkedBank) {
+        const validation = validateBankDeposit(linkedBank, allGoals, value, activeGoal.id);
+        if (!validation.valid) {
+          alert(validation.errorMessage || 'Deposit exceeds available balance in the linked bank account.');
+          return;
+        }
+      }
+
+      setIsSubmittingAction(true);
+      try {
+        await goalService.contribute(activeGoal.id, value, actionNote.trim() || undefined);
+        setActionAmount('');
+        setActionNote('');
+        setActionModalType(null);
+        if (onUpdated) onUpdated();
+      } catch (e: any) {
+        alert('Deposit failed: ' + (e?.message || e));
+      } finally {
+        setIsSubmittingAction(false);
+      }
+    } else if (actionModalType === 'withdraw') {
+      if (value > activeGoal.currentAmount) {
+        alert(`Withdrawal amount (₹${value.toLocaleString('en-IN')}) cannot exceed current goal savings (₹${activeGoal.currentAmount.toLocaleString('en-IN')}).`);
         return;
       }
-    }
 
-    setIsDepositing(true);
-    try {
-      await goalService.contribute(activeGoal.id, value, depositNote.trim() || undefined);
-      setDepositAmount('');
-      setDepositNote('');
-      setShowDepositBox(false);
-      if (onUpdated) onUpdated();
-    } catch (e: any) {
-      alert('Deposit failed: ' + (e?.message || e));
-    } finally {
-      setIsDepositing(false);
-    }
-  };
-
-  const handleWithdraw = async (amt?: number) => {
-    const value = amt !== undefined ? amt : parseFloat(withdrawAmount);
-    if (!value || value <= 0) return;
-
-    if (value > activeGoal.currentAmount) {
-      alert(`Withdrawal amount (₹${value.toLocaleString('en-IN')}) cannot exceed current goal savings (₹${activeGoal.currentAmount.toLocaleString('en-IN')}).`);
-      return;
-    }
-
-    setIsWithdrawing(true);
-    try {
-      await goalService.withdraw(activeGoal.id, value, withdrawNote.trim() || undefined);
-      setWithdrawAmount('');
-      setWithdrawNote('');
-      setShowWithdrawBox(false);
-      if (onUpdated) onUpdated();
-    } catch (e: any) {
-      alert('Withdrawal failed: ' + (e?.message || e));
-    } finally {
-      setIsWithdrawing(false);
+      setIsSubmittingAction(true);
+      try {
+        await goalService.withdraw(activeGoal.id, value, actionNote.trim() || undefined);
+        setActionAmount('');
+        setActionNote('');
+        setActionModalType(null);
+        if (onUpdated) onUpdated();
+      } catch (e: any) {
+        alert('Withdrawal failed: ' + (e?.message || e));
+      } finally {
+        setIsSubmittingAction(false);
+      }
     }
   };
 
@@ -260,17 +292,28 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
       ? `Delete withdrawal of ${amountStr}? This will restore ${amountStr} back to your goal balance.`
       : `Delete savings deposit of ${amountStr}? This will deduct ${amountStr} from your goal balance.`;
 
-    const confirmed = Platform.OS === 'web'
-      ? window.confirm(confirmMsg)
-      : true;
-
-    if (confirmed) {
+    const doDelete = async () => {
+      setIsDeletingEntry(true);
       try {
         await goalService.deleteEntry(activeGoal.id, entry.id);
+        setSelectedEntry(null);
         if (onUpdated) onUpdated();
       } catch (err: any) {
         alert('Failed to delete transaction: ' + (err?.message || err));
+      } finally {
+        setIsDeletingEntry(false);
       }
+    };
+
+    if (Platform.OS === 'web') {
+      if (window.confirm(confirmMsg)) {
+        await doDelete();
+      }
+    } else {
+      Alert.alert('Delete Transaction', confirmMsg, [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: doDelete },
+      ]);
     }
   };
 
@@ -295,18 +338,26 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
   };
 
   const handleDelete = async () => {
-    const confirmed = Platform.OS === 'web' 
-      ? window.confirm(`Are you sure you want to delete goal "${activeGoal.name}"?`)
-      : true;
-
-    if (confirmed) {
+    const confirmMsg = `Are you sure you want to give up on "${activeGoal.name}"? This goal will be removed.`;
+    const doDelete = async () => {
       try {
         await goalService.deleteGoal(activeGoal.id);
         onClose();
         if (onUpdated) onUpdated();
       } catch (e: any) {
-        alert('Failed to delete: ' + (e?.message || e));
+        alert('Failed to delete goal: ' + (e?.message || e));
       }
+    };
+
+    if (Platform.OS === 'web') {
+      if (window.confirm(confirmMsg)) {
+        await doDelete();
+      }
+    } else {
+      Alert.alert('Give Up on Goal', confirmMsg, [
+        { text: 'Keep Goal', style: 'cancel' },
+        { text: 'Give Up', style: 'destructive', onPress: doDelete },
+      ]);
     }
   };
 
@@ -376,7 +427,22 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
 
   return (
     <>
-      <Modal visible={visible} animationType="slide" transparent statusBarTranslucent onRequestClose={onClose}>
+      <Modal
+        visible={visible}
+        animationType="slide"
+        transparent
+        statusBarTranslucent
+        onRequestClose={() => {
+          if (selectedEntry !== null) {
+            setSelectedEntry(null);
+          } else if (actionModalType !== null) {
+            Keyboard.dismiss();
+            setActionModalType(null);
+          } else {
+            onClose();
+          }
+        }}
+      >
       <View style={styles.modalOverlay}>
         <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
         <KeyboardAvoidingView
@@ -398,9 +464,63 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
               },
             ]}
           >
-            {/* 1. HERO COVER BANNER WITH SEAMLESS FADE-OUT */}
-            <View style={styles.heroFrame}>
-              <Image source={{ uri: coverUri }} style={styles.heroImage} resizeMode="cover" />
+            {/* 1. HERO COVER BANNER WITH SEAMLESS FADE-OUT & PROGRESSIVE REVEAL */}
+            <View
+              style={styles.heroFrame}
+              onLayout={(e) => setHeroWidth(e.nativeEvent.layout.width)}
+            >
+              {/* Layer A: Base Grayed/Blurred Image (0% or unreached progress) with subtle reduced blur */}
+              <Image
+                source={{ uri: coverUri }}
+                blurRadius={Platform.OS === 'web' ? undefined : 2.5}
+                style={[
+                  styles.heroImage,
+                  (Platform.OS === 'web'
+                    ? { filter: 'blur(2.5px) grayscale(100%) contrast(1.05) brightness(0.65)' }
+                    : {}) as any,
+                ]}
+                resizeMode="cover"
+              />
+              <View
+                style={[
+                  StyleSheet.absoluteFill,
+                  {
+                    backgroundColor: isDark ? 'rgba(36, 41, 46, 0.45)' : 'rgba(226, 232, 240, 0.35)',
+                  },
+                ]}
+              />
+
+              {/* Layer B: Revealed Vivid Full-Color Clear Portion (matching saved progress percentage) */}
+              {pacing && pacing.progressPercent > 0 ? (
+                <View
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    bottom: 0,
+                    width: `${Math.min(100, Math.max(0, pacing.progressPercent))}%`,
+                    overflow: 'hidden',
+                  }}
+                >
+                  <Image
+                    source={{ uri: coverUri }}
+                    style={{ width: heroWidth > 0 ? heroWidth : '100%', height: '100%' }}
+                    resizeMode="cover"
+                  />
+                  {pacing.progressPercent < 100 ? (
+                    <LinearGradient
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 0 }}
+                      colors={[
+                        'transparent',
+                        isDark ? 'rgba(43, 49, 55, 0.35)' : 'rgba(226, 232, 240, 0.3)',
+                        isDark ? 'rgba(43, 49, 55, 0.8)' : 'rgba(226, 232, 240, 0.7)',
+                      ]}
+                      style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 24 }}
+                    />
+                  ) : null}
+                </View>
+              ) : null}
 
               {/* Layer A: Subtle top vignette for button contrast */}
               <LinearGradient
@@ -422,63 +542,33 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
                 style={StyleSheet.absoluteFill}
               />
 
-              {/* Floating Top Actions: Delete & Close */}
-              <View style={styles.heroTopActions}>
+              {/* Floating Top Actions: Pencil Edit at top-right (delete icon and close cross removed as requested) */}
+              <View style={[styles.heroTopActions, { justifyContent: 'flex-end' }]}>
                 <TouchableOpacity
-                  onPress={handleDelete}
+                  onPress={() => setShowImagePickerModal(true)}
                   style={styles.heroIconCircle}
-                  accessibilityLabel="Delete goal"
+                  accessibilityLabel="Change Cover Image"
                 >
-                  <Ionicons name="trash-outline" size={17} color="#FFFFFF" />
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  onPress={onClose}
-                  style={styles.heroIconCircle}
-                  accessibilityLabel="Close"
-                >
-                  <Ionicons name="close" size={20} color="#FFFFFF" />
+                  <Ionicons name="pencil" size={16} color="#FFFFFF" />
                 </TouchableOpacity>
               </View>
 
               {/* Floating Bottom Bar in fade transition zone */}
               <View style={styles.heroBottomBar}>
-                <View style={{ flex: 1, marginRight: 10 }}>
+                <View style={{ flex: 1 }}>
                   <Text style={[styles.heroGoalTitle, { color: textColor }]} numberOfLines={1}>
                     {activeGoal.name}
                   </Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 6 }}>
-                    <View style={[styles.heroStatusPill, { backgroundColor: `${pacing.statusColor}25`, borderColor: pacing.statusColor }]}>
-                      <Text style={[styles.heroStatusText, { color: pacing.statusColor }]}>
-                        {pacing.statusText}
-                      </Text>
-                    </View>
-                    {activeGoal.priority ? (
+                  {activeGoal.priority ? (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
                       <View style={[styles.heroPriorityPill, { backgroundColor: cardBg, borderColor }]}>
                         <Text style={[styles.heroPriorityText, { color: subTextColor }]}>
                           {activeGoal.priority.toUpperCase()}
                         </Text>
                       </View>
-                    ) : null}
-                  </View>
+                    </View>
+                  ) : null}
                 </View>
-
-                {/* Pencil Edit Image Button */}
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  onPress={() => setShowImagePickerModal(true)}
-                  style={[
-                    styles.heroEditPill,
-                    {
-                      backgroundColor: cardBg,
-                      borderColor,
-                    },
-                  ]}
-                  accessibilityLabel="Change Cover Image"
-                >
-                  <Ionicons name="pencil" size={13} color={textColor} />
-                  <Text style={[styles.heroEditText, { color: textColor }]}>Edit Image</Text>
-                </TouchableOpacity>
               </View>
             </View>
 
@@ -525,33 +615,6 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
                   />
                 </View>
 
-                {/* Milestone Tracker */}
-                <View style={styles.milestoneRow}>
-                  {milestones.map((m, idx) => (
-                    <View key={idx} style={styles.milestoneCol}>
-                      <View
-                        style={[
-                          styles.milestoneCircle,
-                          { borderColor: m.unlocked ? goalColor : borderColor, backgroundColor: m.unlocked ? `${goalColor}25` : cardBg },
-                        ]}
-                      >
-                        <Ionicons
-                          name={m.icon as any}
-                          size={14}
-                          color={m.unlocked ? goalColor : subTextColor}
-                        />
-                      </View>
-                      <Text
-                        style={[
-                          styles.milestoneLabel,
-                          { color: m.unlocked ? goalColor : subTextColor, fontWeight: m.unlocked ? '700' : '500' },
-                        ]}
-                      >
-                        {m.label}
-                      </Text>
-                    </View>
-                  ))}
-                </View>
               </View>
 
               {/* Milestone Reached Banner for Freedom Stash */}
@@ -583,240 +646,86 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
                 </View>
               )}
 
-              {/* Backed Savings Account Section */}
-              <View style={[styles.sectionCard, { backgroundColor: cardBg, borderColor, marginTop: 14 }]}>
-                <View style={styles.rowBetween}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    <Ionicons
-                      name="business-outline"
-                      size={16}
-                      color={bankSummary?.isOverallocated ? colors.danger : colors.accent}
-                      style={{ marginRight: 6 }}
+              {/* Linked Bank Card with Logo & Change Option */}
+              <TouchableOpacity
+                activeOpacity={0.82}
+                onPress={() => setShowBankPickerModal(true)}
+                style={[
+                  styles.sectionCard,
+                  {
+                    backgroundColor: cardBg,
+                    borderColor,
+                    marginTop: 14,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    paddingVertical: 12,
+                    paddingHorizontal: 14,
+                    borderRadius: 16,
+                  },
+                ]}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 12 }}>
+                  {linkedBank ? (
+                    <BankIcon
+                      name={linkedBank.bankName}
+                      code={linkedBank.bankName}
+                      size={40}
+                      style={{ marginRight: 12 }}
                     />
-                    <Text style={[styles.boxTitle, { color: textColor }]}>Backed Savings Account</Text>
-                  </View>
-                  <TouchableOpacity
-                    onPress={() => setShowBankPickerModal(true)}
-                    style={[styles.smallLinkBtn, { borderColor }]}
-                  >
-                    <Text style={[styles.smallLinkText, { color: goalColor }]}>
-                      {linkedBank ? 'Change' : 'Link Account'}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-
-                {linkedBank && bankSummary ? (
-                  <View style={{ marginTop: 8 }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Text style={{ fontSize: 13, fontWeight: '700', color: textColor }}>
-                        {linkedBank.bankName || 'Savings Account'} {linkedBank.accountNumberSuffix ? `•••• ${linkedBank.accountNumberSuffix}` : ''}
-                      </Text>
-                      <Text style={{ fontSize: 12, fontWeight: '700', color: bankSummary.isOverallocated ? colors.danger : colors.accent }}>
-                        {bankSummary.isOverallocated ? `Deficit: -${formatIndianCompactRupees(bankSummary.deficitAmount)}` : `${formatIndianCompactRupees(bankSummary.unallocatedBalance)} unallocated`}
-                      </Text>
+                  ) : (
+                    <View
+                      style={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: 20,
+                        backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : '#f1f5f9',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        marginRight: 12,
+                        borderWidth: 1,
+                        borderColor: borderColor,
+                      }}
+                    >
+                      <Ionicons name="business" size={19} color={subTextColor} />
                     </View>
-                    <Text style={{ fontSize: 11, color: subTextColor, marginTop: 2 }}>
-                      Account Total: {formatIndianFullRupees(bankSummary.totalBalance)} · Allocated across {bankSummary.linkedGoalsCount} goal{bankSummary.linkedGoalsCount !== 1 ? 's' : ''}: {formatIndianFullRupees(bankSummary.totalAllocated)}
+                  )}
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: textColor }} numberOfLines={1}>
+                      {linkedBank ? linkedBank.bankName : 'No Bank Linked'}
                     </Text>
-                    {bankSummary.isOverallocated ? (
-                      <View style={[styles.deficitNotice, { backgroundColor: isDark ? 'rgba(255, 82, 82, 0.12)' : '#FEE2E2', borderColor: colors.danger }]}>
-                        <Ionicons name="alert-circle" size={14} color={colors.danger} style={{ marginRight: 6 }} />
-                        <Text style={{ fontSize: 11.5, color: colors.danger, flex: 1, fontWeight: '600' }}>
-                          Account balance is {formatIndianFullRupees(bankSummary.deficitAmount)} below total goals allocated. Please deposit into your bank account or adjust goal savings.
-                        </Text>
-                      </View>
+                    <Text style={{ fontSize: 12, color: subTextColor, marginTop: 2 }} numberOfLines={1}>
+                      {linkedBank
+                        ? (linkedBank.accountNumberSuffix
+                            ? `•••• ${linkedBank.accountNumberSuffix} · ₹${(linkedBank.currentBalance || 0).toLocaleString('en-IN')}`
+                            : `₹${(linkedBank.currentBalance || 0).toLocaleString('en-IN')}`)
+                        : 'Tap to link a bank account'}
+                    </Text>
+                    {bankSummary?.isOverallocated ? (
+                      <Text style={{ fontSize: 11, color: colors.danger, fontWeight: '600', marginTop: 2 }}>
+                        Deficit: -{formatIndianCompactRupees(bankSummary.deficitAmount)}
+                      </Text>
                     ) : null}
                   </View>
-                ) : (
-                  <View style={{ marginTop: 6 }}>
-                    <Text style={{ fontSize: 12, color: subTextColor, lineHeight: 16 }}>
-                      This goal is currently tracked manually without a bank balance cap. Link an account to verify real savings.
-                    </Text>
-                  </View>
-                )}
-              </View>
-
-              {/* Quick Action: Add Funds / Withdraw / Deploy */}
-              {!showDepositBox && !showWithdrawBox ? (
-                <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
-                  <TouchableOpacity
-                    activeOpacity={0.8}
-                    onPress={() => {
-                      setShowDepositBox(true);
-                      setShowWithdrawBox(false);
-                    }}
-                    style={[styles.depositPromptBtn, { flex: 1, backgroundColor: `${goalColor}15`, borderColor: `${goalColor}40`, marginTop: 0 }]}
-                  >
-                    <Ionicons name="add-circle" size={18} color={goalColor} />
-                    <Text style={[styles.depositPromptText, { color: goalColor }]}>
-                      + Add Savings
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    activeOpacity={0.8}
-                    onPress={() => {
-                      if (activeGoal.currentAmount <= 0) {
-                        alert('No funds available in this goal to withdraw.');
-                        return;
-                      }
-                      setShowWithdrawBox(true);
-                      setShowDepositBox(false);
-                    }}
-                    style={[
-                      styles.depositPromptBtn,
-                      {
-                        flex: 1,
-                        backgroundColor: isDark ? 'rgba(239, 68, 68, 0.12)' : '#FEF2F2',
-                        borderColor: isDark ? 'rgba(239, 68, 68, 0.35)' : '#FECACA',
-                        marginTop: 0,
-                        opacity: activeGoal.currentAmount > 0 ? 1 : 0.5,
-                      },
-                    ]}
-                  >
-                    <Ionicons name="arrow-down-circle" size={18} color={colors.danger} />
-                    <Text style={[styles.depositPromptText, { color: colors.danger }]}>
-                      - Withdraw
-                    </Text>
-                  </TouchableOpacity>
-
-                  {(activeGoal.category === 'wealth_stash' || activeGoal.isMilestoneBased) && activeGoal.currentAmount > 0 && (
-                    <TouchableOpacity
-                      activeOpacity={0.8}
-                      onPress={() => setShowDeployModal(true)}
-                      style={[styles.depositPromptBtn, { flex: 1, backgroundColor: cardBg, borderColor: `${goalColor}60`, marginTop: 0 }]}
-                    >
-                      <Ionicons name="rocket-outline" size={18} color={goalColor} />
-                      <Text style={[styles.depositPromptText, { color: goalColor }]}>
-                        Deploy
-                      </Text>
-                    </TouchableOpacity>
-                  )}
                 </View>
-              ) : showDepositBox ? (
-                <View style={[styles.depositBox, { backgroundColor: cardBg, borderColor, marginTop: 10 }]}>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Text style={[styles.boxTitle, { color: textColor }]}>Deposit Funds to Goal</Text>
-                    <TouchableOpacity onPress={() => setShowDepositBox(false)}>
-                      <Ionicons name="close" size={20} color={subTextColor} />
-                    </TouchableOpacity>
-                  </View>
 
-                  <View style={styles.quickDepositPills}>
-                    {[1000, 2500, 5000, 10000].map((amt) => (
-                      <TouchableOpacity
-                        key={amt}
-                        onPress={() => handleDeposit(amt)}
-                        disabled={isDepositing}
-                        style={[styles.depositPill, { backgroundColor: `${goalColor}18`, borderColor: goalColor }]}
-                      >
-                        <Text style={[styles.depositPillText, { color: goalColor }]}>
-                          +₹{amt.toLocaleString('en-IN')}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-
-                  <View style={[styles.customDepositRow, { borderColor }]}>
-                    <Text style={[styles.currencyPrefix, { color: goalColor }]}>₹</Text>
-                    <TextInput
-                      style={[styles.depositInput, { color: textColor }]}
-                      value={depositAmount}
-                      onChangeText={setDepositAmount}
-                      keyboardType="numeric"
-                      placeholder="Enter custom amount..."
-                      placeholderTextColor={subTextColor}
-                      onFocus={() => {
-                        setTimeout(() => scrollViewRef.current?.scrollTo({ y: 180, animated: true }), 150);
-                      }}
-                    />
-                    <TouchableOpacity
-                      onPress={() => handleDeposit()}
-                      disabled={isDepositing || !depositAmount}
-                      style={[styles.saveDepositBtn, { backgroundColor: goalColor, opacity: isDepositing ? 0.6 : 1 }]}
-                    >
-                      <Text style={styles.saveDepositBtnText}>Deposit</Text>
-                    </TouchableOpacity>
-                  </View>
-
-                  <TextInput
-                    style={[styles.noteInput, { backgroundColor: bgModal, color: textColor, borderColor }]}
-                    value={depositNote}
-                    onChangeText={setDepositNote}
-                    placeholder="Add a note (e.g. Salary, bonus, gift)..."
-                    placeholderTextColor={subTextColor}
-                  />
-                </View>
-              ) : (
-                <View style={[styles.depositBox, { backgroundColor: cardBg, borderColor, marginTop: 10 }]}>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Text style={[styles.boxTitle, { color: colors.danger }]}>Withdraw Funds from Goal</Text>
-                    <TouchableOpacity onPress={() => setShowWithdrawBox(false)}>
-                      <Ionicons name="close" size={20} color={subTextColor} />
-                    </TouchableOpacity>
-                  </View>
-
-                  <Text style={{ fontSize: 12, color: subTextColor, marginTop: 2, marginBottom: 8 }}>
-                    Available in Goal: ₹{activeGoal.currentAmount.toLocaleString('en-IN')}
+                <View
+                  style={{
+                    paddingHorizontal: 12,
+                    paddingVertical: 6,
+                    borderRadius: 8,
+                    backgroundColor: isDark ? 'rgba(45, 186, 78, 0.12)' : 'rgba(45, 186, 78, 0.08)',
+                    borderWidth: 1,
+                    borderColor: `${goalColor}40`,
+                  }}
+                >
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: goalColor }}>
+                    {linkedBank ? 'Change' : 'Link'}
                   </Text>
-
-                  <View style={styles.quickDepositPills}>
-                    {[500, 1000, 2500].filter((amt) => amt <= activeGoal.currentAmount).map((amt) => (
-                      <TouchableOpacity
-                        key={amt}
-                        onPress={() => handleWithdraw(amt)}
-                        disabled={isWithdrawing}
-                        style={[styles.depositPill, { backgroundColor: isDark ? 'rgba(239, 68, 68, 0.15)' : '#FEE2E2', borderColor: colors.danger }]}
-                      >
-                        <Text style={[styles.depositPillText, { color: colors.danger }]}>
-                          -₹{amt.toLocaleString('en-IN')}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                    {activeGoal.currentAmount > 0 && (
-                      <TouchableOpacity
-                        onPress={() => handleWithdraw(activeGoal.currentAmount)}
-                        disabled={isWithdrawing}
-                        style={[styles.depositPill, { backgroundColor: isDark ? 'rgba(239, 68, 68, 0.2)' : '#FECACA', borderColor: colors.danger }]}
-                      >
-                        <Text style={[styles.depositPillText, { color: colors.danger, fontWeight: '700' }]}>
-                          All (₹{activeGoal.currentAmount.toLocaleString('en-IN')})
-                        </Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-
-                  <View style={[styles.customDepositRow, { borderColor }]}>
-                    <Text style={[styles.currencyPrefix, { color: colors.danger }]}>₹</Text>
-                    <TextInput
-                      style={[styles.depositInput, { color: textColor }]}
-                      value={withdrawAmount}
-                      onChangeText={setWithdrawAmount}
-                      keyboardType="numeric"
-                      placeholder="Enter amount to withdraw..."
-                      placeholderTextColor={subTextColor}
-                      onFocus={() => {
-                        setTimeout(() => scrollViewRef.current?.scrollTo({ y: 180, animated: true }), 150);
-                      }}
-                    />
-                    <TouchableOpacity
-                      onPress={() => handleWithdraw()}
-                      disabled={isWithdrawing || !withdrawAmount}
-                      style={[styles.saveDepositBtn, { backgroundColor: colors.danger, opacity: isWithdrawing ? 0.6 : 1 }]}
-                    >
-                      <Text style={styles.saveDepositBtnText}>Withdraw</Text>
-                    </TouchableOpacity>
-                  </View>
-
-                  <TextInput
-                    style={[styles.noteInput, { backgroundColor: bgModal, color: textColor, borderColor }]}
-                    value={withdrawNote}
-                    onChangeText={setWithdrawNote}
-                    placeholder="Add a reason (e.g. Emergency, expense)..."
-                    placeholderTextColor={subTextColor}
-                  />
                 </View>
-              )}
+              </TouchableOpacity>
+
+
 
               {/* Actionable Monthly Savings Plan (Clean, practical, no jargon) */}
               <View style={[styles.sectionCard, { backgroundColor: cardBg, borderColor, marginTop: 14 }]}>
@@ -875,18 +784,18 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
                 <View style={styles.rowBetween}>
                   <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                     <Ionicons name="time-outline" size={16} color={goalColor} style={{ marginRight: 6 }} />
-                    <Text style={[styles.boxTitle, { color: textColor }]}>Goal History & Transactions</Text>
+                    <Text style={[styles.boxTitle, { color: textColor }]}>Goal History</Text>
                   </View>
-                  <View style={[styles.planBadge, { backgroundColor: `${goalColor}18`, borderColor: goalColor }]}>
+                  {/* <View style={[styles.planBadge, { backgroundColor: `${goalColor}18`, borderColor: goalColor }]}>
                     <Text style={[styles.planBadgeText, { color: goalColor }]}>
                       {goalEntries.length} {goalEntries.length === 1 ? 'RECORD' : 'RECORDS'}
                     </Text>
-                  </View>
+                  </View> */}
                 </View>
 
-                <Text style={{ fontSize: 12, color: subTextColor, marginTop: 4, marginBottom: 10 }}>
+                {/* <Text style={{ fontSize: 12, color: subTextColor, marginTop: 4, marginBottom: 10 }}>
                   Track all additions and withdrawals. Deleting a transaction automatically restores or deducts your balance.
-                </Text>
+                </Text> */}
 
                 {goalEntries.length === 0 ? (
                   <View style={styles.emptyHistoryBox}>
@@ -897,98 +806,550 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
                     </Text>
                   </View>
                 ) : (
-                  <View style={[styles.historyTableContainer, { borderColor }]}>
-                    {/* Table Header */}
-                    <View style={[styles.historyTableHeader, { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#F3F4F6', borderBottomColor: borderColor }]}>
-                      <Text style={[styles.historyHeaderCol, { flex: 1.1, color: subTextColor }]}>DATE</Text>
-                      <Text style={[styles.historyHeaderCol, { flex: 1.1, color: subTextColor }]}>TYPE</Text>
-                      <Text style={[styles.historyHeaderCol, { flex: 2, color: subTextColor }]}>NOTE</Text>
-                      <Text style={[styles.historyHeaderCol, { flex: 1.4, textAlign: 'right', color: subTextColor }]}>AMOUNT</Text>
-                      <Text style={[styles.historyHeaderCol, { width: 34, textAlign: 'center', color: subTextColor }]}>DEL</Text>
-                    </View>
-
-                    {/* Table Rows */}
+                  <View style={[styles.historyListContainer, { borderColor, backgroundColor: cardBg }]}>
                     {goalEntries.map((item, index) => {
                       const isWithdraw = item.type === 'withdraw';
                       const isOpening = item.type === 'opening';
-                      const typeLabel = isWithdraw ? 'Withdraw' : isOpening ? 'Opening' : 'Deposit';
-                      const typeBg = isWithdraw
+                      const iconName = isWithdraw ? 'arrow-up' : isOpening ? 'wallet' : 'arrow-down';
+                      const iconColor = isWithdraw ? colors.danger : isOpening ? '#3b82f6' : '#10B981';
+                      const iconBg = isWithdraw
                         ? (isDark ? 'rgba(239, 68, 68, 0.15)' : '#FEE2E2')
                         : isOpening
                         ? (isDark ? 'rgba(59, 130, 246, 0.15)' : '#DBEAFE')
-                        : (isDark ? 'rgba(45, 186, 78, 0.15)' : '#DCFCE7');
-                      const typeColor = isWithdraw
-                        ? colors.danger
+                        : (isDark ? 'rgba(16, 185, 129, 0.15)' : '#D1FAE5');
+                      const title = isWithdraw
+                        ? 'Withdrawal'
                         : isOpening
-                        ? '#3b82f6'
-                        : '#2dba4e';
+                        ? 'Opening Balance'
+                        : 'Savings Deposit';
+                      const dateStr = formatEntryDate(item.at);
 
                       return (
-                        <View
+                        <TouchableOpacity
                           key={item.id || `entry_${index}`}
+                          activeOpacity={0.7}
+                          onPress={() => setSelectedEntry(item)}
                           style={[
-                            styles.historyTableRow,
-                            {
-                              borderBottomColor: borderColor,
-                              backgroundColor: index % 2 === 1 ? (isDark ? 'rgba(255,255,255,0.02)' : '#FAFAFA') : 'transparent',
-                            },
+                            styles.historyItemRow,
+                            index > 0 && { borderTopWidth: 1, borderTopColor: borderColor },
                           ]}
                         >
-                          <Text style={[styles.historyRowText, { flex: 1.1, color: subTextColor }]} numberOfLines={1}>
-                            {formatEntryDate(item.at)}
-                          </Text>
-
-                          <View style={{ flex: 1.1, justifyContent: 'center' }}>
-                            <View style={[styles.typeBadge, { backgroundColor: typeBg, borderColor: typeColor }]}>
-                              <Text style={[styles.typeBadgeText, { color: typeColor }]} numberOfLines={1}>
-                                {typeLabel}
-                              </Text>
-                            </View>
+                          <View style={[styles.historyItemIconCircle, { backgroundColor: iconBg }]}>
+                            <Ionicons name={iconName as any} size={13} color={iconColor} />
                           </View>
 
-                          <Text style={[styles.historyRowText, { flex: 2, color: textColor }]} numberOfLines={1}>
-                            {item.note || (isWithdraw ? 'Withdrawal' : isOpening ? 'Opening balance' : 'Savings')}
-                          </Text>
+                          <View style={{ flex: 1, marginLeft: 10, marginRight: 6 }}>
+                            <Text style={{ fontSize: 12.5, fontWeight: '700', color: textColor }} numberOfLines={1}>
+                              {title}
+                            </Text>
+                            <Text style={{ fontSize: 10.5, color: subTextColor, marginTop: 1 }}>
+                              {dateStr}
+                            </Text>
+                          </View>
 
-                          <Text
-                            style={[
-                              styles.historyRowText,
-                              {
-                                flex: 1.4,
-                                textAlign: 'right',
+                          <View style={{ alignItems: 'center', flexDirection: 'row' }}>
+                            <Text
+                              style={{
+                                fontSize: 13.5,
                                 fontWeight: '700',
-                                color: isWithdraw ? colors.danger : colors.accent,
-                              },
-                            ]}
-                            numberOfLines={1}
-                          >
-                            {isWithdraw ? '-' : '+'}₹{Number(item.amount).toLocaleString('en-IN')}
-                          </Text>
-
-                          <TouchableOpacity
-                            onPress={() => handleDeleteEntry(item)}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                            style={[styles.deleteEntryBtn, { width: 34, alignItems: 'center', justifyContent: 'center' }]}
-                            accessibilityLabel="Delete entry"
-                          >
-                            <Ionicons name="trash-outline" size={15} color={subTextColor} />
-                          </TouchableOpacity>
-                        </View>
+                                color: isWithdraw ? colors.danger : '#10B981',
+                                marginRight: 4,
+                              }}
+                            >
+                              {isWithdraw ? '-' : '+'}₹{Number(item.amount).toLocaleString('en-IN')}
+                            </Text>
+                            <Ionicons name="chevron-forward" size={13} color={subTextColor} />
+                          </View>
+                        </TouchableOpacity>
                       );
                     })}
                   </View>
                 )}
               </View>
+
+              {/* Give Up on Goal Option (Discreet, low-contrast danger option below history) */}
+              <View style={{ alignItems: 'center', marginTop: 24, marginBottom: 18 }}>
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  onPress={handleDelete}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    paddingVertical: 10,
+                    paddingHorizontal: 16,
+                    borderRadius: 12,
+                    backgroundColor: isDark ? 'rgba(239, 68, 68, 0.08)' : 'rgba(239, 68, 68, 0.06)',
+                    borderWidth: 1,
+                    borderColor: isDark ? 'rgba(239, 68, 68, 0.25)' : 'rgba(239, 68, 68, 0.2)',
+                    gap: 6,
+                  }}
+                >
+                  <Ionicons name="flag-outline" size={15} color={colors.danger} />
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: colors.danger }}>
+                    Give Up on Goal
+                  </Text>
+                </TouchableOpacity>
+                <Text style={{ fontSize: 11, color: subTextColor, marginTop: 6, textAlign: 'center' }}>
+                  Abandoning this goal will remove it and release its tracked progress.
+                </Text>
+              </View>
             </ScrollView>
 
-            {/* Close button */}
-            <View style={[styles.footer, { borderTopColor: borderColor }]}>
-              <TouchableOpacity onPress={onClose} style={[styles.doneBtn, { backgroundColor: goalColor }]}>
-                <Text style={styles.doneBtnText}>Close Roadmap</Text>
+            {/* Bottom Sticky Action Buttons */}
+            <View style={[styles.footer, { borderTopColor: borderColor, paddingBottom: Platform.OS === 'ios' ? 20 : 12 }]}>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={() => {
+                  setActionAmount('');
+                  setActionNote('');
+                  setActionModalType('deposit');
+                }}
+                style={[
+                  styles.bottomActionBtn,
+                  {
+                    flex: 1,
+                    backgroundColor: goalColor,
+                  },
+                ]}
+              >
+                <Ionicons name="add-circle" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
+                <Text style={styles.bottomActionBtnText}>Add Savings</Text>
               </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={() => {
+                  if (activeGoal.currentAmount <= 0) {
+                    alert('No funds available in this goal to withdraw.');
+                    return;
+                  }
+                  setActionAmount('');
+                  setActionNote('');
+                  setActionModalType('withdraw');
+                }}
+                disabled={activeGoal.currentAmount <= 0}
+                style={[
+                  styles.bottomActionBtn,
+                  {
+                    flex: 1,
+                    backgroundColor: isDark ? 'rgba(239, 68, 68, 0.16)' : '#FEE2E2',
+                    borderWidth: 1,
+                    borderColor: isDark ? 'rgba(239, 68, 68, 0.4)' : '#FCA5A5',
+                    opacity: activeGoal.currentAmount > 0 ? 1 : 0.5,
+                  },
+                ]}
+              >
+                <Ionicons
+                  name="arrow-down-circle"
+                  size={18}
+                  color={colors.danger}
+                  style={{ marginRight: 6 }}
+                />
+                <Text style={[styles.bottomActionBtnText, { color: colors.danger }]}>
+                  Withdraw
+                </Text>
+              </TouchableOpacity>
+
+              {(activeGoal.category === 'wealth_stash' || activeGoal.isMilestoneBased) && activeGoal.currentAmount > 0 && (
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => setShowDeployModal(true)}
+                  style={[
+                    styles.bottomActionBtn,
+                    {
+                      backgroundColor: cardBg,
+                      borderWidth: 1,
+                      borderColor: `${goalColor}60`,
+                      paddingHorizontal: 14,
+                    },
+                  ]}
+                >
+                  <Ionicons name="rocket-outline" size={18} color={goalColor} />
+                  <Text style={[styles.bottomActionBtnText, { color: goalColor, marginLeft: 6 }]}>Deploy</Text>
+                </TouchableOpacity>
+              )}
             </View>
           </View>
         </KeyboardAvoidingView>
+
+        {/* Dedicated Action Sheet (Add Savings / Withdraw) rendered inside single modal to prevent Android Dialog keyboard overlay */}
+        {actionModalType !== null && (
+          <View style={styles.actionSheetBackdrop}>
+            <TouchableOpacity
+              style={StyleSheet.absoluteFill}
+              activeOpacity={1}
+              onPress={() => {
+                Keyboard.dismiss();
+                setActionModalType(null);
+              }}
+            />
+            <KeyboardAvoidingView
+              behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+              style={[
+                styles.keyboardAvoidingWrap,
+                Platform.OS === 'android' && isKeyboardVisible && { paddingBottom: Math.max(0, keyboardHeight - 12) },
+              ]}
+            >
+              <View
+                style={[
+                  styles.modalContent,
+                  {
+                    backgroundColor: bgModal,
+                    borderColor,
+                    maxHeight: isKeyboardVisible ? windowHeight * 0.58 : windowHeight * 0.85,
+                  },
+                ]}
+              >
+                <View style={styles.modalHeader}>
+                  <View style={{ flex: 1, paddingRight: 12 }}>
+                    <Text style={[styles.goalTitle, { color: textColor }]}>
+                      {actionModalType === 'deposit' ? 'Add Savings' : 'Withdraw Funds'}
+                    </Text>
+                    <Text style={{ fontSize: 12, color: subTextColor, marginTop: 2 }}>
+                      {actionModalType === 'deposit'
+                        ? `Deposit towards ${activeGoal.name}`
+                        : `From ${activeGoal.name} • Available: ₹${activeGoal.currentAmount.toLocaleString('en-IN')}`}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => {
+                      Keyboard.dismiss();
+                      setActionModalType(null);
+                    }}
+                    style={[styles.actionIconBtn, { backgroundColor: cardBg }]}
+                  >
+                    <Ionicons name="close" size={20} color={textColor} />
+                  </TouchableOpacity>
+                </View>
+
+                <ScrollView
+                  keyboardShouldPersistTaps="handled"
+                  bounces={false}
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: Platform.OS === 'ios' ? 28 : 20 }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 11,
+                      fontWeight: '700',
+                      textTransform: 'uppercase',
+                      letterSpacing: 0.5,
+                      color: subTextColor,
+                      marginTop: 6,
+                      marginBottom: 8,
+                    }}
+                  >
+                    Amount
+                  </Text>
+                  <View
+                    style={[
+                      styles.customDepositRow,
+                      {
+                        borderColor,
+                        backgroundColor: cardBg,
+                        height: 52,
+                        borderRadius: 14,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.currencyPrefix,
+                        {
+                          color: actionModalType === 'deposit' ? goalColor : colors.danger,
+                          fontSize: 22,
+                        },
+                      ]}
+                    >
+                      ₹
+                    </Text>
+                    <TextInput
+                      style={[
+                        styles.depositInput,
+                        { color: textColor, fontSize: 18, fontWeight: '700' },
+                      ]}
+                      value={actionAmount}
+                      onChangeText={setActionAmount}
+                      keyboardType="numeric"
+                      placeholder="0"
+                      placeholderTextColor={subTextColor}
+                      autoFocus
+                    />
+                  </View>
+
+                  <Text
+                    style={{
+                      fontSize: 11,
+                      fontWeight: '700',
+                      textTransform: 'uppercase',
+                      letterSpacing: 0.5,
+                      color: subTextColor,
+                      marginTop: 14,
+                      marginBottom: 8,
+                    }}
+                  >
+                    {actionModalType === 'deposit' ? 'Note (Optional)' : 'Reason (Optional)'}
+                  </Text>
+                  <TextInput
+                    style={[
+                      styles.noteInput,
+                      {
+                        backgroundColor: cardBg,
+                        color: textColor,
+                        borderColor,
+                        borderRadius: 14,
+                        height: 48,
+                        paddingHorizontal: 14,
+                        fontSize: 14,
+                        marginTop: 0,
+                      },
+                    ]}
+                    value={actionNote}
+                    onChangeText={setActionNote}
+                    placeholder={
+                      actionModalType === 'deposit'
+                        ? 'e.g. Salary, bonus, gift'
+                        : 'e.g. Expense, emergency'
+                    }
+                    placeholderTextColor={subTextColor}
+                  />
+
+                  <TouchableOpacity
+                    onPress={handleConfirmAction}
+                    disabled={
+                      isSubmittingAction ||
+                      !actionAmount ||
+                      parseFloat(actionAmount) <= 0
+                    }
+                    style={[
+                      styles.bottomActionBtn,
+                      {
+                        backgroundColor:
+                          actionModalType === 'deposit' ? goalColor : colors.danger,
+                        marginTop: 20,
+                        height: 50,
+                        borderRadius: 14,
+                        opacity:
+                          isSubmittingAction ||
+                          !actionAmount ||
+                          parseFloat(actionAmount) <= 0
+                            ? 0.6
+                            : 1,
+                      },
+                    ]}
+                  >
+                    {isSubmittingAction ? (
+                      <ActivityIndicator size="small" color="#ffffff" />
+                    ) : (
+                      <>
+                        <Ionicons
+                          name={
+                            actionModalType === 'deposit'
+                              ? 'add-circle'
+                              : 'arrow-down-circle'
+                          }
+                          size={20}
+                          color="#FFFFFF"
+                          style={{ marginRight: 8 }}
+                        />
+                        <Text style={[styles.bottomActionBtnText, { fontSize: 15 }]}>
+                          {actionModalType === 'deposit'
+                            ? actionAmount && parseFloat(actionAmount) > 0
+                              ? `Deposit ₹${Number(actionAmount).toLocaleString('en-IN')}`
+                              : 'Deposit Funds'
+                            : actionAmount && parseFloat(actionAmount) > 0
+                              ? `Withdraw ₹${Number(actionAmount).toLocaleString('en-IN')}`
+                              : 'Withdraw Funds'}
+                        </Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                </ScrollView>
+              </View>
+            </KeyboardAvoidingView>
+          </View>
+        )}
+
+        {/* Transaction Detail & Delete Modal */}
+        {selectedEntry !== null && (
+          <View style={styles.actionSheetBackdrop}>
+            <TouchableOpacity
+              style={StyleSheet.absoluteFill}
+              activeOpacity={1}
+              onPress={() => setSelectedEntry(null)}
+            />
+            <View
+              style={[
+                styles.modalContent,
+                {
+                  backgroundColor: bgModal,
+                  borderColor,
+                  paddingBottom: Platform.OS === 'ios' ? 28 : 20,
+                  maxHeight: windowHeight * 0.85,
+                },
+              ]}
+            >
+              <View style={styles.modalHeader}>
+                <View style={{ flex: 1, paddingRight: 12 }}>
+                  <Text style={[styles.goalTitle, { color: textColor }]}>
+                    Transaction Details
+                  </Text>
+                  <Text style={{ fontSize: 12, color: subTextColor, marginTop: 2 }}>
+                    {activeGoal.name}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => setSelectedEntry(null)}
+                  style={[styles.actionIconBtn, { backgroundColor: cardBg }]}
+                >
+                  <Ionicons name="close" size={20} color={textColor} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 12 }}
+              >
+                {/* Hero Amount Display */}
+                <View
+                  style={{
+                    alignItems: 'center',
+                    paddingVertical: 18,
+                    borderRadius: 18,
+                    backgroundColor: cardBg,
+                    borderWidth: 1,
+                    borderColor,
+                    marginBottom: 16,
+                  }}
+                >
+                  <View
+                    style={{
+                      width: 48,
+                      height: 48,
+                      borderRadius: 24,
+                      backgroundColor: selectedEntry.type === 'withdraw'
+                        ? (isDark ? 'rgba(239, 68, 68, 0.15)' : '#FEE2E2')
+                        : selectedEntry.type === 'opening'
+                        ? (isDark ? 'rgba(59, 130, 246, 0.15)' : '#DBEAFE')
+                        : (isDark ? 'rgba(16, 185, 129, 0.15)' : '#D1FAE5'),
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      marginBottom: 10,
+                    }}
+                  >
+                    <Ionicons
+                      name={
+                        selectedEntry.type === 'withdraw'
+                          ? 'arrow-up'
+                          : selectedEntry.type === 'opening'
+                          ? 'wallet'
+                          : 'arrow-down'
+                      }
+                      size={24}
+                      color={
+                        selectedEntry.type === 'withdraw'
+                          ? colors.danger
+                          : selectedEntry.type === 'opening'
+                          ? '#3b82f6'
+                          : '#10B981'
+                      }
+                    />
+                  </View>
+                  <Text
+                    style={{
+                      fontSize: 28,
+                      fontWeight: '800',
+                      letterSpacing: -0.5,
+                      color: selectedEntry.type === 'withdraw' ? colors.danger : '#10B981',
+                    }}
+                  >
+                    {selectedEntry.type === 'withdraw' ? '-' : '+'}₹{Number(selectedEntry.amount).toLocaleString('en-IN')}
+                  </Text>
+                  <Text style={{ fontSize: 12, fontWeight: '700', textTransform: 'uppercase', color: subTextColor, marginTop: 4, letterSpacing: 0.5 }}>
+                    {selectedEntry.type === 'withdraw'
+                      ? 'Withdrawal from Goal'
+                      : selectedEntry.type === 'opening'
+                      ? 'Opening Balance'
+                      : 'Savings Deposit to Goal'}
+                  </Text>
+                </View>
+
+                {/* Details Breakdown */}
+                <View
+                  style={{
+                    borderRadius: 16,
+                    backgroundColor: cardBg,
+                    borderWidth: 1,
+                    borderColor,
+                    paddingHorizontal: 16,
+                    paddingVertical: 12,
+                    marginBottom: 18,
+                  }}
+                >
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: borderColor }}>
+                    <Text style={{ fontSize: 13, color: subTextColor, fontWeight: '500' }}>Date</Text>
+                    <Text style={{ fontSize: 13, color: textColor, fontWeight: '700' }}>
+                      {formatFullEntryDate(selectedEntry.at)}
+                    </Text>
+                  </View>
+
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: borderColor }}>
+                    <Text style={{ fontSize: 13, color: subTextColor, fontWeight: '500' }}>Category</Text>
+                    <Text style={{ fontSize: 13, color: textColor, fontWeight: '700' }}>
+                      {selectedEntry.type === 'withdraw' ? 'Withdrawal' : selectedEntry.type === 'opening' ? 'Initial Savings' : 'Goal Contribution'}
+                    </Text>
+                  </View>
+
+                  {/* Note / Description */}
+                  <View style={{ paddingVertical: 10 }}>
+                    <Text style={{ fontSize: 13, color: subTextColor, fontWeight: '500', marginBottom: 6 }}>
+                      Note / Description
+                    </Text>
+                    <Text
+                      style={{
+                        fontSize: 13.5,
+                        color: selectedEntry.note ? textColor : subTextColor,
+                        fontStyle: selectedEntry.note ? 'normal' : 'italic',
+                        lineHeight: 19,
+                      }}
+                    >
+                      {selectedEntry.note || 'No note added for this transaction.'}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Delete Button */}
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => handleDeleteEntry(selectedEntry)}
+                  disabled={isDeletingEntry}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    height: 48,
+                    borderRadius: 14,
+                    backgroundColor: isDark ? 'rgba(239, 68, 68, 0.15)' : '#FEE2E2',
+                    borderWidth: 1,
+                    borderColor: isDark ? 'rgba(239, 68, 68, 0.4)' : '#FCA5A5',
+                    opacity: isDeletingEntry ? 0.6 : 1,
+                  }}
+                >
+                  {isDeletingEntry ? (
+                    <ActivityIndicator size="small" color={colors.danger} />
+                  ) : (
+                    <>
+                      <Ionicons name="trash-outline" size={18} color={colors.danger} style={{ marginRight: 8 }} />
+                      <Text style={{ fontSize: 14, fontWeight: '700', color: colors.danger }}>
+                        Delete Transaction
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </ScrollView>
+            </View>
+          </View>
+        )}
       </View>
     </Modal>
 
@@ -1199,13 +1560,11 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
                       },
                     ]}
                   >
-                    <View style={[styles.bankPickerIcon, { backgroundColor: isSelected ? `${colors.accent}25` : `${colors.accent}15` }]}>
-                      <Ionicons
-                        name="business"
-                        size={20}
-                        color={isSelected ? colors.accent : colors.accent}
-                      />
-                    </View>
+                    <BankIcon
+                      name={bank.bankName}
+                      code={bank.smsSenderId || bank.bankName}
+                      size={38}
+                    />
                     <View style={{ flex: 1, marginLeft: 12 }}>
                       <Text style={{ fontSize: 13.5, fontWeight: '700', color: textColor }}>
                         {bank.bankName || 'Savings Account'} {bank.accountNumberSuffix ? `•••• ${bank.accountNumberSuffix}` : ''}
@@ -1247,6 +1606,18 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.78)',
     justifyContent: 'flex-end',
+    ...(Platform.OS === 'web' ? { height: '100dvh' as any, width: '100vw' as any, position: 'fixed' as any, top: 0, left: 0, right: 0, bottom: 0 } : {}),
+  },
+  actionSheetBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.68)',
+    justifyContent: 'flex-end',
+    zIndex: 999,
+    elevation: 20,
     ...(Platform.OS === 'web' ? { height: '100dvh' as any, width: '100vw' as any, position: 'fixed' as any, top: 0, left: 0, right: 0, bottom: 0 } : {}),
   },
   keyboardAvoidingWrap: {
@@ -1605,9 +1976,23 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   footer: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingTop: 12,
     borderTopWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+  },
+  bottomActionBtn: {
+    height: 48,
+    borderRadius: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bottomActionBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#ffffff',
   },
   doneBtn: {
     height: 48,
@@ -1732,51 +2117,24 @@ const styles = StyleSheet.create({
     fontSize: 12.5,
     marginTop: 8,
   },
-  historyTableContainer: {
+  historyListContainer: {
+    borderRadius: 14,
     borderWidth: 1,
-    borderRadius: 12,
     overflow: 'hidden',
     marginTop: 6,
   },
-  historyTableHeader: {
+  historyItemRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderBottomWidth: 1,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
   },
-  historyHeaderCol: {
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
-  historyTableRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    borderBottomWidth: 1,
-  },
-  historyRowText: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  typeBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-    borderWidth: 1,
-    alignSelf: 'flex-start',
-  },
-  typeBadgeText: {
-    fontSize: 9.5,
-    fontWeight: '700',
-  },
-  deleteEntryBtn: {
+  historyItemIconCircle: {
+    width: 28,
     height: 28,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 6,
   },
   emptyHistoryBox: {
     alignItems: 'center',
@@ -1785,3 +2143,4 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
 });
+

@@ -1,5 +1,4 @@
 import { View, Text, StyleSheet, TouchableOpacity, Image, Platform } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { useTheme, useBankStore, useGoalsStore } from '../../../store';
 import type { Goal } from '../services/goalPacingService';
 import { getGoalPacing } from '../services/goalPacingService';
@@ -14,7 +13,7 @@ import { getBankAllocationSummary } from '../services/goalBankAllocationService'
 interface GoalListItemProps {
   goal: Goal;
   onPress: () => void;
-  onLogSavings: (goal: Goal) => void;
+  onLogSavings?: (goal: Goal) => void;
   onEditImage?: (goal: Goal) => void;
 }
 
@@ -111,9 +110,6 @@ export const GoalListItem: React.FC<GoalListItemProps> = ({
           <Text style={[styles.goalTitle, { color: colors.text }]} numberOfLines={1}>
             {goal.name}
           </Text>
-          <Text style={[styles.percentText, { color: colors.text }]}>
-            {pacing.pctSaved}%
-          </Text>
         </View>
 
         {/* Amount Line */}
@@ -162,18 +158,17 @@ export const GoalListItem: React.FC<GoalListItemProps> = ({
         </View>
       </View>
 
-      {/* 3. RIGHT QUICK CTA */}
-      <TouchableOpacity
-        activeOpacity={0.8}
-        onPress={(e) => {
-          e.stopPropagation();
-          onLogSavings(goal);
-        }}
-        style={[styles.quickLogBtn, { backgroundColor: colors.accent }]}
-      >
-        <Ionicons name="add" size={13} color="#FFFFFF" style={{ marginRight: 2 }} />
-        <Text style={styles.quickLogText}>Log</Text>
-      </TouchableOpacity>
+      {/* 3. RIGHT CURRENT PERCENTAGE */}
+      <View style={styles.percentContainer}>
+        <Text
+          style={[
+            styles.percentValue,
+            { color: pacing.pctSaved >= 100 ? colors.accent : colors.text },
+          ]}
+        >
+          {pacing.pctSaved}%
+        </Text>
+      </View>
     </TouchableOpacity>
   );
 };
@@ -222,21 +217,11 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   titleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
     marginBottom: 2,
   },
   goalTitle: {
     fontSize: 13.5,
     fontWeight: '700',
-    flex: 1,
-    marginRight: 6,
-  },
-  percentText: {
-    fontSize: 12,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
   },
   amountLine: {
     fontSize: 11.5,
@@ -267,18 +252,18 @@ const styles = StyleSheet.create({
     fontWeight: '400',
     flex: 1,
   },
-  quickLogBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  percentContainer: {
+    alignItems: 'flex-end',
     justifyContent: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 8,
+    paddingLeft: 8,
+    paddingRight: 2,
+    minWidth: 42,
   },
-  quickLogText: {
-    color: '#FFFFFF',
-    fontSize: 11.5,
-    fontWeight: '700',
+  percentValue: {
+    fontSize: 15,
+    fontWeight: '800',
+    fontVariant: ['tabular-nums'],
+    letterSpacing: -0.3,
   },
   bankSubTag: {
     fontSize: 10.5,

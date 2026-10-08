@@ -2,7 +2,7 @@
   "expo": {
     "name": "Regent Money",
     "slug": "regent-money",
-    "version": "1.0.31",
+    "version": "1.0.32",
     "orientation": "portrait",
     "icon": "./assets/appicon.png",
     "notification": {
@@ -33,7 +33,7 @@
       ],
       "predictiveBackGestureEnabled": false,
       "package": "com.anonymous.regentmoney",
-      "versionCode": 114,
+      "versionCode": 115,
       "adaptiveIcon": {
         "foregroundImage": "./assets/appicon.png",
         "backgroundColor": "#FFFFFF"

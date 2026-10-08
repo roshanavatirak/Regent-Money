@@ -9,6 +9,7 @@ import {
   FlatList,
   Platform,
   StatusBar,
+  useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
@@ -62,6 +63,8 @@ interface OnboardingScreenProps {
 
 export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({ navigation }) => {
   const insets = useSafeAreaInsets();
+  const { width: windowWidth } = useWindowDimensions();
+  const [containerWidth, setContainerWidth] = useState(windowWidth || SCREEN_WIDTH);
   const [currentIndex, setCurrentIndex] = useState(0);
   const flatListRef = useRef<FlatList>(null);
 
@@ -76,12 +79,46 @@ export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({ navigation }
 
   const handleNext = () => {
     if (currentIndex < SLIDES.length - 1) {
-      flatListRef.current?.scrollToIndex({
-        index: currentIndex + 1,
-        animated: true,
-      });
+      const nextIdx = currentIndex + 1;
+      setCurrentIndex(nextIdx);
+      try {
+        flatListRef.current?.scrollToOffset({
+          offset: nextIdx * containerWidth,
+          animated: true,
+        });
+      } catch {
+        flatListRef.current?.scrollToIndex({
+          index: nextIdx,
+          animated: true,
+        });
+      }
     } else {
       handleFinishOnboarding();
+    }
+  };
+
+  const goToSlide = (idx: number) => {
+    setCurrentIndex(idx);
+    try {
+      flatListRef.current?.scrollToOffset({
+        offset: idx * containerWidth,
+        animated: true,
+      });
+    } catch {
+      flatListRef.current?.scrollToIndex({
+        index: idx,
+        animated: true,
+      });
+    }
+  };
+
+  const handleScrollEnd = (e: any) => {
+    const offsetX = e.nativeEvent?.contentOffset?.x ?? 0;
+    if (containerWidth > 0) {
+      const idx = Math.round(offsetX / containerWidth);
+      if (idx >= 0 && idx < SLIDES.length && idx !== currentIndex) {
+        setCurrentIndex(idx);
+      }
     }
   };
 
@@ -91,15 +128,15 @@ export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({ navigation }
     }
   }).current;
 
-  const viewConfig = useRef({ viewAreaCoveragePercentThreshold: 50 }).current;
+  const viewConfig = useRef({ viewAreaCoveragePercentThreshold: 40 }).current;
 
   const isLastSlide = currentIndex === SLIDES.length - 1;
 
   const renderSlide = ({ item }: { item: OnboardingSlide }) => {
     return (
-      <View style={[styles.slideContainer, { width: SCREEN_WIDTH }]}>
+      <View style={[styles.slideContainer, { width: containerWidth }]}>
         {/* Ambient Emerald Halo Glow */}
-        <View style={styles.ambientGlow} />
+        <View style={styles.ambientGlow} pointerEvents="none" />
 
         {/* 3D Illustration Container */}
         <View style={styles.illustrationWrapper}>
@@ -156,8 +193,28 @@ export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({ navigation }
         pagingEnabled
         showsHorizontalScrollIndicator={false}
         bounces={false}
+        onMomentumScrollEnd={handleScrollEnd}
         onViewableItemsChanged={onViewableItemsChanged}
         viewabilityConfig={viewConfig}
+        getItemLayout={(_, index) => ({
+          length: containerWidth,
+          offset: containerWidth * index,
+          index,
+        })}
+        onScrollToIndexFailed={(info) => {
+          setTimeout(() => {
+            flatListRef.current?.scrollToOffset({
+              offset: info.index * containerWidth,
+              animated: true,
+            });
+          }, 50);
+        }}
+        onLayout={(e) => {
+          const w = e.nativeEvent.layout.width;
+          if (w > 0 && Math.abs(w - containerWidth) > 1) {
+            setContainerWidth(w);
+          }
+        }}
         style={styles.carousel}
       />
 
@@ -168,8 +225,11 @@ export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({ navigation }
           {SLIDES.map((_, index) => {
             const isActive = index === currentIndex;
             return (
-              <View
+              <TouchableOpacity
                 key={index}
+                onPress={() => goToSlide(index)}
+                hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
+                activeOpacity={0.7}
                 style={[
                   styles.dot,
                   isActive ? styles.activePill : styles.inactiveDot,
@@ -336,6 +396,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 28,
     paddingBottom: 24,
     paddingTop: 12,
+    zIndex: 20,
   },
   paginationRow: {
     flexDirection: 'row',
@@ -347,6 +408,7 @@ const styles = StyleSheet.create({
     height: 6,
     borderRadius: 3,
     marginHorizontal: 4,
+    ...(Platform.OS === 'web' ? { cursor: 'pointer' as any } : {}),
   },
   inactiveDot: {
     width: 6,
@@ -381,6 +443,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 8,
     elevation: 3,
+    ...(Platform.OS === 'web' ? { cursor: 'pointer' as any } : {}),
   },
   nextButtonText: {
     color: '#FFFFFF',
@@ -393,6 +456,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#2dba4e',
+    ...(Platform.OS === 'web' ? { cursor: 'pointer' as any } : {}),
     paddingVertical: 15,
     paddingHorizontal: 24,
     borderRadius: 30,

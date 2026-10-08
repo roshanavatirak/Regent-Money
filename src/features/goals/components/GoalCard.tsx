@@ -16,7 +16,7 @@ import { getBankAllocationSummary } from '../services/goalBankAllocationService'
 interface GoalCardProps {
   goal: Goal;
   onPress: () => void;
-  onLogSavings: (goal: Goal) => void;
+  onLogSavings?: (goal: Goal) => void;
   onSecondaryAction?: (goal: Goal, action: string) => void;
   onEditImage?: (goal: Goal) => void;
 }
@@ -77,13 +77,14 @@ export const GoalCard: React.FC<GoalCardProps> = ({
         style={styles.artFrame}
         onLayout={(e) => setFrameWidth(e.nativeEvent.layout.width)}
       >
-        {/* Layer A: Base Grayed/Blurred Image (0% or unreached progress) */}
+        {/* Layer A: Base Grayed/Blurred Image (0% or unreached progress) with subtle reduced blur */}
         <Image
           source={{ uri: coverUri }}
+          blurRadius={Platform.OS === 'web' ? undefined : 2.5}
           style={[
             styles.coverImage,
             (Platform.OS === 'web'
-              ? { filter: 'grayscale(100%) contrast(1.1) brightness(0.6)' }
+              ? { filter: 'blur(2.5px) grayscale(100%) contrast(1.05) brightness(0.65)' }
               : {}) as any,
           ]}
           resizeMode="cover"
@@ -98,7 +99,7 @@ export const GoalCard: React.FC<GoalCardProps> = ({
           ]}
         />
 
-        {/* Layer B: Revealed Vivid Full-Color Portion (Progressively unlocks from 1% to 100%) */}
+        {/* Layer B: Revealed Vivid Full-Color Clear Portion (Progressively unlocks from 1% to 100%) */}
         {frameWidth > 0 && pacing.pctSaved > 0 ? (
           <View
             style={[
@@ -214,46 +215,6 @@ export const GoalCard: React.FC<GoalCardProps> = ({
             {copy.statusText}
           </Text>
         </View>
-
-        {/* 3. BUTTONS ROW */}
-        <View style={styles.buttonsRow}>
-          {/* Primary Action Button */}
-          <TouchableOpacity
-            activeOpacity={0.8}
-            onPress={(e) => {
-              e.stopPropagation();
-              onLogSavings(goal);
-            }}
-            style={[styles.primaryBtn, { backgroundColor: colors.accent }]}
-          >
-            <Ionicons name="add" size={14} color="#FFFFFF" style={{ marginRight: 4 }} />
-            <Text style={styles.primaryBtnText}>{copy.primaryActionLabel}</Text>
-          </TouchableOpacity>
-
-          {/* Secondary Action Button (if present) */}
-          {copy.secondaryActionLabel ? (
-            <TouchableOpacity
-              activeOpacity={0.7}
-              onPress={(e) => {
-                e.stopPropagation();
-                if (onSecondaryAction) {
-                  onSecondaryAction(goal, copy.secondaryActionLabel!);
-                }
-              }}
-              style={[
-                styles.secondaryBtn,
-                {
-                  backgroundColor: colors.buttonSecondaryBackground,
-                  borderColor: colors.border,
-                },
-              ]}
-            >
-              <Text style={[styles.secondaryBtnText, { color: colors.buttonSecondaryText }]}>
-                {copy.secondaryActionLabel}
-              </Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
       </View>
     </TouchableOpacity>
   );
@@ -311,9 +272,9 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 255, 255, 0.25)',
   },
   contentBody: {
-    paddingHorizontal: 11,
+    paddingHorizontal: 12,
     paddingTop: 3,
-    paddingBottom: 8,
+    paddingBottom: 12,
     marginTop: -24,
   },
   goalTitle: {
