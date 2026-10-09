@@ -1059,21 +1059,79 @@ export const budgetService = {
     useBudgetStore.getState().addBudget(budgetItem);
 
     if (token) {
-      try {
-        await fetch(`${BACKEND_URL}/sync/budget`, {
+      fetch(`${BACKEND_URL}/sync/budget`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(budgetItem),
+      }).catch((err: any) => {
+        console.warn('[BudgetService] Offline fallback for create budget:', err.message);
+      });
+    }
+
+    return budgetItem;
+  },
+
+  /**
+   * Batch create multiple sub-category budgets in a single state update with non-blocking sync
+   */
+  async createBudgetsBatch(payloads: Array<{
+    name?: string;
+    category?: string;
+    limitAmount: number;
+    period?: string;
+    periodType?: BudgetPeriodType;
+    startDate?: number;
+    endDate?: number;
+    isOverall?: boolean;
+    fixedObligations?: number;
+    parentBudgetId?: string;
+    isManuallyActivated?: boolean;
+    effectiveStartDate?: number;
+    customCategoryDef?: BudgetCustomCategory;
+  }>): Promise<BudgetCategory[]> {
+    if (!payloads.length) return [];
+
+    const items: BudgetCategory[] = payloads.map((payload) => ({
+      id: 'budget_' + (payload.category || 'all') + '_' + Math.random().toString(36).substr(2, 9),
+      name: payload.name || (payload.isOverall ? 'Total Spending Budget' : payload.category || 'Custom Budget'),
+      category: payload.isOverall ? 'all' : (payload.category?.toLowerCase() || 'other_expense'),
+      limitAmount: payload.limitAmount,
+      spentAmount: 0,
+      period: payload.period || 'Current Cycle',
+      periodType: payload.periodType || 'monthly',
+      startDate: payload.startDate,
+      endDate: payload.endDate,
+      isOverall: payload.isOverall,
+      fixedObligations: payload.fixedObligations || 0,
+      parentBudgetId: payload.parentBudgetId,
+      isManuallyActivated: payload.isManuallyActivated || false,
+      effectiveStartDate: payload.effectiveStartDate,
+      customCategoryDef: payload.customCategoryDef,
+    }));
+
+    // Optimistically add all items to store at once
+    const currentBudgets = useBudgetStore.getState().budgets || [];
+    useBudgetStore.setState({ budgets: [...currentBudgets, ...items] });
+
+    // Background non-blocking sync to backend
+    const token = await authService.getAccessToken();
+    if (token) {
+      items.forEach((item) => {
+        fetch(`${BACKEND_URL}/sync/budget`, {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify(budgetItem),
-        });
-      } catch (err: any) {
-        console.warn('[BudgetService] Offline fallback for create budget:', err.message);
-      }
+          body: JSON.stringify(item),
+        }).catch((err: any) => console.warn('[BudgetService] Offline fallback for batch create:', err?.message));
+      });
     }
 
-    return budgetItem;
+    return items;
   },
 
   /**

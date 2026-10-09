@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -139,9 +139,17 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
     for (let i = 0; i < 6; i++) {
       const m = addMonths(now, i);
       const monthKey = format(m, 'MMMM yyyy');
-      const hasBudget = budgets.some(
-        (b) => b.isOverall && (!b.periodType || b.periodType === 'monthly') && b.period?.includes(monthKey)
-      );
+      const hasBudget = budgets.some((b) => {
+        if (!b.isOverall || (b.periodType && b.periodType !== 'monthly')) return false;
+        const bPeriod = (b.period || '').toLowerCase().trim();
+        const mKey = monthKey.toLowerCase().trim();
+        if (bPeriod.includes(mKey) || mKey.includes(bPeriod)) return true;
+        if (b.startDate) {
+          const bMonthKey = format(new Date(b.startDate), 'MMMM yyyy').toLowerCase().trim();
+          if (bMonthKey === mKey) return true;
+        }
+        return false;
+      });
       list.push({
         index: i,
         date: m,
@@ -241,8 +249,13 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
   // Calendar Modal Picker State
   const [calendarPickerTarget, setCalendarPickerTarget] = useState<'start' | 'end' | null>(null);
 
-  // Sync route params when component updates
+  // Sync route params when component initially mounts - do not re-run on saving or background budget updates!
+  const hasInitializedFromParamsRef = useRef(false);
+
   useEffect(() => {
+    if (hasInitializedFromParamsRef.current) return;
+    hasInitializedFromParamsRef.current = true;
+
     if (route.params?.initialType) {
       setBudgetType(route.params.initialType);
       if (route.params.initialType === 'custom_event') {
@@ -277,12 +290,24 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
       if (found) {
         setActiveTemplateBudget(found);
         applyBudgetTemplate(found);
-      }
-      const firstAvailable = next6Months.find((m) => !m.hasBudget);
-      if (firstAvailable) {
-        setSelectedMonthIndex(firstAvailable.index);
-        setStartDateStr(firstAvailable.startDateStr);
-        setEndDateStr(firstAvailable.endDateStr);
+
+        // Find the intended next month for this cloned budget
+        let targetIdx = -1;
+        if (found.startDate) {
+          const nextM = addMonths(new Date(found.startDate), 1);
+          const nextMKey = format(nextM, 'MMMM yyyy').toLowerCase();
+          targetIdx = next6Months.findIndex((m) => m.fullLabel.toLowerCase() === nextMKey && !m.hasBudget);
+        }
+        if (targetIdx === -1) {
+          const firstAvailable = next6Months.find((m) => !m.hasBudget);
+          if (firstAvailable) targetIdx = firstAvailable.index;
+        }
+
+        if (targetIdx !== -1) {
+          setSelectedMonthIndex(targetIdx);
+          setStartDateStr(next6Months[targetIdx].startDateStr);
+          setEndDateStr(next6Months[targetIdx].endDateStr);
+        }
       }
     }
   }, [route.params?.initialType, route.params?.parentBudgetId, route.params?.period, route.params?.initialScope, route.params?.cloneFromBudgetId, budgets, next6Months]);
@@ -709,17 +734,18 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
 
         // Batch create cloned or pre-configured sub-category allocations linked to this newly created monthly budget!
         if (allocEntries.length > 0 && created?.id) {
+          const subPayloads = [];
           for (const [catId, item] of allocEntries) {
             const subAmt = parseFloat(item.amountStr);
             if (subAmt > 0) {
               const customDef = customCategories.find((c) => c.id === catId);
               const catLabel = getCategoryMeta(catId, false, customDef).label;
-              await budgetService.createBudget({
+              subPayloads.push({
                 name: catLabel,
                 category: catId,
                 limitAmount: subAmt,
                 period: format(calculatedRange.startDate, 'MMMM yyyy'),
-                periodType: 'monthly',
+                periodType: 'monthly' as const,
                 startDate: calculatedRange.startDate,
                 endDate: calculatedRange.endDate,
                 isOverall: false,
@@ -728,12 +754,15 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
               });
             }
           }
+          if (subPayloads.length > 0) {
+            await budgetService.createBudgetsBatch(subPayloads);
+          }
         }
 
         if (navigation.canGoBack()) {
           navigation.goBack();
         } else {
-          (navigation as any).navigate('Main', { screen: 'Budgets', params: { openTab: 'monthly' } });
+          (navigation as any).navigate('Main', { screen: 'Budgets', params: { openTab: 'monthly', selectedBudgetId: created.id } });
         }
       } else {
         const eventName = budgetName.trim() || 'Special Event Budget';

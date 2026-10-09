@@ -163,12 +163,15 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
     }
   }, [menuBudget?.id]);
 
-  // Sync active tab from route params (e.g. after creating a special event)
+  // Sync active tab & selected budget from route params (e.g. after creating a budget)
   useEffect(() => {
     if (route.params?.openTab) {
       setActiveTab(route.params.openTab);
     }
-  }, [route.params?.openTab]);
+    if (route.params?.selectedBudgetId) {
+      setSelectedMonthlyBudgetId(route.params.selectedBudgetId);
+    }
+  }, [route.params?.openTab, route.params?.selectedBudgetId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -177,7 +180,10 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
       if (route.params?.openTab) {
         setActiveTab(route.params.openTab);
       }
-    }, [sync, route.params?.openTab])
+      if (route.params?.selectedBudgetId) {
+        setSelectedMonthlyBudgetId(route.params.selectedBudgetId);
+      }
+    }, [sync, route.params?.openTab, route.params?.selectedBudgetId])
   );
 
   const onRefresh = useCallback(async () => {
