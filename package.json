@@ -1,6 +1,6 @@
 {
   "name": "regent-money",
-  "version": "1.0.31",
+  "version": "1.0.33",
   "main": "index.ts",
   "dependencies": {
     "@expo/vector-icons": "^15.1.1",
