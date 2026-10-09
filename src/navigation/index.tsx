@@ -362,6 +362,24 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
   const [formError, setFormError] = useState('');
   const [formStep, setFormStep] = useState(1);
 
+  const handleBankBalanceChange = (t: string) => {
+    if (!t) {
+      setBalance('');
+      if (formError) setFormError('');
+      return;
+    }
+    let cleaned = t.replace(/[^0-9.]/g, '');
+    const parts = cleaned.split('.');
+    if (parts.length > 2) {
+      cleaned = parts[0] + '.' + parts.slice(1).join('');
+    }
+    if (parts.length >= 2) {
+      cleaned = parts[0] + '.' + parts[1].slice(0, 2);
+    }
+    setBalance(cleaned);
+    if (formError) setFormError('');
+  };
+
   const resetForm = () => {
     setSelectedBank(null);
     setSearchQuery('');
@@ -447,6 +465,11 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
       setFormError('Current balance must be a valid number.');
       return;
     }
+    const balanceParts = balance.split('.');
+    if (balanceParts.length === 2 && balanceParts[1].length > 2) {
+      setFormError('Current balance cannot have more than 2 decimal places.');
+      return;
+    }
 
     setFormError('');
     setSubmitting(true);
@@ -457,6 +480,7 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
         throw new Error('No access token found');
       }
 
+      const cleanBalance = Math.round(parseFloat(balance) * 100) / 100;
       const newId = 'bank_' + Math.random().toString(36).substr(2, 9);
       const response = await fetch(`${BACKEND_URL}/sync/bank-profile`, {
         method: 'POST',
@@ -469,7 +493,7 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
           bankName: bankNameInput.trim(),
           accountType: accountType || 'Savings',
           accountNumberSuffix: accountSuffix.trim(),
-          currentBalance: parseFloat(balance),
+          currentBalance: cleanBalance,
           smsSenderId: formatSmsSenderTags(smsSenderTags) || undefined,
           upiId: upiId.trim() || undefined,
           customKeywords: customKeywords.trim() || undefined,
@@ -783,9 +807,9 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
                         style={styles.formInputField}
                         placeholder="e.g. 75000"
                         placeholderTextColor={isDark ? 'rgba(250, 251, 252, 0.4)' : colors.textTertiary}
-                        keyboardType="numeric"
+                        keyboardType="decimal-pad"
                         value={balance}
-                        onChangeText={setBalance}
+                        onChangeText={handleBankBalanceChange}
                       />
                     </View>
                   </View>

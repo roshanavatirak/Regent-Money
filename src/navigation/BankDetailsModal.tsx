@@ -702,7 +702,12 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                 <View>
                   <Text style={styles.balanceLabel}>Current Balance</Text>
-                  <Text style={styles.balanceValue}>₹{activeBank.currentBalance.toLocaleString('en-IN')}</Text>
+                  <Text style={styles.balanceValue}>
+                    ₹{(Math.round((Number(activeBank.currentBalance) || 0) * 100) / 100).toLocaleString('en-IN', {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </Text>
                   {activeBank.lastSyncTimestamp && (
                     <Text style={styles.syncText}>
                       Synced: {new Date(activeBank.lastSyncTimestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}

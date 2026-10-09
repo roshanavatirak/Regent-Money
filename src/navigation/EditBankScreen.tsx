@@ -57,7 +57,14 @@ export const EditBankScreen: React.FC<EditBankScreenProps> = (props) => {
   const [accountType, setAccountType] = useState(bank?.accountType || 'Savings');
   const [accountTypeDropdownOpen, setAccountTypeDropdownOpen] = useState(false);
   const [accountSuffix, setAccountSuffix] = useState(bank?.accountNumberSuffix || '');
-  const [balance, setBalance] = useState(bank?.currentBalance !== undefined ? String(bank.currentBalance) : '');
+  const formatBalanceToTwoDecimals = (val: number | string | undefined | null) => {
+    if (val === undefined || val === null || val === '') return '';
+    const num = typeof val === 'number' ? val : parseFloat(String(val));
+    if (isNaN(num)) return '';
+    return (Math.round(num * 100) / 100).toString();
+  };
+
+  const [balance, setBalance] = useState(formatBalanceToTwoDecimals(bank?.currentBalance));
   const [smsSenderTags, setSmsSenderTags] = useState<string[]>(
     parseSmsSenderTags(bank?.smsSenderId)
   );
@@ -67,6 +74,26 @@ export const EditBankScreen: React.FC<EditBankScreenProps> = (props) => {
   const [formError, setFormError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const { scrollBottomPadding } = useKeyboardHeight(40);
+
+  const handleBalanceChange = (t: string) => {
+    if (!t) {
+      setBalance('');
+      if (formError) setFormError('');
+      return;
+    }
+    // Allow digits and at most one decimal point
+    let cleaned = t.replace(/[^0-9.]/g, '');
+    const parts = cleaned.split('.');
+    if (parts.length > 2) {
+      cleaned = parts[0] + '.' + parts.slice(1).join('');
+    }
+    // Enforce no more than two decimal places after the point
+    if (parts.length >= 2) {
+      cleaned = parts[0] + '.' + parts[1].slice(0, 2);
+    }
+    setBalance(cleaned);
+    if (formError) setFormError('');
+  };
 
   const handleGoBack = () => {
     if (props.onBack) {
@@ -107,6 +134,11 @@ export const EditBankScreen: React.FC<EditBankScreenProps> = (props) => {
       setFormError('Current balance must be a valid number.');
       return;
     }
+    const balanceParts = balance.split('.');
+    if (balanceParts.length === 2 && balanceParts[1].length > 2) {
+      setFormError('Current balance cannot have more than 2 decimal places.');
+      return;
+    }
 
     setFormError('');
     setSubmitting(true);
@@ -117,12 +149,13 @@ export const EditBankScreen: React.FC<EditBankScreenProps> = (props) => {
         throw new Error('Authentication session expired. Please log in again.');
       }
 
+      const cleanBalance = Math.round(parseFloat(balance) * 100) / 100;
       const updatedData = {
         id: bank.id,
         bankName: bankNameInput.trim(),
         accountType: accountType || 'Savings',
         accountNumberSuffix: accountSuffix.trim(),
-        currentBalance: parseFloat(balance),
+        currentBalance: cleanBalance,
         smsSenderId: formatSmsSenderTags(smsSenderTags) || undefined,
         upiId: upiId.trim() || undefined,
         customKeywords: customKeywords.trim() || undefined,
@@ -324,10 +357,7 @@ export const EditBankScreen: React.FC<EditBankScreenProps> = (props) => {
               <TextInput
                 style={styles.inputField}
                 value={balance}
-                onChangeText={(t) => {
-                  setBalance(t);
-                  if (formError) setFormError('');
-                }}
+                onChangeText={handleBalanceChange}
                 placeholder="e.g. 15000.00"
                 placeholderTextColor={colors.textTertiary}
                 keyboardType="decimal-pad"

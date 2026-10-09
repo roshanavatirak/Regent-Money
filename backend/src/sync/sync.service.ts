@@ -385,7 +385,7 @@ export class SyncService implements OnModuleInit {
     if (existing) {
       existing.bankName = data.bankName;
       existing.accountNumberSuffix = data.accountNumberSuffix;
-      existing.currentBalance = data.currentBalance;
+      existing.currentBalance = Math.round(Number(data.currentBalance || 0) * 100) / 100;
       existing.accountType = data.accountType || existing.accountType || 'Savings';
       existing.smsSenderId = data.smsSenderId || null;
       existing.upiId = data.upiId || null;
@@ -404,7 +404,7 @@ export class SyncService implements OnModuleInit {
       bankName: data.bankName,
       accountType: data.accountType || 'Savings',
       accountNumberSuffix: data.accountNumberSuffix,
-      currentBalance: data.currentBalance,
+      currentBalance: Math.round(Number(data.currentBalance || 0) * 100) / 100,
       smsSenderId: data.smsSenderId || null,
       upiId: data.upiId || null,
       customKeywords: data.customKeywords || null,
@@ -931,7 +931,7 @@ export class SyncService implements OnModuleInit {
 
     if (data.updatedBalance !== undefined && data.updatedBalance !== null && !isNaN(Number(data.updatedBalance))) {
       // Direct authoritative balance from bank SMS
-      bank.currentBalance = Math.max(0, parseFloat(String(data.updatedBalance)));
+      bank.currentBalance = Math.round(Math.max(0, parseFloat(String(data.updatedBalance))) * 100) / 100;
       bank.lastSyncTimestamp = Date.now();
       bank.updatedAt = Date.now();
       await this.bankProfileRepository.save(bank);
@@ -951,7 +951,7 @@ export class SyncService implements OnModuleInit {
       }
 
       if (applicableChange !== 0) {
-        const updatedBal = parseFloat(String(bank.currentBalance || 0)) + applicableChange;
+        const updatedBal = Math.round((parseFloat(String(bank.currentBalance || 0)) + applicableChange) * 100) / 100;
         bank.currentBalance = bank.accountType === 'Savings' ? Math.max(0, updatedBal) : updatedBal;
         bank.lastSyncTimestamp = Date.now();
         bank.updatedAt = Date.now();
@@ -1311,7 +1311,7 @@ export class SyncService implements OnModuleInit {
       createdRecord = await this.transactionRepository.save(newTx);
 
       // Decrement bank balance
-      bank.currentBalance = parseFloat(String(bank.currentBalance)) - amount;
+      bank.currentBalance = Math.round((parseFloat(String(bank.currentBalance)) - amount) * 100) / 100;
 
       // Update budget spent amount if matching category exists
       try {
@@ -1343,7 +1343,7 @@ export class SyncService implements OnModuleInit {
       createdRecord = await this.incomeRecordRepository.save(newInc);
 
       // Increment bank balance
-      bank.currentBalance = parseFloat(String(bank.currentBalance)) + amount;
+      bank.currentBalance = Math.round((parseFloat(String(bank.currentBalance)) + amount) * 100) / 100;
     }
 
     if (note) {
@@ -1417,7 +1417,7 @@ export class SyncService implements OnModuleInit {
           where: { id: tx.bankProfileId, userId, isDeleted: false },
         });
         if (bank) {
-          bank.currentBalance = parseFloat(String(bank.currentBalance)) - amountDiff;
+          bank.currentBalance = Math.round((parseFloat(String(bank.currentBalance)) - amountDiff) * 100) / 100;
           bank.lastSyncTimestamp = Date.now();
           bank.updatedAt = Date.now();
           await this.bankProfileRepository.save(bank);
@@ -1454,7 +1454,7 @@ export class SyncService implements OnModuleInit {
           where: { id: inc.bankProfileId, userId, isDeleted: false },
         });
         if (bank) {
-          bank.currentBalance = parseFloat(String(bank.currentBalance)) + amountDiff;
+          bank.currentBalance = Math.round((parseFloat(String(bank.currentBalance)) + amountDiff) * 100) / 100;
           bank.lastSyncTimestamp = Date.now();
           bank.updatedAt = Date.now();
           await this.bankProfileRepository.save(bank);
@@ -1493,7 +1493,7 @@ export class SyncService implements OnModuleInit {
           where: { id: tx.bankProfileId, userId, isDeleted: false },
         });
         if (bank) {
-          bank.currentBalance = parseFloat(String(bank.currentBalance)) + oldAmount;
+          bank.currentBalance = Math.round((parseFloat(String(bank.currentBalance)) + oldAmount) * 100) / 100;
           bank.lastSyncTimestamp = Date.now();
           bank.updatedAt = Date.now();
           await this.bankProfileRepository.save(bank);
@@ -1526,7 +1526,7 @@ export class SyncService implements OnModuleInit {
           where: { id: inc.bankProfileId, userId, isDeleted: false },
         });
         if (bank) {
-          bank.currentBalance = parseFloat(String(bank.currentBalance)) - oldAmount;
+          bank.currentBalance = Math.round((parseFloat(String(bank.currentBalance)) - oldAmount) * 100) / 100;
           bank.lastSyncTimestamp = Date.now();
           bank.updatedAt = Date.now();
           await this.bankProfileRepository.save(bank);
@@ -2232,7 +2232,8 @@ export class SyncService implements OnModuleInit {
     }
 
     if (ingested) {
-      matchedBank.currentBalance = matchedBank.accountType === 'Savings' ? Math.max(0, newBalance) : newBalance;
+      const roundedNewBal = Math.round(newBalance * 100) / 100;
+      matchedBank.currentBalance = matchedBank.accountType === 'Savings' ? Math.max(0, roundedNewBal) : roundedNewBal;
       matchedBank.lastSyncTimestamp = Date.now();
       matchedBank.updatedAt = Date.now();
       await this.bankProfileRepository.save(matchedBank);
