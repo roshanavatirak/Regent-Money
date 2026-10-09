@@ -43,17 +43,21 @@ export const LUXURY_PRESET_AVATARS: LuxuryAvatarOption[] = [
 export const pickImageFromDevice = async (): Promise<string | null> => {
   try {
     if (Platform.OS !== 'web') {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        alert('Permission to access photos is needed to upload an avatar.');
-        return null;
+      try {
+        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (status === 'denied') {
+          alert('Permission to access photos is needed to upload an avatar.');
+          return null;
+        }
+      } catch {
+        // System photo picker on newer Android does not require explicit permission
       }
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [1, 1],
+      allowsEditing: Platform.OS === 'ios',
+      aspect: Platform.OS === 'ios' ? [1, 1] : undefined,
       quality: 0.7,
       base64: true,
     });

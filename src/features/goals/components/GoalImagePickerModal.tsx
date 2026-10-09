@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   Image,
   Platform,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -38,38 +39,56 @@ export const GoalImagePickerModal: React.FC<GoalImagePickerModalProps> = ({
   onResetToAuto,
 }) => {
   const { colors, isDark } = useTheme();
+  const [isPicking, setIsPicking] = useState(false);
 
   if (!goal) return null;
 
   const currentCoverUri = getCoverImageUri(goal);
 
   const handlePickFromLibrary = async () => {
+    if (isPicking) return;
+    setIsPicking(true);
     try {
       if (Platform.OS !== 'web') {
-        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (status !== 'granted') {
-          Alert.alert(
-            'Permission Required',
-            'Please allow photo library access to upload a custom cover photo.'
-          );
-          return;
+        try {
+          const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+          if (status === 'denied') {
+            Alert.alert(
+              'Permission Required',
+              'Please allow photo library access in your device settings to select a cover photo.'
+            );
+            setIsPicking(false);
+            return;
+          }
+        } catch {
+          // On newer Android (API 33+), system photo picker handles access directly
         }
       }
 
+      // Note: allowsEditing: true on Android triggers an external CROP intent that
+      // frequently crashes/ANRs across devices. allowsEditing: false launches the native
+      // picker directly and smoothly, while the UI clips to 16:9 banner via resizeMode="cover".
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
-        allowsEditing: true,
-        aspect: [16, 9],
-        quality: 0.85,
+        allowsEditing: false,
+        quality: 0.8,
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const pickedUri = result.assets[0].uri;
-        onCustomImagePicked(goal.id, pickedUri);
-        onClose();
+        if (pickedUri) {
+          onCustomImagePicked(goal.id, pickedUri);
+          onClose();
+        }
       }
     } catch (err) {
-      console.warn('Error picking image:', err);
+      console.warn('[GoalImagePickerModal] Error picking image:', err);
+      Alert.alert(
+        'Upload Photo',
+        'Could not open photo gallery. Please try again or select a curated theme below.'
+      );
+    } finally {
+      setIsPicking(false);
     }
   };
 
@@ -160,11 +179,20 @@ export const GoalImagePickerModal: React.FC<GoalImagePickerModalProps> = ({
             {/* Upload Button */}
             <TouchableOpacity
               activeOpacity={0.8}
+              disabled={isPicking}
               onPress={handlePickFromLibrary}
-              style={[styles.actionBtn, { backgroundColor: colors.accent }]}
+              style={[
+                styles.actionBtn,
+                { backgroundColor: colors.accent },
+                isPicking && { opacity: 0.7 },
+              ]}
             >
-              <Ionicons name="cloud-upload-outline" size={16} color="#FFFFFF" style={{ marginRight: 6 }} />
-              <Text style={styles.actionBtnText}>Upload Photo</Text>
+              {isPicking ? (
+                <ActivityIndicator size="small" color="#FFFFFF" style={{ marginRight: 6 }} />
+              ) : (
+                <Ionicons name="cloud-upload-outline" size={16} color="#FFFFFF" style={{ marginRight: 6 }} />
+              )}
+              <Text style={styles.actionBtnText}>{isPicking ? 'Opening...' : 'Upload Photo'}</Text>
             </TouchableOpacity>
 
             {/* Auto Detect / Reset */}
