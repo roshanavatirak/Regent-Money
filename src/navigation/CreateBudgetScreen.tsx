@@ -217,6 +217,7 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
   });
 
   const [monthDropdownOpen, setMonthDropdownOpen] = useState(false);
+  const [templateDropdownOpen, setTemplateDropdownOpen] = useState(false);
 
   // 3. Category Mode vs New Budget
   const isCategoryMode = route.params?.initialScope === 'category';
@@ -823,11 +824,6 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
           <Text style={[styles.headerTitle, { color: colors.text }]}>
             {isCategoryMode ? 'Add Category Sub-Budget' : 'New Budget'}
           </Text>
-          <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]}>
-            {isCategoryMode
-              ? 'Allocate a portion of your monthly budget'
-              : 'Plan your monthly spending or configure a special event'}
-          </Text>
         </View>
       </View>
 
@@ -841,24 +837,13 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
         {/* ==================== 1. NEW MAIN BUDGET FLOW ==================== */}
         {!isCategoryMode ? (
           <>
-            {/* COPY FROM PREVIOUS BUDGET (QUICK TEMPLATE SELECTOR) */}
+            {/* COPY FROM PREVIOUS BUDGET (DROPDOWN PICKER) */}
             {allOverallAndEventBudgets.length > 0 && (
-              <View
-                style={[
-                  styles.templateCard,
-                  {
-                    backgroundColor: isDark ? 'rgba(255,255,255,0.03)' : '#f8fafc',
-                    borderColor: activeTemplateBudget ? colors.accent : colors.border,
-                  },
-                ]}
-              >
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                    <Ionicons name="flash" size={15} color={colors.accent} />
-                    <Text style={[styles.templateCardTitle, { color: colors.text }]}>
-                      {activeTemplateBudget ? `Template: ${activeTemplateBudget.name || activeTemplateBudget.period || 'Loaded'}` : 'Copy from Previous Budget'}
-                    </Text>
-                  </View>
+              <View style={{ marginBottom: 14 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <Text style={[styles.inputLabel, { color: colors.textSecondary, marginBottom: 0 }]}>
+                    COPY FROM PREVIOUS BUDGET
+                  </Text>
                   {activeTemplateBudget && (
                     <TouchableOpacity
                       onPress={() => {
@@ -873,53 +858,125 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
                     </TouchableOpacity>
                   )}
                 </View>
-                <Text style={[styles.templateCardDesc, { color: colors.textSecondary, marginBottom: 8 }]}>
-                  {activeTemplateBudget
-                    ? 'Limits and category allocations pre-filled from this past budget. You can tweak amounts as needed.'
-                    : '1-tap to duplicate limits and category allocations from a past cycle so you don’t start from zero:'}
-                </Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 2 }}>
-                  {allOverallAndEventBudgets.map((b) => {
-                    const isSelected = activeTemplateBudget?.id === b.id;
-                    const bName = b.name || (b.isOverall ? b.period || 'Monthly' : 'Event');
-                    return (
-                      <TouchableOpacity
-                        key={b.id}
-                        style={[
-                          styles.templateChip,
-                          {
-                            backgroundColor: isSelected ? colors.accent : isDark ? 'rgba(255,255,255,0.05)' : '#ffffff',
-                            borderColor: isSelected ? colors.accent : colors.border,
-                          },
-                        ]}
-                        onPress={() => {
-                          setActiveTemplateBudget(b);
-                          applyBudgetTemplate(b);
-                        }}
-                        activeOpacity={0.7}
-                      >
+
+                {/* Dropdown Trigger */}
+                <TouchableOpacity
+                  style={[
+                    styles.monthDropdownTrigger,
+                    {
+                      backgroundColor: colors.inputBackground,
+                      borderColor: activeTemplateBudget ? colors.accent : colors.border,
+                    },
+                  ]}
+                  onPress={() => {
+                    setTemplateDropdownOpen(!templateDropdownOpen);
+                    setMonthDropdownOpen(false);
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+                    <Ionicons
+                      name={activeTemplateBudget ? 'flash' : 'copy-outline'}
+                      size={17}
+                      color={activeTemplateBudget ? colors.accent : colors.textSecondary}
+                    />
+                    <Text
+                      style={[
+                        styles.monthDropdownTitle,
+                        { color: activeTemplateBudget ? colors.text : colors.textSecondary, flex: 1 },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {activeTemplateBudget
+                        ? `${activeTemplateBudget.name || activeTemplateBudget.period || 'Previous Budget'} (₹${Number(activeTemplateBudget.limitAmount || 0).toLocaleString('en-IN')})`
+                        : 'Select previous budget to copy (Optional)'}
+                    </Text>
+                  </View>
+                  <Ionicons name={templateDropdownOpen ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textSecondary} />
+                </TouchableOpacity>
+
+                {/* Dropdown Menu */}
+                {templateDropdownOpen && (
+                  <View style={[styles.monthDropdownMenu, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                    {/* None / Start from scratch */}
+                    <TouchableOpacity
+                      style={[
+                        styles.monthMenuItem,
+                        { borderBottomColor: colors.border },
+                        !activeTemplateBudget && { backgroundColor: isDark ? 'rgba(45, 186, 78, 0.12)' : 'rgba(22, 163, 74, 0.08)' },
+                      ]}
+                      onPress={() => {
+                        setActiveTemplateBudget(null);
+                        setAmountStr('');
+                        setBudgetName('');
+                        setAllocations({});
+                        setTemplateDropdownOpen(false);
+                      }}
+                    >
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                         <Ionicons
-                          name={b.isOverall ? 'calendar-outline' : 'airplane-outline'}
-                          size={13}
-                          color={isSelected ? '#ffffff' : colors.accent}
-                          style={{ marginRight: 5 }}
+                          name={!activeTemplateBudget ? 'radio-button-on' : 'radio-button-off'}
+                          size={18}
+                          color={!activeTemplateBudget ? colors.accent : colors.textSecondary}
                         />
-                        <Text style={[styles.templateChipText, { color: isSelected ? '#ffffff' : colors.text }]}>
-                          {bName} (₹{Number(b.limitAmount || 0).toLocaleString('en-IN')})
+                        <Text
+                          style={[
+                            styles.monthMenuItemText,
+                            { color: !activeTemplateBudget ? colors.accent : colors.text, fontWeight: !activeTemplateBudget ? '700' : '500' },
+                          ]}
+                        >
+                          None (Start from scratch)
                         </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
+                      </View>
+                    </TouchableOpacity>
+
+                    {allOverallAndEventBudgets.map((b) => {
+                      const isSelected = activeTemplateBudget?.id === b.id;
+                      const bName = b.name || (b.isOverall ? b.period || 'Monthly Budget' : 'Event Budget');
+                      return (
+                        <TouchableOpacity
+                          key={b.id}
+                          style={[
+                            styles.monthMenuItem,
+                            { borderBottomColor: colors.border },
+                            isSelected && { backgroundColor: isDark ? 'rgba(45, 186, 78, 0.12)' : 'rgba(22, 163, 74, 0.08)' },
+                          ]}
+                          onPress={() => {
+                            setActiveTemplateBudget(b);
+                            applyBudgetTemplate(b);
+                            setTemplateDropdownOpen(false);
+                          }}
+                        >
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+                            <Ionicons
+                              name={isSelected ? 'radio-button-on' : 'radio-button-off'}
+                              size={18}
+                              color={isSelected ? colors.accent : colors.textSecondary}
+                            />
+                            <Text
+                              style={[
+                                styles.monthMenuItemText,
+                                { color: isSelected ? colors.accent : colors.text, fontWeight: isSelected ? '700' : '500', flex: 1 },
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {bName}
+                            </Text>
+                          </View>
+                          <Text style={{ fontSize: 13, fontWeight: '800', color: colors.accent, marginLeft: 8 }}>
+                            ₹{Number(b.limitAmount || 0).toLocaleString('en-IN')}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
               </View>
             )}
 
-            {/* DURATION SELECTOR (EXACTLY 2 OPTIONS) */}
-            <View style={styles.sectionHeader}>
+            {/* DURATION SELECTOR */}
+            <View style={[styles.sectionHeader, { marginBottom: 8 }]}>
               <Text style={[styles.sectionTitle, { color: colors.text }]}>Select Budget Type</Text>
-              <Text style={[styles.sectionDesc, { color: colors.textSecondary }]}>
-                Choose a recurring monthly cycle or a dedicated special event
-              </Text>
             </View>
 
             <View style={[styles.durationTabsRow, { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#e2e8f0' }]}>
@@ -987,10 +1044,7 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
               <>
                 {/* 1. Month & Cycle Dates */}
                 <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                  <Text style={[styles.cardTitle, { color: colors.text }]}>1. Month & Cycle Dates</Text>
-                  <Text style={[styles.cardSubtitle, { color: colors.textSecondary }]}>
-                    Standard calendar month or custom salary cycle (e.g. 5th to 4th)
-                  </Text>
+                  <Text style={[styles.cardTitle, { color: colors.text, marginBottom: 10 }]}>1. Month & Cycle Dates</Text>
 
                   <View style={styles.subTabRow}>
                     <TouchableOpacity
@@ -1031,7 +1085,10 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
                       <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>SELECT MONTH (NEXT 6 MONTHS)</Text>
                       <TouchableOpacity
                         style={[styles.monthDropdownTrigger, { backgroundColor: colors.inputBackground, borderColor: colors.border }]}
-                        onPress={() => setMonthDropdownOpen(!monthDropdownOpen)}
+                        onPress={() => {
+                          setMonthDropdownOpen(!monthDropdownOpen);
+                          setTemplateDropdownOpen(false);
+                        }}
                         activeOpacity={0.8}
                       >
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
@@ -1137,10 +1194,7 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
 
                 {/* 2. Total Monthly Spending Limit */}
                 <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                  <Text style={[styles.cardTitle, { color: colors.text }]}>2. Total Monthly Spending Limit</Text>
-                  <Text style={[styles.cardSubtitle, { color: colors.textSecondary }]}>
-                    Set your overall target spending limit in rupees for this month
-                  </Text>
+                  <Text style={[styles.cardTitle, { color: colors.text, marginBottom: 10 }]}>2. Total Monthly Spending Limit</Text>
 
                   <View style={[styles.amountInputRow, { borderColor: colors.border, backgroundColor: colors.inputBackground }]}>
                     <Text style={[styles.currencySymbol, { color: colors.accent }]}>₹</Text>
@@ -1173,7 +1227,7 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
                 {/* 3. CLONED CATEGORY ALLOCATIONS PREVIEW */}
                 {Object.keys(allocations).length > 0 && (
                   <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                       <Text style={[styles.cardTitle, { color: colors.text }]}>
                         3. Category Allocations ({Object.keys(allocations).length})
                       </Text>
@@ -1181,9 +1235,6 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
                         Auto-created on save
                       </Text>
                     </View>
-                    <Text style={[styles.cardSubtitle, { color: colors.textSecondary }]}>
-                      These categories will be automatically cloned and linked under this month's budget ceiling.
-                    </Text>
 
                     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
                       {Object.entries(allocations).map(([catId, item]) => {
