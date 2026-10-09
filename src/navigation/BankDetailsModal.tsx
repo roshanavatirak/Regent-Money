@@ -19,6 +19,7 @@ import {
   NativeModules
 } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
+import { BankIcon } from '../components/BankIcon';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import TextRecognition from '@react-native-ml-kit/text-recognition';
@@ -681,9 +682,16 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
           <View style={styles.cardContainer}>
             {/* Header */}
             <View style={styles.modalHeader}>
-              <View>
-                <Text style={styles.title}>{activeBank.bankName}</Text>
-                <Text style={styles.subtitle}>{activeBank.accountType || 'Savings'} •••• {activeBank.accountNumberSuffix}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 12 }}>
+                <BankIcon
+                  code={activeBank.smsSenderId || activeBank.bankName}
+                  name={activeBank.bankName}
+                  size={42}
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.title} numberOfLines={1}>{activeBank.bankName}</Text>
+                  <Text style={styles.subtitle}>{activeBank.accountType || 'Savings'} •••• {activeBank.accountNumberSuffix}</Text>
+                </View>
               </View>
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <TouchableOpacity
