@@ -46,6 +46,8 @@ export class ChatRequestDto {
 
 export interface OcrTransactionExtracted {
   date: string;
+  time?: string | null;
+  timestamp?: number | null;
   amount: number;
   type: 'debit' | 'credit';
   merchant: string;
@@ -326,7 +328,8 @@ First, determine if the text contains valid financial bank transactions:
   Set isValid to true, rejectionReason to null, and extract all transactions.
 
 Each transaction in the array must have:
-- date: string (format YYYY-MM-DD)
+- date: string in 'YYYY-MM-DD' format (CRITICAL: extract the exact transaction date from the statement. Do NOT default to today's date).
+- time: string or null in 24-hour 'HH:mm' or 'HH:mm:ss' format (extract the exact transaction time if present; otherwise return null).
 - amount: number (positive value, no commas)
 - type: 'debit' or 'credit' (debit for withdrawal/spend/DR/Paid; credit for deposit/salary/CR/Received)
 - merchant: string (clean merchant/payee/payer name or transaction details, remove generic bank noise if possible)
@@ -344,6 +347,7 @@ Return ONLY a valid JSON object matching:
   "transactions": [
     {
       "date": "YYYY-MM-DD",
+      "time": "HH:mm" or null,
       "amount": 0.00,
       "type": "debit" | "credit",
       "merchant": "Name",
@@ -453,7 +457,8 @@ Carefully evaluate the image and classify it into ONE of these categories:
    - rejectionReason: null
    - transactions: Extract all visible transactions into an array.
      Each transaction must have:
-     * date: string in 'YYYY-MM-DD' format (if year is missing, assume current year or year in screenshot)
+     * date: string in 'YYYY-MM-DD' format (CRITICAL: extract the exact transaction date shown on the screen or receipt. Do NOT use today's date if a date is present. If year is missing, infer from context or assume current year).
+     * time: string or null (CRITICAL: extract the exact transaction time/timestamp in 24-hour 'HH:mm' or 'HH:mm:ss' format, e.g. '14:32' for 2:32 PM, '09:15', '21:04:12'. Look for timestamps on UPI payment receipts like GPay/PhonePe/Paytm, bank SMS receipts, and app screens. If no time is shown, return null).
      * amount: number (positive value, no commas or currency symbols)
      * type: 'debit' or 'credit' (debit for withdrawal/spend/DR/Paid; credit for deposit/salary/CR/Received)
      * merchant: string (clean merchant/payee/payer name or description, remove generic noise)
@@ -472,6 +477,7 @@ Return ONLY a valid JSON object matching this schema:
   "transactions": [
     {
       "date": "YYYY-MM-DD",
+      "time": "HH:mm" or null,
       "amount": 0.00,
       "type": "debit" | "credit",
       "merchant": "Name",

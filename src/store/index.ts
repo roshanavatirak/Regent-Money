@@ -442,6 +442,8 @@ export interface BankProfileType {
 
 export interface BankState {
   bankProfiles: BankProfileType[];
+  activeBankModalId: string | null;
+  setActiveBankModalId: (id: string | null) => void;
   setBankProfiles: (profiles: BankProfileType[]) => void;
   addBankProfileState: (profile: BankProfileType) => void;
   removeBankProfileState: (id: string) => void;
@@ -451,6 +453,8 @@ export interface BankState {
 
 export const useBankStore = create<BankState>((set) => ({
   bankProfiles: loadCached<BankProfileType[]>('cache_bank_profiles', []),
+  activeBankModalId: null,
+  setActiveBankModalId: (activeBankModalId) => set({ activeBankModalId }),
   setBankProfiles: (bankProfiles) => {
     mmkvStorage.setObject('cache_bank_profiles', bankProfiles);
     set({ bankProfiles });

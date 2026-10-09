@@ -64,6 +64,7 @@ import { getExecutiveGreeting, getSessionGreeting } from '../constants/aiGreetin
 import { SmsSenderTagsManager } from '../components/SmsSenderTagsManager';
 import { getSmsSenderSuggestions, formatSmsSenderTags } from '../constants/bankSmsSenders';
 import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
+import { isExcludedFromBudget } from '../services/budgetService';
 
 const POPULAR_BANKS = [
   { code: 'SBIN', name: 'State Bank of India', short: 'SBI Bank' },
@@ -2212,16 +2213,21 @@ const DashboardScreen = () => {
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
     return transactions
-      .filter((tx) => tx.timestamp >= startOfMonth)
-      .reduce((sum, tx) => sum + tx.amount, 0);
+      .filter((tx) => tx.timestamp >= startOfMonth && tx.type !== 'credit' && !isExcludedFromBudget(tx))
+      .reduce((sum, tx) => sum + (parseFloat(tx.amount) || 0), 0);
   }, [transactions]);
 
   // Donut chart category grouping (with double-drilldown into merchants when category is selected)
+  // Strictly excludes self-transfers and non-spending transfers
   const donutData = useMemo(() => {
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
     const filteredTxs = transactions.filter(
-      (tx) => tx.timestamp >= startOfMonth && (filterCategory === null || tx.category === filterCategory)
+      (tx) =>
+        tx.timestamp >= startOfMonth &&
+        tx.type !== 'credit' &&
+        !isExcludedFromBudget(tx) &&
+        (filterCategory === null || tx.category === filterCategory)
     );
 
     const map: { [key: string]: number } = {};
@@ -3080,10 +3086,10 @@ const BanksScreen = () => {
   const { sync } = useSyncDb();
 
   const bankProfiles = useBankStore((state) => state.bankProfiles);
+  const activeBankModalId = useBankStore((state) => state.activeBankModalId);
+  const setActiveBankModalId = useBankStore((state) => state.setActiveBankModalId);
   const [addBankModalVisible, setAddBankModalVisible] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
-  const [selectedBank, setSelectedBank] = useState<any | null>(null);
-  const [detailsVisible, setDetailsVisible] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   const totalBalance = useMemo(() => {
@@ -3303,8 +3309,7 @@ const BanksScreen = () => {
                   elevation: 2,
                 }}
                 onPress={() => {
-                  setSelectedBank(bank);
-                  setDetailsVisible(true);
+                  setActiveBankModalId(bank.id);
                 }}
                 activeOpacity={0.8}
               >
@@ -3438,9 +3443,9 @@ const BanksScreen = () => {
       />
 
       <BankDetailsModal
-        visible={detailsVisible}
-        onClose={() => setDetailsVisible(false)}
-        bank={selectedBank ? bankProfiles.find((b) => b.id === selectedBank.id) || selectedBank : null}
+        visible={!!activeBankModalId}
+        onClose={() => setActiveBankModalId(null)}
+        bank={activeBankModalId ? bankProfiles.find((b) => b.id === activeBankModalId) || null : null}
       />
     </View>
   );

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
+  BackHandler,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -31,13 +32,26 @@ export const ACCOUNT_TYPES = [
   { id: 'Overdraft', label: 'Overdraft (OD) Account', icon: 'repeat' },
 ];
 
-export const EditBankScreen: React.FC = () => {
+export interface EditBankScreenProps {
+  bank?: BankProfileType;
+  returnToBankId?: string;
+  onBack?: () => void;
+  onSuccess?: (bank: BankProfileType) => void;
+}
+
+export const EditBankScreen: React.FC<EditBankScreenProps> = (props) => {
   const insets = useSafeAreaInsets();
-  const navigation = useNavigation<any>();
-  const route = useRoute<any>();
+  let navigation: any = null;
+  let route: any = null;
+  try {
+    navigation = useNavigation<any>();
+  } catch (e) {}
+  try {
+    route = useRoute<any>();
+  } catch (e) {}
   const { colors, isDark } = useTheme();
 
-  const bank: BankProfileType = route.params?.bank;
+  const bank: BankProfileType = props.bank || route?.params?.bank;
 
   const [bankNameInput, setBankNameInput] = useState(bank?.bankName || '');
   const [accountType, setAccountType] = useState(bank?.accountType || 'Savings');
@@ -54,8 +68,29 @@ export const EditBankScreen: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const { scrollBottomPadding } = useKeyboardHeight(40);
 
+  const handleGoBack = () => {
+    if (props.onBack) {
+      props.onBack();
+      return;
+    }
+    const returnToBankId = props.returnToBankId || route?.params?.returnToBankId || bank?.id;
+    if (returnToBankId) {
+      useBankStore.getState().setActiveBankModalId(returnToBankId);
+    }
+    navigation?.goBack?.();
+  };
+
+  useEffect(() => {
+    const onBackPress = () => {
+      handleGoBack();
+      return true;
+    };
+    const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => sub.remove();
+  }, [props.onBack, props.returnToBankId, route?.params?.returnToBankId, bank?.id]);
+
   if (!bank) {
-    navigation.goBack();
+    handleGoBack();
     return null;
   }
 
@@ -115,7 +150,11 @@ export const EditBankScreen: React.FC = () => {
       };
 
       useBankStore.getState().updateBankProfileState(updatedBank);
-      navigation.goBack();
+      if (props.onSuccess) {
+        props.onSuccess(updatedBank);
+      } else {
+        handleGoBack();
+      }
     } catch (e: any) {
       setFormError(e.message || 'Could not save bank changes.');
     } finally {
@@ -133,7 +172,7 @@ export const EditBankScreen: React.FC = () => {
       {/* Top Header */}
       <View style={[styles.header, { paddingTop: Math.max(insets.top, 16) }]}>
         <TouchableOpacity
-          onPress={() => navigation.goBack()}
+          onPress={handleGoBack}
           style={styles.backBtn}
           activeOpacity={0.7}
         >

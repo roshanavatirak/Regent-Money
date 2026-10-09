@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,8 @@ import {
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
+  Switch,
+  BackHandler,
 } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -59,14 +61,44 @@ const DEBIT_CATEGORIES: CategoryOption[] = [
   { id: 'other_expense', label: 'Other Expense', iconName: 'tag' },
 ];
 
-export const TransactionDetailScreen: React.FC = () => {
+export interface TransactionDetailScreenProps {
+  transaction?: TransactionItem;
+  bankName?: string;
+  accountNumberSuffix?: string;
+  onBack?: () => void;
+  onSuccess?: (action: 'updated' | 'deleted', data?: any) => void;
+}
+
+export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (props) => {
   const insets = useSafeAreaInsets();
-  const navigation = useNavigation<any>();
-  const route = useRoute<any>();
+  let navigation: any = null;
+  try {
+    navigation = useNavigation<any>();
+  } catch (e) {}
+  let route: any = null;
+  try {
+    route = useRoute<any>();
+  } catch (e) {}
   const { colors, isDark } = useTheme();
 
-  const transaction: TransactionItem = route.params?.transaction;
-  const bankName: string | undefined = route.params?.bankName;
+  const transaction: TransactionItem = props.transaction || route?.params?.transaction;
+  const bankProfiles = useBankStore((state) => state.bankProfiles);
+  const matchedBank = useMemo(() => {
+    if (transaction?.bankProfileId) {
+      return bankProfiles.find((b) => b.id === transaction.bankProfileId);
+    }
+    const bName = (props.bankName || route?.params?.bankName || '').toLowerCase();
+    if (bName) {
+      return bankProfiles.find((b) => b.bankName.toLowerCase() === bName);
+    }
+    return null;
+  }, [bankProfiles, transaction?.bankProfileId, props.bankName, route?.params?.bankName]);
+
+  const displayBankName = props.bankName || route?.params?.bankName || matchedBank?.bankName;
+  const accountSuffix =
+    props.accountNumberSuffix ||
+    route?.params?.accountNumberSuffix ||
+    matchedBank?.accountNumberSuffix;
 
   const [amountStr, setAmountStr] = useState(transaction?.amount ? String(transaction.amount) : '');
   const [selectedCategory, setSelectedCategory] = useState<string>(
@@ -80,8 +112,29 @@ export const TransactionDetailScreen: React.FC = () => {
   const scrollViewRef = useRef<ScrollView>(null);
   const { scrollBottomPadding } = useKeyboardHeight(40);
 
+  const handleGoBack = () => {
+    if (props.onBack) {
+      props.onBack();
+      return;
+    }
+    const returnToBankId = route?.params?.returnToBankId || transaction?.bankProfileId;
+    if (returnToBankId) {
+      useBankStore.getState().setActiveBankModalId(returnToBankId);
+    }
+    navigation?.goBack?.();
+  };
+
+  useEffect(() => {
+    const onBackPress = () => {
+      handleGoBack();
+      return true;
+    };
+    const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => sub.remove();
+  }, [props.onBack, route?.params?.returnToBankId, transaction?.bankProfileId]);
+
   if (!transaction) {
-    navigation.goBack();
+    handleGoBack();
     return null;
   }
 
@@ -152,7 +205,16 @@ export const TransactionDetailScreen: React.FC = () => {
         await tagLearningService.saveLearnedTag(targetMerchant, selectedCategory).catch(() => {});
       }
 
-      if (typeof route.params?.onSuccess === 'function') {
+      if (typeof props.onSuccess === 'function') {
+        props.onSuccess('updated', {
+          ...res,
+          id: transaction.id,
+          type: transaction.type,
+          newAmount: parsedAmount,
+          category: selectedCategory,
+          merchant: note.trim() || selectedCategory,
+        });
+      } else if (typeof route?.params?.onSuccess === 'function') {
         route.params.onSuccess('updated', {
           ...res,
           id: transaction.id,
@@ -163,7 +225,7 @@ export const TransactionDetailScreen: React.FC = () => {
         });
       }
 
-      navigation.goBack();
+      handleGoBack();
     } catch (e: any) {
       Alert.alert('Error', e.message || 'Unable to update transaction.');
     } finally {
@@ -214,7 +276,14 @@ export const TransactionDetailScreen: React.FC = () => {
             // Store might not track all
           }
 
-          if (typeof route.params?.onSuccess === 'function') {
+          if (typeof props.onSuccess === 'function') {
+            props.onSuccess('deleted', {
+              id: transaction.id,
+              type: transaction.type,
+              amount: originalAmount,
+              updatedBalance: res.updatedBalance,
+            });
+          } else if (typeof route?.params?.onSuccess === 'function') {
             route.params.onSuccess('deleted', {
               id: transaction.id,
               type: transaction.type,
@@ -223,7 +292,7 @@ export const TransactionDetailScreen: React.FC = () => {
             });
           }
 
-          navigation.goBack();
+          handleGoBack();
         } catch (e: any) {
           Alert.alert('Delete Failed', e.message || 'Unable to delete transaction.');
         } finally {
@@ -240,7 +309,7 @@ export const TransactionDetailScreen: React.FC = () => {
       {/* Top Header */}
       <View style={[styles.header, { paddingTop: Math.max(insets.top, 16) }]}>
         <TouchableOpacity
-          onPress={() => navigation.goBack()}
+          onPress={handleGoBack}
           style={styles.backBtn}
           activeOpacity={0.7}
         >
@@ -248,7 +317,7 @@ export const TransactionDetailScreen: React.FC = () => {
         </TouchableOpacity>
         <View style={{ flex: 1, marginLeft: 12 }}>
           <Text style={styles.headerTitle}>Transaction Details</Text>
-          <Text style={styles.headerSubtitle} numberOfLines={1}>
+          <Text style={styles.headerSubtitle} numberOfLines={2}>
             {transaction.timestamp
               ? (() => {
                   const d = new Date(transaction.timestamp);
@@ -273,7 +342,11 @@ export const TransactionDetailScreen: React.FC = () => {
                   });
                 })()
               : 'Transaction Record'}
-            {bankName ? ` • ${bankName}` : ''}
+            {displayBankName
+              ? ` • ${displayBankName}${accountSuffix ? ` •••• ${accountSuffix}` : ''}`
+              : accountSuffix
+              ? ` • •••• ${accountSuffix}`
+              : ''}
           </Text>
         </View>
         <View
@@ -368,26 +441,13 @@ export const TransactionDetailScreen: React.FC = () => {
             </View>
           </View>
 
-          {/* Editable Category / Tag Section */}
+          {/* Category Section */}
           <View style={styles.inputSection}>
-            <View style={styles.labelRow}>
-              <Text style={styles.inputLabel}>TRANSACTION TAG</Text>
-              <TouchableOpacity
-                onPress={() => setTagModalVisible(true)}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                <Text style={{ fontSize: 11, fontWeight: '700', color: (colors as any).primary || colors.accent || '#0070F3' }}>
-                  Choose from 30+ Tags
-                </Text>
-              </TouchableOpacity>
-            </View>
+            <Text style={styles.inputLabel}>CATEGORY</Text>
 
-            {/* Selected Tag Card */}
             {(() => {
               const currentTagDef = getTagDef(selectedCategory);
-              const quickTags = isCredit
-                ? ['salary', 'cashback', 'interest', 'money_received']
-                : ['food', 'shopping', 'groceries', 'commute', 'fuel'];
+              const targetName = note.trim() || transaction.merchant;
 
               return (
                 <>
@@ -434,193 +494,52 @@ export const TransactionDetailScreen: React.FC = () => {
                       >
                         {currentTagDef.label}
                       </Text>
-                      {(() => {
-                        const targetName = note.trim() || transaction.merchant;
-                        const defaultTag = targetName ? tagLearningService.getPrimaryTag(targetName, transaction.type) : null;
-                        const isDifferent = defaultTag && defaultTag.toLowerCase() !== selectedCategory.toLowerCase();
-
-                        if (isDifferent) {
-                          return (
-                            <Text style={[styles.selectedTagSub, { color: updatePayeeRule ? '#818CF8' : '#10B981', fontWeight: '600' }]}>
-                              {updatePayeeRule
-                                ? `🔄 Changing default rule for "${targetName}"`
-                                : `⚡ One-time tag (Default: ${getTagDef(defaultTag).label})`}
-                            </Text>
-                          );
-                        }
-                        return (
-                          <Text style={styles.selectedTagSub}>
-                            {targetName
-                              ? `Payee Default: ${currentTagDef.label}`
-                              : 'Tap to change category'}
-                          </Text>
-                        );
-                      })()}
-                    </View>
-
-                    <View
-                      style={[
-                        styles.changeTagBtn,
-                        { borderColor: isDark ? '#3D3D52' : '#D1D5DB' },
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.changeTagBtnText,
-                          { color: isDark ? '#9CA3AF' : '#4B5563' },
-                        ]}
-                      >
-                        Change
+                      <Text style={styles.selectedTagSub}>
+                        Tap to change category
                       </Text>
-                      <Feather
-                        name="chevron-right"
-                        size={14}
-                        color={isDark ? '#9CA3AF' : '#4B5563'}
-                      />
                     </View>
+
+                    <Feather
+                      name="chevron-right"
+                      size={20}
+                      color={isDark ? '#6B7280' : '#9CA3AF'}
+                      style={{ marginRight: 6 }}
+                    />
                   </TouchableOpacity>
 
-                  {/* Quick Tag Pills */}
-                  <View style={styles.quickTagRow}>
-                    {quickTags.map((tagId) => {
-                      const def = getTagDef(tagId);
-                      const isSelected =
-                        selectedCategory.toLowerCase() === def.id.toLowerCase();
-                      return (
-                        <TouchableOpacity
-                          key={def.id}
-                          style={[
-                            styles.quickTagChip,
-                            {
-                              backgroundColor: isSelected
-                                ? isDark
-                                  ? 'rgba(0, 112, 243, 0.2)'
-                                  : '#EEF2FF'
-                                : isDark
-                                ? '#232332'
-                                : '#F3F4F6',
-                              borderColor: isSelected
-                                ? '#0070F3'
-                                : 'transparent',
-                            },
-                          ]}
-                          onPress={() => {
-                            setSelectedCategory(def.id);
-                            setUpdatePayeeRule(false); // Quick tags default to this transaction only
-                          }}
-                          activeOpacity={0.7}
-                        >
-                          <Text
-                            style={[
-                              styles.quickTagChipText,
-                              {
-                                color: isSelected
-                                  ? '#0070F3'
-                                  : isDark
-                                  ? '#D1D5DB'
-                                  : '#4B5563',
-                                fontWeight: isSelected ? '800' : '600',
-                              },
-                            ]}
-                          >
-                            {def.label}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                    <TouchableOpacity
+                  {/* Clear & Simple Payee Default Switch */}
+                  {targetName ? (
+                    <View
                       style={[
-                        styles.quickTagChip,
-                        { backgroundColor: isDark ? '#232332' : '#F3F4F6' },
+                        styles.ruleToggleCard,
+                        {
+                          backgroundColor: isDark ? '#1C1F2B' : '#F8FAFC',
+                          borderColor: isDark ? '#2D3446' : '#E2E8F0',
+                        },
                       ]}
-                      onPress={() => setTagModalVisible(true)}
-                      activeOpacity={0.7}
                     >
-                      <Feather
-                        name="plus"
-                        size={12}
-                        color="#0070F3"
-                        style={{ marginRight: 2 }}
-                      />
                       <Text
+                        numberOfLines={1}
+                        ellipsizeMode="tail"
                         style={[
-                          styles.quickTagChipText,
-                          { color: '#0070F3', fontWeight: '800' },
+                          styles.ruleToggleTitle,
+                          { color: isDark ? '#F1F5F9' : '#0F172A', flex: 1, marginRight: 12 },
                         ]}
                       >
-                        More
+                        Always use {currentTagDef.label} for {targetName}
                       </Text>
-                    </TouchableOpacity>
-                  </View>
 
-                  {/* Scope Explainer / Switcher if category differs from payee default */}
-                  {(() => {
-                    const targetName = note.trim() || transaction.merchant;
-                    const defaultTag = targetName ? tagLearningService.getPrimaryTag(targetName, transaction.type) : null;
-                    const isDifferent = defaultTag && defaultTag.toLowerCase() !== selectedCategory.toLowerCase();
-
-                    if (!isDifferent || !targetName) return null;
-
-                    return (
-                      <View
-                        style={[
-                          styles.ruleToggleCard,
-                          {
-                            backgroundColor: isDark ? '#1C1F2B' : '#F8FAFC',
-                            borderColor: isDark ? '#2D3446' : '#E2E8F0',
-                          },
-                        ]}
-                      >
-                        <View style={{ flex: 1, marginRight: 8 }}>
-                          <Text style={[styles.ruleToggleTitle, { color: isDark ? '#F1F5F9' : '#0F172A' }]}>
-                            {updatePayeeRule
-                              ? `Set ${currentTagDef.label} as default for "${targetName}"`
-                              : `Keep "${targetName}" default as ${getTagDef(defaultTag).label}`}
-                          </Text>
-                          <Text style={[styles.ruleToggleSub, { color: isDark ? '#94A3B8' : '#64748B' }]}>
-                            {updatePayeeRule
-                              ? `All future transactions will automatically use ${currentTagDef.label}.`
-                              : `This transaction will use ${currentTagDef.label}, but future transactions will remain ${getTagDef(defaultTag).label}.`}
-                          </Text>
-                        </View>
-
-                        <TouchableOpacity
-                          style={[
-                            styles.ruleTogglePill,
-                            {
-                              backgroundColor: updatePayeeRule
-                                ? isDark ? 'rgba(99, 102, 241, 0.2)' : '#EEF2FF'
-                                : isDark ? 'rgba(16, 185, 129, 0.15)' : '#ECFDF5',
-                              borderColor: updatePayeeRule
-                                ? isDark ? '#818CF8' : '#002E6E'
-                                : '#10B981',
-                            },
-                          ]}
-                          onPress={() => setUpdatePayeeRule(!updatePayeeRule)}
-                          activeOpacity={0.7}
-                        >
-                          <Feather
-                            name={updatePayeeRule ? 'repeat' : 'zap'}
-                            size={12}
-                            color={updatePayeeRule ? (isDark ? '#818CF8' : '#002E6E') : '#10B981'}
-                            style={{ marginRight: 4 }}
-                          />
-                          <Text
-                            style={[
-                              styles.ruleTogglePillText,
-                              {
-                                color: updatePayeeRule
-                                  ? isDark ? '#818CF8' : '#002E6E'
-                                  : '#10B981',
-                              },
-                            ]}
-                          >
-                            {updatePayeeRule ? 'Always' : 'This Only'}
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
-                    );
-                  })()}
+                      <Switch
+                        value={updatePayeeRule}
+                        onValueChange={setUpdatePayeeRule}
+                        trackColor={{
+                          false: isDark ? '#2D3446' : '#D1D5DB',
+                          true: '#0070F3',
+                        }}
+                        thumbColor="#FFFFFF"
+                      />
+                    </View>
+                  ) : null}
                 </>
               );
             })()}
@@ -926,30 +845,15 @@ const getStyles = (colors: any, isDark: boolean) =>
     ruleToggleCard: {
       flexDirection: 'row',
       alignItems: 'center',
-      marginTop: 12,
-      padding: 12,
-      borderRadius: 12,
-      borderWidth: 1,
-    },
-    ruleToggleTitle: {
-      fontSize: 12,
-      fontWeight: '700',
-      marginBottom: 3,
-    },
-    ruleToggleSub: {
-      fontSize: 11,
-      lineHeight: 15,
-    },
-    ruleTogglePill: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingVertical: 6,
-      paddingHorizontal: 10,
+      justifyContent: 'space-between',
+      marginTop: 14,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
       borderRadius: 14,
       borderWidth: 1,
     },
-    ruleTogglePillText: {
-      fontSize: 11.5,
+    ruleToggleTitle: {
+      fontSize: 13,
       fontWeight: '700',
     },
   });

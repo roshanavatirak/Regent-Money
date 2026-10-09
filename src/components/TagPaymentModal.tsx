@@ -48,12 +48,6 @@ export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
   const [isCreatingNew, setIsCreatingNew] = useState(false);
   const [newTagInput, setNewTagInput] = useState('');
   const [errorText, setErrorText] = useState('');
-  const [scope, setScope] = useState<'transaction_only' | 'always_payee'>('transaction_only');
-
-  const currentPayeeDefaultTag = useMemo(() => {
-    return merchantName ? tagLearningService.getPrimaryTag(merchantName) : null;
-  }, [merchantName]);
-  const currentPayeeDefaultDef = currentPayeeDefaultTag ? getTagDef(currentPayeeDefaultTag) : null;
   const selectedTagDef = getTagDef(currentSelected);
 
   // Update selection if prop changes
@@ -63,7 +57,6 @@ export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
       setIsCreatingNew(false);
       setNewTagInput('');
       setErrorText('');
-      setScope('transaction_only'); // Default to this payment only
       setCustomTags(tagLearningService.getCustomTags());
     }
   }, [visible, selectedTag]);
@@ -88,11 +81,7 @@ export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
   };
 
   const handleConfirm = () => {
-    const isAlways = scope === 'always_payee';
-    if (merchantName && isAlways) {
-      tagLearningService.saveLearnedTag(merchantName, currentSelected);
-    }
-    onSelectTag(currentSelected, isAlways);
+    onSelectTag(currentSelected);
     onClose();
   };
 
@@ -371,123 +360,6 @@ export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
               <Text style={styles.errorText}>{errorText}</Text>
             ) : null}
 
-            {/* Scope Selection: One-Time Override vs Default Payee Rule */}
-            {merchantName ? (
-              <View
-                style={[
-                  styles.scopeCard,
-                  {
-                    backgroundColor: isDark ? '#1A1E29' : '#F1F5F9',
-                    borderColor: isDark ? '#2D3446' : '#E2E8F0',
-                  },
-                ]}
-              >
-                <View style={styles.scopeHeaderRow}>
-                  <Text style={[styles.scopePayeeLabel, { color: isDark ? '#94A3B8' : '#64748B' }]}>
-                    APPLY TAG FOR <Text style={{ fontWeight: '800', color: isDark ? '#F1F5F9' : '#0F172A' }}>{merchantName.toUpperCase()}</Text>
-                  </Text>
-                </View>
-
-                <View
-                  style={[
-                    styles.scopeSelectorRow,
-                    { backgroundColor: isDark ? '#11141D' : '#E2E8F0' },
-                  ]}
-                >
-                  <TouchableOpacity
-                    style={[
-                      styles.scopeTabBtn,
-                      scope === 'transaction_only' && [
-                        styles.scopeTabBtnActive,
-                        {
-                          backgroundColor: isDark ? '#232A3B' : '#FFFFFF',
-                          borderColor: '#10B981',
-                        },
-                      ],
-                    ]}
-                    onPress={() => setScope('transaction_only')}
-                    activeOpacity={0.8}
-                  >
-                    <Feather
-                      name="zap"
-                      size={13}
-                      color={scope === 'transaction_only' ? '#10B981' : isDark ? '#64748B' : '#94A3B8'}
-                      style={{ marginRight: 6 }}
-                    />
-                    <Text
-                      style={[
-                        styles.scopeTabText,
-                        scope === 'transaction_only' && [
-                          styles.scopeTabTextActive,
-                          { color: isDark ? '#F1F5F9' : '#0F172A' },
-                        ],
-                      ]}
-                    >
-                      This Payment Only
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[
-                      styles.scopeTabBtn,
-                      scope === 'always_payee' && [
-                        styles.scopeTabBtnActive,
-                        {
-                          backgroundColor: isDark ? '#232A3B' : '#FFFFFF',
-                          borderColor: isDark ? '#818CF8' : '#002E6E',
-                        },
-                      ],
-                    ]}
-                    onPress={() => setScope('always_payee')}
-                    activeOpacity={0.8}
-                  >
-                    <Feather
-                      name="repeat"
-                      size={13}
-                      color={
-                        scope === 'always_payee'
-                          ? isDark
-                            ? '#818CF8'
-                            : '#002E6E'
-                          : isDark
-                          ? '#64748B'
-                          : '#94A3B8'
-                      }
-                      style={{ marginRight: 6 }}
-                    />
-                    <Text
-                      style={[
-                        styles.scopeTabText,
-                        scope === 'always_payee' && [
-                          styles.scopeTabTextActive,
-                          { color: isDark ? '#818CF8' : '#002E6E' },
-                        ],
-                      ]}
-                    >
-                      Always for Payee
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-
-                <View style={styles.scopeHintRow}>
-                  <Ionicons
-                    name={
-                      scope === 'transaction_only'
-                        ? 'shield-checkmark-outline'
-                        : 'refresh-circle-outline'
-                    }
-                    size={14}
-                    color={scope === 'transaction_only' ? '#10B981' : isDark ? '#818CF8' : '#002E6E'}
-                    style={{ marginRight: 6, marginTop: 1 }}
-                  />
-                  <Text style={[styles.scopeHintText, { color: isDark ? '#94A3B8' : '#475569' }]}>
-                    {scope === 'transaction_only'
-                      ? `"${merchantName}" will keep default category (${currentPayeeDefaultDef?.label || 'Food & Dining'}) for past & future payments.`
-                      : `All future transactions from "${merchantName}" will automatically be categorized as ${selectedTagDef?.label}.`}
-                  </Text>
-                </View>
-              </View>
-            ) : null}
           </ScrollView>
 
           {/* Bottom Primary CTA Button */}
@@ -495,12 +367,14 @@ export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
             <TouchableOpacity
               style={[
                 styles.primaryBtn,
-                { backgroundColor: isDark ? '#6366F1' : '#002E6E' },
+                { backgroundColor: isDark ? '#2563EB' : '#0070F3' },
               ]}
               onPress={handleConfirm}
               activeOpacity={0.85}
             >
-              <Text style={styles.primaryBtnText}>Tag Payment</Text>
+              <Text style={styles.primaryBtnText}>
+                Select {selectedTagDef?.label || 'Category'}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>

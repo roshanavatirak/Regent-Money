@@ -30,9 +30,11 @@ import { parseStatementTextWithAI } from '../services/aiService';
 import { syncService } from '../services/syncService';
 import { getBackendUrl } from '../config/api';
 import { ReviewTransactionsModal } from './ReviewTransactionsModal';
+import { TransactionDetailScreen } from './TransactionDetailScreen';
+import { EditBankScreen } from './EditBankScreen';
+import { ManualTransactionScreen } from './ManualTransactionScreen';
 import { smsCatchupService } from '../services/smsCatchupService';
 import { smsPermissionService } from '../services/smsPermissionService';
-import { parseSmsSenderTags } from '../constants/bankSmsSenders';
 import { uploadFile, UploadError, isPasswordRequired } from '../services/uploadFile';
 
 const BACKEND_URL = getBackendUrl();
@@ -74,6 +76,17 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
   const [reviewModalVisible, setReviewModalVisible] = useState(false);
   const [extractedTransactions, setExtractedTransactions] = useState<any[]>([]);
   const [detectedFinalBalance, setDetectedFinalBalance] = useState<number | null>(null);
+  const [selectedTransactionForDetail, setSelectedTransactionForDetail] = useState<any | null>(null);
+  const [isEditingBank, setIsEditingBank] = useState(false);
+  const [manualTxType, setManualTxType] = useState<'credit' | 'debit' | null>(null);
+
+  useEffect(() => {
+    if (!visible) {
+      setIsEditingBank(false);
+      setManualTxType(null);
+      setSelectedTransactionForDetail(null);
+    }
+  }, [visible]);
 
   // SMS Consent toggle states
   const [smsConsent, setSmsConsent] = useState(activeBank?.smsConsent || false);
@@ -358,6 +371,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
       /(?:credited|received|deposited|added)\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d{2})?)/i,
     ];
     const dateRegex = /(\d{2}[-/.]\d{2}[-/.]\d{2,4}|\d{4}[-/.]\d{2}[-/.]\d{2})/;
+    const timeRegex = /(?:at\s+)?(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM|am|pm)?)/i;
     const merchantRegex = /(?:to|at|from|by|at)\s+([A-Za-z0-9\s]{3,15})/i;
 
     for (const line of lines) {
@@ -365,6 +379,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
       let amount = 0;
       let type: 'debit' | 'credit' | null = null;
       let date = new Date().toISOString().split('T')[0];
+      let time: string | null = null;
       let merchant = '';
 
       for (const rx of debitRegexes) {
@@ -400,13 +415,30 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
             }
           }
         }
+
+        const timeMatch = line.match(timeRegex);
+        if (timeMatch) {
+          const rawTime = timeMatch[1].trim();
+          const ampmMatch = rawTime.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?$/i);
+          if (ampmMatch) {
+            let h = parseInt(ampmMatch[1], 10);
+            const m = parseInt(ampmMatch[2], 10);
+            const ampm = ampmMatch[4]?.toLowerCase();
+            if (ampm === 'pm' && h < 12) h += 12;
+            if (ampm === 'am' && h === 12) h = 0;
+            if (!isNaN(h) && !isNaN(m)) {
+              time = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+            }
+          }
+        }
+
         const merchMatch = line.match(merchantRegex);
         if (merchMatch) {
           merchant = merchMatch[1].trim();
         } else {
           merchant = type === 'debit' ? 'Spends' : 'Credits';
         }
-        parsed.push({ amount, type, date, merchant });
+        parsed.push({ amount, type, date, time, merchant });
       }
     }
     return parsed;
@@ -637,10 +669,15 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
       <Modal
         visible={visible}
         transparent
-        animationType="slide"
+        animationType="none"
         onRequestClose={onClose}
       >
         <View style={styles.overlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            onPress={onClose}
+            activeOpacity={1}
+          />
           <View style={styles.cardContainer}>
             {/* Header */}
             <View style={styles.modalHeader}>
@@ -648,7 +685,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
                 <Text style={styles.title}>{activeBank.bankName}</Text>
                 <Text style={styles.subtitle}>{activeBank.accountType || 'Savings'} •••• {activeBank.accountNumberSuffix}</Text>
               </View>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <TouchableOpacity
                   onPress={() => setOptionsMenuVisible(true)}
                   style={styles.menuBtn}
@@ -656,9 +693,6 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
                   accessibilityLabel="Account Options"
                 >
                   <Feather name="more-vertical" size={18} color="#8E8E9F" />
-                </TouchableOpacity>
-                <TouchableOpacity onPress={onClose} style={styles.closeBtn} activeOpacity={0.7}>
-                  <Feather name="x" size={18} color="#8E8E9F" />
                 </TouchableOpacity>
               </View>
             </View>
@@ -681,8 +715,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
                   <TouchableOpacity
                     style={[styles.compactActionBtn, styles.compactCreditBtn]}
                     onPress={() => {
-                      onClose();
-                      navigation.navigate('ManualTransaction', { bank: activeBank, initialType: 'credit' });
+                      setManualTxType('credit');
                     }}
                     activeOpacity={0.8}
                   >
@@ -693,8 +726,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
                   <TouchableOpacity
                     style={[styles.compactActionBtn, styles.compactDebitBtn]}
                     onPress={() => {
-                      onClose();
-                      navigation.navigate('ManualTransaction', { bank: activeBank, initialType: 'debit' });
+                      setManualTxType('debit');
                     }}
                     activeOpacity={0.8}
                   >
@@ -726,53 +758,6 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
               </TouchableOpacity>
             </View>
 
-            {/* Active SMS Sender Codes */}
-            {(() => {
-              const tags = parseSmsSenderTags(activeBank.smsSenderId);
-              return (
-                <View style={[styles.smsTagsBanner, { backgroundColor: isDark ? '#1C1C24' : '#F9FAFB', borderColor: isDark ? '#2D2D3A' : '#E5E7EB' }]}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                      <Feather name="message-square" size={12} color={colors.accent || '#03DAC6'} style={{ marginRight: 5 }} />
-                      <Text style={[styles.smsTagsTitle, { color: colors.textSecondary }]}>TRACKED SMS HEADERS</Text>
-                    </View>
-                    <TouchableOpacity
-                      onPress={() => {
-                        onClose();
-                        navigation.navigate('EditBank', { bank: activeBank });
-                      }}
-                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                    >
-                      <Text style={{ fontSize: 11, color: colors.accent || '#03DAC6', fontWeight: '700' }}>
-                        + Manage Tags
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 5 }}>
-                    {tags.length > 0 ? (
-                      tags.map((tag: string) => (
-                        <View
-                          key={tag}
-                          style={[
-                            styles.smsTagPill,
-                            {
-                              backgroundColor: isDark ? 'rgba(3, 218, 198, 0.12)' : 'rgba(3, 218, 198, 0.15)',
-                              borderColor: isDark ? 'rgba(3, 218, 198, 0.3)' : 'rgba(3, 218, 198, 0.4)',
-                            },
-                          ]}
-                        >
-                          <Text style={[styles.smsTagPillText, { color: colors.accent || '#03DAC6' }]}>{tag}</Text>
-                        </View>
-                      ))
-                    ) : (
-                      <Text style={{ fontSize: 11, color: colors.textTertiary, fontStyle: 'italic' }}>
-                        Listening to all bank SMS alerts. Tap Manage Tags to specify codes.
-                      </Text>
-                    )}
-                  </View>
-                </View>
-              );
-            })()}
 
             {/* Search bar */}
             <View style={styles.searchContainer}>
@@ -868,8 +853,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
                     <TouchableOpacity
                       style={styles.txRow}
                       onPress={() => {
-                        onClose();
-                        navigation.navigate('TransactionDetail', { transaction: item, bankName: activeBank?.bankName });
+                        setSelectedTransactionForDetail(item);
                       }}
                       activeOpacity={0.7}
                     >
@@ -917,6 +901,51 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
           <View style={styles.ocrLoaderOverlay}>
             <ActivityIndicator size="large" color="#2dba4e" />
             <Text style={styles.ocrLoaderText}>{ocrStatusText}</Text>
+          </View>
+        )}
+
+        {/* In-place Transaction Detail overlay preserving exact bank transactions list state */}
+        {selectedTransactionForDetail && (
+          <View style={[StyleSheet.absoluteFill, { zIndex: 9999, backgroundColor: colors.background }]}>
+            <TransactionDetailScreen
+              transaction={selectedTransactionForDetail}
+              bankName={activeBank.bankName}
+              accountNumberSuffix={activeBank.accountNumberSuffix}
+              onBack={() => setSelectedTransactionForDetail(null)}
+              onSuccess={() => {
+                setSelectedTransactionForDetail(null);
+                fetchIncomeRecords();
+              }}
+            />
+          </View>
+        )}
+
+        {/* In-place Edit Bank Details overlay */}
+        {isEditingBank && (
+          <View style={[StyleSheet.absoluteFill, { zIndex: 9999, backgroundColor: colors.background }]}>
+            <EditBankScreen
+              bank={activeBank}
+              onBack={() => setIsEditingBank(false)}
+              onSuccess={(updated) => {
+                setIsEditingBank(false);
+                setLocalBank(updated);
+              }}
+            />
+          </View>
+        )}
+
+        {/* In-place Manual Transaction overlay */}
+        {manualTxType && (
+          <View style={[StyleSheet.absoluteFill, { zIndex: 9999, backgroundColor: colors.background }]}>
+            <ManualTransactionScreen
+              bank={activeBank}
+              initialType={manualTxType}
+              onBack={() => setManualTxType(null)}
+              onSuccess={() => {
+                setManualTxType(null);
+                fetchIncomeRecords();
+              }}
+            />
           </View>
         )}
       </Modal>
@@ -1072,9 +1101,9 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
 
       {/* Three-Dot Options & Settings Menu Modal */}
       <Modal
-        visible={optionsMenuVisible}
+        visible={optionsMenuVisible && !isEditingBank && !manualTxType}
         transparent
-        animationType="fade"
+        animationType="none"
         onRequestClose={() => setOptionsMenuVisible(false)}
       >
         <View style={styles.optionsMenuOverlay}>
@@ -1201,8 +1230,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
                   style={styles.menuItemTouchable}
                   onPress={() => {
                     setOptionsMenuVisible(false);
-                    onClose();
-                    navigation.navigate('EditBank', { bank: activeBank });
+                    setIsEditingBank(true);
                   }}
                   activeOpacity={0.7}
                 >

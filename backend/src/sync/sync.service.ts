@@ -758,11 +758,68 @@ export class SyncService implements OnModuleInit {
         ? await this.userMerchantTagRepository.find({ where: { userId } }).catch(() => [])
         : [];
 
+      // Helper to compute exact millisecond timestamp from date, time, and client timestamp
+      const parseExactTimestamp = (dateStr?: string, timeStr?: string | null, clientTimestamp?: number | null): number => {
+        if (clientTimestamp && !isNaN(Number(clientTimestamp)) && Number(clientTimestamp) > 0) {
+          return Number(clientTimestamp);
+        }
+        if (!dateStr) return Date.now();
+
+        let year: number, month: number, day: number;
+        const parts = dateStr.trim().split(/[-/.]/);
+        if (parts.length === 3) {
+          if (parts[0].length === 4) {
+            year = parseInt(parts[0], 10);
+            month = parseInt(parts[1], 10) - 1;
+            day = parseInt(parts[2], 10);
+          } else {
+            year = parts[2].length === 2 ? 2000 + parseInt(parts[2], 10) : parseInt(parts[2], 10);
+            month = parseInt(parts[1], 10) - 1;
+            day = parseInt(parts[0], 10);
+          }
+        } else {
+          const d = new Date(dateStr);
+          if (!isNaN(d.getTime())) {
+            year = d.getFullYear();
+            month = d.getMonth();
+            day = d.getDate();
+          } else {
+            return Date.now();
+          }
+        }
+
+        let hours = 12;
+        let minutes = 0;
+        let seconds = 0;
+
+        if (timeStr && timeStr.trim()) {
+          const rawTime = timeStr.trim();
+          const ampmMatch = rawTime.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?$/i);
+          if (ampmMatch) {
+            let h = parseInt(ampmMatch[1], 10);
+            const m = parseInt(ampmMatch[2], 10);
+            const s = ampmMatch[3] ? parseInt(ampmMatch[3], 10) : 0;
+            const ampm = ampmMatch[4]?.toLowerCase();
+            if (ampm === 'pm' && h < 12) h += 12;
+            if (ampm === 'am' && h === 12) h = 0;
+            if (!isNaN(h) && !isNaN(m)) {
+              hours = h;
+              minutes = m;
+              seconds = isNaN(s) ? 0 : s;
+            }
+          }
+        }
+
+        const resDate = new Date(year, month, day, hours, minutes, seconds);
+        return isNaN(resDate.getTime()) ? Date.now() : resDate.getTime();
+      };
+
       for (const item of data.transactions) {
         const amount = parseFloat(String(item.amount));
         if (isNaN(amount) || amount <= 0) continue;
 
-        const parsedDate = item.date ? new Date(item.date) : new Date();
+        const exactTimestamp = parseExactTimestamp(item.date, item.time, item.timestamp);
+        const parsedDate = new Date(exactTimestamp);
         if (isNaN(parsedDate.getTime())) continue;
 
         const startOfDay = new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate(), 0, 0, 0, 0).getTime();
@@ -786,7 +843,6 @@ export class SyncService implements OnModuleInit {
             const normTxMerchant = (tx.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
             if (normTxMerchant && normItemMerchant && normTxMerchant !== normItemMerchant) return false;
 
-            if (item.timestamp && txTime && Math.abs(txTime - item.timestamp) > 5000) return false;
             return true;
           }) || newTransactions.some((tx) => {
             if (itemRef && (tx.smsId === `ref_${itemRef}` || tx.smsId === itemRef)) return true;
@@ -801,7 +857,6 @@ export class SyncService implements OnModuleInit {
             const normTxMerchant = (tx.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
             if (normTxMerchant && normItemMerchant && normTxMerchant !== normItemMerchant) return false;
 
-            if (item.timestamp && txTime && Math.abs(txTime - item.timestamp) > 5000) return false;
             return true;
           });
 
@@ -813,7 +868,7 @@ export class SyncService implements OnModuleInit {
               amount,
               category: item.category || (item.merchant ? await this.classifyCategory(item.merchant, userId, preloadedRules) : 'miscellaneous'),
               merchant: item.merchant || 'Merchant',
-              timestamp: item.timestamp && !isNaN(Number(item.timestamp)) ? Number(item.timestamp) : parsedDate.getTime(),
+              timestamp: exactTimestamp,
               bankProfileId: data.bankProfileId,
               smsId: itemSmsId || 'ocr_extracted',
               isAnomaly: amount > 5000,
@@ -835,7 +890,6 @@ export class SyncService implements OnModuleInit {
             const normIncSource = (inc.source || '').toLowerCase().replace(/[^a-z0-9]/g, '');
             if (normIncSource && normItemMerchant && normIncSource !== normItemMerchant) return false;
 
-            if (item.timestamp && incTime && Math.abs(incTime - item.timestamp) > 5000) return false;
             return true;
           }) || newIncomeRecords.some((inc) => {
             const incTime = Number(inc.timestamp);
@@ -846,7 +900,6 @@ export class SyncService implements OnModuleInit {
             const normIncSource = (inc.source || '').toLowerCase().replace(/[^a-z0-9]/g, '');
             if (normIncSource && normItemMerchant && normIncSource !== normItemMerchant) return false;
 
-            if (item.timestamp && incTime && Math.abs(incTime - item.timestamp) > 5000) return false;
             return true;
           });
 
@@ -857,7 +910,7 @@ export class SyncService implements OnModuleInit {
               userId,
               amount,
               source: item.merchant || 'Direct Credit',
-              timestamp: item.timestamp && !isNaN(Number(item.timestamp)) ? Number(item.timestamp) : parsedDate.getTime(),
+              timestamp: exactTimestamp,
               bankProfileId: data.bankProfileId,
               updatedAt: Date.now(),
               isDeleted: false,
@@ -867,7 +920,7 @@ export class SyncService implements OnModuleInit {
             netBalanceChange += amount;
           }
         }
-    }
+      }
 
     if (newTransactions.length > 0) {
       await this.transactionRepository.save(newTransactions);
@@ -1060,6 +1113,8 @@ export class SyncService implements OnModuleInit {
       ocrResult.transactions.map(async (tx, idx) => ({
         id: `extracted_${Date.now()}_${idx}`,
         date: tx.date,
+        time: tx.time ?? null,
+        timestamp: tx.timestamp ?? null,
         amount: tx.amount,
         type: tx.type,
         merchant: tx.merchant,
@@ -1136,6 +1191,8 @@ export class SyncService implements OnModuleInit {
       transactions.map(async (tx, idx) => ({
         id: `extracted_${Date.now()}_${idx}`,
         date: tx.date,
+        time: tx.time ?? null,
+        timestamp: tx.timestamp ?? null,
         amount: tx.amount,
         type: tx.type,
         merchant: tx.merchant,

@@ -155,9 +155,52 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
     return list;
   }, [budgets]);
 
-  // Default month selection: if current month already has a budget, default to next month!
+  // Default month selection:
+  // If parentBudgetId, period or targetDate passed via route, match that month!
+  // If adding category sub-budget, default to current month (0) or matching parent budget, NOT next month!
   const [selectedMonthIndex, setSelectedMonthIndex] = useState(() => {
     const now = new Date();
+    if (route.params?.period) {
+      const idx = next6Months.findIndex(
+        (m) =>
+          m.fullLabel.toLowerCase() === route.params.period.toLowerCase() ||
+          route.params.period.toLowerCase().includes(m.fullLabel.toLowerCase())
+      );
+      if (idx !== -1) return idx;
+    }
+    if (route.params?.parentBudgetId) {
+      const parent = budgets.find((b) => b.id === route.params.parentBudgetId);
+      if (parent) {
+        const pDate = parent.startDate ? new Date(parent.startDate) : now;
+        const pMonthKey = format(pDate, 'MMMM yyyy');
+        const idx = next6Months.findIndex(
+          (m) =>
+            m.fullLabel.toLowerCase() === pMonthKey.toLowerCase() ||
+            parent.period?.toLowerCase().includes(m.fullLabel.toLowerCase())
+        );
+        if (idx !== -1) return idx;
+      }
+    }
+    if (route.params?.targetDate) {
+      const tDate = new Date(route.params.targetDate);
+      const tMonthKey = format(tDate, 'MMMM yyyy');
+      const idx = next6Months.findIndex((m) => m.fullLabel.toLowerCase() === tMonthKey.toLowerCase());
+      if (idx !== -1) return idx;
+    }
+    if (route.params?.initialScope === 'category') {
+      return 0;
+    }
+
+    // If duplicating from template, find the first upcoming month that does NOT already have a budget!
+    if (route.params?.cloneFromBudgetId) {
+      const firstAvailable = next6Months.find((m) => !m.hasBudget);
+      if (firstAvailable) return firstAvailable.index;
+    }
+
+    // Default for new budget creation: find first upcoming month without an existing budget
+    const firstAvailable = next6Months.find((m) => !m.hasBudget);
+    if (firstAvailable) return firstAvailable.index;
+
     const currentMonthKey = format(now, 'MMMM yyyy');
     const currentHasBudget = budgets.some(
       (b) => b.isOverall && (!b.periodType || b.periodType === 'monthly') && b.period?.includes(currentMonthKey)
@@ -206,14 +249,43 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
         if (!budgetName) setBudgetName('Goa Trip');
       }
     }
+    if (route.params?.period) {
+      const idx = next6Months.findIndex(
+        (m) =>
+          m.fullLabel.toLowerCase() === route.params.period.toLowerCase() ||
+          route.params.period.toLowerCase().includes(m.fullLabel.toLowerCase())
+      );
+      if (idx !== -1) setSelectedMonthIndex(idx);
+    } else if (route.params?.parentBudgetId) {
+      const parent = budgets.find((b) => b.id === route.params.parentBudgetId);
+      if (parent) {
+        const pDate = parent.startDate ? new Date(parent.startDate) : new Date();
+        const pMonthKey = format(pDate, 'MMMM yyyy');
+        const idx = next6Months.findIndex(
+          (m) =>
+            m.fullLabel.toLowerCase() === pMonthKey.toLowerCase() ||
+            parent.period?.toLowerCase().includes(m.fullLabel.toLowerCase())
+        );
+        if (idx !== -1) setSelectedMonthIndex(idx);
+      }
+    } else if (route.params?.initialScope === 'category') {
+      setSelectedMonthIndex(0);
+    }
+
     if (route.params?.cloneFromBudgetId) {
       const found = budgets.find((b) => b.id === route.params.cloneFromBudgetId);
       if (found) {
         setActiveTemplateBudget(found);
         applyBudgetTemplate(found);
       }
+      const firstAvailable = next6Months.find((m) => !m.hasBudget);
+      if (firstAvailable) {
+        setSelectedMonthIndex(firstAvailable.index);
+        setStartDateStr(firstAvailable.startDateStr);
+        setEndDateStr(firstAvailable.endDateStr);
+      }
     }
-  }, [route.params?.initialType, route.params?.cloneFromBudgetId, budgets]);
+  }, [route.params?.initialType, route.params?.parentBudgetId, route.params?.period, route.params?.initialScope, route.params?.cloneFromBudgetId, budgets, next6Months]);
 
   // Custom Category Creation Modal
   const [customCatModalVisible, setCustomCatModalVisible] = useState(false);
@@ -248,13 +320,59 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
 
   // Find existing overall budget to link sub-budgets to
   const existingOverallBudget = useMemo(() => {
-    return budgets.find((b) => b.isOverall && (!b.periodType || b.periodType === 'monthly'));
-  }, [budgets]);
+    // 1. Explicit parentBudgetId from navigation params
+    if (route.params?.parentBudgetId) {
+      const byId = budgets.find((b) => b.id === route.params.parentBudgetId);
+      if (byId) return byId;
+    }
+
+    // 2. Explicit period from navigation params
+    if (route.params?.period) {
+      const byPeriod = budgets.find(
+        (b) => b.isOverall && (!b.periodType || b.periodType === 'monthly') && b.period === route.params.period
+      );
+      if (byPeriod) return byPeriod;
+    }
+
+    // 3. Match against the currently selected month in next6Months[selectedMonthIndex]
+    const selectedMonthObj = next6Months[selectedMonthIndex];
+    if (selectedMonthObj) {
+      const bySelectedMonth = budgets.find(
+        (b) =>
+          b.isOverall &&
+          (!b.periodType || b.periodType === 'monthly') &&
+          (b.period?.toLowerCase().includes(selectedMonthObj.fullLabel.toLowerCase()) ||
+            selectedMonthObj.fullLabel.toLowerCase().includes(b.period?.toLowerCase() || ''))
+      );
+      if (bySelectedMonth) return bySelectedMonth;
+    }
+
+    // 4. Currently active in-progress budget (current calendar month)
+    const now = Date.now();
+    const active = budgets.find((b) => {
+      if (!b.isOverall || (b.periodType && b.periodType !== 'monthly')) return false;
+      const s = typeof b.startDate === 'number' ? b.startDate : new Date(b.startDate || 0).getTime();
+      const e = typeof b.endDate === 'number' ? b.endDate : new Date(b.endDate || 0).getTime();
+      return now >= s && now <= e;
+    });
+    if (active) return active;
+
+    // 5. Fallback: chronological earliest overall monthly budget
+    return (
+      budgets
+        .filter((b) => b.isOverall && (!b.periodType || b.periodType === 'monthly'))
+        .sort((a, b) => (Number(a.startDate) || 0) - (Number(b.startDate) || 0))[0] || null
+    );
+  }, [budgets, route.params?.parentBudgetId, route.params?.period, selectedMonthIndex, next6Months]);
 
   const existingCategoryBudgets = useMemo(() => {
     if (!existingOverallBudget) return [];
     return budgets.filter(
-      (b) => !b.isOverall && (!b.periodType || b.periodType === 'monthly') && (b.parentBudgetId === existingOverallBudget.id || !b.parentBudgetId)
+      (b) =>
+        !b.isOverall &&
+        (!b.periodType || b.periodType === 'monthly') &&
+        (b.parentBudgetId === existingOverallBudget.id ||
+          (!b.parentBudgetId && b.period === existingOverallBudget.period))
     );
   }, [budgets, existingOverallBudget]);
 
@@ -289,6 +407,33 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
     }
     return initial;
   });
+
+  // Keep allocations synced to the targeted parent budget's categories
+  useEffect(() => {
+    if (isCategoryMode && existingCategoryBudgets.length > 0) {
+      setAllocations((prev) => {
+        const hasExistingKeys = existingCategoryBudgets.some((b) => !!prev[b.category]);
+        if (!hasExistingKeys) {
+          const next: Record<string, { id?: string; amountStr: string }> = {};
+          existingCategoryBudgets.forEach((b) => {
+            next[b.category] = {
+              id: b.id,
+              amountStr: String(b.limitAmount || 0),
+            };
+          });
+          if (route.params?.initialCategory && !next[route.params.initialCategory]) {
+            const catId = route.params.initialCategory;
+            const curAllocated = Object.values(next).reduce((sum, item) => sum + (parseFloat(item.amountStr) || 0), 0);
+            const rem = Math.max(500, parentTotalLimit - curAllocated);
+            const defaultAmt = rem > 0 ? (rem >= 1000 ? 1000 : rem) : 1000;
+            next[catId] = { amountStr: String(defaultAmt) };
+          }
+          return next;
+        }
+        return prev;
+      });
+    }
+  }, [isCategoryMode, existingCategoryBudgets, parentTotalLimit, route.params?.initialCategory]);
 
   const allocationEntries = useMemo(() => Object.entries(allocations), [allocations]);
   const totalAllocatedCount = allocationEntries.length;
@@ -432,6 +577,16 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
       }
     }
 
+    // Strict Validation: Sub-categories must not exceed parent budget limit!
+    const totalAllocated = entries.reduce((sum, [, item]) => sum + (parseFloat(item.amountStr) || 0), 0);
+    if (parentTotalLimit > 0 && totalAllocated > parentTotalLimit) {
+      Alert.alert(
+        'Allocation Exceeds Total Budget',
+        `Total allocated to categories (₹${totalAllocated.toLocaleString('en-IN')}) cannot exceed your main budget ceiling of ₹${parentTotalLimit.toLocaleString('en-IN')}. Please reduce category amounts to stay within budget.`
+      );
+      return;
+    }
+
     try {
       setSaving(true);
       const parentBudget = existingOverallBudget;
@@ -508,7 +663,37 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
       setSaving(true);
 
       if (budgetType === 'monthly') {
-        const name = budgetName.trim() || `Monthly Budget (${format(calculatedRange.startDate, 'MMMM yyyy')})`;
+        const targetPeriod = format(calculatedRange.startDate, 'MMMM yyyy');
+
+        // Strict Validation: Prevent duplicate overall budget for the same month!
+        const existingForMonth = budgets.find(
+          (b) =>
+            b.isOverall &&
+            (!b.periodType || b.periodType === 'monthly') &&
+            (b.period?.toLowerCase().trim() === targetPeriod.toLowerCase().trim() ||
+              (b.startDate && format(new Date(b.startDate), 'MMMM yyyy').toLowerCase() === targetPeriod.toLowerCase()))
+        );
+
+        if (existingForMonth) {
+          Alert.alert(
+            'Budget Already Exists',
+            `A monthly budget for ${targetPeriod} is already present. Duplicate budgets for the same month are not allowed. You can edit the existing budget instead.`
+          );
+          return;
+        }
+
+        // Validate that sub-category allocations do not exceed the main budget limit
+        const allocEntries = Object.entries(allocations);
+        const totalSubAlloc = allocEntries.reduce((sum, [, item]) => sum + (parseFloat(item.amountStr) || 0), 0);
+        if (amount > 0 && totalSubAlloc > amount) {
+          Alert.alert(
+            'Allocation Exceeds Total Budget',
+            `Total allocated to sub-categories (₹${totalSubAlloc.toLocaleString('en-IN')}) cannot exceed your main budget ceiling of ₹${amount.toLocaleString('en-IN')}. Please reduce category amounts.`
+          );
+          return;
+        }
+
+        const name = budgetName.trim() || `Monthly Budget (${targetPeriod})`;
 
         const created = await budgetService.createBudget({
           name,
@@ -523,7 +708,6 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
         });
 
         // Batch create cloned or pre-configured sub-category allocations linked to this newly created monthly budget!
-        const allocEntries = Object.entries(allocations);
         if (allocEntries.length > 0 && created?.id) {
           for (const [catId, item] of allocEntries) {
             const subAmt = parseFloat(item.amountStr);
@@ -1557,7 +1741,7 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
               },
             ]}
             onPress={handleSaveAllCategoryBudgets}
-            disabled={saving || totalAllocatedCount === 0}
+            disabled={saving || totalAllocatedCount === 0 || isBufferExceeded}
             activeOpacity={0.8}
           >
             {saving ? (
@@ -1569,7 +1753,7 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
                   {totalAllocatedCount === 0
                     ? 'Select Categories to Allocate'
                     : isBufferExceeded
-                    ? `Save Sub-Budgets (Exceeded by ₹${Math.abs(freeBufferRemaining).toLocaleString('en-IN')})`
+                    ? `Cannot Save: Exceeded by ₹${Math.abs(freeBufferRemaining).toLocaleString('en-IN')}`
                     : `Save ${totalAllocatedCount} Sub-Budget${totalAllocatedCount > 1 ? 's' : ''} (₹${totalAllocatedSum.toLocaleString('en-IN')})`}
                 </Text>
               </>

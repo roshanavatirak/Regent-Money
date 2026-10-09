@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
+  BackHandler,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -48,14 +49,28 @@ const DEBIT_CATEGORIES: CategoryOption[] = [
 
 const QUICK_AMOUNTS = [500, 1000, 2000, 5000];
 
-export const ManualTransactionScreen: React.FC = () => {
+export interface ManualTransactionScreenProps {
+  bank?: any;
+  initialType?: 'credit' | 'debit';
+  returnToBankId?: string;
+  onBack?: () => void;
+  onSuccess?: (result: any) => void;
+}
+
+export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (props) => {
   const insets = useSafeAreaInsets();
-  const navigation = useNavigation<any>();
-  const route = useRoute<any>();
+  let navigation: any = null;
+  let route: any = null;
+  try {
+    navigation = useNavigation<any>();
+  } catch (e) {}
+  try {
+    route = useRoute<any>();
+  } catch (e) {}
   const { colors, isDark } = useTheme();
 
-  const bank = route.params?.bank;
-  const initialType: 'credit' | 'debit' = route.params?.initialType || 'credit';
+  const bank = props.bank || route?.params?.bank;
+  const initialType: 'credit' | 'debit' = props.initialType || route?.params?.initialType || 'credit';
 
   const [type, setType] = useState<'credit' | 'debit'>(initialType);
   const [amountStr, setAmountStr] = useState('');
@@ -67,8 +82,29 @@ export const ManualTransactionScreen: React.FC = () => {
   const scrollViewRef = useRef<ScrollView>(null);
   const { scrollBottomPadding } = useKeyboardHeight(40);
 
+  const handleGoBack = () => {
+    if (props.onBack) {
+      props.onBack();
+      return;
+    }
+    const returnToBankId = props.returnToBankId || route?.params?.returnToBankId;
+    if (returnToBankId) {
+      useBankStore.getState().setActiveBankModalId(returnToBankId);
+    }
+    navigation?.goBack?.();
+  };
+
+  useEffect(() => {
+    const onBackPress = () => {
+      handleGoBack();
+      return true;
+    };
+    const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => sub.remove();
+  }, [props.onBack, props.returnToBankId, route?.params?.returnToBankId]);
+
   if (!bank) {
-    navigation.goBack();
+    handleGoBack();
     return null;
   }
 
@@ -131,7 +167,14 @@ export const ManualTransactionScreen: React.FC = () => {
       // Update Zustand bank store directly
       useBankStore.getState().updateBankBalance(bank.id, updatedBalance);
 
-      if (typeof route.params?.onSuccess === 'function') {
+      if (props.onSuccess) {
+        props.onSuccess({
+          type,
+          amount: parsedAmount,
+          updatedBalance,
+          record: result.record,
+        });
+      } else if (typeof route?.params?.onSuccess === 'function') {
         route.params.onSuccess({
           type,
           amount: parsedAmount,
@@ -140,7 +183,7 @@ export const ManualTransactionScreen: React.FC = () => {
         });
       }
 
-      navigation.goBack();
+      handleGoBack();
     } catch (err: any) {
       Alert.alert('Transaction Failed', err.message || 'Unable to save manual transaction.');
     } finally {
@@ -156,7 +199,7 @@ export const ManualTransactionScreen: React.FC = () => {
       {/* Top Header */}
       <View style={[styles.header, { paddingTop: Math.max(insets.top, 16) }]}>
         <TouchableOpacity
-          onPress={() => navigation.goBack()}
+          onPress={handleGoBack}
           style={styles.backBtn}
           activeOpacity={0.7}
         >

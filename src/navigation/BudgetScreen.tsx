@@ -173,6 +173,7 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
   useFocusEffect(
     useCallback(() => {
       sync();
+      budgetService.cleanupDuplicateBudgets().catch(() => {});
       if (route.params?.openTab) {
         setActiveTab(route.params.openTab);
       }
@@ -187,11 +188,23 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
 
   const [selectedMonthlyBudgetId, setSelectedMonthlyBudgetId] = useState<string | null>(null);
 
-  // All Monthly Overall Budgets (e.g., October 2026, November 2026)
+  // All Monthly Overall Budgets (e.g., October 2026, November 2026) - STRICTLY UNIQUE PER MONTH
   const allMonthlyOverallBudgets = useMemo(() => {
-    return budgets
+    const overall = budgets
       .filter((b) => b.isOverall && (!b.periodType || b.periodType === 'monthly'))
-      .sort((a, b) => (a.startDate || 0) - (b.startDate || 0));
+      .sort((a, b) => (Number(a.startDate) || 0) - (Number(b.startDate) || 0));
+
+    const seenMonths = new Set<string>();
+    const uniqueList: BudgetCategory[] = [];
+
+    for (const b of overall) {
+      const monthKey = (b.period || (b.startDate ? format(new Date(b.startDate), 'MMMM yyyy') : b.id)).toLowerCase().trim();
+      if (!seenMonths.has(monthKey)) {
+        seenMonths.add(monthKey);
+        uniqueList.push(b);
+      }
+    }
+    return uniqueList;
   }, [budgets]);
 
   // Selected or Active Monthly Overall Budget
@@ -275,14 +288,28 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
     }
   };
 
-  // Sub-categories scoped strictly to the selected monthly overall budget
+  // Sub-categories scoped strictly to the selected monthly overall budget (Deduplicated per category)
   const monthlyCategoryBudgets = useMemo(() => {
     if (!monthlyOverallBudget) return [];
-    return budgets.filter((b) => {
+    const rawCategories = budgets.filter((b) => {
       if (b.isOverall || (b.periodType && b.periodType !== 'monthly')) return false;
       if (b.parentBudgetId) return b.parentBudgetId === monthlyOverallBudget.id;
       return b.period === monthlyOverallBudget.period;
     });
+
+    const seenCategories = new Map<string, BudgetCategory>();
+    for (const b of rawCategories) {
+      const catKey = (b.category || '').toLowerCase().trim();
+      if (!seenCategories.has(catKey)) {
+        seenCategories.set(catKey, b);
+      } else {
+        const current = seenCategories.get(catKey)!;
+        if (b.parentBudgetId === monthlyOverallBudget.id && current.parentBudgetId !== monthlyOverallBudget.id) {
+          seenCategories.set(catKey, b);
+        }
+      }
+    }
+    return Array.from(seenCategories.values());
   }, [budgets, monthlyOverallBudget]);
 
   const specialEventBudgets = useMemo(() => {
@@ -781,7 +808,15 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
                 Categories ({monthlyCategoryBudgets.length})
               </Text>
               <TouchableOpacity
-                onPress={() => navigation.navigate('CreateBudget', { initialType: 'monthly', initialScope: 'category' })}
+                onPress={() =>
+                  navigation.navigate('CreateBudget', {
+                    initialType: 'monthly',
+                    initialScope: 'category',
+                    parentBudgetId: monthlyOverallBudget?.id,
+                    period: monthlyOverallBudget?.period,
+                    targetDate: monthlyOverallBudget?.startDate,
+                  })
+                }
                 activeOpacity={0.7}
               >
                 <Text style={[styles.addCategoryLink, { color: colors.accent }]}>+ Add</Text>
@@ -1043,7 +1078,16 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
                               ₹{group.totalSpent.toLocaleString('en-IN')}
                             </Text>
                             <TouchableOpacity
-                              onPress={() => navigation.navigate('CreateBudget', { initialType: 'monthly', initialScope: 'category', initialCategory: group.category })}
+                              onPress={() =>
+                                navigation.navigate('CreateBudget', {
+                                  initialType: 'monthly',
+                                  initialScope: 'category',
+                                  initialCategory: group.category,
+                                  parentBudgetId: monthlyOverallBudget?.id,
+                                  period: monthlyOverallBudget?.period,
+                                  targetDate: monthlyOverallBudget?.startDate,
+                                })
+                              }
                               style={{ backgroundColor: `${colors.accent}20`, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: `${colors.accent}40` }}
                               activeOpacity={0.7}
                             >

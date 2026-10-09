@@ -371,9 +371,15 @@ export function getBudgetPeriodRange(
  * (Strictly excluded to prevent double counting in budgets)
  */
 export function isExcludedFromBudget(tx: any, explicitExcludedIds?: string[]): boolean {
+  if (!tx) return false;
   if (tx.isSelfTransfer === true || tx.excludedFromBudget === true) return true;
-  const category = (tx.category || '').toLowerCase();
-  if (category === 'transfer' || category === 'self_transfer') return true;
+  const category = (tx.category || tx.tag || '').toLowerCase().trim();
+  if (
+    category === 'transfer' ||
+    category === 'self_transfer' ||
+    category === 'self transfer' ||
+    category === 'self-transfer'
+  ) return true;
 
   if (explicitExcludedIds && tx.id && explicitExcludedIds.includes(tx.id)) {
     return true;
@@ -383,7 +389,7 @@ export function isExcludedFromBudget(tx: any, explicitExcludedIds?: string[]): b
     const { useBudgetStore } = require('../store');
     const excludedIds: string[] = useBudgetStore.getState().excludedTransactionIds || [];
     if (tx.id && excludedIds.includes(tx.id)) return true;
-  } catch {}
+  } catch { }
 
   const note = (tx.merchant || tx.source || tx.note || '').toUpperCase();
   const excludedPatterns = [
@@ -397,6 +403,8 @@ export function isExcludedFromBudget(tx: any, explicitExcludedIds?: string[]): b
     'CARD PAYMENT',
     'SELF TRANSFER',
     'TRANSFER TO OWN',
+    'SELF TRF',
+    'OWN A/C',
   ];
 
   return excludedPatterns.some((pattern) => note.includes(pattern));
@@ -998,6 +1006,35 @@ export const budgetService = {
     customCategoryDef?: BudgetCustomCategory;
   }): Promise<BudgetCategory> {
     const token = await authService.getAccessToken();
+
+    // Prevent duplicate overall monthly budget for the same month/period
+    if (payload.isOverall && (!payload.periodType || payload.periodType === 'monthly')) {
+      const existingBudgets = useBudgetStore.getState().budgets || [];
+      const targetPeriod = (payload.period || (payload.startDate ? format(new Date(payload.startDate), 'MMMM yyyy') : '')).toLowerCase().trim();
+      const existing = existingBudgets.find((b) => {
+        if (!b.isOverall || (b.periodType && b.periodType !== 'monthly')) return false;
+        const bPeriod = (b.period || (b.startDate ? format(new Date(b.startDate), 'MMMM yyyy') : '')).toLowerCase().trim();
+        return bPeriod && targetPeriod && bPeriod === targetPeriod;
+      });
+
+      if (existing) {
+        console.warn(`[budgetService] Duplicate overall monthly budget prevented for "${targetPeriod}". Updating existing budget (${existing.id}) instead.`);
+        await this.updateBudget(existing.id, {
+          limitAmount: payload.limitAmount,
+          name: payload.name || existing.name,
+          startDate: payload.startDate || existing.startDate,
+          endDate: payload.endDate || existing.endDate,
+        });
+        return {
+          ...existing,
+          limitAmount: payload.limitAmount,
+          name: payload.name || existing.name,
+          startDate: payload.startDate || existing.startDate,
+          endDate: payload.endDate || existing.endDate,
+        };
+      }
+    }
+
     const id = 'budget_' + (payload.category || 'all') + '_' + Math.random().toString(36).substr(2, 9);
 
     const budgetItem: BudgetCategory = {
@@ -1037,6 +1074,48 @@ export const budgetService = {
     }
 
     return budgetItem;
+  },
+
+  /**
+   * Automatically detect and remove duplicate monthly overall budgets and duplicate sub-categories
+   */
+  async cleanupDuplicateBudgets(): Promise<void> {
+    const budgets = useBudgetStore.getState().budgets || [];
+    const overallMonthly = budgets.filter((b) => b.isOverall && (!b.periodType || b.periodType === 'monthly'));
+
+    const seenMonthPeriods = new Map<string, BudgetCategory>();
+    const duplicateIdsToDelete: string[] = [];
+
+    // Deduplicate overall budgets
+    for (const b of overallMonthly) {
+      const periodKey = (b.period || (b.startDate ? format(new Date(b.startDate), 'MMMM yyyy') : b.id)).toLowerCase().trim();
+      if (seenMonthPeriods.has(periodKey)) {
+        duplicateIdsToDelete.push(b.id);
+      } else {
+        seenMonthPeriods.set(periodKey, b);
+      }
+    }
+
+    // Deduplicate sub-categories under the same parent/period
+    const subCategories = budgets.filter((b) => !b.isOverall && (!b.periodType || b.periodType === 'monthly'));
+    const seenSubs = new Set<string>();
+
+    for (const b of subCategories) {
+      const parentKey = b.parentBudgetId || b.period || 'none';
+      const subKey = `${parentKey}_${(b.category || '').toLowerCase().trim()}`;
+      if (seenSubs.has(subKey)) {
+        duplicateIdsToDelete.push(b.id);
+      } else {
+        seenSubs.add(subKey);
+      }
+    }
+
+    if (duplicateIdsToDelete.length > 0) {
+      console.log(`[BudgetService] Removing ${duplicateIdsToDelete.length} duplicate budgets...`);
+      for (const dupId of duplicateIdsToDelete) {
+        await this.deleteBudget(dupId).catch(() => {});
+      }
+    }
   },
 
   async updateBudget(id: string, partial: Partial<BudgetCategory>): Promise<void> {

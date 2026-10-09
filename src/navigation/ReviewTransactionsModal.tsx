@@ -25,6 +25,7 @@ const BACKEND_URL = getBackendUrl();
 export interface EditableTransactionItem {
   id: string;
   date: string;
+  time: string;
   amount: string;
   type: 'debit' | 'credit';
   merchant: string;
@@ -39,6 +40,8 @@ export interface ReviewTransactionsModalProps {
   rawTransactions: Array<{
     id?: string;
     date: string;
+    time?: string | null;
+    timestamp?: number | null;
     amount: number;
     type: 'debit' | 'credit';
     merchant: string;
@@ -87,18 +90,30 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
   useEffect(() => {
     if (visible && rawTransactions) {
       setItems(
-        rawTransactions.map((tx, idx) => ({
-          id: tx.id || `item_${Date.now()}_${idx}`,
-          date: tx.date || new Date().toISOString().split('T')[0],
-          amount: String(tx.amount || ''),
-          type: tx.type === 'credit' ? 'credit' : 'debit',
-          merchant: tx.merchant || '',
-          category: tx.category || 'transfer',
-          balanceAfter:
-            tx.balanceAfter !== undefined && tx.balanceAfter !== null
-              ? String(tx.balanceAfter)
-              : '',
-        }))
+        rawTransactions.map((tx, idx) => {
+          let timeVal = tx.time || '';
+          if (!timeVal && tx.timestamp) {
+            const d = new Date(Number(tx.timestamp));
+            if (!isNaN(d.getTime())) {
+              const hh = String(d.getHours()).padStart(2, '0');
+              const mm = String(d.getMinutes()).padStart(2, '0');
+              timeVal = `${hh}:${mm}`;
+            }
+          }
+          return {
+            id: tx.id || `item_${Date.now()}_${idx}`,
+            date: tx.date || new Date().toISOString().split('T')[0],
+            time: timeVal,
+            amount: String(tx.amount || ''),
+            type: tx.type === 'credit' ? 'credit' : 'debit',
+            merchant: tx.merchant || '',
+            category: tx.category || 'transfer',
+            balanceAfter:
+              tx.balanceAfter !== undefined && tx.balanceAfter !== null
+                ? String(tx.balanceAfter)
+                : '',
+          };
+        })
       );
 
       if (detectedFinalBalance !== undefined && detectedFinalBalance !== null) {
@@ -157,10 +172,13 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
   };
 
   const addNewItem = () => {
-    const today = new Date().toISOString().split('T')[0];
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+    const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     const newItem: EditableTransactionItem = {
       id: `manual_new_${Date.now()}`,
       date: today,
+      time: currentTime,
       amount: '',
       type: 'debit',
       merchant: '',
@@ -213,14 +231,52 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
 
       const payload = {
         bankProfileId: bank.id,
-        transactions: items.map((it) => ({
-          amount: parseFloat(it.amount),
-          type: it.type,
-          date: it.date.trim(),
-          merchant: it.merchant.trim(),
-          category: it.category,
-          balanceAfter: it.balanceAfter.trim() ? parseFloat(it.balanceAfter) : null,
-        })),
+        transactions: items.map((it) => {
+          let itemTimestamp: number | undefined = undefined;
+          const trimmedDate = it.date.trim();
+          const trimmedTime = it.time.trim();
+          if (trimmedDate) {
+            const parts = trimmedDate.split(/[-/.]/).map((v) => parseInt(v, 10));
+            if (parts.length === 3) {
+              const y = parts[0] > 1000 ? parts[0] : parts[2];
+              const m = parts[0] > 1000 ? parts[1] : parts[1];
+              const d = parts[0] > 1000 ? parts[2] : parts[0];
+              if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+                let h = 12;
+                let min = 0;
+                if (trimmedTime) {
+                  const ampmMatch = trimmedTime.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?$/i);
+                  if (ampmMatch) {
+                    let parsedH = parseInt(ampmMatch[1], 10);
+                    const parsedM = parseInt(ampmMatch[2], 10);
+                    const ampm = ampmMatch[3]?.toLowerCase();
+                    if (ampm === 'pm' && parsedH < 12) parsedH += 12;
+                    if (ampm === 'am' && parsedH === 12) parsedH = 0;
+                    if (!isNaN(parsedH) && !isNaN(parsedM)) {
+                      h = parsedH;
+                      min = parsedM;
+                    }
+                  }
+                }
+                const computed = new Date(y, m - 1, d, h, min, 0);
+                if (!isNaN(computed.getTime())) {
+                  itemTimestamp = computed.getTime();
+                }
+              }
+            }
+          }
+
+          return {
+            amount: parseFloat(it.amount),
+            type: it.type,
+            date: trimmedDate,
+            time: trimmedTime || null,
+            timestamp: itemTimestamp,
+            merchant: it.merchant.trim(),
+            category: it.category,
+            balanceAfter: it.balanceAfter.trim() ? parseFloat(it.balanceAfter) : null,
+          };
+        }),
         updatedBalance: !isNaN(parsedFinalBalance as number) ? parsedFinalBalance : undefined,
       };
 
@@ -428,26 +484,27 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
                     </TouchableOpacity>
                   </View>
 
-                  {/* Amount & Date Row */}
-                  <View style={styles.inputGridRow}>
-                    <View style={{ flex: 1.2, marginRight: 10 }}>
-                      <Text style={styles.fieldLabel}>Amount (₹)</Text>
-                      <View style={styles.inputContainer}>
-                        <Text style={[styles.inlineCurrency, { color: isDebit ? '#ef4444' : '#2dba4e' }]}>
-                          {isDebit ? '-' : '+'}₹
-                        </Text>
-                        <TextInput
-                          style={styles.textInput}
-                          value={item.amount}
-                          onChangeText={(v) => updateItem(item.id, 'amount', v)}
-                          keyboardType="numeric"
-                          placeholder="0.00"
-                          placeholderTextColor={colors.textTertiary}
-                        />
-                      </View>
+                  {/* Amount Field */}
+                  <View style={{ marginTop: 6 }}>
+                    <Text style={styles.fieldLabel}>Amount (₹)</Text>
+                    <View style={styles.inputContainer}>
+                      <Text style={[styles.inlineCurrency, { color: isDebit ? '#ef4444' : '#2dba4e' }]}>
+                        {isDebit ? '-' : '+'}₹
+                      </Text>
+                      <TextInput
+                        style={styles.textInput}
+                        value={item.amount}
+                        onChangeText={(v) => updateItem(item.id, 'amount', v)}
+                        keyboardType="numeric"
+                        placeholder="0.00"
+                        placeholderTextColor={colors.textTertiary}
+                      />
                     </View>
+                  </View>
 
-                    <View style={{ flex: 1 }}>
+                  {/* Date & Time Row */}
+                  <View style={[styles.inputGridRow, { marginTop: 10 }]}>
+                    <View style={{ flex: 1.2, marginRight: 10 }}>
                       <Text style={styles.fieldLabel}>Date (YYYY-MM-DD)</Text>
                       <View style={styles.inputContainer}>
                         <Feather name="calendar" size={14} color="#8E8E9F" style={{ marginRight: 6 }} />
@@ -456,6 +513,20 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
                           value={item.date}
                           onChangeText={(v) => updateItem(item.id, 'date', v)}
                           placeholder="YYYY-MM-DD"
+                          placeholderTextColor={colors.textTertiary}
+                        />
+                      </View>
+                    </View>
+
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.fieldLabel}>Time (HH:MM)</Text>
+                      <View style={styles.inputContainer}>
+                        <Feather name="clock" size={14} color="#8E8E9F" style={{ marginRight: 6 }} />
+                        <TextInput
+                          style={styles.textInput}
+                          value={item.time}
+                          onChangeText={(v) => updateItem(item.id, 'time', v)}
+                          placeholder="14:30"
                           placeholderTextColor={colors.textTertiary}
                         />
                       </View>
