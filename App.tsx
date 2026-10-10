@@ -48,6 +48,8 @@ if (Platform.OS === 'web' && typeof document !== 'undefined') {
   }
 }
 
+import { KeyboardProvider } from 'react-native-keyboard-controller';
+
 export default function App() {
   useEffect(() => {
     // Proactively preload icon fonts so individual components don't trigger independent timeouts
@@ -60,5 +62,9 @@ export default function App() {
     });
   }, []);
 
-  return <AppNavigator />;
+  return (
+    <KeyboardProvider>
+      <AppNavigator />
+    </KeyboardProvider>
+  );
 }

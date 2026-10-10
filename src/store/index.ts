@@ -796,6 +796,16 @@ export const showGlobalConfirm = (options: ConfirmOptions) => {
   useConfirmStore.getState().showConfirm(options);
 };
 
+export const showGlobalAlert = (title: string, message?: string, onOk?: () => void) => {
+  useConfirmStore.getState().showConfirm({
+    title,
+    message: message || '',
+    confirmText: 'OK',
+    icon: 'info',
+    onConfirm: onOk || (() => {}),
+  });
+};
+
 // 10. Security & Biometrics Store
 export type AutoLockTimeout = 1 | 5 | 10;
 

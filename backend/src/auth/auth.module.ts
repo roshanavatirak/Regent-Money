@@ -7,6 +7,8 @@ import { AuthController } from './auth.controller';
 import { User } from '../users/entities/user.entity';
 import { MailModule } from '../mail/mail.module';
 
+import { TurnstileService } from './turnstile.service';
+
 @Module({
   imports: [
     TypeOrmModule.forFeature([User]),
@@ -19,8 +21,8 @@ import { MailModule } from '../mail/mail.module';
       }),
     }),
   ],
-  providers: [AuthService],
+  providers: [AuthService, TurnstileService],
   controllers: [AuthController],
-  exports: [AuthService, JwtModule],
+  exports: [AuthService, TurnstileService, JwtModule],
 })
 export class AuthModule {}

@@ -121,7 +121,7 @@ export const authService = {
     return cachedProfile;
   },
 
-  async signUp(name: string, email: string, phone: string, password?: string): Promise<{ profile: UserProfile; sessionConfirmed: boolean }> {
+  async signUp(name: string, email: string, phone: string, password?: string, turnstileToken?: string): Promise<{ profile: UserProfile; sessionConfirmed: boolean }> {
     const sanitizedEmail = email.trim().toLowerCase();
     const sanitizedPhone = formatPhoneNumber(phone.trim());
 
@@ -133,6 +133,7 @@ export const authService = {
         email: sanitizedEmail,
         phone: sanitizedPhone,
         password,
+        turnstileToken,
       }),
     });
 
@@ -160,7 +161,7 @@ export const authService = {
       syncNativeAuthCredentials(data.accessToken);
 
       // Initial database push
-      syncService.sync().catch((e) => console.error('[Auth] Initial sync push failed:', e));
+      syncService.sync().catch((e) => console.warn('[Auth] Initial sync push failed:', e));
     }
 
     return { profile, sessionConfirmed };
@@ -169,7 +170,7 @@ export const authService = {
   /**
    * Log in online using NestJS Authentication.
    */
-  async logIn(emailOrMobile: string, password?: string, rememberMe: boolean = true): Promise<UserProfile> {
+  async logIn(emailOrMobile: string, password?: string, rememberMe: boolean = true, turnstileToken?: string): Promise<UserProfile> {
     const input = emailOrMobile.trim();
     const isMail = input.includes('@');
     const emailOrMobileFormatted = isMail ? input.toLowerCase() : formatPhoneNumber(input);
@@ -180,6 +181,7 @@ export const authService = {
       body: JSON.stringify({
         emailOrMobile: emailOrMobileFormatted,
         password,
+        turnstileToken,
       }),
     });
 
@@ -200,7 +202,7 @@ export const authService = {
     syncNativeAuthCredentials(data.accessToken);
 
     // Initial database pull (downloads user transactions, budgets, goals)
-    syncService.sync().catch((e) => console.error('[Auth] Initial sync pull failed:', e));
+    syncService.sync().catch((e) => console.warn('[Auth] Initial sync pull failed:', e));
 
     return profile;
   },
@@ -275,7 +277,7 @@ export const authService = {
       syncNativeAuthCredentials(data.accessToken);
 
       // Initial database sync
-      syncService.sync().catch((e) => console.error('[Auth] Google Native login sync failed:', e));
+      syncService.sync().catch((e) => console.warn('[Auth] Google Native login sync failed:', e));
 
       return profile;
     } catch (e: any) {
@@ -324,7 +326,7 @@ export const authService = {
     syncNativeAuthCredentials(data.accessToken);
 
     // Initial database sync
-    syncService.sync().catch((e) => console.error('[Auth] Google login sync failed:', e));
+    syncService.sync().catch((e) => console.warn('[Auth] Google login sync failed:', e));
     return profile;
   },
 

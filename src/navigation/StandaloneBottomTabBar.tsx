@@ -12,7 +12,9 @@ import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
+  runOnJS,
 } from 'react-native-reanimated';
+import { useKeyboardHandler } from 'react-native-keyboard-controller';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -85,19 +87,29 @@ export const StandaloneBottomTabBar: React.FC<StandaloneBottomTabBarProps> = ({
   const user = useAuthStore((state) => state.user);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
 
+  useKeyboardHandler(
+    {
+      onStart: (e) => {
+        'worklet';
+        runOnJS(setIsKeyboardVisible)(e.height > 0);
+      },
+      onEnd: (e) => {
+        'worklet';
+        runOnJS(setIsKeyboardVisible)(e.height > 0);
+      },
+    },
+    []
+  );
+
   useEffect(() => {
-    const showSub = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
-      () => setIsKeyboardVisible(true)
-    );
-    const hideSub = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
-      () => setIsKeyboardVisible(false)
-    );
-    return () => {
-      showSub.remove();
-      hideSub.remove();
-    };
+    if (Platform.OS === 'web') {
+      const showSub = Keyboard.addListener('keyboardDidShow', () => setIsKeyboardVisible(true));
+      const hideSub = Keyboard.addListener('keyboardDidHide', () => setIsKeyboardVisible(false));
+      return () => {
+        showSub.remove();
+        hideSub.remove();
+      };
+    }
   }, []);
 
   const isSmall = windowWidth < 380;

@@ -12,7 +12,6 @@ import {
   ActivityIndicator,
   Dimensions,
   Platform,
-  KeyboardAvoidingView,
   Keyboard,
   RefreshControl,
   Modal,
@@ -43,8 +42,10 @@ import Animated, {
   withTiming,
   withDelay,
   withSpring,
-  FadeIn
+  FadeIn,
+  runOnJS,
 } from 'react-native-reanimated';
+import { KeyboardAvoidingView, useKeyboardHandler } from 'react-native-keyboard-controller';
 import { CartesianChart, Area, Line } from 'victory-native';
 import { Canvas, ImageSVG, useSVG, LinearGradient, vec, Group, Path, Skia } from '@shopify/react-native-skia';
 
@@ -220,6 +221,7 @@ import {
   useAnalyticsStore,
   useConfirmStore,
   showGlobalConfirm,
+  showGlobalAlert,
   rehydrateAllStores,
   useSecurityStore,
   AutoLockTimeout,
@@ -256,6 +258,28 @@ import {
   ChatMessage
 } from '../services/aiService';
 import { sanitizeTransactions } from '../services/sanitizer';
+
+// Route React Native Web alerts to Regent Money's luxury GlobalConfirmModal
+if (Platform.OS === 'web') {
+  Alert.alert = (title: string, message?: string, buttons?: any[]) => {
+    if (!buttons || buttons.length <= 1) {
+      showGlobalAlert(title, message || '', buttons?.[0]?.onPress);
+    } else {
+      const cancelBtn = buttons.find((b: any) => b.style === 'cancel') || buttons[0];
+      const confirmBtn = buttons.find((b: any) => b !== cancelBtn) || buttons[1];
+      showGlobalConfirm({
+        title,
+        message: message || '',
+        cancelText: cancelBtn?.text || 'Cancel',
+        confirmText: confirmBtn?.text || 'OK',
+        isDestructive: confirmBtn?.style === 'destructive',
+        icon: confirmBtn?.style === 'destructive' ? 'trash-2' : 'alert-triangle',
+        onConfirm: confirmBtn?.onPress || (() => {}),
+        onCancel: cancelBtn?.onPress,
+      });
+    }
+  };
+}
 
 // ----------------------------------------------------
 // Bouncing Dots Component (Reanimated Typing Indicator)
@@ -2505,81 +2529,52 @@ const ChatScreen = () => {
   }, [user?.name]);
 
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
-  const [containerHeight, setContainerHeight] = useState(0);
-  const initialContainerHeightRef = React.useRef(0);
-  const cachedNavBottomInset = React.useRef(insets.bottom);
   const flatListRef = React.useRef<FlatList>(null);
   const inputRef = React.useRef<TextInput>(null);
 
-  useEffect(() => {
-    if (!isKeyboardVisible && insets.bottom > 0) {
-      cachedNavBottomInset.current = insets.bottom;
-    }
-  }, [isKeyboardVisible, insets.bottom]);
+  useKeyboardHandler(
+    {
+      onStart: (e) => {
+        'worklet';
+        runOnJS(setIsKeyboardVisible)(e.height > 0);
+      },
+      onEnd: (e) => {
+        'worklet';
+        runOnJS(setIsKeyboardVisible)(e.height > 0);
+      },
+    },
+    []
+  );
 
   useEffect(() => {
-    const onShow = (e: any) => {
-      const height = e?.endCoordinates?.height || 0;
-      setKeyboardHeight(height);
-      setIsKeyboardVisible(true);
+    if (Platform.OS === 'web') {
+      const showSub = Keyboard.addListener('keyboardDidShow', () => setIsKeyboardVisible(true));
+      const hideSub = Keyboard.addListener('keyboardDidHide', () => setIsKeyboardVisible(false));
+      return () => {
+        showSub.remove();
+        hideSub.remove();
+      };
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isKeyboardVisible) {
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: true });
       }, 80);
-    };
-
-    const onHide = () => {
-      setKeyboardHeight(0);
-      setIsKeyboardVisible(false);
-    };
-
-    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-
-    const showSub = Keyboard.addListener(showEvent, onShow);
-    const hideSub = Keyboard.addListener(hideEvent, onHide);
-
-    return () => {
-      showSub.remove();
-      hideSub.remove();
-    };
-  }, []);
-
-  const handleContainerLayout = (e: any) => {
-    const h = e.nativeEvent.layout.height;
-    if (!isKeyboardVisible && h > 0) {
-      initialContainerHeightRef.current = Math.max(initialContainerHeightRef.current, h);
     }
-    setContainerHeight(h);
-  };
+  }, [isKeyboardVisible]);
 
   // Responsive bottom clearance:
-  // - On iOS: KeyboardAvoidingView handles the lift, so bottom spacing is 8px.
-  // - On Android edge-to-edge: When the soft keyboard opens, it sits over Android's transparent system navigation bar.
-  //   In edge-to-edge mode, insets.bottom drops to 0, but the window layout bottom remains positioned behind the IME
-  //   by the height of the navigation bar (typically 24-48px).
-  //   We compensate with the cached system navigation bar inset plus breathing room for the input capsule and disclaimer text.
-  // - When keyboard is closed: Bottom spacing rests cleanly above the floating bottom tab bar (navBarClearance + 8).
+  // - When keyboard is open: StandaloneBottomTabBar is hidden, and KeyboardAvoidingView handles the lift.
+  //   Input bar only needs clean resting clearance (8px).
+  // - When keyboard is closed: Input bar rests cleanly above the floating bottom tab bar (navBarClearance + 8).
   const dynamicBottomPadding = useMemo(() => {
     if (Platform.OS === 'web') {
       return navBarClearance + 8;
     }
-    if (isKeyboardVisible) {
-      if (Platform.OS === 'ios') {
-        return 8;
-      }
-      const shrinkAmount =
-        initialContainerHeightRef.current > 0 && containerHeight > 0
-          ? Math.max(0, initialContainerHeightRef.current - containerHeight)
-          : 0;
-
-      const uncompensated = Math.max(0, keyboardHeight - shrinkAmount);
-      const navClearanceAndroid = Math.max(cachedNavBottomInset.current, insets.bottom, 28) + 16;
-
-      return Math.max(navClearanceAndroid, uncompensated + 16);
-    }
-    return navBarClearance + 8;
-  }, [isKeyboardVisible, keyboardHeight, containerHeight, insets.bottom, navBarClearance]);
+    return isKeyboardVisible ? 8 : (navBarClearance + 8);
+  }, [isKeyboardVisible, navBarClearance]);
 
   // Sync DB on screen focus
   useFocusEffect(
@@ -2811,14 +2806,11 @@ const ChatScreen = () => {
   const nextCard2 = cardIndex < EXECUTIVE_PROMPTS.length ? EXECUTIVE_PROMPTS[(cardIndex + 2) % EXECUTIVE_PROMPTS.length] : null;
 
   return (
-    <View
-      style={[styles.container, { paddingTop: 0 }]}
-      onLayout={handleContainerLayout}
-    >
+    <View style={[styles.container, { paddingTop: 0 }]}>
       <AppTopBar />
 
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior="padding"
         style={{ flex: 1 }}
       >
         {/* Minimalist Executive Header */}

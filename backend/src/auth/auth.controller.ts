@@ -3,19 +3,36 @@ import type { Response } from 'express';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
 
+import { TurnstileService } from './turnstile.service';
+
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) { }
+  constructor(
+    private readonly authService: AuthService,
+    private readonly turnstileService: TurnstileService,
+  ) { }
 
   @Post('signup')
   @HttpCode(HttpStatus.CREATED)
-  async signUp(@Body() body: { name: string; email: string; phone: string; password?: string }) {
+  async signUp(
+    @Req() req: any,
+    @Body() body: { name: string; email: string; phone: string; password?: string; turnstileToken?: string },
+  ) {
+    if (body.turnstileToken) {
+      await this.turnstileService.verifyToken(body.turnstileToken, req?.ip);
+    }
     return this.authService.signUp(body);
   }
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  async login(@Body() body: { emailOrMobile: string; password?: string }) {
+  async login(
+    @Req() req: any,
+    @Body() body: { emailOrMobile: string; password?: string; turnstileToken?: string },
+  ) {
+    if (body.turnstileToken) {
+      await this.turnstileService.verifyToken(body.turnstileToken, req?.ip);
+    }
     return this.authService.login(body);
   }
 

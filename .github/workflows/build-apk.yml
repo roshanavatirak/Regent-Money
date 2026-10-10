@@ -50,6 +50,7 @@ jobs:
           cat << 'EOF' > .env
           EXPO_PUBLIC_BACKEND_URL=${{ secrets.EXPO_PUBLIC_BACKEND_URL || 'https://regent-money.onrender.com' }}
           EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=${{ secrets.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '55231273460-epfomp35a43c6d15bhilb92i6btl6jt9.apps.googleusercontent.com' }}
+          EXPO_PUBLIC_TURNSTILE_SITE_KEY=${{ secrets.EXPO_PUBLIC_TURNSTILE_SITE_KEY || '0x4AAAAAAFS21ZDrV2b2WG7k' }}
           EOF
 
       - name: Make Gradlew Executable
@@ -73,6 +74,7 @@ jobs:
         env:
           EXPO_PUBLIC_BACKEND_URL: ${{ secrets.EXPO_PUBLIC_BACKEND_URL || 'https://regent-money.onrender.com' }}
           EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: ${{ secrets.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '55231273460-epfomp35a43c6d15bhilb92i6btl6jt9.apps.googleusercontent.com' }}
+          EXPO_PUBLIC_TURNSTILE_SITE_KEY: ${{ secrets.EXPO_PUBLIC_TURNSTILE_SITE_KEY || '0x4AAAAAAFS21ZDrV2b2WG7k' }}
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m"
         run: |
           cd android

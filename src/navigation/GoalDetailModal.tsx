@@ -18,11 +18,15 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useTheme, Goal, SavingsEntry, useBankStore, useGoalsStore } from '../store';
+import { useTheme, Goal, SavingsEntry, useBankStore, useGoalsStore, showGlobalConfirm, showGlobalAlert } from '../store';
 import {
   getGoalPacing,
   goalService,
   GOAL_CATEGORIES,
+  calculateRequiredMonthly,
+  calculateRequiredMonths,
+  getStrategyRecommendation,
+  formatIndianCompactAmount,
 } from '../services/goalService';
 import {
   getBankAllocationSummary,
@@ -90,10 +94,38 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
   const [selectedEntry, setSelectedEntry] = useState<SavingsEntry | null>(null);
   const [isDeletingEntry, setIsDeletingEntry] = useState(false);
 
-  // Android hardware back button handler when Action Sheet or Transaction Detail is open
+  // Options menu (Three dots) state
+  const [showOptionsMenu, setShowOptionsMenu] = useState(false);
+
+  // Edit Goal & Savings Plan modal state
+  const [showEditGoalModal, setShowEditGoalModal] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editTargetAmount, setEditTargetAmount] = useState('');
+  const [editSolverMode, setEditSolverMode] = useState<'by_date' | 'by_monthly'>('by_date');
+  const [editTargetMonths, setEditTargetMonths] = useState<number>(12);
+  const [editMonthlyContribution, setEditMonthlyContribution] = useState('');
+  const [editPriority, setEditPriority] = useState<'high' | 'medium' | 'low'>('medium');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const editScrollViewRef = useRef<ScrollView>(null);
+
+  // Android hardware back button handler when any sheet or modal is open
   useEffect(() => {
-    if ((actionModalType !== null || selectedEntry !== null) && Platform.OS === 'android') {
+    if (
+      (actionModalType !== null ||
+        selectedEntry !== null ||
+        showOptionsMenu ||
+        showEditGoalModal) &&
+      Platform.OS === 'android'
+    ) {
       const backSub = BackHandler.addEventListener('hardwareBackPress', () => {
+        if (showEditGoalModal) {
+          setShowEditGoalModal(false);
+          return true;
+        }
+        if (showOptionsMenu) {
+          setShowOptionsMenu(false);
+          return true;
+        }
         if (selectedEntry !== null) {
           setSelectedEntry(null);
           return true;
@@ -107,7 +139,7 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
       });
       return () => backSub.remove();
     }
-  }, [actionModalType, selectedEntry]);
+  }, [actionModalType, selectedEntry, showOptionsMenu, showEditGoalModal]);
 
   // Deploy Capital state (for Freedom Stash & open-ended wealth goals)
   const [showDeployModal, setShowDeployModal] = useState(false);
@@ -201,6 +233,128 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
     return [...activeGoal.entries];
   }, [activeGoal?.entries]);
 
+  // Edit Goal Planning & Intelligence Calculations
+  const handleOpenEditGoal = () => {
+    if (!activeGoal) return;
+    setShowOptionsMenu(false);
+    setEditName(activeGoal.name);
+    setEditTargetAmount(String(activeGoal.targetAmount));
+
+    let initialMonths = 12;
+    if (activeGoal.targetDate) {
+      const raw = String(activeGoal.targetDate).trim();
+      const dateStr = raw.length === 7 ? `${raw}-01` : raw;
+      const targetTime =
+        typeof activeGoal.targetDate === 'number'
+          ? activeGoal.targetDate
+          : new Date(dateStr).getTime();
+      if (!isNaN(targetTime)) {
+        initialMonths = Math.max(
+          1,
+          Math.ceil((targetTime - Date.now()) / (1000 * 60 * 60 * 24 * 30))
+        );
+      }
+    }
+    setEditTargetMonths(initialMonths);
+
+    const initialMonthly =
+      activeGoal.committedMonthly ||
+      activeGoal.monthlyContribution ||
+      requiredMonthlySavings;
+    setEditMonthlyContribution(initialMonthly > 0 ? String(initialMonthly) : '');
+    setEditSolverMode(activeGoal.category === 'wealth_stash' ? 'by_monthly' : 'by_date');
+    setEditPriority((activeGoal.priority as any) || 'medium');
+    setShowEditGoalModal(true);
+  };
+
+  const parsedEditTarget = Math.max(1000, parseFloat(editTargetAmount) || 0);
+  const editCurrentSaved = activeGoal?.currentAmount || 0;
+  const editRemainingNeeded = Math.max(0, parsedEditTarget - editCurrentSaved);
+
+  const editStrategy = useMemo(() => {
+    if (!activeGoal) return { title: 'Balanced Plan', expectedReturn: 8.5 };
+    return getStrategyRecommendation(editTargetMonths, activeGoal.category);
+  }, [editTargetMonths, activeGoal?.category]);
+
+  const editSolvedMonthly = useMemo(() => {
+    return calculateRequiredMonthly(
+      parsedEditTarget,
+      editCurrentSaved,
+      editTargetMonths,
+      editStrategy.expectedReturn
+    );
+  }, [parsedEditTarget, editCurrentSaved, editTargetMonths, editStrategy.expectedReturn]);
+
+  const parsedEditMonthly = Math.max(
+    100,
+    parseFloat(editMonthlyContribution) || editSolvedMonthly
+  );
+
+  const editSolvedMonths = useMemo(() => {
+    return calculateRequiredMonths(
+      parsedEditTarget,
+      editCurrentSaved,
+      parsedEditMonthly,
+      editStrategy.expectedReturn
+    );
+  }, [parsedEditTarget, editCurrentSaved, parsedEditMonthly, editStrategy.expectedReturn]);
+
+  const effectiveEditMonths =
+    editSolverMode === 'by_date' ? editTargetMonths : editSolvedMonths;
+  const effectiveEditMonthly =
+    editSolverMode === 'by_date' ? editSolvedMonthly : parsedEditMonthly;
+  const effectiveEditTargetDate = useMemo(() => {
+    const d = new Date(Date.now() + effectiveEditMonths * 30 * 24 * 60 * 60 * 1000);
+    return d.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+  }, [effectiveEditMonths]);
+
+  const handleSaveEditGoal = async () => {
+    if (!activeGoal) return;
+    if (!editName.trim()) {
+      showGlobalAlert('Goal Name Required', 'Please enter a name for your goal.');
+      return;
+    }
+    if (parsedEditTarget <= 0) {
+      showGlobalAlert('Invalid Target', 'Please enter a valid target amount.');
+      return;
+    }
+    if (parsedEditTarget < editCurrentSaved) {
+      showGlobalAlert(
+        'Target Below Current Balance',
+        `Target amount (₹${parsedEditTarget.toLocaleString('en-IN')}) cannot be less than your current saved amount (₹${editCurrentSaved.toLocaleString('en-IN')}).`
+      );
+      return;
+    }
+
+    setIsSavingEdit(true);
+    try {
+      const finalMonths =
+        editSolverMode === 'by_date' ? editTargetMonths : editSolvedMonths;
+      const finalTargetTime = Date.now() + finalMonths * 30 * 24 * 60 * 60 * 1000;
+      const finalTargetDateStr = new Date(finalTargetTime).toISOString().slice(0, 10);
+      const finalMonthly =
+        editSolverMode === 'by_date' ? editSolvedMonthly : parsedEditMonthly;
+
+      const updates: Partial<Goal> = {
+        name: editName.trim(),
+        targetAmount: parsedEditTarget,
+        targetDate: finalTargetDateStr,
+        committedMonthly: finalMonthly,
+        monthlyContribution: finalMonthly,
+        priority: editPriority,
+      };
+
+      await goalService.updateGoal(activeGoal.id, updates);
+      setShowEditGoalModal(false);
+      if (onUpdated) onUpdated();
+      showGlobalAlert('Goal Updated', `"${editName.trim()}" has been successfully updated.`);
+    } catch (err: any) {
+      showGlobalAlert('Update Failed', err?.message || 'Could not save goal updates.');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
   if (!activeGoal || !pacing) return null;
 
   const goalColor = activeGoal.color || '#2dba4e';
@@ -260,13 +414,16 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
         setActionModalType(null);
         if (onUpdated) onUpdated();
       } catch (e: any) {
-        alert('Deposit failed: ' + (e?.message || e));
+        showGlobalAlert('Deposit Failed', e?.message || e);
       } finally {
         setIsSubmittingAction(false);
       }
     } else if (actionModalType === 'withdraw') {
       if (value > activeGoal.currentAmount) {
-        alert(`Withdrawal amount (₹${value.toLocaleString('en-IN')}) cannot exceed current goal savings (₹${activeGoal.currentAmount.toLocaleString('en-IN')}).`);
+        showGlobalAlert(
+          'Withdrawal Limit',
+          `Withdrawal amount (₹${value.toLocaleString('en-IN')}) cannot exceed current goal savings (₹${activeGoal.currentAmount.toLocaleString('en-IN')}).`
+        );
         return;
       }
 
@@ -278,7 +435,7 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
         setActionModalType(null);
         if (onUpdated) onUpdated();
       } catch (e: any) {
-        alert('Withdrawal failed: ' + (e?.message || e));
+        showGlobalAlert('Withdrawal Failed', e?.message || e);
       } finally {
         setIsSubmittingAction(false);
       }
@@ -299,22 +456,21 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
         setSelectedEntry(null);
         if (onUpdated) onUpdated();
       } catch (err: any) {
-        alert('Failed to delete transaction: ' + (err?.message || err));
+        showGlobalAlert('Delete Failed', 'Failed to delete transaction: ' + (err?.message || err));
       } finally {
         setIsDeletingEntry(false);
       }
     };
 
-    if (Platform.OS === 'web') {
-      if (window.confirm(confirmMsg)) {
-        await doDelete();
-      }
-    } else {
-      Alert.alert('Delete Transaction', confirmMsg, [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: doDelete },
-      ]);
-    }
+    showGlobalConfirm({
+      title: 'Delete Transaction',
+      message: confirmMsg,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      isDestructive: true,
+      icon: 'trash-2',
+      onConfirm: doDelete,
+    });
   };
 
   const handleSelectBank = async (bankId: string | null) => {
@@ -324,7 +480,7 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
         if (targetBank) {
           const validation = validateBankDeposit(targetBank, allGoals, activeGoal.currentAmount, activeGoal.id);
           if (!validation.valid) {
-            alert(validation.errorMessage || 'Target bank account does not have sufficient unallocated balance.');
+            showGlobalAlert('Linked Bank Error', validation.errorMessage || 'Target bank account does not have sufficient unallocated balance.');
             return;
           }
         }
@@ -333,7 +489,7 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
       setShowBankPickerModal(false);
       if (onUpdated) onUpdated();
     } catch (err: any) {
-      alert('Failed to update linked bank: ' + (err?.message || err));
+      showGlobalAlert('Update Failed', 'Failed to update linked bank: ' + (err?.message || err));
     }
   };
 
@@ -345,20 +501,19 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
         onClose();
         if (onUpdated) onUpdated();
       } catch (e: any) {
-        alert('Failed to delete goal: ' + (e?.message || e));
+        showGlobalAlert('Delete Failed', 'Failed to delete goal: ' + (e?.message || e));
       }
     };
 
-    if (Platform.OS === 'web') {
-      if (window.confirm(confirmMsg)) {
-        await doDelete();
-      }
-    } else {
-      Alert.alert('Give Up on Goal', confirmMsg, [
-        { text: 'Keep Goal', style: 'cancel' },
-        { text: 'Give Up', style: 'destructive', onPress: doDelete },
-      ]);
-    }
+    showGlobalConfirm({
+      title: 'Give Up on Goal',
+      message: confirmMsg,
+      confirmText: 'Give Up',
+      cancelText: 'Keep Goal',
+      isDestructive: true,
+      icon: 'alert-triangle',
+      onConfirm: doDelete,
+    });
   };
 
   const handleAdvanceMilestone = async (increment: number = 100000) => {
@@ -366,22 +521,22 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
       await goalService.advanceMilestone(activeGoal.id, increment);
       if (onUpdated) onUpdated();
     } catch (e: any) {
-      alert('Failed to advance milestone: ' + (e?.message || e));
+      showGlobalAlert('Milestone Error', 'Failed to advance milestone: ' + (e?.message || e));
     }
   };
 
   const handleDeployCapital = async () => {
     const amt = parseFloat(deployAmount);
     if (!amt || amt <= 0) {
-      alert('Please enter a valid amount to deploy');
+      showGlobalAlert('Invalid Amount', 'Please enter a valid amount to deploy');
       return;
     }
     if (amt > activeGoal.currentAmount) {
-      alert(`Cannot deploy more than available capital (₹${activeGoal.currentAmount.toLocaleString('en-IN')})`);
+      showGlobalAlert('Limit Exceeded', `Cannot deploy more than available capital (₹${activeGoal.currentAmount.toLocaleString('en-IN')})`);
       return;
     }
     if (!deployName.trim()) {
-      alert('Please enter a title for your new goal');
+      showGlobalAlert('Title Required', 'Please enter a title for your new goal');
       return;
     }
 
@@ -404,7 +559,7 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
       setDeployTarget('');
       if (onUpdated) onUpdated();
     } catch (e: any) {
-      alert('Failed to deploy capital: ' + (e?.message || e));
+      showGlobalAlert('Deployment Failed', 'Failed to deploy capital: ' + (e?.message || e));
     } finally {
       setIsDeploying(false);
     }
@@ -433,7 +588,11 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
         transparent
         statusBarTranslucent
         onRequestClose={() => {
-          if (selectedEntry !== null) {
+          if (showEditGoalModal) {
+            setShowEditGoalModal(false);
+          } else if (showOptionsMenu) {
+            setShowOptionsMenu(false);
+          } else if (selectedEntry !== null) {
             setSelectedEntry(null);
           } else if (actionModalType !== null) {
             Keyboard.dismiss();
@@ -464,12 +623,12 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
               },
             ]}
           >
-            {/* 1. HERO COVER BANNER WITH SEAMLESS FADE-OUT & PROGRESSIVE REVEAL */}
+            {/* 1. HERO COVER BANNER (Progressive Blur & Clear Reveal matching saved percentage) */}
             <View
               style={styles.heroFrame}
               onLayout={(e) => setHeroWidth(e.nativeEvent.layout.width)}
             >
-              {/* Layer A: Base Grayed/Blurred Image (0% or unreached progress) with subtle reduced blur */}
+              {/* Layer A: Base Grayed/Blurred Image (0% or unreached progress) with subtle reduced blur matching GoalCard */}
               <Image
                 source={{ uri: coverUri }}
                 blurRadius={Platform.OS === 'web' ? undefined : 2.5}
@@ -481,6 +640,7 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
                 ]}
                 resizeMode="cover"
               />
+              {/* Tone wash overlay matching global theme background */}
               <View
                 style={[
                   StyleSheet.absoluteFill,
@@ -490,7 +650,7 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
                 ]}
               />
 
-              {/* Layer B: Revealed Vivid Full-Color Clear Portion (matching saved progress percentage) */}
+              {/* Layer B: Revealed Vivid Full-Color Clear Portion (matching achieved goal progress percentage) */}
               {pacing && pacing.progressPercent > 0 ? (
                 <View
                   style={{
@@ -524,8 +684,8 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
 
               {/* Layer A: Subtle top vignette for button contrast */}
               <LinearGradient
-                colors={['rgba(0,0,0,0.55)', 'transparent']}
-                locations={[0.0, 0.38]}
+                colors={['rgba(0,0,0,0.45)', 'transparent']}
+                locations={[0.0, 0.35]}
                 style={StyleSheet.absoluteFill}
               />
 
@@ -535,25 +695,25 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
                   'transparent',
                   'transparent',
                   isDark ? 'rgba(36, 41, 46, 0.45)' : 'rgba(255, 255, 255, 0.45)',
-                  isDark ? 'rgba(36, 41, 46, 0.88)' : 'rgba(255, 255, 255, 0.88)',
+                  isDark ? 'rgba(36, 41, 46, 0.92)' : 'rgba(255, 255, 255, 0.92)',
                   bgModal,
                 ]}
-                locations={[0.0, 0.32, 0.64, 0.88, 1.0]}
+                locations={[0.0, 0.35, 0.65, 0.88, 1.0]}
                 style={StyleSheet.absoluteFill}
               />
 
-              {/* Floating Top Actions: Pencil Edit at top-right (delete icon and close cross removed as requested) */}
-              <View style={[styles.heroTopActions, { justifyContent: 'flex-end' }]}>
+              {/* Circular Action Button at top-right (Three-dot Goal Options) */}
+              <View style={styles.heroTopActions}>
                 <TouchableOpacity
-                  onPress={() => setShowImagePickerModal(true)}
+                  onPress={() => setShowOptionsMenu(true)}
                   style={styles.heroIconCircle}
-                  accessibilityLabel="Change Cover Image"
+                  accessibilityLabel="Goal Options"
                 >
-                  <Ionicons name="pencil" size={16} color="#FFFFFF" />
+                  <Ionicons name="ellipsis-vertical" size={18} color="#FFFFFF" />
                 </TouchableOpacity>
               </View>
 
-              {/* Floating Bottom Bar in fade transition zone */}
+              {/* Goal Title placed in the lower fade area */}
               <View style={styles.heroBottomBar}>
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.heroGoalTitle, { color: textColor }]} numberOfLines={1}>
@@ -865,33 +1025,6 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
                     })}
                   </View>
                 )}
-              </View>
-
-              {/* Give Up on Goal Option (Discreet, low-contrast danger option below history) */}
-              <View style={{ alignItems: 'center', marginTop: 24, marginBottom: 18 }}>
-                <TouchableOpacity
-                  activeOpacity={0.7}
-                  onPress={handleDelete}
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    paddingVertical: 10,
-                    paddingHorizontal: 16,
-                    borderRadius: 12,
-                    backgroundColor: isDark ? 'rgba(239, 68, 68, 0.08)' : 'rgba(239, 68, 68, 0.06)',
-                    borderWidth: 1,
-                    borderColor: isDark ? 'rgba(239, 68, 68, 0.25)' : 'rgba(239, 68, 68, 0.2)',
-                    gap: 6,
-                  }}
-                >
-                  <Ionicons name="flag-outline" size={15} color={colors.danger} />
-                  <Text style={{ fontSize: 13, fontWeight: '700', color: colors.danger }}>
-                    Give Up on Goal
-                  </Text>
-                </TouchableOpacity>
-                <Text style={{ fontSize: 11, color: subTextColor, marginTop: 6, textAlign: 'center' }}>
-                  Abandoning this goal will remove it and release its tracked progress.
-                </Text>
               </View>
             </ScrollView>
 
@@ -1588,6 +1721,459 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
       </View>
     </Modal>
 
+    {/* Goal Options Sheet (Three Dots Action Menu) */}
+    <Modal
+      visible={showOptionsMenu}
+      transparent
+      animationType="fade"
+      onRequestClose={() => setShowOptionsMenu(false)}
+    >
+      <TouchableOpacity
+        style={styles.actionSheetBackdrop}
+        activeOpacity={1}
+        onPress={() => setShowOptionsMenu(false)}
+      >
+        <View
+          style={[styles.optionsSheetCard, { backgroundColor: isDark ? '#1C2128' : '#FFFFFF', borderColor }]}
+          onStartShouldSetResponder={() => true}
+        >
+          {/* Drag Pill */}
+          <View style={styles.dragPill} />
+
+          {/* Header */}
+          <View style={styles.optionsSheetHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.optionsSheetTitle, { color: textColor }]}>Goal Options</Text>
+              <Text style={{ fontSize: 11.5, color: subTextColor, marginTop: 2 }} numberOfLines={1}>
+                {activeGoal?.name}
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => setShowOptionsMenu(false)}
+              style={[styles.closeCircleBtn, { backgroundColor: cardBg }]}
+            >
+              <Ionicons name="close" size={18} color={textColor} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Action List */}
+          <View style={{ marginTop: 14, gap: 10 }}>
+            {/* 1. Edit Target & Savings Plan */}
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={handleOpenEditGoal}
+              style={[styles.optionRowItem, { backgroundColor: cardBg, borderColor }]}
+            >
+              <View style={[styles.optionIconBadge, { backgroundColor: `${colors.accent}15` }]}>
+                <Ionicons name="options-outline" size={20} color={colors.accent} />
+              </View>
+              <Text style={[styles.optionItemTitle, { color: textColor, flex: 1, marginLeft: 12 }]}>
+                Edit Target & Savings Plan
+              </Text>
+              <Ionicons name="chevron-forward" size={18} color={subTextColor} />
+            </TouchableOpacity>
+
+            {/* 2. Change Cover Photo */}
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => {
+                setShowOptionsMenu(false);
+                setShowImagePickerModal(true);
+              }}
+              style={[styles.optionRowItem, { backgroundColor: cardBg, borderColor }]}
+            >
+              <View style={[styles.optionIconBadge, { backgroundColor: `${colors.accent}15` }]}>
+                <Ionicons name="image-outline" size={20} color={colors.accent} />
+              </View>
+              <Text style={[styles.optionItemTitle, { color: textColor, flex: 1, marginLeft: 12 }]}>
+                Change Cover Photo
+              </Text>
+              <Ionicons name="chevron-forward" size={18} color={subTextColor} />
+            </TouchableOpacity>
+
+            {/* 3. Give Up on Goal (Delete option in red) */}
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => {
+                setShowOptionsMenu(false);
+                handleDelete();
+              }}
+              style={[styles.optionRowItem, { backgroundColor: cardBg, borderColor }]}
+            >
+              <View style={[styles.optionIconBadge, { backgroundColor: `${colors.danger}18` }]}>
+                <Ionicons name="trash-outline" size={20} color={colors.danger} />
+              </View>
+              <Text style={[styles.optionItemTitle, { color: textColor, flex: 1, marginLeft: 12 }]}>
+                Give Up on Goal
+              </Text>
+              <Ionicons name="chevron-forward" size={18} color={subTextColor} />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </TouchableOpacity>
+    </Modal>
+
+    {/* Edit Target & Savings Plan Modal */}
+    <Modal
+      visible={showEditGoalModal}
+      transparent
+      animationType="slide"
+      onRequestClose={() => setShowEditGoalModal(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.keyboardAvoidingWrap}
+        >
+          <View
+            style={[
+              styles.editModalContainer,
+              {
+                backgroundColor: isDark ? '#1C2128' : '#FFFFFF',
+                borderColor,
+                maxHeight: windowHeight * 0.9,
+              },
+            ]}
+          >
+            {/* Drag Handle */}
+            <View style={styles.dragPill} />
+
+            {/* Modal Header */}
+            <View style={styles.editModalHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.editModalTitle, { color: textColor }]}>Edit Target & Savings Plan</Text>
+                <Text style={{ fontSize: 11.5, color: subTextColor, marginTop: 2 }}>
+                  Recalculate your monthly SIP or target timeline
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setShowEditGoalModal(false)}
+                style={[styles.closeCircleBtn, { backgroundColor: cardBg }]}
+              >
+                <Ionicons name="close" size={18} color={textColor} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              ref={editScrollViewRef}
+              style={{ paddingHorizontal: 20 }}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ paddingBottom: 30 }}
+            >
+              {/* Goal Title */}
+              <Text style={[styles.editSectionLabel, { color: textColor, marginTop: 12 }]}>Goal Name</Text>
+              <TextInput
+                style={[styles.editTextInput, { backgroundColor: cardBg, color: textColor, borderColor }]}
+                value={editName}
+                onChangeText={setEditName}
+                placeholder="e.g. New Motorbike"
+                placeholderTextColor={subTextColor}
+              />
+
+              {/* Target Amount */}
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 14 }}>
+                <Text style={[styles.editSectionLabel, { color: textColor }]}>Target Amount (₹)</Text>
+                <Text style={{ fontSize: 11, color: subTextColor }}>
+                  Current Saved: ₹{editCurrentSaved.toLocaleString('en-IN')}
+                </Text>
+              </View>
+              <View style={[styles.customDepositRow, { borderColor, backgroundColor: cardBg, marginTop: 6 }]}>
+                <Text style={[styles.currencyPrefix, { color: goalColor }]}>₹</Text>
+                <TextInput
+                  style={[styles.depositInput, { color: textColor }]}
+                  value={editTargetAmount}
+                  onChangeText={setEditTargetAmount}
+                  keyboardType="numeric"
+                  placeholder="e.g. 200000"
+                  placeholderTextColor={subTextColor}
+                />
+              </View>
+
+              {/* Quick Target Increment Chips */}
+              <View style={styles.quickChipsRow}>
+                {[
+                  { label: '+₹25k', val: 25000 },
+                  { label: '+₹50k', val: 50000 },
+                  { label: '+₹1L', val: 100000 },
+                  { label: '+₹5L', val: 500000 },
+                ].map((chip) => (
+                  <TouchableOpacity
+                    key={chip.label}
+                    onPress={() => {
+                      const cur = parseFloat(editTargetAmount) || 0;
+                      setEditTargetAmount(String(cur + chip.val));
+                    }}
+                    style={[styles.quickChipBtn, { backgroundColor: cardBg, borderColor }]}
+                  >
+                    <Text style={[styles.quickChipText, { color: colors.accent }]}>{chip.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {/* Savings Plan Mode Selector */}
+              <Text style={[styles.editSectionLabel, { color: textColor, marginTop: 16 }]}>
+                Savings Plan Mode
+              </Text>
+              <Text style={{ fontSize: 11, color: subTextColor, marginBottom: 8 }}>
+                Choose how you want Regent Money to calculate your plan
+              </Text>
+              <View style={[styles.modeSwitcher, { backgroundColor: cardBg, borderColor }]}>
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => setEditSolverMode('by_date')}
+                  style={[
+                    styles.modeBtn,
+                    editSolverMode === 'by_date' && { backgroundColor: `${colors.accent}20`, borderColor: colors.accent },
+                  ]}
+                >
+                  <Ionicons
+                    name="calendar-outline"
+                    size={16}
+                    color={editSolverMode === 'by_date' ? colors.accent : subTextColor}
+                  />
+                  <Text
+                    style={[
+                      styles.modeBtnText,
+                      { color: editSolverMode === 'by_date' ? colors.accent : textColor },
+                    ]}
+                  >
+                    Time-wise Plan
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => setEditSolverMode('by_monthly')}
+                  style={[
+                    styles.modeBtn,
+                    editSolverMode === 'by_monthly' && { backgroundColor: `${colors.accent}20`, borderColor: colors.accent },
+                  ]}
+                >
+                  <Ionicons
+                    name="repeat-outline"
+                    size={16}
+                    color={editSolverMode === 'by_monthly' ? colors.accent : subTextColor}
+                  />
+                  <Text
+                    style={[
+                      styles.modeBtnText,
+                      { color: editSolverMode === 'by_monthly' ? colors.accent : textColor },
+                    ]}
+                  >
+                    Monthly SIP Plan
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Mode A: Time-wise Plan (Pick Timeline -> Calculates Monthly SIP) */}
+              {editSolverMode === 'by_date' ? (
+                <View style={{ marginTop: 12 }}>
+                  <Text style={[styles.editSectionLabel, { color: textColor }]}>
+                    Target Timeframe: <Text style={{ color: colors.accent, fontWeight: '700' }}>{editTargetMonths} Months</Text>
+                  </Text>
+
+                  {/* Quick Month Chips */}
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
+                    <View style={styles.quickMonthsRow}>
+                      {[3, 6, 12, 18, 24, 36, 48, 60].map((m) => (
+                        <TouchableOpacity
+                          key={m}
+                          onPress={() => setEditTargetMonths(m)}
+                          style={[
+                            styles.monthPill,
+                            {
+                              backgroundColor: editTargetMonths === m ? `${colors.accent}25` : cardBg,
+                              borderColor: editTargetMonths === m ? colors.accent : borderColor,
+                            },
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.monthPillText,
+                              { color: editTargetMonths === m ? colors.accent : textColor },
+                            ]}
+                          >
+                            {m < 12 ? `${m}m` : m % 12 === 0 ? `${m / 12}y` : `${m}m`}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </ScrollView>
+
+                  {/* Stepper Row */}
+                  <View style={[styles.monthStepperRow, { backgroundColor: cardBg, borderColor, marginTop: 10 }]}>
+                    <TouchableOpacity
+                      onPress={() => setEditTargetMonths((prev) => Math.max(1, prev - 1))}
+                      style={styles.stepperBtn}
+                    >
+                      <Ionicons name="remove" size={18} color={textColor} />
+                      <Text style={[styles.stepperBtnText, { color: textColor }]}>1 mo</Text>
+                    </TouchableOpacity>
+
+                    <View style={{ alignItems: 'center' }}>
+                      <Text style={{ fontSize: 14, fontWeight: '700', color: textColor }}>
+                        {editTargetMonths} {editTargetMonths === 1 ? 'Month' : 'Months'}
+                      </Text>
+                      <Text style={{ fontSize: 11, color: subTextColor, marginTop: 2 }}>
+                        Target: {effectiveEditTargetDate}
+                      </Text>
+                    </View>
+
+                    <TouchableOpacity
+                      onPress={() => setEditTargetMonths((prev) => prev + 1)}
+                      style={styles.stepperBtn}
+                    >
+                      <Ionicons name="add" size={18} color={textColor} />
+                      <Text style={[styles.stepperBtnText, { color: textColor }]}>1 mo</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Realtime Solved Result Card */}
+                  <View style={[styles.resultCard, { backgroundColor: `${colors.accent}12`, borderColor: `${colors.accent}35`, marginTop: 12 }]}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <Text style={[styles.resultLabel, { color: subTextColor }]}>Required Monthly Savings (SIP)</Text>
+                      <View style={[styles.planBadge, { backgroundColor: `${colors.accent}20`, borderColor: colors.accent }]}>
+                        <Text style={[styles.planBadgeText, { color: colors.accent }]}>{editStrategy.title}</Text>
+                      </View>
+                    </View>
+                    <Text style={[styles.resultBigNum, { color: colors.accent }]}>
+                      ₹{editSolvedMonthly.toLocaleString('en-IN')}
+                      <Text style={{ fontSize: 13, fontWeight: '500', color: subTextColor }}>/month</Text>
+                    </Text>
+                    <Text style={[styles.resultSub, { color: textColor }]}>
+                      Saving ₹{editSolvedMonthly.toLocaleString('en-IN')}/mo in your account reaches ₹{parsedEditTarget.toLocaleString('en-IN')} by <Text style={{ fontWeight: '700', color: colors.accent }}>{effectiveEditTargetDate}</Text> (with {editStrategy.expectedReturn}% CAGR).
+                    </Text>
+                  </View>
+                </View>
+              ) : (
+                /* Mode B: Monthly SIP Plan (Pick Monthly -> Calculates Months) */
+                <View style={{ marginTop: 12 }}>
+                  <Text style={[styles.editSectionLabel, { color: textColor }]}>
+                    Monthly SIP Contribution (₹)
+                  </Text>
+                  <View style={[styles.customDepositRow, { borderColor, backgroundColor: cardBg, marginTop: 6 }]}>
+                    <Text style={[styles.currencyPrefix, { color: goalColor }]}>₹</Text>
+                    <TextInput
+                      style={[styles.depositInput, { color: textColor }]}
+                      value={editMonthlyContribution}
+                      onChangeText={setEditMonthlyContribution}
+                      keyboardType="numeric"
+                      placeholder="e.g. 10000"
+                      placeholderTextColor={subTextColor}
+                    />
+                  </View>
+
+                  {/* Quick Monthly Chips */}
+                  <View style={styles.quickChipsRow}>
+                    {[2000, 5000, 10000, 25000, 50000].map((amt) => (
+                      <TouchableOpacity
+                        key={amt}
+                        onPress={() => setEditMonthlyContribution(String(amt))}
+                        style={[
+                          styles.quickChipBtn,
+                          {
+                            backgroundColor: parsedEditMonthly === amt ? `${colors.accent}20` : cardBg,
+                            borderColor: parsedEditMonthly === amt ? colors.accent : borderColor,
+                          },
+                        ]}
+                      >
+                        <Text style={[styles.quickChipText, { color: parsedEditMonthly === amt ? colors.accent : textColor }]}>
+                          ₹{formatIndianCompactAmount(amt)}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  {/* Realtime Solved Result Card */}
+                  <View style={[styles.resultCard, { backgroundColor: `${colors.accent}12`, borderColor: `${colors.accent}35`, marginTop: 12 }]}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <Text style={[styles.resultLabel, { color: subTextColor }]}>Estimated Completion Timeline</Text>
+                      <View style={[styles.planBadge, { backgroundColor: `${colors.accent}20`, borderColor: colors.accent }]}>
+                        <Text style={[styles.planBadgeText, { color: colors.accent }]}>{editSolvedMonths} MO TO GO</Text>
+                      </View>
+                    </View>
+                    <Text style={[styles.resultBigNum, { color: colors.accent }]}>
+                      {editSolvedMonths} {editSolvedMonths === 1 ? 'Month' : 'Months'}
+                    </Text>
+                    <Text style={[styles.resultSub, { color: textColor }]}>
+                      At ₹{parsedEditMonthly.toLocaleString('en-IN')}/mo, you will achieve your target of ₹{parsedEditTarget.toLocaleString('en-IN')} by <Text style={{ fontWeight: '700', color: colors.accent }}>{effectiveEditTargetDate}</Text>.
+                    </Text>
+                  </View>
+                </View>
+              )}
+
+              {/* Priority Selector */}
+              <Text style={[styles.editSectionLabel, { color: textColor, marginTop: 16 }]}>Priority</Text>
+              <View style={styles.priorityRow}>
+                {(['high', 'medium', 'low'] as const).map((p) => {
+                  const isSelected = editPriority === p;
+                  return (
+                    <TouchableOpacity
+                      key={p}
+                      onPress={() => setEditPriority(p)}
+                      style={[
+                        styles.priorityBtn,
+                        {
+                          backgroundColor: isSelected ? `${colors.accent}20` : cardBg,
+                          borderColor: isSelected ? colors.accent : borderColor,
+                        },
+                      ]}
+                    >
+                      <Ionicons
+                        name={p === 'high' ? 'flame' : p === 'medium' ? 'flag' : 'leaf'}
+                        size={14}
+                        color={isSelected ? colors.accent : subTextColor}
+                      />
+                      <Text
+                        style={[
+                          styles.priorityText,
+                          { color: isSelected ? colors.accent : textColor, marginLeft: 5 },
+                        ]}
+                      >
+                        {p.toUpperCase()}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {/* Footer Buttons */}
+              <View style={[styles.footerRow, { marginTop: 22 }]}>
+                <TouchableOpacity
+                  onPress={() => setShowEditGoalModal(false)}
+                  style={[styles.backBtn, { borderColor, backgroundColor: cardBg }]}
+                >
+                  <Text style={[styles.backBtnText, { color: subTextColor }]}>Cancel</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={handleSaveEditGoal}
+                  disabled={isSavingEdit || !editName.trim() || parsedEditTarget <= 0}
+                  style={[
+                    styles.nextBtn,
+                    {
+                      backgroundColor: colors.accent,
+                      opacity: isSavingEdit || !editName.trim() || parsedEditTarget <= 0 ? 0.6 : 1,
+                    },
+                  ]}
+                >
+                  {isSavingEdit ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 13.5 }}>Save Changes</Text>
+                      <Ionicons name="checkmark-circle" size={16} color="#FFFFFF" style={{ marginLeft: 6 }} />
+                    </>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </View>
+    </Modal>
+
     {/* Cover Image Picker Modal */}
     <GoalImagePickerModal
       goal={goal}
@@ -1636,6 +2222,8 @@ const styles = StyleSheet.create({
     height: 220,
     position: 'relative',
     overflow: 'hidden',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
   },
   heroImage: {
     width: '100%',
@@ -1644,41 +2232,33 @@ const styles = StyleSheet.create({
   heroTopActions: {
     position: 'absolute',
     top: 14,
-    left: 16,
     right: 16,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
     zIndex: 2,
   },
   heroIconCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(30, 41, 59, 0.75)',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.25)',
+    borderColor: 'rgba(255, 255, 255, 0.28)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   heroBottomBar: {
     position: 'absolute',
     bottom: 12,
-    left: 16,
-    right: 16,
+    left: 20,
+    right: 20,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-end',
     zIndex: 2,
   },
   heroGoalTitle: {
-    fontSize: 20,
+    fontSize: 22,
     fontWeight: '800',
-    color: '#FFFFFF',
-    letterSpacing: -0.3,
-    textShadowColor: 'rgba(0, 0, 0, 0.6)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 3,
+    letterSpacing: -0.4,
   },
   heroStatusPill: {
     paddingHorizontal: 8,
@@ -2141,6 +2721,245 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 20,
     paddingHorizontal: 16,
+  },
+  // Three-dots options sheet and edit goal plan styles
+  heroHeaderDotsBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  dragPill: {
+    width: 38,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255, 255, 255, 0.22)',
+    alignSelf: 'center',
+    marginBottom: 8,
+  },
+  optionsSheetCard: {
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    borderWidth: 1,
+    paddingHorizontal: 20,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 24,
+    paddingTop: 10,
+  },
+  optionsSheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: 6,
+  },
+  optionsSheetTitle: {
+    fontSize: 16.5,
+    fontWeight: '700',
+    letterSpacing: -0.2,
+  },
+  closeCircleBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  optionRowItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  optionIconBadge: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  optionItemTitle: {
+    fontSize: 13.5,
+    fontWeight: '700',
+  },
+  optionItemDesc: {
+    fontSize: 11.5,
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  editModalContainer: {
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderWidth: 1,
+    overflow: 'hidden',
+    paddingTop: 10,
+    width: '100%',
+  },
+  editModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+  },
+  editModalTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    letterSpacing: -0.3,
+  },
+  editSectionLabel: {
+    fontSize: 12.5,
+    fontWeight: '700',
+  },
+  editTextInput: {
+    height: 46,
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    fontSize: 13.5,
+    fontWeight: '600',
+    marginTop: 6,
+  },
+  quickChipsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 8,
+  },
+  quickChipBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  quickChipText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  modeSwitcher: {
+    flexDirection: 'row',
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 4,
+    gap: 4,
+  },
+  modeBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 9,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'transparent',
+    gap: 6,
+  },
+  modeBtnText: {
+    fontSize: 12.5,
+    fontWeight: '700',
+  },
+  quickMonthsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingVertical: 2,
+  },
+  monthPill: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  monthPillText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  monthStepperRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+  },
+  stepperBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    gap: 3,
+  },
+  stepperBtnText: {
+    fontSize: 11.5,
+    fontWeight: '600',
+  },
+  resultCard: {
+    padding: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  resultLabel: {
+    fontSize: 11.5,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  resultBigNum: {
+    fontSize: 22,
+    fontWeight: '800',
+    marginTop: 4,
+    letterSpacing: -0.4,
+  },
+  resultSub: {
+    fontSize: 11.5,
+    lineHeight: 16,
+    marginTop: 6,
+  },
+  priorityRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+  },
+  priorityBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 9,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  priorityText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+  },
+  footerRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  backBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  backBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  nextBtn: {
+    flex: 2,
+    height: 44,
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });
 

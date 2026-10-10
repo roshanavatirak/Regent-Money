@@ -20,8 +20,16 @@ async function bootstrap() {
   app.enableCors({
     origin: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With', 'Access-Control-Request-Private-Network'],
     credentials: true,
+  });
+
+  // Support Chrome Private Network Access (PNA) preflights between localhost and 127.0.0.1
+  app.use((req: any, res: any, next: any) => {
+    if (req.headers['access-control-request-private-network']) {
+      res.setHeader('Access-Control-Allow-Private-Network', 'true');
+    }
+    next();
   });
 
   const port = process.env.PORT || 3000;

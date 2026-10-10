@@ -8,7 +8,6 @@ import {
   ActivityIndicator,
   Alert,
   StyleSheet,
-  KeyboardAvoidingView,
   Platform,
   BackHandler,
 } from 'react-native';
@@ -18,7 +17,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { useTheme, useBankStore } from '../store';
 import { authService } from '../services/authService';
 import { getBackendUrl } from '../config/api';
-import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
+import { KeyboardScreen } from '../components/KeyboardScreen';
 
 const BACKEND_URL = getBackendUrl();
 
@@ -79,8 +78,6 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
   );
   const [note, setNote] = useState('');
   const [loading, setLoading] = useState(false);
-  const scrollViewRef = useRef<ScrollView>(null);
-  const { scrollBottomPadding } = useKeyboardHeight(40);
 
   const handleGoBack = () => {
     if (props.onBack) {
@@ -234,17 +231,10 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
         </View>
       </View>
 
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={{ flex: 1 }}
+      <KeyboardScreen
+        contentContainerStyle={styles.scrollContent}
+        keyboardDismissMode="on-drag"
       >
-        <ScrollView
-          ref={scrollViewRef}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag"
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPadding }]}
-        >
           {/* Type Switcher Tabs */}
           <View style={styles.typeSwitcherContainer}>
             <TouchableOpacity
@@ -472,8 +462,7 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
               </View>
             )}
           </TouchableOpacity>
-        </ScrollView>
-      </KeyboardAvoidingView>
+        </KeyboardScreen>
     </View>
   );
 };

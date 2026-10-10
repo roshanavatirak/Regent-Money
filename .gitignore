@@ -43,3 +43,6 @@ yarn-error.*
 
 # website
 website/
+
+# zip archives
+*.zip

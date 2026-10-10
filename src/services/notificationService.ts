@@ -1,12 +1,11 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import { useNotificationStore, useAuthStore } from '../store';
-import { getBackendUrl } from '../config/api';
+import { BACKEND_URL, getBackendUrl } from '../config/api';
 import { mmkvStorage } from '../db/mmkv';
 import { tokenStore } from './tokenStore';
 import { getDailyHumorMessage } from './humorousMessages';
 
-const BACKEND_URL = getBackendUrl();
 const PROMPTED_KEY = 'notification_permission_prompted';
 const TOKEN_KEY = 'saved_expo_push_token';
 
@@ -62,6 +61,55 @@ export const notificationService = {
   },
 
   /**
+   * Global function to post or schedule any notification from the app with Regent Money branding.
+   * Ensures channelId, emerald accent color (#10B981), high priority, and logo styling are unified.
+   */
+  async postNotification(params: {
+    title: string;
+    body: string;
+    data?: Record<string, unknown>;
+    channelId?: string;
+    identifier?: string;
+    trigger?: Notifications.NotificationTriggerInput;
+  }): Promise<string | null> {
+    if (Platform.OS === 'web') return null;
+
+    try {
+      await this.setupChannels();
+      const channel = params.channelId || 'daily_alerts';
+
+      const content: Notifications.NotificationContentInput = {
+        title: params.title,
+        body: params.body,
+        sound: 'default',
+        color: '#10B981',
+        data: params.data || {},
+        priority: 'high',
+      };
+
+      if (params.trigger) {
+        return await Notifications.scheduleNotificationAsync({
+          identifier: params.identifier,
+          content,
+          trigger: params.trigger,
+        });
+      } else {
+        return await Notifications.scheduleNotificationAsync({
+          identifier: params.identifier,
+          content,
+          trigger: {
+            channelId: channel,
+            seconds: 1,
+          } as any,
+        });
+      }
+    } catch (e: any) {
+      console.warn('[NotificationService] Failed to post notification:', e.message);
+      return null;
+    }
+  },
+
+  /**
    * Schedules recurring 9:00 AM and 9:00 PM native device notifications directly with Android OS.
    * This guarantees status-bar / heads-up banners even if backend is sleeping or device is offline.
    */
@@ -89,15 +137,12 @@ export const notificationService = {
       const eveningMsg = getDailyHumorMessage('evening');
 
       // 1. Schedule 9:00 AM Morning Notification (Local device time)
-      await Notifications.scheduleNotificationAsync({
+      await this.postNotification({
         identifier: 'daily_humor_morning',
-        content: {
-          title: morningMsg.title,
-          body: morningMsg.body,
-          sound: 'default',
-          color: '#10B981',
-          data: { slot: 'morning', type: 'daily_humor' },
-        },
+        title: morningMsg.title,
+        body: morningMsg.body,
+        channelId: 'daily_alerts',
+        data: { slot: 'morning', type: 'daily_humor' },
         trigger: {
           type: Notifications.SchedulableTriggerInputTypes.DAILY,
           channelId: 'daily_alerts',
@@ -107,15 +152,12 @@ export const notificationService = {
       });
 
       // 2. Schedule 9:00 PM Evening Notification (21:00 Local device time)
-      await Notifications.scheduleNotificationAsync({
+      await this.postNotification({
         identifier: 'daily_humor_evening',
-        content: {
-          title: eveningMsg.title,
-          body: eveningMsg.body,
-          sound: 'default',
-          color: '#10B981',
-          data: { slot: 'evening', type: 'daily_humor' },
-        },
+        title: eveningMsg.title,
+        body: eveningMsg.body,
+        channelId: 'daily_alerts',
+        data: { slot: 'evening', type: 'daily_humor' },
         trigger: {
           type: Notifications.SchedulableTriggerInputTypes.DAILY,
           channelId: 'daily_alerts',
@@ -307,7 +349,7 @@ export const notificationService = {
 
       useNotificationStore.getState().setNotifications(combined);
     } catch (err: any) {
-      console.error('[NotificationService] Error syncing notifications:', err.message);
+      console.warn('[NotificationService] Error syncing notifications:', err.message);
     } finally {
       useNotificationStore.getState().setLoading(false);
     }
@@ -417,3 +459,14 @@ export const notificationService = {
     };
   },
 };
+
+/**
+ * Universal global function to send an app notification with Regent Money branding and right-side logo.
+ */
+export const sendAppNotification = (params: {
+  title: string;
+  body: string;
+  data?: Record<string, unknown>;
+  channelId?: string;
+  identifier?: string;
+}) => notificationService.postNotification(params);

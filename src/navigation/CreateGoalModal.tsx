@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   TextInput,
   ScrollView,
-  KeyboardAvoidingView,
   Platform,
   Dimensions,
   useWindowDimensions,
@@ -33,8 +32,8 @@ import {
   formatIndianFullRupees,
   formatIndianCompactRupees,
 } from '../features/goals/services/goalNudgeTemplates';
-import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
 import { BankIcon } from '../components/BankIcon';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 
 const { width } = Dimensions.get('window');
 
@@ -51,7 +50,6 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
 }) => {
   const { colors, isDark } = useTheme();
   const { height: windowHeight } = useWindowDimensions();
-  const { keyboardHeight, isKeyboardVisible } = useKeyboardHeight();
 
   // Wizard step state: 1 (Category) -> 2 (Target & Initial) -> 3 (Timeline & Strategy)
   const [step, setStep] = useState<1 | 2 | 3>(1);
@@ -183,25 +181,17 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
   const subTextColor = colors.textSecondary;
 
   return (
-    <Modal visible={visible} animationType="slide" transparent statusBarTranslucent onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" transparent statusBarTranslucent navigationBarTranslucent onRequestClose={onClose}>
       <View style={styles.modalOverlay}>
         <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={[
-            styles.keyboardAvoidingWrap,
-            Platform.OS === 'android' && isKeyboardVisible && { paddingBottom: keyboardHeight },
-          ]}
-        >
+        <View style={styles.keyboardAvoidingWrap}>
           <View
             style={[
               styles.modalContent,
               {
                 backgroundColor: bgModal,
                 borderColor,
-                maxHeight: isKeyboardVisible
-                  ? Math.max(300, windowHeight - keyboardHeight - (Platform.OS === 'android' ? 36 : 20))
-                  : windowHeight * 0.9,
+                maxHeight: windowHeight * 0.9,
               },
             ]}
           >
@@ -246,14 +236,10 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
               })}
             </View>
 
-            <ScrollView 
-              ref={scrollViewRef}
-              style={[
-                styles.scrollBody,
-                isKeyboardVisible && {
-                  maxHeight: Math.max(160, windowHeight - keyboardHeight - 210),
-                },
-              ]}
+            <KeyboardAwareScrollView 
+              ref={scrollViewRef as any}
+              bottomOffset={24}
+              style={styles.scrollBody}
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
               contentContainerStyle={{ paddingBottom: 24 }}
@@ -316,9 +302,6 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
                   onChangeText={setName}
                   placeholder="e.g., Royal Enfield Hunter 350"
                   placeholderTextColor={subTextColor}
-                  onFocus={() => {
-                    setTimeout(() => scrollViewRef.current?.scrollTo({ y: 0, animated: true }), 150);
-                  }}
                 />
 
                 {/* Target Amount */}
@@ -341,9 +324,6 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
                     keyboardType="numeric"
                     placeholder="0"
                     placeholderTextColor={subTextColor}
-                    onFocus={() => {
-                      setTimeout(() => scrollViewRef.current?.scrollTo({ y: 120, animated: true }), 150);
-                    }}
                   />
                 </View>
 
@@ -724,7 +704,7 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
                 </View>
               </View>
             )}
-          </ScrollView>
+          </KeyboardAwareScrollView>
 
           {/* Footer Buttons */}
           <View style={[styles.footerRow, { borderTopColor: borderColor }]}>
@@ -763,7 +743,7 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
             )}
           </View>
           </View>
-        </KeyboardAvoidingView>
+        </View>
       </View>
     </Modal>
   );

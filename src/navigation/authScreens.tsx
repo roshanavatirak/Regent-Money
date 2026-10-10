@@ -20,8 +20,9 @@ import { Feather, Ionicons } from '@expo/vector-icons';
 import { authService, LastGoogleUser } from '../services/authService';
 import { getGoogleWebClientId } from '../services/supabaseClient';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
-import { useTheme } from '../store';
+import { useTheme, showGlobalAlert } from '../store';
 import { StatusBar } from 'expo-status-bar';
+import { CloudflareTurnstile } from '../components/CloudflareTurnstile';
 
 const { width } = Dimensions.get('window');
 
@@ -182,6 +183,63 @@ const GoogleAuthButton: React.FC<GoogleAuthButtonProps> = ({
     setLastGoogleUser(authService.getLastGoogleUser());
   }, []);
 
+  const handleDirectLastUserLogin = async () => {
+    if (!lastGoogleUser?.email) return;
+    const webClientId = getGoogleWebClientId();
+
+    if (Platform.OS !== 'web' && webClientId) {
+      setLoading(true);
+      try {
+        await authService.signInWithGoogleNative(false);
+        setLastGoogleUser(authService.getLastGoogleUser());
+      } catch (e: any) {
+        if (e.code === 'SIGN_IN_CANCELLED' || e.message?.includes('cancelled')) {
+          console.log('[Auth] Google Sign-In cancelled.');
+        } else {
+          showGlobalAlert('Google Sign-In Failed', e.message);
+        }
+      } finally {
+        setLoading(false);
+      }
+    } else {
+      // Instant 1-tap login directly with the saved Last Used Google account
+      setLoading(true);
+      try {
+        await authService.signUpOrLogInGoogle(
+          lastGoogleUser.name || lastGoogleUser.email.split('@')[0],
+          lastGoogleUser.email,
+          lastGoogleUser.photo
+        );
+      } catch (e: any) {
+        showGlobalAlert('Google Sign-In Failed', e.message);
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
+  const handleSwitchAccount = async () => {
+    const webClientId = getGoogleWebClientId();
+    if (Platform.OS !== 'web' && webClientId) {
+      setLoading(true);
+      try {
+        await authService.signInWithGoogleNative(true);
+        setLastGoogleUser(authService.getLastGoogleUser());
+      } catch (e: any) {
+        if (e.code === 'SIGN_IN_CANCELLED' || e.message?.includes('cancelled')) {
+          console.log('[Auth] Google Sign-In cancelled.');
+        } else {
+          showGlobalAlert('Google Sign-In Failed', e.message);
+        }
+      } finally {
+        setLoading(false);
+      }
+    } else {
+      // Show modal to pick or enter a different Google account
+      onOpenMockModal();
+    }
+  };
+
   const handleGooglePress = async (forceSwitch: boolean = false) => {
     const webClientId = getGoogleWebClientId();
     if (Platform.OS !== 'web' && webClientId) {
@@ -195,20 +253,21 @@ const GoogleAuthButton: React.FC<GoogleAuthButtonProps> = ({
           e.code === 'DEVELOPER_ERROR' ||
           e.message?.includes('DEVELOPER_ERROR')
         ) {
-          alert(
-            'Google Sign-In Developer Error: This usually means your Google Web Client ID is mismatching, or your SHA-1 fingerprint is not configured in the Google Cloud Console for Android Package Name (com.anonymous.regentmoney). Please check settings.'
+          showGlobalAlert(
+            'Configuration Notice',
+            'Google Web Client ID is mismatching, or your SHA-1 fingerprint is not configured in the Google Cloud Console for Android Package Name (com.anonymous.regentmoney). Please check settings.'
           );
         } else if (e.code === 'SIGN_IN_CANCELLED' || e.message?.includes('cancelled')) {
           console.log('[Auth] Google Sign-In cancelled.');
         } else {
-          alert('Native Google Sign-In failed: ' + e.message);
+          showGlobalAlert('Google Sign-In Failed', e.message);
         }
       } finally {
         setLoading(false);
       }
     } else {
       if (Platform.OS !== 'web' && !webClientId) {
-        alert('Google Web Client ID is not configured in Settings.');
+        showGlobalAlert('Settings Required', 'Google Web Client ID is not configured in Settings.');
       }
       onOpenMockModal();
     }
@@ -220,10 +279,10 @@ const GoogleAuthButton: React.FC<GoogleAuthButtonProps> = ({
 
     return (
       <View style={styles.linkedInGoogleContainer}>
-        {/* Main 1-Tap Google Button */}
+        {/* Main 1-Tap Google Button - Directly logs in as lastGoogleUser */}
         <TouchableOpacity
           style={styles.linkedInGoogleCard}
-          onPress={() => handleGooglePress(false)}
+          onPress={handleDirectLastUserLogin}
           activeOpacity={0.85}
         >
           <View style={styles.linkedInAvatarWrap}>
@@ -258,11 +317,11 @@ const GoogleAuthButton: React.FC<GoogleAuthButtonProps> = ({
         {/* Change / Switch Account Option */}
         <TouchableOpacity
           style={styles.switchAccountBtn}
-          onPress={() => handleGooglePress(true)}
+          onPress={handleSwitchAccount}
           activeOpacity={0.7}
         >
           <Ionicons name="swap-horizontal" size={14} color="#10B981" style={{ marginRight: 6 }} />
-          {/* <Text style={styles.switchAccountBtnText}>Switch Google account</Text> */}
+          <Text style={styles.switchAccountBtnText}>Switch Google account</Text>
         </TouchableOpacity>
       </View>
     );
@@ -296,7 +355,7 @@ export const WelcomeScreen = ({ navigation }: { navigation: any }) => {
     try {
       await authService.signUpOrLogInGoogle(account.name, account.email, account.avatarUrl);
     } catch (e: any) {
-      alert('Simulated Google Auth failed: ' + e.message);
+      showGlobalAlert('Google Sign-In Failed', e.message);
     } finally {
       setLoading(false);
     }
@@ -392,7 +451,7 @@ export const AuthLandingScreen = ({ navigation }: { navigation: any }) => {
     try {
       await authService.signUpOrLogInGoogle(account.name, account.email, account.avatarUrl);
     } catch (e: any) {
-      alert('Simulated Google Auth failed: ' + e.message);
+      showGlobalAlert('Google Sign-In Failed', e.message);
     } finally {
       setLoading(false);
     }
@@ -483,6 +542,7 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
   const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [turnstileToken, setTurnstileToken] = useState('');
   const [keyboardVisible, setKeyboardVisible] = useState(false);
 
   useEffect(() => {
@@ -505,10 +565,14 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
       setError('Please enter both Email/Mobile and Password');
       return;
     }
+    if (Platform.OS === 'web' && !turnstileToken) {
+      setError('Please complete the Cloudflare security verification');
+      return;
+    }
     setError('');
     setLoading(true);
     try {
-      await authService.logIn(emailOrMobile, password, rememberMe);
+      await authService.logIn(emailOrMobile, password, rememberMe, turnstileToken);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -604,6 +668,14 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
             <Text style={styles.rememberMeLabel}>Remember me for 30 days</Text>
           </TouchableOpacity>
 
+          <CloudflareTurnstile
+            onVerify={(token) => {
+              setTurnstileToken(token);
+              setError('');
+            }}
+            onExpire={() => setTurnstileToken('')}
+          />
+
           {loading ? (
             <ActivityIndicator size="large" color="#2dba4e" style={{ marginTop: 24 }} />
           ) : (
@@ -646,6 +718,7 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
   const [secureText, setSecureText] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [turnstileToken, setTurnstileToken] = useState('');
   const [showVerifyModal, setShowVerifyModal] = useState(false);
   const [registeredEmail, setRegisteredEmail] = useState('');
   const [keyboardVisible, setKeyboardVisible] = useState(false);
@@ -686,11 +759,15 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
       setError('Passwords do not match');
       return;
     }
+    if (Platform.OS === 'web' && !turnstileToken) {
+      setError('Please complete the Cloudflare security verification');
+      return;
+    }
 
     setError('');
     setLoading(true);
     try {
-      const result = await authService.signUp(name.trim(), email.trim(), phone.trim(), password);
+      const result = await authService.signUp(name.trim(), email.trim(), phone.trim(), password, turnstileToken);
       if (!result.sessionConfirmed) {
         setRegisteredEmail(email.trim());
         setShowVerifyModal(true);
@@ -823,6 +900,14 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
               }}
             />
           </View>
+
+          <CloudflareTurnstile
+            onVerify={(token) => {
+              setTurnstileToken(token);
+              setError('');
+            }}
+            onExpire={() => setTurnstileToken('')}
+          />
 
           {loading ? (
             <ActivityIndicator size="large" color="#2dba4e" style={{ marginTop: 24 }} />
