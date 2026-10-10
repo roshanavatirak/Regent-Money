@@ -6,9 +6,48 @@ import android.content.Intent
 import android.os.Build
 import android.provider.Telephony
 import android.util.Log
-import com.facebook.react.HeadlessJsTaskService
 
 class SmsReceiver : BroadcastReceiver() {
+
+    companion object {
+        private val OTP_PATTERN = Regex(
+            "(?i)\\b(otp|one[ -]?time (password|pin)|verification code|passcode)\\b[^0-9]{0,25}\\d{4,8}"
+        )
+
+        private val OTP_PATTERN_REVERSE = Regex(
+            "(?i)\\b\\d{4,8}\\b[^0-9]{0,25}\\b(is (your|the) )?(otp|one[ -]?time (password|pin)|verification code)\\b"
+        )
+
+        private val DEFAULT_BANK_SENDERS = setOf(
+            "HDFCBK", "HDFCBN", "HDFCLT", "HDFCAL", "HDFCCC", "HDFCSM",
+            "SBIPSG", "SBIBNK", "SBIUPI", "SBIINB", "ATMSBI", "SBISMS", "CBSSBI",
+            "ICICIB", "ICICIT", "ICICIS", "ICICAC", "ICICIC",
+            "AXISBK", "AXISBC", "AXISIN", "AXISAL", "AXISMS",
+            "KOTAKB", "KOTAKS", "KOTAKN", "KMBLTD",
+            "BOBTXN", "BOBSMS", "BOBALT", "BARB",
+            "PNBSMS", "PNBALT", "PUNBNK", "PNBTXN",
+            "CNRBK", "CANBNK", "CANARA", "CNRSMS",
+            "UBININ", "UBISMS", "UNIONB",
+            "IDFCFB", "IDFCBK", "IDFCBN",
+            "INDBNK", "INDUSB", "INDUSI",
+            "YESBNK", "YESB", "YESALT",
+            "FEDBNK", "FEDRAL", "INDIBK", "INDIAN",
+            "BOIND", "BOISMS", "BOIALT", "CBIN", "CENTBK",
+            "IOBCHN", "IOBBNK", "UCOBNK", "RBLBNK", "RBLSMS",
+            "PAYTM", "PAYTMB", "AIRTEL", "AIRBNK"
+        )
+
+        private fun isAllowedBankSender(context: Context, sender: String): Boolean {
+            val prefs = context.getSharedPreferences("regent_native_prefs", Context.MODE_PRIVATE)
+            val allowed = prefs.getStringSet("bank_sender_ids", null) ?: DEFAULT_BANK_SENDERS
+            val upperSender = sender.trim().uppercase()
+            // Indian DLT headers look like "AX-HDFCBK" or "VM-HDFCBK-S"; take the 6-char core ID
+            val parts = upperSender.split("-")
+            val core = if (parts.size >= 2) parts[1] else parts[0]
+            return core in allowed || upperSender in allowed
+        }
+    }
+
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == Telephony.Sms.Intents.SMS_RECEIVED_ACTION) {
             try {
@@ -21,41 +60,24 @@ class SmsReceiver : BroadcastReceiver() {
                 for ((sender, msgList) in messagesBySender) {
                     val body = msgList.joinToString(separator = "") { it.displayMessageBody ?: "" }
                     val timestamp = msgList.firstOrNull()?.timestampMillis ?: System.currentTimeMillis()
-                    Log.d("SmsReceiver", "Received SMS from $sender (length: ${body.length}): $body")
 
-                    // 1. Direct Native Ingestion (<50ms, zero JS dependency)
-                    var nativeSyncHandled = false
-                    try {
-                        val prefs = context.getSharedPreferences("regent_native_prefs", Context.MODE_PRIVATE)
-                        val token = prefs.getString("auth_access_token", null)
-                        if (!token.isNullOrBlank()) {
-                            SmsDirectSyncWorker.syncSms(context, sender, body, timestamp)
-                            nativeSyncHandled = true
-                        }
-                    } catch (nativeEx: Exception) {
-                        Log.e("SmsReceiver", "Native direct sync dispatch failed", nativeEx)
+                    // Strict on-device filtering: drop OTPs and non-bank messages before anything leaves the device
+                    if (!isAllowedBankSender(context, sender) || OTP_PATTERN.containsMatchIn(body) || OTP_PATTERN_REVERSE.containsMatchIn(body)) {
+                        continue
                     }
 
-                    // 2. Headless JS Task Service (ONLY fallback if native token is absent)
-                    if (!nativeSyncHandled) {
-                        val serviceIntent = Intent(context, SmsTaskService::class.java).apply {
-                            putExtra("sender", sender)
-                            putExtra("body", body)
-                        }
+                    // NEVER log the body - protects financial privacy and prevents logcat exposure
+                    Log.d("SmsReceiver", "Bank SMS received from $sender")
 
-                        try {
-                            HeadlessJsTaskService.acquireWakeLockNow(context)
-                            context.startService(serviceIntent)
-                        } catch (serviceEx: Exception) {
-                            Log.w("SmsReceiver", "startService failed, attempting foreground fallback", serviceEx)
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                try {
-                                    context.startForegroundService(serviceIntent)
-                                } catch (fgEx: Exception) {
-                                    Log.e("SmsReceiver", "startForegroundService also failed", fgEx)
-                                }
-                            }
-                        }
+                    // 1. Direct Native Ingestion via WorkManager
+                    val prefs = context.getSharedPreferences("regent_native_prefs", Context.MODE_PRIVATE)
+                    val token = prefs.getString("auth_access_token", null)
+                    val userId = prefs.getString("user_id", null)
+
+                    if (!token.isNullOrBlank() && !userId.isNullOrBlank()) {
+                        SmsDirectSyncWorker.enqueue(context, sender, body, timestamp)
+                    } else {
+                        Log.d("SmsReceiver", "No active user session in native storage; skipping background sync. Catch-up will handle upon login.")
                     }
                 }
             } catch (e: Exception) {

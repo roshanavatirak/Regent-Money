@@ -58,9 +58,9 @@ export class AppService {
       'https://github.com/roshanavatirak/Regent-Money/releases/latest/download/regent-money.apk';
 
     const releaseNotes = [
-      'New Wealth Roadmap & Goal milestones',
-      'Unified top navigation bar',
-      'Design & performance refinements',
+      'Enhanced Regent AI Chatbot: Structured tables, 1-tap message copy, and refreshed tree logo',
+      'Instant Background SMS Sync: Expedited sync engine capturing bank alerts even when device is asleep',
+      'Stability & Account Safeguards: Strict multi-account isolation and network performance improvements',
     ];
 
     const isUpdateAvailable =

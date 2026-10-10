@@ -49,22 +49,6 @@ export const GoalImagePickerModal: React.FC<GoalImagePickerModalProps> = ({
     if (isPicking) return;
     setIsPicking(true);
     try {
-      if (Platform.OS !== 'web') {
-        try {
-          const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-          if (status === 'denied') {
-            Alert.alert(
-              'Permission Required',
-              'Please allow photo library access in your device settings to select a cover photo.'
-            );
-            setIsPicking(false);
-            return;
-          }
-        } catch {
-          // On newer Android (API 33+), system photo picker handles access directly
-        }
-      }
-
       // Note: allowsEditing: true on Android triggers an external CROP intent that
       // frequently crashes/ANRs across devices. allowsEditing: false launches the native
       // picker directly and smoothly, while the UI clips to 16:9 banner via resizeMode="cover".

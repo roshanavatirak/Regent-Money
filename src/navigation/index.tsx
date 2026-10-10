@@ -64,7 +64,6 @@ import bankNamesJson from './banknames.json';
 import { getExecutiveGreeting, getSessionGreeting } from '../constants/aiGreetings';
 import { SmsSenderTagsManager } from '../components/SmsSenderTagsManager';
 import { getSmsSenderSuggestions, formatSmsSenderTags } from '../constants/bankSmsSenders';
-import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
 import { isExcludedFromBudget } from '../services/budgetService';
 
 const POPULAR_BANKS = [
@@ -253,6 +252,8 @@ import { ReportBugScreen } from './ReportBugScreen';
 import { BudgetScreen } from './BudgetScreen';
 import { CreateBudgetScreen } from './CreateBudgetScreen';
 import { smsCatchupService } from '../services/smsCatchupService';
+import * as Clipboard from 'expo-clipboard';
+import { FormattedChatMessage } from '../components/FormattedChatMessage';
 import {
   askChatbot,
   ChatMessage
@@ -364,7 +365,22 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
   const { colors, isDark } = useTheme();
   const { height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const { keyboardHeight, isKeyboardVisible } = useKeyboardHeight();
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+
+  useKeyboardHandler(
+    {
+      onStart: (e) => {
+        'worklet';
+        runOnJS(setIsKeyboardVisible)(e.height > 0);
+      },
+      onEnd: (e) => {
+        'worklet';
+        runOnJS(setIsKeyboardVisible)(e.height > 0);
+      },
+    },
+    []
+  );
+
   const styles = getStyles(colors);
   const navStyles = getNavStyles(colors);
   const user = useAuthStore((state) => state.user);
@@ -540,13 +556,8 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
   };
 
   const modalHeight = useMemo(() => {
-    if (isKeyboardVisible) {
-      const topOffset = Platform.OS === 'android' ? Math.max(insets.top, 36) : (insets.top + 20);
-      const availableHeight = windowHeight - keyboardHeight - topOffset;
-      return Math.min(windowHeight * 0.85, Math.max(280, availableHeight));
-    }
-    return windowHeight * 0.85;
-  }, [isKeyboardVisible, windowHeight, keyboardHeight, insets.top]);
+    return windowHeight * 0.88;
+  }, [windowHeight]);
 
   return (
     <Modal
@@ -554,6 +565,7 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
       transparent
       animationType="slide"
       statusBarTranslucent
+      navigationBarTranslucent
       onRequestClose={() => {
         if (formStep === 2) {
           setFormStep(1);
@@ -583,12 +595,9 @@ const AddBankModal = ({ visible, onClose, onSuccess }: AddBankModalProps) => {
           }}
         />
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior="padding"
           pointerEvents="box-none"
-          style={[
-            { width: '100%', alignItems: 'center', justifyContent: 'flex-end' },
-            Platform.OS === 'android' && isKeyboardVisible && { paddingBottom: keyboardHeight },
-          ]}
+          style={{ width: '100%', alignItems: 'center', justifyContent: 'flex-end' }}
         >
           <View
             style={[
@@ -2529,8 +2538,25 @@ const ChatScreen = () => {
   }, [user?.name]);
 
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const flatListRef = React.useRef<FlatList>(null);
   const inputRef = React.useRef<TextInput>(null);
+
+  const handleCopyMessage = async (text: string, index: number) => {
+    try {
+      if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.clipboard) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        await Clipboard.setStringAsync(text);
+      }
+      setCopiedIndex(index);
+      setTimeout(() => {
+        setCopiedIndex((prev) => (prev === index ? null : prev));
+      }, 2000);
+    } catch (err) {
+      console.warn('Failed to copy message:', err);
+    }
+  };
 
   useKeyboardHandler(
     {
@@ -2978,13 +3004,17 @@ const ChatScreen = () => {
             keyboardShouldPersistTaps="handled"
             onScrollBeginDrag={Keyboard.dismiss}
             onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
-            renderItem={({ item }) => {
+            renderItem={({ item, index }) => {
               const isUser = item.role === 'user';
               return (
-                <View style={{ flexDirection: 'row', justifyContent: isUser ? 'flex-end' : 'flex-start', marginBottom: 12 }}>
+                <View style={{ flexDirection: 'row', justifyContent: isUser ? 'flex-end' : 'flex-start', marginBottom: 14 }}>
                   {!isUser && (
                     <View style={styles.chatAvatarBadge}>
-                      <Ionicons name="sparkles" size={13} color={colors.accent} />
+                      <Image
+                        source={require('../../assets/tree.png')}
+                        style={styles.chatAvatarImg}
+                        resizeMode="contain"
+                      />
                     </View>
                   )}
                   <View
@@ -2993,15 +3023,53 @@ const ChatScreen = () => {
                       isUser ? styles.userBubble : styles.botBubble,
                     ]}
                   >
-                    <Text
-                      style={[
-                        styles.chatText,
-                        isUser ? styles.userChatText : styles.botChatText,
-                      ]}
-                      selectable
-                    >
-                      {item.content}
-                    </Text>
+                    <FormattedChatMessage
+                      content={item.content}
+                      isUser={isUser}
+                      colors={colors}
+                      isDark={isDark}
+                    />
+
+                    {/* Copy message button with feedback icon */}
+                    <View style={[styles.copyRow, isUser ? styles.copyRowUser : styles.copyRowBot]}>
+                      <TouchableOpacity
+                        onPress={() => handleCopyMessage(item.content, index)}
+                        style={[
+                          styles.copyBtn,
+                          isUser ? styles.copyBtnUser : styles.copyBtnBot,
+                          copiedIndex === index && styles.copyBtnSuccess,
+                        ]}
+                        activeOpacity={0.7}
+                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                      >
+                        <Ionicons
+                          name={copiedIndex === index ? 'checkmark-circle' : 'copy-outline'}
+                          size={12}
+                          color={
+                            copiedIndex === index
+                              ? '#10B981'
+                              : isUser
+                              ? (colors.isDark ? '#6ee7b7' : '#047857')
+                              : colors.textSecondary
+                          }
+                        />
+                        <Text
+                          style={[
+                            styles.copyBtnText,
+                            {
+                              color:
+                                copiedIndex === index
+                                  ? '#10B981'
+                                  : isUser
+                                  ? (colors.isDark ? '#6ee7b7' : '#047857')
+                                  : colors.textSecondary,
+                            },
+                          ]}
+                        >
+                          {copiedIndex === index ? 'Copied' : 'Copy'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
                   </View>
                 </View>
               );
@@ -4849,10 +4917,10 @@ const getStyles = (colors: any) => StyleSheet.create({
     marginBottom: 24,
   },
   welcomeAvatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: colors.isDark ? '#1e293b' : '#ffffff',
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: 'transparent',
     borderWidth: 1.2,
     borderColor: colors.isDark ? 'rgba(45, 186, 78, 0.35)' : 'rgba(45, 186, 78, 0.25)',
     justifyContent: 'center',
@@ -4866,8 +4934,8 @@ const getStyles = (colors: any) => StyleSheet.create({
     elevation: 3,
   },
   welcomeAvatarImage: {
-    width: 44,
-    height: 44,
+    width: 48,
+    height: 48,
     transform: [{ scale: 1.25 }],
   },
   execGreetingTitle: {
@@ -5058,22 +5126,60 @@ const getStyles = (colors: any) => StyleSheet.create({
     paddingBottom: 20,
   },
   chatAvatarBadge: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.accent,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'transparent',
+    borderWidth: 1.2,
+    borderColor: colors.isDark ? 'rgba(16, 185, 129, 0.45)' : 'rgba(16, 185, 129, 0.35)',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 8,
     marginTop: 4,
+    overflow: 'hidden',
+  },
+  chatAvatarImg: {
+    width: 28,
+    height: 28,
+    transform: [{ scale: 1.15 }],
   },
   chatBubble: {
     borderRadius: 16,
     paddingHorizontal: 14,
     paddingVertical: 10,
-    maxWidth: '82%',
+    maxWidth: '86%',
+  },
+  copyRow: {
+    flexDirection: 'row',
+    marginTop: 6,
+    paddingTop: 2,
+  },
+  copyRowUser: {
+    justifyContent: 'flex-end',
+  },
+  copyRowBot: {
+    justifyContent: 'flex-start',
+  },
+  copyBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  copyBtnUser: {
+    backgroundColor: colors.isDark ? 'rgba(0, 0, 0, 0.25)' : 'rgba(16, 185, 129, 0.15)',
+  },
+  copyBtnBot: {
+    backgroundColor: colors.isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)',
+  },
+  copyBtnSuccess: {
+    backgroundColor: colors.isDark ? 'rgba(16, 185, 129, 0.2)' : 'rgba(16, 185, 129, 0.15)',
+  },
+  copyBtnText: {
+    fontSize: 11,
+    fontWeight: '600',
+    marginLeft: 4,
   },
   userBubble: {
     backgroundColor: colors.isDark ? '#1b3b27' : '#dcfce7',

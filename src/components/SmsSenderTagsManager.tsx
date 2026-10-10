@@ -9,7 +9,7 @@ import {
   Platform,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
-import { getSmsSenderSuggestions } from '../constants/bankSmsSenders';
+import { getSmsSenderSuggestions, syncBankSenderIdsToNative } from '../constants/bankSmsSenders';
 
 interface SmsSenderTagsManagerProps {
   tags: string[];
@@ -57,12 +57,16 @@ export const SmsSenderTagsManager: React.FC<SmsSenderTagsManagerProps> = ({
     }
 
     setErrorText('');
-    onChangeTags([...tags, clean]);
+    const updated = [...tags, clean];
+    onChangeTags(updated);
+    syncBankSenderIdsToNative(updated);
     setInputVal('');
   };
 
   const handleRemoveTag = (tagToRemove: string) => {
-    onChangeTags(tags.filter(t => t.toUpperCase() !== tagToRemove.toUpperCase()));
+    const updated = tags.filter(t => t.toUpperCase() !== tagToRemove.toUpperCase());
+    onChangeTags(updated);
+    syncBankSenderIdsToNative(updated);
   };
 
   const handleAddAllSuggestions = () => {
@@ -75,6 +79,7 @@ export const SmsSenderTagsManager: React.FC<SmsSenderTagsManagerProps> = ({
       }
     }
     onChangeTags(newTags);
+    syncBankSenderIdsToNative(newTags);
   };
 
   return (

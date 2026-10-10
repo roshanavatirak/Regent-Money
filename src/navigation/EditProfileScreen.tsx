@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   TextInput,
   ActivityIndicator,
-  KeyboardAvoidingView,
   Platform,
   Alert,
 } from 'react-native';
@@ -17,7 +16,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useTheme, useAuthStore } from '../store';
 import { authService } from '../services/authService';
 import { DobDatePickerModal, calculateAge } from '../components/DobDatePickerModal';
-import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
+import { KeyboardScreen } from '../components/KeyboardScreen';
 
 export const EditProfileScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
@@ -33,7 +32,6 @@ export const EditProfileScreen: React.FC = () => {
   const [income, setIncome] = useState(user?.currentIncome ? String(user.currentIncome) : '75000');
   const [sourcesCount, setSourcesCount] = useState(user?.incomeSourcesCount || 1);
   const [loading, setLoading] = useState(false);
-  const { scrollBottomPadding } = useKeyboardHeight(40);
 
 
   const handleSave = async () => {
@@ -94,17 +92,12 @@ export const EditProfileScreen: React.FC = () => {
         </View>
       </View>
 
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={{ flex: 1 }}
+      <KeyboardScreen
+        showsVerticalScrollIndicator={false}
+        keyboardDismissMode="on-drag"
+        contentContainerStyle={styles.scrollContent}
       >
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag"
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPadding }]}
-        >
-          {/* Full Name */}
+        {/* Full Name */}
           <Text style={styles.formFieldLabel}>FULL NAME</Text>
           <TextInput
             style={styles.formInput}
@@ -219,8 +212,7 @@ export const EditProfileScreen: React.FC = () => {
               </View>
             )}
           </TouchableOpacity>
-        </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardScreen>
 
       {/* Dynamic 18+ Date Picker Modal */}
       <DobDatePickerModal

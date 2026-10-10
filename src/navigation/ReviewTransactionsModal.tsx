@@ -9,10 +9,10 @@ import {
   ActivityIndicator,
   Alert,
   StyleSheet,
-  KeyboardAvoidingView,
   Platform,
   useWindowDimensions,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../store';
@@ -313,10 +313,10 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
   if (!visible) return null;
 
   return (
-    <Modal visible={visible} animationType="slide" transparent statusBarTranslucent onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" transparent statusBarTranslucent navigationBarTranslucent onRequestClose={onClose}>
       <View style={styles.modalOverlay}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior="padding"
           style={styles.keyboardAvoidingWrap}
         >
           <View style={[styles.modalContainer, { height: windowHeight * 0.92, paddingBottom: Math.max(insets.bottom, 16) }]}>

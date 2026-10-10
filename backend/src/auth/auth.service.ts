@@ -226,14 +226,18 @@ export class AuthService implements OnModuleInit {
       throw new UnauthorizedException('Google ID token is required');
     }
 
-    const clientId = this.configService?.get<string>('GOOGLE_CLIENT_ID') || process.env.GOOGLE_CLIENT_ID;
+    const configuredClientId = this.configService?.get<string>('GOOGLE_CLIENT_ID') || process.env.GOOGLE_CLIENT_ID;
+    const allowedAudiences = [
+      configuredClientId,
+      '55231273460-epfomp35a43c6d15bhilb92i6btl6jt9.apps.googleusercontent.com',
+    ].filter(Boolean) as string[];
 
     // 1. Cryptographically verify the Google idToken
     let payload;
     try {
       const ticket = await this.getGoogleClient().verifyIdToken({
         idToken,
-        audience: clientId,
+        audience: allowedAudiences,
       });
       payload = ticket.getPayload();
     } catch (error: any) {
@@ -303,67 +307,6 @@ export class AuthService implements OnModuleInit {
       accessToken,
       user: userProfile,
       profile: userProfile,
-    };
-  }
-
-  async googleAuth(dto: { email: string; name: string; avatarUrl?: string }) {
-    const email = dto.email.trim().toLowerCase();
-
-    // Check if user already exists
-    let user = await this.userRepository.findOne({
-      where: { email, isDeleted: false },
-    });
-
-    const now = Date.now();
-
-    if (!user) {
-      // Register a new user via Google (automatically verified)
-      const userId = crypto.randomUUID();
-      user = this.userRepository.create({
-        id: userId,
-        userId: userId,
-        email,
-        phone: '',
-        name: dto.name,
-        authProvider: 'google',
-        avatarUrl: dto.avatarUrl || '',
-        createdAt: now,
-        updatedAt: now,
-        isDeleted: false,
-        isVerified: true, // Google accounts are auto-verified
-        verificationToken: null,
-      });
-      user = await this.userRepository.save(user) as User;
-    } else {
-      // Update details if necessary
-      user.name = dto.name;
-      if (dto.avatarUrl) {
-        user.avatarUrl = dto.avatarUrl;
-      }
-      user.updatedAt = now;
-      user = await this.userRepository.save(user) as User;
-    }
-
-    const tokenPayload = { sub: user.id, email: user.email };
-    const accessToken = this.jwtService.sign(tokenPayload);
-
-    const profile = {
-      id: user.id,
-      email: user.email,
-      phone: user.phone,
-      name: user.name,
-      authProvider: 'google',
-      avatarUrl: user.avatarUrl,
-      createdAt: user.createdAt,
-      isVerified: user.isVerified,
-      termsAccepted: user.termsAccepted ?? false,
-      termsAcceptedAt: user.termsAcceptedAt ?? null,
-    };
-
-    return {
-      accessToken,
-      user: profile,
-      profile,
     };
   }
 

@@ -1,4 +1,4 @@
-import { PermissionsAndroid, Platform, Linking, Alert } from 'react-native';
+import { PermissionsAndroid, Platform } from 'react-native';
 import * as IntentLauncher from 'expo-intent-launcher';
 import { mmkvStorage } from '../db/mmkv';
 
@@ -68,23 +68,16 @@ export const smsPermissionService = {
   },
 
   /**
-   * Request Battery Optimization exemption so the OS does not kill or delay SMS background tasks
+   * Opens Battery Optimization Settings so user can optionally allow background execution without restricted permissions
    */
   async requestBatteryOptimizationExemption(): Promise<void> {
     if (Platform.OS !== 'android') return;
     try {
       await IntentLauncher.startActivityAsync(
-        IntentLauncher.ActivityAction.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-        { data: 'package:com.anonymous.regentmoney' }
+        IntentLauncher.ActivityAction.IGNORE_BATTERY_OPTIMIZATION_SETTINGS
       );
     } catch (e) {
-      try {
-        await IntentLauncher.startActivityAsync(
-          IntentLauncher.ActivityAction.IGNORE_BATTERY_OPTIMIZATION_SETTINGS
-        );
-      } catch (err) {
-        // Fallback silently if manufacturer disables direct action
-      }
+      // Fallback silently if manufacturer disables direct action
     }
   },
 };

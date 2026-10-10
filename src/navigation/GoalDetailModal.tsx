@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   TextInput,
   ScrollView,
-  KeyboardAvoidingView,
   Platform,
   useWindowDimensions,
   Image,
@@ -16,6 +15,7 @@ import {
   BackHandler,
   Alert,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme, Goal, SavingsEntry, useBankStore, useGoalsStore, showGlobalConfirm, showGlobalAlert } from '../store';
@@ -39,7 +39,6 @@ import {
 } from '../features/goals/services/goalNudgeTemplates';
 import { GoalImagePickerModal } from '../features/goals/components/GoalImagePickerModal';
 import { getCoverImageUri } from '../features/goals/services/goalIllustrationMap';
-import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
 import { BankIcon } from '../components/BankIcon';
 
 const formatEntryDate = (dateVal: string | number | undefined) => {
@@ -81,7 +80,6 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
 }) => {
   const { colors, isDark } = useTheme();
   const { height: windowHeight } = useWindowDimensions();
-  const { keyboardHeight, isKeyboardVisible } = useKeyboardHeight();
 
   // Action Modal state (Add Savings / Withdraw)
   const [actionModalType, setActionModalType] = useState<'deposit' | 'withdraw' | null>(null);
@@ -587,6 +585,7 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
         animationType="slide"
         transparent
         statusBarTranslucent
+        navigationBarTranslucent
         onRequestClose={() => {
           if (showEditGoalModal) {
             setShowEditGoalModal(false);
@@ -605,11 +604,8 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
       <View style={styles.modalOverlay}>
         <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={[
-            styles.keyboardAvoidingWrap,
-            Platform.OS === 'android' && isKeyboardVisible && { paddingBottom: keyboardHeight },
-          ]}
+          behavior="padding"
+          style={styles.keyboardAvoidingWrap}
         >
           <View
             style={[
@@ -617,9 +613,7 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
               {
                 backgroundColor: bgModal,
                 borderColor,
-                maxHeight: isKeyboardVisible
-                  ? Math.max(300, windowHeight - keyboardHeight - (Platform.OS === 'android' ? 36 : 20))
-                  : windowHeight * 0.94,
+                maxHeight: windowHeight * 0.94,
               },
             ]}
           >
@@ -1117,11 +1111,8 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
               }}
             />
             <KeyboardAvoidingView
-              behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-              style={[
-                styles.keyboardAvoidingWrap,
-                Platform.OS === 'android' && isKeyboardVisible && { paddingBottom: Math.max(0, keyboardHeight - 12) },
-              ]}
+              behavior="padding"
+              style={styles.keyboardAvoidingWrap}
             >
               <View
                 style={[
@@ -1129,7 +1120,7 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
                   {
                     backgroundColor: bgModal,
                     borderColor,
-                    maxHeight: isKeyboardVisible ? windowHeight * 0.58 : windowHeight * 0.85,
+                    maxHeight: windowHeight * 0.85,
                   },
                 ]}
               >
@@ -1487,15 +1478,12 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
     </Modal>
 
     {/* Sub-modal: Deploy Capital */}
-    <Modal visible={showDeployModal} animationType="slide" transparent statusBarTranslucent onRequestClose={() => setShowDeployModal(false)}>
+    <Modal visible={showDeployModal} animationType="slide" transparent statusBarTranslucent navigationBarTranslucent onRequestClose={() => setShowDeployModal(false)}>
       <View style={styles.modalOverlay}>
         <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setShowDeployModal(false)} />
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={[
-            styles.keyboardAvoidingWrap,
-            Platform.OS === 'android' && isKeyboardVisible && { paddingBottom: keyboardHeight },
-          ]}
+          behavior="padding"
+          style={styles.keyboardAvoidingWrap}
         >
           <View
             style={[
@@ -1503,9 +1491,7 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
               {
                 backgroundColor: bgModal,
                 borderColor,
-                maxHeight: isKeyboardVisible
-                  ? Math.max(280, windowHeight - keyboardHeight - (Platform.OS === 'android' ? 36 : 20))
-                  : windowHeight * 0.88,
+                maxHeight: windowHeight * 0.88,
                 paddingBottom: 24,
               },
             ]}
@@ -1600,6 +1586,7 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
       animationType="slide"
       transparent
       statusBarTranslucent
+      navigationBarTranslucent
       onRequestClose={() => setShowBankPickerModal(false)}
     >
       <View style={styles.modalOverlay}>
@@ -1726,6 +1713,8 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
       visible={showOptionsMenu}
       transparent
       animationType="fade"
+      statusBarTranslucent
+      navigationBarTranslucent
       onRequestClose={() => setShowOptionsMenu(false)}
     >
       <TouchableOpacity
@@ -1818,11 +1807,13 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({
       visible={showEditGoalModal}
       transparent
       animationType="slide"
+      statusBarTranslucent
+      navigationBarTranslucent
       onRequestClose={() => setShowEditGoalModal(false)}
     >
       <View style={styles.modalOverlay}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior="padding"
           style={styles.keyboardAvoidingWrap}
         >
           <View

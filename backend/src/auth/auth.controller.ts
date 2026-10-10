@@ -1,4 +1,5 @@
 import { Controller, Post, Get, Patch, Body, Query, Res, Req, HttpCode, HttpStatus, UseGuards, BadRequestException } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
@@ -12,48 +13,50 @@ export class AuthController {
     private readonly turnstileService: TurnstileService,
   ) { }
 
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('signup')
   @HttpCode(HttpStatus.CREATED)
   async signUp(
     @Req() req: any,
     @Body() body: { name: string; email: string; phone: string; password?: string; turnstileToken?: string },
   ) {
+    const isWeb = Boolean(req.headers?.origin || req.headers?.referer);
     if (body.turnstileToken) {
       await this.turnstileService.verifyToken(body.turnstileToken, req?.ip);
+    } else if (isWeb && process.env.CLOUDFLARE_TURNSTILE_SECRET_KEY) {
+      throw new BadRequestException('Security verification token is required for web signup.');
     }
     return this.authService.signUp(body);
   }
 
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('login')
   @HttpCode(HttpStatus.OK)
   async login(
     @Req() req: any,
     @Body() body: { emailOrMobile: string; password?: string; turnstileToken?: string },
   ) {
+    const isWeb = Boolean(req.headers?.origin || req.headers?.referer);
     if (body.turnstileToken) {
       await this.turnstileService.verifyToken(body.turnstileToken, req?.ip);
+    } else if (isWeb && process.env.CLOUDFLARE_TURNSTILE_SECRET_KEY) {
+      throw new BadRequestException('Security verification token is required for web login.');
     }
     return this.authService.login(body);
   }
 
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('google')
   @HttpCode(HttpStatus.OK)
   async googleAuth(
     @Body('idToken') idToken?: string,
-    @Body() body?: { idToken?: string; email?: string; name?: string; avatarUrl?: string },
+    @Body() body?: { idToken?: string },
   ) {
     const token = idToken || body?.idToken;
-    if (token) {
-      return this.authService.googleAuthWithToken(token);
+    if (!token) {
+      throw new BadRequestException('Google ID token is required');
     }
-    if (body?.email) {
-      return this.authService.googleAuth({
-        email: body.email,
-        name: body.name || 'Google User',
-        avatarUrl: body.avatarUrl,
-      });
-    }
-    throw new BadRequestException('Google ID token is required');
+    return this.authService.googleAuthWithToken(token);
   }
 
   @UseGuards(JwtAuthGuard)

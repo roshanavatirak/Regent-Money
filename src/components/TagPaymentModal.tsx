@@ -9,8 +9,8 @@ import {
   StyleSheet,
   Dimensions,
   Platform,
-  KeyboardAvoidingView,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import {
   PAYTM_TRANSACTION_TAGS,
@@ -160,10 +160,11 @@ export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
       transparent
       animationType="slide"
       statusBarTranslucent
+      navigationBarTranslucent
       onRequestClose={onClose}
     >
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior="padding"
         style={styles.overlay}
       >
         <TouchableOpacity

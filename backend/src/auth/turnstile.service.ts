@@ -26,9 +26,6 @@ export class TurnstileService {
       throw new BadRequestException('Cloudflare security verification token is required.');
     }
 
-    if (token === 'native_mobile_verified') {
-      return true;
-    }
 
     try {
       const formData = new URLSearchParams();

@@ -12,12 +12,12 @@ import {
   FlatList,
   SectionList,
   Switch,
-  KeyboardAvoidingView,
   Platform,
   PermissionsAndroid,
   Linking,
   NativeModules
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { BankIcon } from '../components/BankIcon';
 import * as ImagePicker from 'expo-image-picker';
@@ -572,14 +572,6 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
   // Image Upload / Ingestion using Backend AI Vision
   const handleUploadScreenshot = async () => {
     try {
-      if (Platform.OS !== 'web') {
-        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (status !== 'granted') {
-          Alert.alert('Permission Denied', 'Camera roll access is needed to upload screenshots.');
-          return;
-        }
-      }
-
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         allowsEditing: false,
@@ -969,6 +961,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
         transparent
         animationType="fade"
         statusBarTranslucent
+        navigationBarTranslucent
         onRequestClose={() => {
           setPasswordModalVisible(false);
           setPendingPdf(null);
@@ -978,7 +971,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
       >
         <View style={styles.pwdOverlay}>
           <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            behavior="padding"
             style={{ width: '100%', alignItems: 'center' }}
           >
             <View style={styles.pwdCard}>

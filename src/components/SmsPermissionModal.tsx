@@ -7,6 +7,8 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Platform,
+  Alert,
+  Linking,
 } from 'react-native';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../store';
@@ -34,13 +36,33 @@ export const SmsPermissionModal: React.FC<SmsPermissionModalProps> = ({
     try {
       const granted = await smsPermissionService.requestSmsPermissions();
       if (granted) {
-        // Attempt battery optimization exemption for killed-state real-time reliability
-        await smsPermissionService.requestBatteryOptimizationExemption();
-        // Catch up on any recent bank transactions
-        smsCatchupService.reconcile().catch(() => {});
-        if (onGranted) {
-          onGranted();
-        }
+        setLoading(false);
+        // Explain background sync before navigating to system battery settings
+        Alert.alert(
+          'Background Tracking',
+          'For instant tracking when the app is closed, allow Regent Money to run in the background in system settings.',
+          [
+            {
+              text: 'Continue',
+              onPress: async () => {
+                await smsPermissionService.requestBatteryOptimizationExemption();
+                smsCatchupService.reconcile().catch(() => {});
+                if (onGranted) onGranted();
+                onDismiss();
+              },
+            },
+            {
+              text: 'Skip',
+              style: 'cancel',
+              onPress: () => {
+                smsCatchupService.reconcile().catch(() => {});
+                if (onGranted) onGranted();
+                onDismiss();
+              },
+            },
+          ]
+        );
+        return;
       }
     } catch (e) {
       console.warn('[SmsPermissionModal] Failed to grant SMS permissions:', e);
@@ -55,6 +77,10 @@ export const SmsPermissionModal: React.FC<SmsPermissionModalProps> = ({
     onDismiss();
   };
 
+  const openPrivacyPolicy = () => {
+    Linking.openURL('https://regentmoney.com/privacy').catch(() => {});
+  };
+
   const styles = getStyles(colors, isDark);
 
   return (
@@ -67,22 +93,19 @@ export const SmsPermissionModal: React.FC<SmsPermissionModalProps> = ({
     >
       <View style={styles.backdrop}>
         <View style={styles.container}>
-          {/* Top Emerald Message Icon with Glow */}
+          {/* Top Message Icon */}
           <View style={styles.iconCircle}>
-            <MaterialCommunityIcons name="message-processing" size={32} color="#2dba4e" />
-            <View style={styles.iconBadge}>
-              <Feather name="zap" size={10} color="#0B0E14" />
-            </View>
+            <MaterialCommunityIcons name="message-text-lock" size={30} color="#2dba4e" />
           </View>
 
           {/* Kicker & Title */}
-          <Text style={styles.kicker}>AUTOMATIC EXPENSE TRACKING</Text>
-          <Text style={styles.title}>Real-Time Bank SMS Sync</Text>
+          <Text style={styles.kicker}>PROMINENT DISCLOSURE</Text>
+          <Text style={styles.title}>Automatic expense tracking from bank SMS</Text>
           <Text style={styles.subtitle}>
-            Track expenses the millisecond you spend, even when the app is completely closed.
+            Regent Money reads SMS messages from your banks to record transactions automatically, including recent messages already in your inbox.
           </Text>
 
-          {/* Highlights List */}
+          {/* Disclosure Points */}
           <View style={styles.featuresList}>
             <View style={styles.featureItem}>
               <View
@@ -91,12 +114,12 @@ export const SmsPermissionModal: React.FC<SmsPermissionModalProps> = ({
                   { backgroundColor: isDark ? 'rgba(45, 186, 78, 0.15)' : '#e8f5e9' },
                 ]}
               >
-                <Feather name="zap" size={18} color="#2dba4e" />
+                <Feather name="shield" size={17} color="#2dba4e" />
               </View>
               <View style={styles.featureTextWrap}>
-                <Text style={styles.featureTitle}>Instant Capture When Closed</Text>
+                <Text style={styles.featureTitle}>Only bank transaction messages</Text>
                 <Text style={styles.featureDesc}>
-                  Under 50ms native parsing. You never need to keep the app running.
+                  Messages from banks you use are checked on your phone. OTPs, personal messages and messages from anyone else are never read or sent.
                 </Text>
               </View>
             </View>
@@ -108,12 +131,12 @@ export const SmsPermissionModal: React.FC<SmsPermissionModalProps> = ({
                   { backgroundColor: isDark ? 'rgba(56, 189, 248, 0.15)' : '#e0f2fe' },
                 ]}
               >
-                <Feather name="shield" size={18} color="#38bdf8" />
+                <Feather name="lock" size={17} color="#38bdf8" />
               </View>
               <View style={styles.featureTextWrap}>
-                <Text style={styles.featureTitle}>100% Private & Filtered</Text>
+                <Text style={styles.featureTitle}>How it's used</Text>
                 <Text style={styles.featureDesc}>
-                  Only bank credit/debit texts are read. Personal chats and OTPs are ignored.
+                  Bank transaction messages are sent securely to Regent Money's servers to extract the amount, merchant and account. The message text is not stored; only the resulting transaction is saved to your account.
                 </Text>
               </View>
             </View>
@@ -125,16 +148,26 @@ export const SmsPermissionModal: React.FC<SmsPermissionModalProps> = ({
                   { backgroundColor: isDark ? 'rgba(245, 158, 11, 0.15)' : '#fffbeb' },
                 ]}
               >
-                <MaterialCommunityIcons name="battery-charging" size={18} color="#f59e0b" />
+                <Feather name="sliders" size={17} color="#f59e0b" />
               </View>
               <View style={styles.featureTextWrap}>
-                <Text style={styles.featureTitle}>Zero Battery Drain</Text>
+                <Text style={styles.featureTitle}>You're in control</Text>
                 <Text style={styles.featureDesc}>
-                  Lightweight Android broadcast listener wakes up only when an SMS arrives.
+                  You can turn this off anytime in Settings, or add transactions manually instead.
                 </Text>
               </View>
             </View>
           </View>
+
+          {/* Privacy Policy Link */}
+          <TouchableOpacity
+            onPress={openPrivacyPolicy}
+            style={styles.privacyLinkRow}
+            activeOpacity={0.7}
+          >
+            <Feather name="external-link" size={12} color="#2dba4e" style={{ marginRight: 4 }} />
+            <Text style={styles.privacyLinkText}>Read our Privacy Policy</Text>
+          </TouchableOpacity>
 
           {/* Action Buttons */}
           <TouchableOpacity
@@ -147,8 +180,8 @@ export const SmsPermissionModal: React.FC<SmsPermissionModalProps> = ({
               <ActivityIndicator size="small" color="#0B0E14" />
             ) : (
               <View style={styles.btnContentRow}>
-                <Feather name="check-circle" size={17} color="#0B0E14" style={{ marginRight: 8 }} />
-                <Text style={styles.primaryButtonText}>Enable Real-Time Tracking</Text>
+                <Feather name="check" size={17} color="#0B0E14" style={{ marginRight: 8 }} />
+                <Text style={styles.primaryButtonText}>Allow SMS access</Text>
               </View>
             )}
           </TouchableOpacity>
@@ -159,7 +192,7 @@ export const SmsPermissionModal: React.FC<SmsPermissionModalProps> = ({
             disabled={loading}
             activeOpacity={0.7}
           >
-            <Text style={styles.secondaryButtonText}>Maybe Later</Text>
+            <Text style={styles.secondaryButtonText}>Not now</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -300,6 +333,19 @@ const getStyles = (colors: any, isDark: boolean) =>
       fontWeight: '800',
       color: '#0B0E14',
       letterSpacing: 0.3,
+    },
+    privacyLinkRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: 6,
+      marginBottom: 14,
+    },
+    privacyLinkText: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: '#2dba4e',
+      textDecorationLine: 'underline',
     },
     secondaryButton: {
       width: '100%',

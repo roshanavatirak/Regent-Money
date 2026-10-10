@@ -9,16 +9,16 @@ import {
   ScrollView,
   ActivityIndicator,
   Platform,
-  KeyboardAvoidingView,
   Keyboard,
   Modal,
   Dimensions,
   Image
 } from 'react-native';
+import { KeyboardScreen } from '../components/KeyboardScreen';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { authService, LastGoogleUser } from '../services/authService';
-import { getGoogleWebClientId } from '../services/supabaseClient';
+import { getGoogleWebClientId } from '../config/auth';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { useTheme, showGlobalAlert } from '../store';
 import { StatusBar } from 'expo-status-bar';
@@ -26,156 +26,20 @@ import { CloudflareTurnstile } from '../components/CloudflareTurnstile';
 
 const { width } = Dimensions.get('window');
 
+
 // ----------------------------------------------------
-// Mock Google Accounts Chooser Overlay
-// ----------------------------------------------------
-interface GoogleAccount {
-  name: string;
-  email: string;
-  avatarUrl: string;
-}
-
-const MOCK_GOOGLE_ACCOUNTS: GoogleAccount[] = [
-  { name: 'Alex Rivera', email: 'alex.rivera@gmail.com', avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80' },
-  { name: 'Priya Sharma', email: 'priya.sharma@gmail.com', avatarUrl: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=150&q=80' },
-  { name: 'Marcus Chen', email: 'marcus.chen@gmail.com', avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&q=80' }
-];
-
-interface GoogleModalProps {
-  visible: boolean;
-  onClose: () => void;
-  onSelectAccount: (account: GoogleAccount) => void;
-}
-
-const GoogleAccountModal = ({ visible, onClose, onSelectAccount }: GoogleModalProps) => {
-  const { colors } = useTheme();
-  const styles = getStyles(colors);
-  const [customName, setCustomName] = useState('');
-  const [customEmail, setCustomEmail] = useState('');
-  const [customMode, setCustomMode] = useState(false);
-  const [error, setError] = useState('');
-
-  const handleCustomSubmit = () => {
-    if (!customName.trim() || !customEmail.trim()) {
-      setError('Please fill in both Name and Email');
-      return;
-    }
-    if (!customEmail.includes('@') || !customEmail.includes('.')) {
-      setError('Please enter a valid Google Email address');
-      return;
-    }
-
-    setError('');
-    onSelectAccount({
-      name: customName.trim(),
-      email: customEmail.trim().toLowerCase(),
-      avatarUrl: `https://ui-avatars.com/api/?name=${encodeURIComponent(customName)}&background=2dba4e&color=24292e&bold=true`
-    });
-    // Reset state
-    setCustomName('');
-    setCustomEmail('');
-    setCustomMode(false);
-  };
-
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalCard}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Sign in with Google</Text>
-            <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-              <Feather name="x" size={20} color="#8E8E9F" />
-            </TouchableOpacity>
-          </View>
-
-          {error ? <Text style={styles.errorText}>{error}</Text> : null}
-
-          {!customMode ? (
-            <View>
-              <Text style={styles.modalSubtitle}>Choose an account to continue to Regent Money</Text>
-
-              {MOCK_GOOGLE_ACCOUNTS.map((acc, index) => (
-                <TouchableOpacity
-                  key={index}
-                  style={styles.googleAccountItem}
-                  onPress={() => onSelectAccount(acc)}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.googleAvatar}>
-                    <Text style={styles.avatarText}>{acc.name.charAt(0)}</Text>
-                  </View>
-                  <View style={styles.googleMeta}>
-                    <Text style={styles.googleName}>{acc.name}</Text>
-                    <Text style={styles.googleEmail}>{acc.email}</Text>
-                  </View>
-                  <Feather name="chevron-right" size={16} color="#8E8E9F" />
-                </TouchableOpacity>
-              ))}
-
-              <TouchableOpacity
-                style={styles.customGoogleBtn}
-                onPress={() => setCustomMode(true)}
-                activeOpacity={0.7}
-              >
-                <Feather name="plus-circle" size={18} color="#03DAC6" style={{ marginRight: 8 }} />
-                <Text style={styles.customGoogleBtnText}>Use another Google Account</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            <View>
-              <Text style={styles.modalSubtitle}>Enter details to simulate custom Google OAuth</Text>
-
-              <Text style={styles.inputLabel}>Full Name</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Google Account Name (e.g. John Doe)"
-                placeholderTextColor="#666"
-                value={customName}
-                onChangeText={setCustomName}
-              />
-
-              <Text style={styles.inputLabel}>Google Email</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Google Email (e.g. john.doe@gmail.com)"
-                placeholderTextColor="#666"
-                keyboardType="email-address"
-                autoCapitalize="none"
-                value={customEmail}
-                onChangeText={setCustomEmail}
-              />
-
-              <View style={styles.buttonRow}>
-                <TouchableOpacity style={styles.cancelBtn} onPress={() => setCustomMode(false)}>
-                  <Text style={styles.cancelBtnText}>Back</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.submitGoogleBtn} onPress={handleCustomSubmit}>
-                  <Text style={styles.submitGoogleBtnText}>Authorize</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          )}
-        </View>
-      </View>
-    </Modal>
-  );
-};
-
-// // ----------------------------------------------------
 // Google Auth Button with LinkedIn-Style "Last Used" Card
 // ----------------------------------------------------
 interface GoogleAuthButtonProps {
   styles: any;
   loading: boolean;
   setLoading: (val: boolean) => void;
-  onOpenMockModal: () => void;
 }
 
 const GoogleAuthButton: React.FC<GoogleAuthButtonProps> = ({
   styles,
   loading,
   setLoading,
-  onOpenMockModal,
 }) => {
   const [lastGoogleUser, setLastGoogleUser] = useState<LastGoogleUser | null>(() => authService.getLastGoogleUser());
 
@@ -202,19 +66,10 @@ const GoogleAuthButton: React.FC<GoogleAuthButtonProps> = ({
         setLoading(false);
       }
     } else {
-      // Instant 1-tap login directly with the saved Last Used Google account
-      setLoading(true);
-      try {
-        await authService.signUpOrLogInGoogle(
-          lastGoogleUser.name || lastGoogleUser.email.split('@')[0],
-          lastGoogleUser.email,
-          lastGoogleUser.photo
-        );
-      } catch (e: any) {
-        showGlobalAlert('Google Sign-In Failed', e.message);
-      } finally {
-        setLoading(false);
-      }
+      showGlobalAlert(
+        'Mobile Feature',
+        'Google Sign-In is only supported on the mobile app. Please sign in using your Email & Password.'
+      );
     }
   };
 
@@ -235,8 +90,10 @@ const GoogleAuthButton: React.FC<GoogleAuthButtonProps> = ({
         setLoading(false);
       }
     } else {
-      // Show modal to pick or enter a different Google account
-      onOpenMockModal();
+      showGlobalAlert(
+        'Mobile Feature',
+        'Google Sign-In is only supported on the mobile app. Please sign in using your Email & Password.'
+      );
     }
   };
 
@@ -266,10 +123,10 @@ const GoogleAuthButton: React.FC<GoogleAuthButtonProps> = ({
         setLoading(false);
       }
     } else {
-      if (Platform.OS !== 'web' && !webClientId) {
-        showGlobalAlert('Settings Required', 'Google Web Client ID is not configured in Settings.');
-      }
-      onOpenMockModal();
+      showGlobalAlert(
+        'Mobile Feature',
+        'Google Sign-In is only supported on the mobile app. Please sign in using your Email & Password.'
+      );
     }
   };
 
@@ -346,20 +203,7 @@ export const WelcomeScreen = ({ navigation }: { navigation: any }) => {
   const { colors } = useTheme();
   const styles = getStyles(colors);
   const insets = useSafeAreaInsets();
-  const [googleVisible, setGoogleVisible] = useState(false);
   const [loading, setLoading] = useState(false);
-
-  const handleGoogleSelect = async (account: GoogleAccount) => {
-    setGoogleVisible(false);
-    setLoading(true);
-    try {
-      await authService.signUpOrLogInGoogle(account.name, account.email, account.avatarUrl);
-    } catch (e: any) {
-      showGlobalAlert('Google Sign-In Failed', e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   return (
     <View style={[styles.container, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 24) }]}>
@@ -413,7 +257,6 @@ export const WelcomeScreen = ({ navigation }: { navigation: any }) => {
                 styles={styles}
                 loading={loading}
                 setLoading={setLoading}
-                onOpenMockModal={() => setGoogleVisible(true)}
               />
             </>
           )}
@@ -423,12 +266,6 @@ export const WelcomeScreen = ({ navigation }: { navigation: any }) => {
           </Text>
         </Animated.View>
       </View>
-
-      <GoogleAccountModal
-        visible={googleVisible}
-        onClose={() => setGoogleVisible(false)}
-        onSelectAccount={handleGoogleSelect}
-      />
     </View>
   );
 };
@@ -442,20 +279,7 @@ export const AuthLandingScreen = ({ navigation }: { navigation: any }) => {
   const { colors } = useTheme();
   const styles = getStyles(colors);
   const insets = useSafeAreaInsets();
-  const [googleVisible, setGoogleVisible] = useState(false);
   const [loading, setLoading] = useState(false);
-
-  const handleGoogleSelect = async (account: GoogleAccount) => {
-    setGoogleVisible(false);
-    setLoading(true);
-    try {
-      await authService.signUpOrLogInGoogle(account.name, account.email, account.avatarUrl);
-    } catch (e: any) {
-      showGlobalAlert('Google Sign-In Failed', e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   return (
     <View style={[styles.container, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 24) }]}>
@@ -508,7 +332,6 @@ export const AuthLandingScreen = ({ navigation }: { navigation: any }) => {
                 styles={styles}
                 loading={loading}
                 setLoading={setLoading}
-                onOpenMockModal={() => setGoogleVisible(true)}
               />
             </>
           )}
@@ -518,12 +341,6 @@ export const AuthLandingScreen = ({ navigation }: { navigation: any }) => {
           </Text>
         </Animated.View>
       </View>
-
-      <GoogleAccountModal
-        visible={googleVisible}
-        onClose={() => setGoogleVisible(false)}
-        onSelectAccount={handleGoogleSelect}
-      />
     </View>
   );
 };
@@ -543,22 +360,6 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [turnstileToken, setTurnstileToken] = useState('');
-  const [keyboardVisible, setKeyboardVisible] = useState(false);
-
-  useEffect(() => {
-    const showSub = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
-      () => setKeyboardVisible(true)
-    );
-    const hideSub = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
-      () => setKeyboardVisible(false)
-    );
-    return () => {
-      showSub.remove();
-      hideSub.remove();
-    };
-  }, []);
 
   const handleLogin = async () => {
     if (!emailOrMobile.trim() || !password) {
@@ -581,21 +382,15 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
   };
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={styles.container}
-    >
-      <ScrollView
-        ref={scrollViewRef}
+    <View style={styles.container}>
+      <KeyboardScreen
         contentContainerStyle={[
           styles.formScrollContent,
           {
             paddingTop: insets.top + 20,
-            paddingBottom: insets.bottom + (keyboardVisible ? 220 : 36)
           }
         ]}
         showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
       >
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
@@ -695,8 +490,8 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
             </TouchableOpacity>
           </View>
         </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+      </KeyboardScreen>
+    </View>
   );
 };
 
@@ -721,22 +516,6 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
   const [turnstileToken, setTurnstileToken] = useState('');
   const [showVerifyModal, setShowVerifyModal] = useState(false);
   const [registeredEmail, setRegisteredEmail] = useState('');
-  const [keyboardVisible, setKeyboardVisible] = useState(false);
-
-  useEffect(() => {
-    const showSub = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
-      () => setKeyboardVisible(true)
-    );
-    const hideSub = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
-      () => setKeyboardVisible(false)
-    );
-    return () => {
-      showSub.remove();
-      hideSub.remove();
-    };
-  }, []);
 
   const handleSignup = async () => {
     if (!name.trim() || !email.trim() || !phone.trim() || !password || !confirmPassword) {
@@ -780,21 +559,15 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
   };
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={styles.container}
-    >
-      <ScrollView
-        ref={scrollViewRef}
+    <View style={styles.container}>
+      <KeyboardScreen
         contentContainerStyle={[
           styles.formScrollContent,
           {
             paddingTop: insets.top + 20,
-            paddingBottom: insets.bottom + (keyboardVisible ? 240 : 36)
           }
         ]}
         showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
       >
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
@@ -928,13 +701,15 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
             </TouchableOpacity>
           </View>
         </View>
-      </ScrollView>
+      </KeyboardScreen>
 
       {/* Verify Email Modal Sheet */}
       <Modal
         visible={showVerifyModal}
         transparent
         animationType="fade"
+        statusBarTranslucent
+        navigationBarTranslucent
         onRequestClose={() => {
           setShowVerifyModal(false);
           navigation.navigate('Login');
@@ -990,7 +765,7 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
           </View>
         </View>
       </Modal>
-    </KeyboardAvoidingView>
+    </View>
   );
 };
 

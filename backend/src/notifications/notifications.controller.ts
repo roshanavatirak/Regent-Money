@@ -1,6 +1,7 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards, Req, Headers, UnauthorizedException } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards, Req, Headers, ForbiddenException } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { NotificationsService } from './notifications.service';
+import { timingSafeEqual } from 'crypto';
 
 @Controller('notifications')
 export class NotificationsController {
@@ -50,9 +51,10 @@ export class NotificationsController {
     return this.notificationsService.deleteNotification(userId, id);
   }
 
-  // Endpoint for internal backend agents or testing to trigger a notification
+  // Protected endpoint for internal backend agents or automated jobs
   @Post('send')
   async sendNotification(
+    @Headers('x-internal-key') internalKeyHeader: string,
     @Body() body: {
       userId: string;
       agentId?: string;
@@ -62,6 +64,16 @@ export class NotificationsController {
       payload?: any;
     },
   ) {
+    const expected = process.env.INTERNAL_API_KEY || process.env.BROADCAST_SECRET;
+    if (
+      !expected ||
+      typeof internalKeyHeader !== 'string' ||
+      internalKeyHeader.length !== expected.length ||
+      !timingSafeEqual(Buffer.from(internalKeyHeader), Buffer.from(expected))
+    ) {
+      throw new ForbiddenException('Access denied. Invalid or missing internal key.');
+    }
+
     return this.notificationsService.sendNotification(body.userId, {
       agentId: body.agentId,
       title: body.title,
@@ -75,13 +87,19 @@ export class NotificationsController {
   @Post('broadcast/daily-humor')
   async triggerDailyHumor(
     @Headers('x-broadcast-secret') secretHeader: string,
+    @Headers('x-internal-key') internalKeyHeader: string,
     @Body() body?: { slot?: 'morning' | 'evening'; secret?: string; title?: string; body?: string },
   ) {
-    const configuredSecret = process.env.BROADCAST_SECRET || 'regent_secret_daily_broadcast_2026';
-    const providedSecret = secretHeader || body?.secret;
+    const expected = process.env.BROADCAST_SECRET || process.env.INTERNAL_API_KEY;
+    const provided = secretHeader || internalKeyHeader || body?.secret;
 
-    if (providedSecret !== configuredSecret) {
-      throw new UnauthorizedException('Invalid broadcast secret.');
+    if (
+      !expected ||
+      typeof provided !== 'string' ||
+      provided.length !== expected.length ||
+      !timingSafeEqual(Buffer.from(provided), Buffer.from(expected))
+    ) {
+      throw new ForbiddenException('Access denied. Invalid or missing broadcast secret.');
     }
 
     const slot = body?.slot || (new Date().getHours() < 14 ? 'morning' : 'evening');

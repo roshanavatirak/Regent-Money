@@ -6,12 +6,12 @@ import {
   ScrollView,
   TouchableOpacity,
   TextInput,
-  KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
   Alert,
   Modal,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Ionicons } from '@expo/vector-icons';
 import {
   format,
@@ -807,7 +807,7 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
   return (
     <KeyboardAvoidingView
       style={[styles.container, { backgroundColor: colors.background }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior="padding"
     >
       {AppTopBarComponent && <AppTopBarComponent />}
 
@@ -1616,9 +1616,9 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
       />
 
       {/* SEARCHABLE CATEGORY PICKER DROPDOWN MODAL */}
-      <Modal visible={categoryPickerModalVisible} transparent animationType="slide" statusBarTranslucent>
+      <Modal visible={categoryPickerModalVisible} transparent animationType="slide" statusBarTranslucent navigationBarTranslucent>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior="padding"
           style={styles.modalOverlay}
         >
           <View style={[styles.pickerModalCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -1726,9 +1726,9 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
       </Modal>
 
       {/* CREATE CUSTOM CATEGORY MODAL */}
-      <Modal visible={customCatModalVisible} transparent animationType="fade" statusBarTranslucent>
+      <Modal visible={customCatModalVisible} transparent animationType="fade" statusBarTranslucent navigationBarTranslucent>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior="padding"
           style={styles.modalOverlay}
         >
           <View style={[styles.modalCard, { backgroundColor: colors.card, borderColor: colors.border }]}>

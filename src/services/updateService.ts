@@ -1,5 +1,4 @@
 import { Platform, Linking } from 'react-native';
-import Constants from 'expo-constants';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as IntentLauncher from 'expo-intent-launcher';
 import * as Application from 'expo-application';
@@ -23,7 +22,7 @@ export interface UpdateInfo {
 export const BASE_APP_VERSION = (appConfig?.expo?.version || '1.0.16').replace(/^v/, '').trim();
 
 export const getAppCurrentVersion = (): string => {
-  // On native Android / iOS standalone APK, read the installed binary version
+  // On native Android / iOS standalone binary, read the installed binary version
   if (Platform.OS !== 'web') {
     const nativeVer = Application.nativeApplicationVersion;
     if (nativeVer && typeof nativeVer === 'string' && nativeVer.trim().length > 0) {
@@ -60,11 +59,9 @@ class UpdateService {
   }
 
   /**
-   * Check for updates from Regent Money Backend API,
-   * with fallback to GitHub Releases API if backend is unavailable.
+   * Check for updates from Regent Money Backend API
    */
   async checkForUpdates(): Promise<UpdateInfo | null> {
-    // Web clients already run the latest bundle directly in browser; APK installer is for native Android
     if (Platform.OS === 'web') {
       return null;
     }
@@ -82,7 +79,6 @@ class UpdateService {
       if (res.ok) {
         const data = await res.json();
         const latestVersion = (data.latestVersion || currentVersion).replace(/^v/, '').trim();
-        // Always verify with client-side semantic comparison to eliminate infinite loops
         const isUpdateAvailable = this.compareVersions(latestVersion, currentVersion) > 0;
         const forceUpdate = isUpdateAvailable && !!data.forceUpdate;
 
@@ -101,9 +97,9 @@ class UpdateService {
           releaseNotes: Array.isArray(data.releaseNotes) && data.releaseNotes.length > 0
             ? data.releaseNotes
             : [
-                'New Wealth Roadmap & Goal milestones',
-                'Unified top navigation bar',
-                'Design and speed enhancements',
+                'Enhanced Regent AI Chatbot: Structured tables, 1-tap message copy, and refreshed tree logo',
+                'Instant Background SMS Sync: Expedited sync engine capturing bank alerts even when device is asleep',
+                'Stability & Account Safeguards: Strict multi-account isolation and network performance improvements',
               ],
         };
       }
@@ -115,11 +111,6 @@ class UpdateService {
     }
   }
 
-  /**
-   * Downloads APK silently inside the app with a live progress bar,
-   * then launches the native Android installer dialog directly.
-   * The user never leaves the app or visits any website.
-   */
   /**
    * Directly triggers the Android Package Installer for an APK already saved locally.
    */
@@ -221,6 +212,24 @@ class UpdateService {
       return false;
     }
   }
+
+  /**
+   * Opens Google Play Store (or App Store on iOS) for in-store updates
+   */
+  async openStore(): Promise<boolean> {
+    const id = Application.applicationId || appConfig?.expo?.android?.package || 'com.anonymous.regentmoney';
+    const urls = Platform.OS === 'android'
+      ? [`market://details?id=${id}`, `https://play.google.com/store/apps/details?id=${id}`]
+      : [];
+    for (const url of urls) {
+      try {
+        await Linking.openURL(url);
+        return true;
+      } catch {}
+    }
+    return false;
+  }
 }
 
 export const updateService = new UpdateService();
+

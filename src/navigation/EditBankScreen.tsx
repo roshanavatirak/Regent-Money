@@ -7,7 +7,6 @@ import {
   TextInput,
   ActivityIndicator,
   StyleSheet,
-  KeyboardAvoidingView,
   Platform,
   BackHandler,
 } from 'react-native';
@@ -20,7 +19,7 @@ import { getBackendUrl } from '../config/api';
 import { BankIcon } from '../components/BankIcon';
 import { SmsSenderTagsManager } from '../components/SmsSenderTagsManager';
 import { formatSmsSenderTags, parseSmsSenderTags } from '../constants/bankSmsSenders';
-import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
+import { KeyboardScreen } from '../components/KeyboardScreen';
 
 const BACKEND_URL = getBackendUrl();
 
@@ -73,7 +72,6 @@ export const EditBankScreen: React.FC<EditBankScreenProps> = (props) => {
 
   const [formError, setFormError] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const { scrollBottomPadding } = useKeyboardHeight(40);
 
   const handleBalanceChange = (t: string) => {
     if (!t) {
@@ -217,17 +215,12 @@ export const EditBankScreen: React.FC<EditBankScreenProps> = (props) => {
         </View>
       </View>
 
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={{ flex: 1 }}
+      <KeyboardScreen
+        showsVerticalScrollIndicator={false}
+        keyboardDismissMode="on-drag"
+        contentContainerStyle={styles.scrollContent}
       >
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag"
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPadding }]}
-        >
-          {/* Bank Icon & Hero Header */}
+        {/* Bank Icon & Hero Header */}
           <View style={styles.bankFormHeader}>
             <View style={{ marginBottom: 12 }}>
               <BankIcon
@@ -423,8 +416,7 @@ export const EditBankScreen: React.FC<EditBankScreenProps> = (props) => {
               <Text style={styles.submitBtnText}>Save Changes</Text>
             </TouchableOpacity>
           )}
-        </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardScreen>
     </View>
   );
 };

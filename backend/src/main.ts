@@ -16,11 +16,62 @@ async function bootstrap() {
   app.use(json({ limit: '25mb' }));
   app.use(urlencoded({ extended: true, limit: '25mb' }));
 
-  // Enable CORS for frontend integration (origin: true reflects incoming request origin to satisfy credentials: true)
+  // Trust proxy for Render / Cloudflare reverse proxies so req.ip and rate-limiting work accurately
+  (app.getHttpAdapter().getInstance() as any)?.set?.('trust proxy', 1);
+
+  // Configure CORS
+  const envOrigins = (process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+
+  const defaultOrigins = [
+    'https://regentmoney.com',
+    'https://www.regentmoney.com',
+    'https://app.regentmoney.com',
+    'https://regent-money.onrender.com',
+  ];
+
+  const devOrigins = [
+    'http://localhost:8081',
+    'http://localhost:3000',
+    'http://localhost:19006',
+    'http://127.0.0.1:8081',
+    'http://127.0.0.1:3000',
+  ];
+
+  const allowedOrigins = [
+    ...defaultOrigins,
+    ...envOrigins,
+    ...(process.env.NODE_ENV !== 'production' ? devOrigins : []),
+  ];
+
   app.enableCors({
-    origin: true,
+    origin: (origin, callback) => {
+      // Allow non-browser requests (native mobile apps, server-to-server) where origin is undefined
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      // In development or local network: allow any localhost/127.0.0.1 or LAN IP on any port
+      if (
+        process.env.NODE_ENV !== 'production' &&
+        /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?$/.test(origin)
+      ) {
+        return callback(null, true);
+      }
+      // Omits CORS headers so browser blocks the request without throwing 500 error
+      callback(null, false);
+    },
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With', 'Access-Control-Request-Private-Network'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Accept',
+      'X-Requested-With',
+      'x-internal-key',
+      'x-broadcast-secret',
+      'Access-Control-Request-Private-Network',
+    ],
     credentials: true,
   });
 

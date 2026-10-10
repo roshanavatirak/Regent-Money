@@ -23,7 +23,6 @@ export const APP_CURRENT_VERSION = getAppCurrentVersion();
 
 class UpdateService {
   async checkForUpdates(): Promise<UpdateInfo | null> {
-    // Web clients always run the latest deployed bundle directly in the browser
     return null;
   }
 
@@ -43,10 +42,13 @@ class UpdateService {
     try {
       await Linking.openURL(downloadUrl);
       return true;
-    } catch (err) {
-      console.error('[UpdateService] Error launching download URL:', err);
+    } catch {
       return false;
     }
+  }
+
+  async openStore(): Promise<boolean> {
+    return false;
   }
 }
 

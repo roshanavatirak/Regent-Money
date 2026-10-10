@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { View, StyleSheet, Text } from 'react-native';
+import React from 'react';
+import { View, StyleSheet } from 'react-native';
 
 interface CloudflareTurnstileProps {
   onVerify: (token: string) => void;
@@ -10,17 +10,10 @@ interface CloudflareTurnstileProps {
 }
 
 export const CloudflareTurnstile: React.FC<CloudflareTurnstileProps> = ({
-  onVerify,
   style,
 }) => {
-  useEffect(() => {
-    // Native mobile fallback: auto-certify mobile client session
-    const timer = setTimeout(() => {
-      onVerify('native_mobile_verified');
-    }, 100);
-    return () => clearTimeout(timer);
-  }, [onVerify]);
-
+  // On native platforms, Cloudflare Turnstile web widget is not rendered
+  // Rate limiting and Play Integrity / App Attest protect native endpoints
   return <View style={[styles.wrapper, style]} />;
 };
 

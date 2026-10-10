@@ -10,11 +10,11 @@ import {
   ActivityIndicator,
   Image,
   Modal,
-  KeyboardAvoidingView,
   Platform,
   Pressable,
   useWindowDimensions,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -268,11 +268,11 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
       {/* ============================================================ */}
       {/* 1. Avatar Selection Modal */}
       {/* ============================================================ */}
-      <Modal visible={avatarModalVisible} transparent animationType="fade" onRequestClose={() => setAvatarModalVisible(false)}>
+      <Modal visible={avatarModalVisible} transparent animationType="fade" statusBarTranslucent navigationBarTranslucent onRequestClose={() => setAvatarModalVisible(false)}>
         <View style={styles.modalBackdrop}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setAvatarModalVisible(false)} />
           <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            behavior="padding"
             style={styles.keyboardAvoidingWrap}
           >
             <View style={styles.modalCard}>

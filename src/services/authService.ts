@@ -2,7 +2,7 @@ import { Platform, NativeModules } from 'react-native';
 import { mmkvStorage } from '../db/mmkv';
 import { useAuthStore, UserProfile, useSecurityStore, AutoLockTimeout } from '../store';
 import { syncService } from './syncService';
-import { getGoogleWebClientId } from './supabaseClient';
+import { getGoogleWebClientId } from '../config/auth';
 import { BACKEND_URL, getBackendUrl } from '../config/api';
 import { tokenStore } from './tokenStore';
 
@@ -29,11 +29,11 @@ function formatPhoneNumber(phone: string): string {
   return '+' + clean;
 }
 
-function syncNativeAuthCredentials(token: string | null) {
+function syncNativeAuthCredentials(token: string | null, userId?: string | null) {
   if (Platform.OS === 'android') {
     try {
       if (token) {
-        NativeModules.NativeStorage?.setAuthCredentials?.(token, getBackendUrl());
+        NativeModules.NativeStorage?.setAuthCredentials?.(token, getBackendUrl(), userId || null);
       } else {
         NativeModules.NativeStorage?.clearAuthCredentials?.();
       }
@@ -101,7 +101,7 @@ export const authService = {
 
     // Sync in background if token exists
     if (token) {
-      syncNativeAuthCredentials(token);
+      syncNativeAuthCredentials(token, cachedProfile?.id);
       this.fetchProfile().catch(() => { });
       syncService.sync().catch((e) =>
         console.log('[Auth] Background sync on session check notice:', e.message)
@@ -199,7 +199,7 @@ export const authService = {
     tokenStore.setAccessToken(data.accessToken);
     mmkvStorage.setBoolean('auth_remember_me', rememberMe);
     useAuthStore.getState().setUser(profile);
-    syncNativeAuthCredentials(data.accessToken);
+    syncNativeAuthCredentials(data.accessToken, profile?.id);
 
     // Initial database pull (downloads user transactions, budgets, goals)
     syncService.sync().catch((e) => console.warn('[Auth] Initial sync pull failed:', e));
@@ -274,7 +274,7 @@ export const authService = {
       mmkvStorage.setObject(USER_PROFILE_KEY, profile);
       tokenStore.setAccessToken(data.accessToken);
       useAuthStore.getState().setUser(profile);
-      syncNativeAuthCredentials(data.accessToken);
+      syncNativeAuthCredentials(data.accessToken, profile?.id);
 
       // Initial database sync
       syncService.sync().catch((e) => console.warn('[Auth] Google Native login sync failed:', e));
@@ -286,49 +286,6 @@ export const authService = {
     }
   },
 
-  /**
-   * Performs high-fidelity mock Google signup/login mapped directly to NestJS endpoints.
-   */
-  async signUpOrLogInGoogle(name: string, email: string, avatarUrl?: string): Promise<UserProfile> {
-    const sanitizedEmail = email.trim().toLowerCase();
-
-    const response = await fetch(`${BACKEND_URL}/auth/google`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email: sanitizedEmail,
-        name,
-        avatarUrl,
-      }),
-    });
-
-    if (!response.ok) {
-      const errData = await response.json();
-      throw new Error(errData.message || 'Google Auth verification failed on backend.');
-    }
-
-    const data = await response.json();
-    const profile: UserProfile = data.profile;
-
-    if (sanitizedEmail) {
-      mmkvStorage.setObject(LAST_GOOGLE_USER_KEY, {
-        email: sanitizedEmail,
-        name: profile.name || name || sanitizedEmail.split('@')[0],
-        photo: profile.avatarUrl || avatarUrl || '',
-      });
-    }
-
-    // Save profile cache and token locally
-    mmkvStorage.setString(SESSION_KEY, profile.id);
-    mmkvStorage.setObject(USER_PROFILE_KEY, profile);
-    tokenStore.setAccessToken(data.accessToken);
-    useAuthStore.getState().setUser(profile);
-    syncNativeAuthCredentials(data.accessToken);
-
-    // Initial database sync
-    syncService.sync().catch((e) => console.warn('[Auth] Google login sync failed:', e));
-    return profile;
-  },
 
   /**
    * Sync security settings (biometricsEnabled, autoLockTimeout) with backend

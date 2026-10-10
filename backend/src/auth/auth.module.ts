@@ -15,10 +15,19 @@ import { TurnstileService } from './turnstile.service';
     MailModule,
     JwtModule.registerAsync({
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        secret: config.get<string>('JWT_SECRET') || 'default-jwt-secret-key-1234',
-        signOptions: { expiresIn: '30d' }, // Session active for 30 days
-      }),
+      useFactory: (config: ConfigService) => {
+        const secret = config.get<string>('JWT_SECRET');
+        const isProd = config.get<string>('NODE_ENV') === 'production';
+        if (!secret || secret === 'default-jwt-secret-key-1234') {
+          if (isProd) {
+            throw new Error('FATAL: JWT_SECRET environment variable is missing or insecure. Refusing to boot in production.');
+          }
+        }
+        return {
+          secret: secret || 'default-jwt-secret-key-1234',
+          signOptions: { expiresIn: '30d' }, // Session active for 30 days
+        };
+      },
     }),
   ],
   providers: [AuthService, TurnstileService],

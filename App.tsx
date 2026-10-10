@@ -60,6 +60,18 @@ export default function App() {
     }).catch((err) => {
       console.warn('[Font] Notice preloading vector icons:', err?.message || err);
     });
+
+    // Seed native bank sender allowlist so on-device SmsReceiver immediately filters OTPs & non-bank senders
+    try {
+      const { syncBankSenderIdsToNative } = require('./src/constants/bankSmsSenders');
+      const { useBankStore } = require('./src/store');
+      const customTags = (useBankStore.getState().bankProfiles || [])
+        .map((b: any) => b.smsSenderId || '')
+        .filter(Boolean);
+      syncBankSenderIdsToNative(customTags);
+    } catch (e) {
+      // Non-critical startup fallback
+    }
   }, []);
 
   return (

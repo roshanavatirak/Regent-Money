@@ -8,7 +8,6 @@ import {
   ActivityIndicator,
   Alert,
   StyleSheet,
-  KeyboardAvoidingView,
   Platform,
   Switch,
   BackHandler,
@@ -22,7 +21,7 @@ import { getBackendUrl } from '../config/api';
 import { TagPaymentModal } from '../components/TagPaymentModal';
 import { getTagDef } from '../constants/transactionTags';
 import { tagLearningService } from '../services/tagLearningService';
-import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
+import { KeyboardScreen } from '../components/KeyboardScreen';
 
 const BACKEND_URL = getBackendUrl();
 
@@ -109,8 +108,6 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
   const [deleting, setDeleting] = useState(false);
   const [tagModalVisible, setTagModalVisible] = useState(false);
   const [updatePayeeRule, setUpdatePayeeRule] = useState(false);
-  const scrollViewRef = useRef<ScrollView>(null);
-  const { scrollBottomPadding } = useKeyboardHeight(40);
 
   const handleGoBack = () => {
     if (props.onBack) {
@@ -366,18 +363,12 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
         </View>
       </View>
 
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={{ flex: 1 }}
+      <KeyboardScreen
+        showsVerticalScrollIndicator={false}
+        keyboardDismissMode="on-drag"
+        contentContainerStyle={styles.scrollContent}
       >
-        <ScrollView
-          ref={scrollViewRef}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag"
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPadding }]}
-        >
-          {/* Type Indicator Banner */}
+        {/* Type Indicator Banner */}
           <View
             style={[
               styles.typeBanner,
@@ -598,8 +589,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
               )}
             </TouchableOpacity>
           </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardScreen>
 
       {/* Paytm-Style Tag Payment Modal */}
       <TagPaymentModal

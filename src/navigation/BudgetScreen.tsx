@@ -10,11 +10,11 @@ import {
   Alert,
   TextInput,
   Modal,
-  KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
   Switch,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
@@ -1584,9 +1584,9 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
       </ScrollView>
 
       {/* CAN I AFFORD THIS MODAL */}
-      <Modal visible={affordModalVisible} transparent animationType="fade" statusBarTranslucent>
+      <Modal visible={affordModalVisible} transparent animationType="fade" statusBarTranslucent navigationBarTranslucent>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior="padding"
           style={styles.modalOverlay}
         >
           <View style={[styles.modalContent, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -1672,10 +1672,11 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
         transparent
         animationType="fade"
         statusBarTranslucent
+        navigationBarTranslucent
         onRequestClose={() => setMenuBudget(null)}
       >
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior="padding"
           style={styles.modalOverlay}
         >
           <TouchableOpacity

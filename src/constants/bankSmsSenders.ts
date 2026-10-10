@@ -195,3 +195,38 @@ export function matchesSmsSender(incomingSender: string, bankSmsSenderId?: strin
     return cleanSender === tag || cleanSender.includes(tag) || tag.includes(cleanSender);
   });
 }
+
+/**
+ * Returns a unique, flat array of all known default bank SMS sender IDs.
+ */
+export function getAllDefaultBankSenderIds(): string[] {
+  const set = new Set<string>();
+  Object.values(BANK_DEFAULT_SMS_SUGGESTIONS).forEach((tags) => {
+    tags.forEach((tag) => {
+      const clean = tag.replace(/[^A-Za-z0-9]/g, '').toUpperCase().trim();
+      if (clean) set.add(clean);
+    });
+  });
+  return Array.from(set);
+}
+
+/**
+ * Pushes the union of default bank sender IDs and user custom tags to native SharedPreferences
+ * so Android's SmsReceiver can filter incoming messages on-device before any processing.
+ */
+export function syncBankSenderIdsToNative(customTags: string[] = []): void {
+  try {
+    const { Platform, NativeModules } = require('react-native');
+    if (Platform.OS !== 'android') return;
+    const defaults = getAllDefaultBankSenderIds();
+    const set = new Set<string>(defaults);
+    customTags.forEach((t) => {
+      const parsed = parseSmsSenderTags(t);
+      parsed.forEach((clean) => set.add(clean));
+    });
+    NativeModules.NativeStorage?.setBankSenderIds?.(Array.from(set));
+  } catch (e) {
+    console.warn('[bankSmsSenders] Failed to sync bank sender IDs to native storage:', e);
+  }
+}
+

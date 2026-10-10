@@ -90,7 +90,6 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
       setStatusMessage('Launching package installer...');
       const launched = await updateService.installApk(downloadedFileUri);
       if (!launched) {
-        // Fallback to browser if installer cannot launch
         await updateService.startInstall(updateInfo.downloadUrl);
       }
     } else {
