@@ -1,5 +1,5 @@
 import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
-import { parseSMS } from './smsParser';
+import { parseSMS, detectBankFromSender } from './smsParser';
 import { authService } from './authService';
 import { getBackendUrl } from '../config/api';
 import { useBankStore, useAuthStore, useTransactionStore } from '../store';
@@ -193,58 +193,53 @@ export const smsCatchupService = {
 
         const parsedSuffix = (parsed.accountSuffix || '').replace(/\D/g, '').slice(-4);
 
-        // 1. Try matching with suffix + sender
-        let matchedBank = bankProfiles.find((b: any) => {
-          const dbSuffix = (b.accountNumberSuffix || b.account_number_suffix || '')
-            .replace(/\D/g, '')
-            .slice(-4);
-          const suffixMatches = parsedSuffix && dbSuffix && dbSuffix === parsedSuffix;
+        // Strict Bank Confidence Matching:
+        // Priority 1: Match from Sender ID DLT code or parsed bankName
+        const senderBank = detectBankFromSender(sender) || (parsed.bankName !== 'Bank' ? parsed.bankName : null);
+
+        // Filter profiles that belong to this sender's bank
+        const candidateBanks = bankProfiles.filter((b: any) => {
+          const profileBankName = (b.bankName || '').toLowerCase();
           const senderMatches = matchesSmsSender(sender, b.smsSenderId || b.sms_sender_id);
-          return suffixMatches && senderMatches;
+          const bankNameMatches = senderBank && profileBankName.includes(senderBank.toLowerCase());
+          return senderMatches || bankNameMatches;
         });
 
-        // 2. Try matching by suffix alone
-        if (!matchedBank && parsedSuffix) {
-          matchedBank = bankProfiles.find((b: any) => {
+        let matchedBank: any = null;
+
+        // Condition A: Suffix matches an account at the same bank
+        if (parsedSuffix && parsedSuffix !== 'XXXX') {
+          matchedBank = candidateBanks.find((b: any) => {
             const dbSuffix = (b.accountNumberSuffix || b.account_number_suffix || '')
               .replace(/\D/g, '')
               .slice(-4);
-            return dbSuffix && dbSuffix === parsedSuffix;
+            return dbSuffix === parsedSuffix;
           });
+          // If a suffix was present in the SMS but did not match any account at this bank,
+          // do NOT assign to any other bank. Leave matchedBank as null (Review Queue).
+        } else if (candidateBanks.length === 1) {
+          // Condition B: No suffix mentioned in SMS (e.g. UPI), but user has EXACTLY ONE account at this bank
+          matchedBank = candidateBanks[0];
         }
 
-        // 3. Try matching by sender ID or bank name (crucial for UPI transactions with no suffix)
-        if (!matchedBank) {
-          matchedBank = bankProfiles.find((b: any) => {
-            const senderMatches = matchesSmsSender(sender, b.smsSenderId || b.sms_sender_id);
-            const nameMatches =
-              parsed.bankName &&
-              parsed.bankName !== 'Bank' &&
-              (b.bankName || '').toLowerCase().includes(parsed.bankName.toLowerCase());
-            return senderMatches || nameMatches;
-          });
-        }
+        // If not 100% confident, group under 'unassigned' (Review Queue)
+        const targetGroupKey = matchedBank ? matchedBank.id : 'unassigned';
 
-        // 4. Fallback to primary or any active bank profile
-        if (!matchedBank && bankProfiles.length > 0) {
-          matchedBank = bankProfiles.find((b: any) => b.isPrimary) || bankProfiles[0];
-        }
-
-        if (!matchedBank) continue;
-
-        if (targetBankId && matchedBank.id !== targetBankId) {
+        if (targetBankId && targetGroupKey !== targetBankId) {
           continue;
         }
 
-        // Verify SMS consent
-        const hasConsent = matchedBank.smsConsent !== false && (matchedBank as any).sms_consent !== false;
-        if (!hasConsent) continue;
+        if (matchedBank) {
+          // Verify SMS consent
+          const hasConsent = matchedBank.smsConsent !== false && (matchedBank as any).sms_consent !== false;
+          if (!hasConsent) continue;
+        }
 
         const msgTimestamp = Number(msg.date) || now;
         const dateStr = new Date(msgTimestamp).toISOString().split('T')[0];
 
-        if (!bankTxsMap.has(matchedBank.id)) {
-          bankTxsMap.set(matchedBank.id, []);
+        if (!bankTxsMap.has(targetGroupKey)) {
+          bankTxsMap.set(targetGroupKey, []);
         }
 
         const predictedCategory = tagLearningService.predict(
@@ -254,7 +249,15 @@ export const smsCatchupService = {
           parsed.isSalary
         );
 
-        const candidateSmsId = msg.id ? `sms_${msg.id}` : (parsed.referenceId ? `ref_${parsed.referenceId}` : undefined);
+        const cleanBody = (body || '').replace(/\s+/g, ' ').trim();
+        let bodyHash = 0;
+        for (let i = 0; i < cleanBody.length; i++) {
+          bodyHash = ((bodyHash << 5) - bodyHash) + cleanBody.charCodeAt(i);
+          bodyHash |= 0;
+        }
+        const candidateSmsId = parsed.referenceId
+          ? `ref_${parsed.referenceId}`
+          : `sms_${Math.abs(bodyHash)}`;
 
         bankTxsMap.get(matchedBank.id)!.push({
           amount: parsed.amount,
@@ -272,10 +275,12 @@ export const smsCatchupService = {
         const existingTransactions = useTransactionStore.getState().transactions || [];
         const normIncoming = (parsed.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
         const isTxExisting = existingTransactions.some((tx: any) => {
+          // 1. Authoritative UPI Ref / RRN comparison
           if (parsed.referenceId && (tx.smsId === `ref_${parsed.referenceId}` || (tx as any).referenceId === parsed.referenceId)) {
             return true;
           }
-          if (candidateSmsId && tx.smsId && tx.smsId === candidateSmsId) {
+          // 2. Deterministic content hash match (unified with direct native worker) or legacy inbox ID
+          if (candidateSmsId && tx.smsId && (tx.smsId === candidateSmsId || tx.smsId === `sms_${msg.id}`)) {
             return true;
           }
           if (parsed.referenceId && tx.smsId && tx.smsId.startsWith('ref_') && tx.smsId !== `ref_${parsed.referenceId}`) {
@@ -291,8 +296,8 @@ export const smsCatchupService = {
           const normTx = (tx.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
           if (normTx && normIncoming && normTx !== normIncoming) return false;
 
-          if (Math.abs(txTime - msgTimestamp) > 5000) return false;
-          return true;
+          // Deduplicate if within 10 minutes of matching transaction
+          return Math.abs(txTime - msgTimestamp) < 600000;
         });
 
         // Only trigger real-time budget nudge & salary cycle detection for NEW transactions
@@ -333,11 +338,13 @@ export const smsCatchupService = {
           .sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0));
         const latestAvailableBalance = txsWithBal.length > 0 ? txsWithBal[0].availableBalance : undefined;
 
+        const isUnassigned = bankProfileId === 'unassigned';
         const bodyPayload: any = {
-          bankProfileId,
+          bankProfileId: isUnassigned ? null : bankProfileId,
           transactions: txList,
         };
-        if (latestAvailableBalance !== undefined) {
+        // Unassigned review queue transactions MUST NEVER update any bank balance
+        if (!isUnassigned && latestAvailableBalance !== undefined) {
           bodyPayload.updatedBalance = latestAvailableBalance;
         }
 

@@ -15,7 +15,7 @@ import { OcrSyncDto } from './dto/ocr-sync.dto';
 import { ManualTransactionDto } from './dto/manual-transaction.dto';
 import { PDFExtract, PDFExtractOptions } from 'pdf.js-extract';
 import { AiService } from '../ai/ai.service';
-import { parseSMS } from './sms-parser.util';
+import { parseSMS, detectBankFromSender } from './sms-parser.util';
 import { RedisService } from '../redis/redis.service';
 
 @Injectable()
@@ -728,21 +728,29 @@ export class SyncService implements OnModuleInit {
 
   async syncOcrTransactions(userId: string, data: OcrSyncDto) {
     return this.withUserLock(userId, async () => {
-      this.logger.log(`Syncing OCR transactions for user ${userId}, bank: ${data.bankProfileId}`);
+      this.logger.log(`Syncing OCR transactions for user ${userId}, bank: ${data.bankProfileId || 'unassigned'}`);
       
-      const bank = await this.bankProfileRepository.findOne({
-        where: { id: data.bankProfileId, userId, isDeleted: false },
-      });
-      if (!bank) {
-        throw new BadRequestException('Bank account profile not found.');
+      const isUnassigned = !data.bankProfileId || data.bankProfileId === 'unassigned';
+      let bank: BankProfile | null = null;
+      if (!isUnassigned) {
+        bank = await this.bankProfileRepository.findOne({
+          where: { id: data.bankProfileId, userId, isDeleted: false },
+        });
+        if (!bank) {
+          throw new BadRequestException('Bank account profile not found.');
+        }
       }
 
       const [existingTxs, existingIncome] = await Promise.all([
         this.transactionRepository.find({
-          where: { userId, bankProfileId: data.bankProfileId },
+          where: isUnassigned
+            ? { userId, isDeleted: false }
+            : { userId, bankProfileId: data.bankProfileId, isDeleted: false },
         }),
         this.incomeRecordRepository.find({
-          where: { userId, bankProfileId: data.bankProfileId },
+          where: isUnassigned
+            ? { userId, isDeleted: false }
+            : { userId, bankProfileId: data.bankProfileId, isDeleted: false },
         }),
       ]);
 
@@ -869,7 +877,7 @@ export class SyncService implements OnModuleInit {
               category: item.category || (item.merchant ? await this.classifyCategory(item.merchant, userId, preloadedRules) : 'miscellaneous'),
               merchant: item.merchant || 'Merchant',
               timestamp: exactTimestamp,
-              bankProfileId: data.bankProfileId,
+              bankProfileId: isUnassigned ? null : data.bankProfileId,
               smsId: itemSmsId || 'ocr_extracted',
               isAnomaly: amount > 5000,
               status: 'cleared',
@@ -911,7 +919,7 @@ export class SyncService implements OnModuleInit {
               amount,
               source: item.merchant || 'Direct Credit',
               timestamp: exactTimestamp,
-              bankProfileId: data.bankProfileId,
+              bankProfileId: isUnassigned ? null : data.bankProfileId,
               updatedAt: Date.now(),
               isDeleted: false,
             });
@@ -929,33 +937,33 @@ export class SyncService implements OnModuleInit {
       await this.incomeRecordRepository.save(newIncomeRecords);
     }
 
-    if (data.updatedBalance !== undefined && data.updatedBalance !== null && !isNaN(Number(data.updatedBalance))) {
-      // Direct authoritative balance from bank SMS
-      bank.currentBalance = Math.round(Math.max(0, parseFloat(String(data.updatedBalance))) * 100) / 100;
-      bank.lastSyncTimestamp = Date.now();
-      bank.updatedAt = Date.now();
-      await this.bankProfileRepository.save(bank);
-    } else if (addedTransactionsCount > 0 || addedIncomeCount > 0) {
-      // Only apply net balance change if these new transactions occurred AFTER bank profile baseline (creation/update)
-      const bankBaseline = Math.max(Number(bank.updatedAt || 0), Number(bank.lastSyncTimestamp || 0));
-      let applicableChange = 0;
-      for (const tx of newTransactions) {
-        if (!bankBaseline || tx.timestamp >= bankBaseline) {
-          applicableChange -= tx.amount;
-        }
-      }
-      for (const inc of newIncomeRecords) {
-        if (!bankBaseline || inc.timestamp >= bankBaseline) {
-          applicableChange += inc.amount;
-        }
-      }
-
-      if (applicableChange !== 0) {
-        const updatedBal = Math.round((parseFloat(String(bank.currentBalance || 0)) + applicableChange) * 100) / 100;
-        bank.currentBalance = bank.accountType === 'Savings' ? Math.max(0, updatedBal) : updatedBal;
+    if (!isUnassigned && bank) {
+      if (data.applyBalanceChange === false) {
+        // User explicitly toggled off balance update -> retain current balance
+        this.logger.log(`User toggled off balance update for bank ${bank.bankName}. Balance preserved at ${bank.currentBalance}`);
+      } else if (data.updatedBalance !== undefined && data.updatedBalance !== null && !isNaN(Number(data.updatedBalance))) {
+        // Direct authoritative or user-confirmed updated balance
+        bank.currentBalance = Math.round(parseFloat(String(data.updatedBalance)) * 100) / 100;
         bank.lastSyncTimestamp = Date.now();
         bank.updatedAt = Date.now();
         await this.bankProfileRepository.save(bank);
+      } else if (addedTransactionsCount > 0 || addedIncomeCount > 0) {
+        // Fallback: apply net flow of imported transactions directly to balance
+        let applicableChange = 0;
+        for (const tx of newTransactions) {
+          applicableChange -= tx.amount;
+        }
+        for (const inc of newIncomeRecords) {
+          applicableChange += inc.amount;
+        }
+
+        if (applicableChange !== 0) {
+          const updatedBal = Math.round((parseFloat(String(bank.currentBalance || 0)) + applicableChange) * 100) / 100;
+          bank.currentBalance = updatedBal;
+          bank.lastSyncTimestamp = Date.now();
+          bank.updatedAt = Date.now();
+          await this.bankProfileRepository.save(bank);
+        }
       }
     }
 
@@ -965,7 +973,7 @@ export class SyncService implements OnModuleInit {
       success: true,
       addedTransactionsCount,
       addedIncomeCount,
-      updatedBalance: bank.currentBalance,
+      updatedBalance: bank ? bank.currentBalance : null,
     };
     });
   }
@@ -2038,57 +2046,27 @@ export class SyncService implements OnModuleInit {
       where: { userId, isDeleted: false },
     });
 
-    let matchedBank =
-      (parsedSuffix
-        ? bankProfiles.find((b) => {
-            const dbSuffix = (b.accountNumberSuffix || '').replace(/\D/g, '').slice(-4);
-            const suffixMatches = dbSuffix && dbSuffix === parsedSuffix;
-            const senderMatches = this.matchesSmsSender(data.sender, b.smsSenderId);
-            return suffixMatches && senderMatches;
-          }) ||
-          bankProfiles.find((b) => {
-            const dbSuffix = (b.accountNumberSuffix || '').replace(/\D/g, '').slice(-4);
-            return dbSuffix && dbSuffix === parsedSuffix;
-          })
-        : null);
+    const senderBank = detectBankFromSender(data.sender) || (parsed.bankName !== 'Bank' ? parsed.bankName : null);
 
-    // 2. If not matched by suffix, match by sender ID or bank name (crucial for UPI transactions)
-    if (!matchedBank) {
-      matchedBank = bankProfiles.find((b) => {
-        const senderMatches = this.matchesSmsSender(data.sender, b.smsSenderId);
-        const nameMatches =
-          parsed.bankName &&
-          parsed.bankName !== 'Bank' &&
-          (b.bankName || '').toLowerCase().includes(parsed.bankName.toLowerCase());
-        return senderMatches || nameMatches;
-      });
+    const candidateBanks = bankProfiles.filter((b) => {
+      const profileBankName = (b.bankName || '').toLowerCase();
+      const senderMatches = this.matchesSmsSender(data.sender, b.smsSenderId);
+      const bankNameMatches = senderBank && profileBankName.includes(senderBank.toLowerCase());
+      return senderMatches || bankNameMatches;
+    });
+
+    let matchedBank: BankProfile | null = null;
+
+    if (parsedSuffix && parsedSuffix !== 'XXXX') {
+      matchedBank = candidateBanks.find((b) => {
+        const dbSuffix = (b.accountNumberSuffix || '').replace(/\D/g, '').slice(-4);
+        return dbSuffix === parsedSuffix;
+      }) || null;
+    } else if (candidateBanks.length === 1) {
+      matchedBank = candidateBanks[0];
     }
 
-    // 3. Fallback to any active bank profile if user has bank accounts
-    if (!matchedBank && bankProfiles.length > 0) {
-      matchedBank = bankProfiles[0];
-    }
-
-    // 4. If user has NO bank profiles at all, auto-create a primary bank profile
-    if (!matchedBank) {
-      const newBankId = 'bank_auto_' + Math.random().toString(36).substr(2, 9);
-      matchedBank = this.bankProfileRepository.create({
-        id: newBankId,
-        userId,
-        bankName: parsed.bankName && parsed.bankName !== 'Bank' ? parsed.bankName : 'Primary Bank',
-        accountNumberSuffix: parsedSuffix || '0000',
-        accountType: 'Savings',
-        currentBalance: parsed.amount,
-        smsConsent: true,
-        smsSenderId: data.sender || 'BANK',
-        updatedAt: Date.now(),
-        isDeleted: false,
-      });
-      await this.bankProfileRepository.save(matchedBank);
-      this.logger.log(`Auto-created bank profile ${matchedBank.bankName} for user ${userId}`);
-    }
-
-    if (matchedBank.smsConsent === false) {
+    if (matchedBank && matchedBank.smsConsent === false) {
       this.logger.log(`SMS consent disabled for bank ${matchedBank.bankName}`);
       return { success: false, reason: 'consent_disabled' };
     }
@@ -2098,15 +2076,6 @@ export class SyncService implements OnModuleInit {
     const startOfDay = new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate(), 0, 0, 0, 0).getTime();
     const endOfDay = new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate(), 23, 59, 59, 999).getTime();
 
-    const [existingTxs, existingIncome] = await Promise.all([
-      this.transactionRepository.find({
-        where: { userId, bankProfileId: matchedBank.id },
-      }),
-      this.incomeRecordRepository.find({
-        where: { userId, bankProfileId: matchedBank.id },
-      }),
-    ]);
-
     const incomingRef = parsed.referenceId;
     const cleanBody = (data.body || '').replace(/\s+/g, ' ').trim();
     let bodyHash = 0;
@@ -2115,6 +2084,52 @@ export class SyncService implements OnModuleInit {
       bodyHash |= 0;
     }
     const directSmsId = incomingRef ? `ref_${incomingRef}` : `sms_${Math.abs(bodyHash)}`;
+
+    if (!matchedBank) {
+      // Record transaction into Review Queue (bankProfileId: null) without modifying any bank balances
+      const txId = 'tx_direct_' + Math.random().toString(36).substr(2, 9);
+      const predictedCategory = parsed.merchant
+        ? await this.classifyCategory(parsed.merchant, userId)
+        : 'miscellaneous';
+
+      const newTx = this.transactionRepository.create({
+        id: txId,
+        userId,
+        amount: parsed.amount,
+        category: predictedCategory,
+        merchant: parsed.merchant,
+        timestamp: txTime,
+        bankProfileId: null,
+        smsId: directSmsId,
+        isAnomaly: parsed.amount > 5000,
+        status: 'pending_review',
+        updatedAt: Date.now(),
+        isDeleted: false,
+      });
+      await this.transactionRepository.save(newTx);
+      await this.invalidateUserSyncCache(userId);
+
+      return {
+        success: true,
+        ingested: true,
+        type: parsed.type,
+        amount: parsed.amount,
+        updatedBalance: null,
+        bankName: 'Unassigned',
+        accountSuffix: parsedSuffix || 'XXXX',
+        merchant: parsed.merchant,
+        isUnassigned: true,
+      };
+    }
+
+    const [existingTxs, existingIncome] = await Promise.all([
+      this.transactionRepository.find({
+        where: { userId, bankProfileId: matchedBank.id },
+      }),
+      this.incomeRecordRepository.find({
+        where: { userId, bankProfileId: matchedBank.id },
+      }),
+    ]);
 
     let ingested = false;
     let newBalance = parseFloat(String(matchedBank.currentBalance || 0));
@@ -2176,7 +2191,7 @@ export class SyncService implements OnModuleInit {
       if (parsed.availableBalance !== undefined && !isNaN(parsed.availableBalance) && parsed.availableBalance >= 0) {
         newBalance = parsed.availableBalance;
       } else {
-        newBalance = Math.max(0, newBalance - parsed.amount);
+        newBalance = newBalance - parsed.amount;
       }
       ingested = true;
     } else {
@@ -2231,9 +2246,9 @@ export class SyncService implements OnModuleInit {
       ingested = true;
     }
 
-    if (ingested) {
+    if (ingested && matchedBank) {
       const roundedNewBal = Math.round(newBalance * 100) / 100;
-      matchedBank.currentBalance = matchedBank.accountType === 'Savings' ? Math.max(0, roundedNewBal) : roundedNewBal;
+      matchedBank.currentBalance = roundedNewBal;
       matchedBank.lastSyncTimestamp = Date.now();
       matchedBank.updatedAt = Date.now();
       await this.bankProfileRepository.save(matchedBank);

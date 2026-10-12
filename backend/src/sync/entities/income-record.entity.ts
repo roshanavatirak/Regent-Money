@@ -27,7 +27,7 @@ export class IncomeRecord {
   timestamp: number;
 
   @Column({ name: 'bank_profile_id', type: 'text', nullable: true })
-  bankProfileId: string;
+  bankProfileId: string | null;
 
   @Column({ name: 'updated_at', type: 'bigint', transformer: {
     to: (value: number) => value ? String(value) : null,

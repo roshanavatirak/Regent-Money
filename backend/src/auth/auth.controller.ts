@@ -45,6 +45,188 @@ export class AuthController {
     return this.authService.login(body);
   }
 
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  async forgotPassword(@Body('email') email: string) {
+    if (!email || !email.trim()) {
+      throw new BadRequestException('Email address is required.');
+    }
+    return this.authService.requestPasswordReset(email);
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  async resetPassword(
+    @Body('token') token: string,
+    @Body('newPassword') newPassword: string,
+  ) {
+    if (!token || !newPassword) {
+      throw new BadRequestException('Reset token and new password are required.');
+    }
+    return this.authService.resetPassword(token, newPassword);
+  }
+
+  @Get('reset-password-page')
+  async resetPasswordPage(@Query('token') token: string, @Res() res: Response) {
+    if (!token) {
+      return res.status(400).send(`
+        <!DOCTYPE html>
+        <html>
+        <head><title>Invalid Link - Regent Money</title></head>
+        <body style="background:#12141c;color:#fff;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;">
+          <div style="background:#1a1d2e;padding:32px;border-radius:16px;text-align:center;max-width:400px;border:1px solid #333;">
+            <h2 style="color:#ff5252;">Invalid Reset Link</h2>
+            <p style="color:#aaa;font-size:14px;margin-top:12px;">This password reset link is missing a valid security token.</p>
+          </div>
+        </body>
+        </html>
+      `);
+    }
+
+    return res.status(200).send(`
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Reset Password & Unlock - Regent Money</title>
+        <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+        <style>
+          :root {
+            --bg: #12141c;
+            --card-bg: rgba(26, 29, 46, 0.75);
+            --primary: #2dba4e;
+            --text: #ffffff;
+            --text-muted: #8c92a6;
+            --border: rgba(255, 255, 255, 0.1);
+          }
+          * { box-sizing: border-box; margin: 0; padding: 0; }
+          body {
+            background-color: var(--bg);
+            color: var(--text);
+            font-family: 'Outfit', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+          }
+          .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 36px 28px;
+            width: 100%;
+            max-width: 420px;
+            text-align: center;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+          }
+          h2 { font-size: 24px; font-weight: 800; margin-bottom: 8px; }
+          p { font-size: 14px; color: var(--text-muted); line-height: 1.5; margin-bottom: 24px; }
+          .form-group { text-align: left; margin-bottom: 16px; }
+          label { display: block; font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px; }
+          input {
+            width: 100%;
+            padding: 12px 16px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background: rgba(0,0,0,0.3);
+            color: #fff;
+            font-size: 15px;
+            outline: none;
+          }
+          input:focus { border-color: var(--primary); }
+          .btn {
+            width: 100%;
+            padding: 14px;
+            border-radius: 12px;
+            background: var(--primary);
+            color: #fff;
+            font-size: 15px;
+            font-weight: 800;
+            border: none;
+            cursor: pointer;
+            margin-top: 10px;
+          }
+          .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+          .status { margin-top: 16px; font-size: 14px; font-weight: 600; }
+          .status.error { color: #ff5252; }
+          .status.success { color: var(--primary); }
+        </style>
+      </head>
+      <body>
+        <div class="card" id="formCard">
+          <h2>Reset Password</h2>
+          <p>Enter your new password to reset credentials and <strong>instantly unlock your account</strong>.</p>
+          <div class="form-group">
+            <label>New Password</label>
+            <input type="password" id="newPassword" placeholder="Minimum 6 characters" />
+          </div>
+          <div class="form-group">
+            <label>Confirm Password</label>
+            <input type="password" id="confirmPassword" placeholder="Re-enter new password" />
+          </div>
+          <button class="btn" id="submitBtn" onclick="submitReset()">Update & Unlock Account</button>
+          <div class="status" id="statusMsg"></div>
+        </div>
+
+        <script>
+          const token = ${JSON.stringify(token)};
+          async function submitReset() {
+            const pwd = document.getElementById('newPassword').value;
+            const confirm = document.getElementById('confirmPassword').value;
+            const msg = document.getElementById('statusMsg');
+            const btn = document.getElementById('submitBtn');
+
+            if (!pwd || pwd.length < 6) {
+              msg.className = 'status error';
+              msg.textContent = 'Password must be at least 6 characters.';
+              return;
+            }
+            if (pwd !== confirm) {
+              msg.className = 'status error';
+              msg.textContent = 'Passwords do not match.';
+              return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Updating...';
+            msg.textContent = '';
+
+            try {
+              const res = await fetch('/auth/reset-password', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token, newPassword: pwd })
+              });
+              const data = await res.json();
+              if (res.ok) {
+                document.getElementById('formCard').innerHTML = \`
+                  <div style="font-size: 40px; margin-bottom: 12px;">✅</div>
+                  <h2 style="color: #2dba4e;">Account Unlocked!</h2>
+                  <p style="color: #aaa; margin: 16px 0;">Your password has been updated and your account is active. You can now return to Regent Money and log in.</p>
+                \`;
+              } else {
+                msg.className = 'status error';
+                msg.textContent = data.message || 'Reset failed. Token may be expired.';
+                btn.disabled = false;
+                btn.textContent = 'Update & Unlock Account';
+              }
+            } catch (err) {
+              msg.className = 'status error';
+              msg.textContent = 'Network error. Please try again.';
+              btn.disabled = false;
+              btn.textContent = 'Update & Unlock Account';
+            }
+          }
+        </script>
+      </body>
+      </html>
+    `);
+  }
+
   @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('google')
   @HttpCode(HttpStatus.OK)

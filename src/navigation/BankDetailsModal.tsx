@@ -873,9 +873,11 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
                             color={isDebit ? '#cf222e' : '#2dba4e'} 
                           />
                         </View>
-                        <View>
-                          <Text style={styles.txMerchant}>{item.merchant}</Text>
-                          <Text style={styles.txDate}>
+                        <View style={styles.txMeta}>
+                          <Text style={styles.txMerchant} numberOfLines={1} ellipsizeMode="tail">
+                            {item.merchant || 'Transaction'}
+                          </Text>
+                          <Text style={styles.txDate} numberOfLines={1}>
                             {new Date(item.timestamp).toLocaleDateString('en-IN', {
                               day: 'numeric',
                               month: 'short',
@@ -888,10 +890,10 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
                         <Text style={[
                           styles.txAmount,
                           { color: isDebit ? colors.text : '#2dba4e' }
-                        ]}>
-                          {isDebit ? '-' : '+'}₹{item.amount.toLocaleString('en-IN')}
+                        ]} numberOfLines={1}>
+                          {isDebit ? '-' : '+'}₹{Math.abs(Number(item.amount || 0)).toLocaleString('en-IN')}
                         </Text>
-                        <Text style={styles.txCategory}>{item.category}</Text>
+                        <Text style={styles.txCategory} numberOfLines={1}>{item.category}</Text>
                       </View>
                     </TouchableOpacity>
                   );
@@ -1690,6 +1692,9 @@ const getStyles = (colors: any) => StyleSheet.create({
   txLeft: {
     flexDirection: 'row',
     alignItems: 'center',
+    flex: 1,
+    minWidth: 0,
+    marginRight: 12,
   },
   iconBadge: {
     width: 32,
@@ -1698,6 +1703,12 @@ const getStyles = (colors: any) => StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 10,
+    flexShrink: 0,
+  },
+  txMeta: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
   },
   txMerchant: {
     fontSize: 13,
@@ -1711,6 +1722,8 @@ const getStyles = (colors: any) => StyleSheet.create({
   },
   txRight: {
     alignItems: 'flex-end',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
   txAmount: {
     fontSize: 13,

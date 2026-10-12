@@ -361,7 +361,53 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
   const [error, setError] = useState('');
   const [turnstileToken, setTurnstileToken] = useState('');
 
+  // Lockout State & Real-Time Countdown
+  const [lockoutUntil, setLockoutUntil] = useState<number | null>(null);
+  const [lockoutRemainingSec, setLockoutRemainingSec] = useState<number>(0);
+  const [lockoutTier, setLockoutTier] = useState<number>(1);
+
+  // Forgot / Reset Password Modal
+  const [showForgotModal, setShowForgotModal] = useState<boolean>(false);
+  const [resetEmail, setResetEmail] = useState<string>('');
+  const [resetSending, setResetSending] = useState<boolean>(false);
+  const [resetMsg, setResetMsg] = useState<{ text: string; error: boolean } | null>(null);
+
+  // Live seconds countdown ticker
+  useEffect(() => {
+    if (!lockoutUntil) return;
+    const tick = () => {
+      const diff = Math.max(0, Math.ceil((lockoutUntil - Date.now()) / 1000));
+      setLockoutRemainingSec(diff);
+      if (diff <= 0) {
+        setLockoutUntil(null);
+        setError('');
+      }
+    };
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [lockoutUntil]);
+
+  const formatRemainingTime = (seconds: number): string => {
+    if (seconds >= 3600) {
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      const s = seconds % 60;
+      return `${h}h ${m}m left (${s}s)`;
+    }
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    if (m > 0) {
+      return `${m} min left (${m}m ${s < 10 ? '0' : ''}${s}s)`;
+    }
+    return `${s}s left`;
+  };
+
   const handleLogin = async () => {
+    if (lockoutRemainingSec > 0) {
+      setError(`Account is temporarily locked. Try again in ${formatRemainingTime(lockoutRemainingSec)} or reset your password.`);
+      return;
+    }
     if (!emailOrMobile.trim() || !password) {
       setError('Please enter both Email/Mobile and Password');
       return;
@@ -375,9 +421,34 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
     try {
       await authService.logIn(emailOrMobile, password, rememberMe, turnstileToken);
     } catch (e: any) {
-      setError(e.message);
+      if (e.locked || e.status === 423) {
+        setLockoutUntil(e.lockedUntil || Date.now() + (e.remainingSeconds || 1800) * 1000);
+        setLockoutTier(e.tier || 1);
+        setLockoutRemainingSec(e.remainingSeconds || 1800);
+        setError(e.message || 'Account locked due to 3 failed attempts.');
+      } else {
+        setError(e.message);
+      }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSendResetLink = async () => {
+    const targetEmail = resetEmail.trim() || (emailOrMobile.includes('@') ? emailOrMobile.trim() : '');
+    if (!targetEmail || !targetEmail.includes('@')) {
+      setResetMsg({ text: 'Please enter a valid registered email address.', error: true });
+      return;
+    }
+    setResetSending(true);
+    setResetMsg(null);
+    try {
+      const res = await authService.requestPasswordReset(targetEmail);
+      setResetMsg({ text: res.message || 'Reset link sent! Check your inbox to unlock immediately.', error: false });
+    } catch (err: any) {
+      setResetMsg({ text: err.message || 'Failed to send reset link.', error: true });
+    } finally {
+      setResetSending(false);
     }
   };
 
@@ -405,10 +476,36 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
             />
           </View>
           <Text style={styles.authHeaderTitle}>Welcome Back</Text>
-          <Text style={styles.authHeaderDesc}>Enter your offline credentials to access Regent Money</Text>
+          <Text style={styles.authHeaderDesc}>Enter your credentials to access Regent Money</Text>
         </View>
 
-        {error ? (
+        {/* Live Lockout Banner or Standard Error */}
+        {lockoutRemainingSec > 0 ? (
+          <View style={[styles.errorContainer, { backgroundColor: 'rgba(255, 82, 82, 0.15)', borderColor: '#FF5252', padding: 14, flexDirection: 'column', alignItems: 'flex-start' }]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+              <Feather name="lock" size={16} color="#FF5252" style={{ marginRight: 8 }} />
+              <Text style={{ color: '#FF5252', fontWeight: '800', fontSize: 14 }}>
+                {lockoutTier === 2 ? 'Account Locked (24 Hours)' : 'Account Locked (30 Minutes)'}
+              </Text>
+            </View>
+            <Text style={{ color: '#ffffff', fontSize: 13, fontWeight: '700', marginBottom: 6 }}>
+              ⏳ Try again in: {formatRemainingTime(lockoutRemainingSec)}
+            </Text>
+            <Text style={{ color: '#aaa', fontSize: 12, lineHeight: 16 }}>
+              Exceeded 3 failed attempts. If you are stuck, you can reset your password via email to unlock immediately.
+            </Text>
+            <TouchableOpacity
+              style={{ marginTop: 10, backgroundColor: '#2dba4e', paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8 }}
+              onPress={() => {
+                if (emailOrMobile.includes('@')) setResetEmail(emailOrMobile);
+                setShowForgotModal(true);
+              }}
+              activeOpacity={0.8}
+            >
+              <Text style={{ color: '#ffffff', fontSize: 12, fontWeight: '800' }}>Reset Password to Unlock</Text>
+            </TouchableOpacity>
+          </View>
+        ) : error ? (
           <View style={styles.errorContainer}>
             <Feather name="alert-circle" size={16} color="#fafbfc" style={{ marginRight: 8 }} />
             <Text style={styles.errorTextInline}>{error}</Text>
@@ -452,16 +549,29 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
             </TouchableOpacity>
           </View>
 
-          <TouchableOpacity
-            style={styles.rememberMeRow}
-            onPress={() => setRememberMe(!rememberMe)}
-            activeOpacity={0.8}
-          >
-            <View style={[styles.checkbox, rememberMe && styles.checkboxChecked]}>
-              {rememberMe && <Feather name="check" size={12} color="#fafbfc" />}
-            </View>
-            <Text style={styles.rememberMeLabel}>Remember me for 30 days</Text>
-          </TouchableOpacity>
+          {/* Remember Me and Forgot Password in One Clean Row */}
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, marginBottom: 4 }}>
+            <TouchableOpacity
+              style={styles.rememberMeRow}
+              onPress={() => setRememberMe(!rememberMe)}
+              activeOpacity={0.8}
+            >
+              <View style={[styles.checkbox, rememberMe && styles.checkboxChecked]}>
+                {rememberMe && <Feather name="check" size={12} color="#fafbfc" />}
+              </View>
+              <Text style={styles.rememberMeLabel}>Remember 30 days</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => {
+                if (emailOrMobile.includes('@')) setResetEmail(emailOrMobile);
+                setShowForgotModal(true);
+              }}
+              activeOpacity={0.7}
+            >
+              <Text style={{ color: colors.accent, fontSize: 12, fontWeight: '700' }}>Forgot password?</Text>
+            </TouchableOpacity>
+          </View>
 
           <CloudflareTurnstile
             onVerify={(token) => {
@@ -475,11 +585,19 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
             <ActivityIndicator size="large" color="#2dba4e" style={{ marginTop: 24 }} />
           ) : (
             <TouchableOpacity
-              style={[styles.primaryBtn, styles.submitBtnMargin, styles.neonBorder]}
+              style={[
+                styles.primaryBtn,
+                styles.submitBtnMargin,
+                styles.neonBorder,
+                lockoutRemainingSec > 0 && { opacity: 0.5, backgroundColor: '#333' },
+              ]}
               onPress={handleLogin}
+              disabled={lockoutRemainingSec > 0}
               activeOpacity={0.8}
             >
-              <Text style={styles.primaryBtnText}>Log In</Text>
+              <Text style={styles.primaryBtnText}>
+                {lockoutRemainingSec > 0 ? `Locked (${formatRemainingTime(lockoutRemainingSec)})` : 'Log In'}
+              </Text>
             </TouchableOpacity>
           )}
 
@@ -491,6 +609,66 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
           </View>
         </View>
       </KeyboardScreen>
+
+      {/* Forgot Password / Instant Unlock Modal */}
+      <Modal
+        visible={showForgotModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowForgotModal(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <View style={{ width: '100%', maxWidth: 420, backgroundColor: colors.card, borderRadius: 20, borderWidth: 1, borderColor: colors.border, padding: 24 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Feather name="key" size={18} color={colors.accent} style={{ marginRight: 8 }} />
+                <Text style={{ fontSize: 17, fontWeight: '800', color: colors.text }}>Reset Password</Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowForgotModal(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Feather name="x" size={20} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={{ fontSize: 13, color: colors.textSecondary, lineHeight: 18, marginBottom: 16 }}>
+              Enter your registered email. We will send a secure reset link that <Text style={{ color: colors.text, fontWeight: '700' }}>instantly clears any active account lockouts</Text> and reactivates your account.
+            </Text>
+
+            {resetMsg && (
+              <View style={[styles.errorContainer, { backgroundColor: resetMsg.error ? 'rgba(255, 82, 82, 0.15)' : 'rgba(45, 186, 78, 0.15)', borderColor: resetMsg.error ? '#FF5252' : '#2dba4e', marginBottom: 14 }]}>
+                <Feather name={resetMsg.error ? "alert-circle" : "check-circle"} size={16} color={resetMsg.error ? "#FF5252" : "#2dba4e"} style={{ marginRight: 8 }} />
+                <Text style={{ color: resetMsg.error ? '#FF5252' : '#2dba4e', fontSize: 12, fontWeight: '600', flex: 1 }}>{resetMsg.text}</Text>
+              </View>
+            )}
+
+            <Text style={styles.inputLabel}>Registered Email Address</Text>
+            <View style={styles.inputContainer}>
+              <Feather name="mail" size={16} color="#8E8E9F" style={styles.inputIcon} />
+              <TextInput
+                style={styles.formInput}
+                placeholder="name@domain.com"
+                placeholderTextColor="#555"
+                autoCapitalize="none"
+                keyboardType="email-address"
+                value={resetEmail}
+                onChangeText={setResetEmail}
+              />
+            </View>
+
+            <TouchableOpacity
+              style={[styles.primaryBtn, { marginTop: 18 }]}
+              onPress={handleSendResetLink}
+              disabled={resetSending}
+              activeOpacity={0.8}
+            >
+              {resetSending ? (
+                <ActivityIndicator size="small" color="#ffffff" />
+              ) : (
+                <Text style={styles.primaryBtnText}>Send Reset Link & Unlock</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };

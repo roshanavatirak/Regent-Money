@@ -21,8 +21,10 @@ export const getBackendUrl = (): string => {
   // In Web Browser: match the browser's current hostname (localhost, 127.0.0.1, or LAN IP)
   if (Platform.OS === 'web') {
     if (typeof window !== 'undefined' && window.location && window.location.hostname) {
+      const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+      const protocol = isLocal ? 'http:' : window.location.protocol;
       const port = (envUrl && envUrl.match(/:(\d+)/)?.[1]) || '3000';
-      return `${window.location.protocol}//${window.location.hostname}:${port}`;
+      return `${protocol}//${window.location.hostname}:${port}`;
     }
     if (envUrl && !envUrl.includes('10.0.2.2')) {
       return envUrl.replace(/\/+$/, '');

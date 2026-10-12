@@ -27,7 +27,7 @@ export class Transaction {
   timestamp: number;
 
   @Column({ name: 'bank_profile_id', type: 'text', nullable: true })
-  bankProfileId: string;
+  bankProfileId: string | null;
 
   @Column({ name: 'sms_id', type: 'text', nullable: true })
   smsId: string;

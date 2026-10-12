@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { Logger } from '@nestjs/common';
 import * as dns from 'dns';
+import { timingSafeEqual } from 'crypto';
 
 import { json, urlencoded } from 'express';
 
@@ -16,6 +17,26 @@ async function bootstrap() {
   app.use(json({ limit: '25mb' }));
   app.use(urlencoded({ extended: true, limit: '25mb' }));
 
+  // Cloudflare Origin Authentication (Connection ②):
+  // Enforces X-Origin-Auth only when CF_ORIGIN_SECRET is configured in environment.
+  // Bypass /health so Render internal deployment health checks continue working.
+  app.use((req: any, res: any, next: any) => {
+    const secret = process.env.CF_ORIGIN_SECRET;
+    if (!secret) return next();
+    if (req.path === '/health') return next();
+
+    const given = req.headers['x-origin-auth'];
+    if (
+      typeof given === 'string' &&
+      given.length === secret.length &&
+      timingSafeEqual(Buffer.from(given), Buffer.from(secret))
+    ) {
+      return next();
+    }
+
+    res.status(403).end();
+  });
+
   // Trust proxy for Render / Cloudflare reverse proxies so req.ip and rate-limiting work accurately
   (app.getHttpAdapter().getInstance() as any)?.set?.('trust proxy', 1);
 
@@ -29,6 +50,7 @@ async function bootstrap() {
     'https://regentmoney.com',
     'https://www.regentmoney.com',
     'https://app.regentmoney.com',
+    'https://api.regentmoney.com',
     'https://regent-money.onrender.com',
   ];
 
@@ -70,6 +92,7 @@ async function bootstrap() {
       'X-Requested-With',
       'x-internal-key',
       'x-broadcast-secret',
+      'x-origin-auth',
       'Access-Control-Request-Private-Network',
     ],
     credentials: true,
@@ -84,7 +107,11 @@ async function bootstrap() {
   });
 
   const port = process.env.PORT || 3000;
-  await app.listen(port, '0.0.0.0');
+  if (process.env.NODE_ENV === 'production') {
+    await app.listen(port, '0.0.0.0');
+  } else {
+    await app.listen(port);
+  }
   logger.log(`NestJS server started successfully. Listening on port: ${port}`);
 }
 bootstrap();

@@ -15,4 +15,5 @@ export class OcrSyncDto {
   bankProfileId: string;
   transactions: OcrSyncTransactionDto[];
   updatedBalance?: number | null;
+  applyBalanceChange?: boolean;
 }

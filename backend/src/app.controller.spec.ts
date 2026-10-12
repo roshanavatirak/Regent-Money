@@ -15,8 +15,8 @@ describe('AppController', () => {
   });
 
   describe('root', () => {
-    it('should return "Hello World!"', () => {
-      expect(appController.getHello()).toBe('Hello World!');
+    it('should return "Regent Money Backend API"', () => {
+      expect(appController.getHello()).toBe('Regent Money Backend API');
     });
   });
 });

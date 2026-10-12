@@ -186,8 +186,16 @@ export const authService = {
     });
 
     if (!response.ok) {
-      const errData = await response.json();
-      throw new Error(errData.message || 'Invalid credentials.');
+      const errData = await response.json().catch(() => ({}));
+      const err: any = new Error(errData.message || 'Invalid credentials.');
+      err.status = response.status;
+      err.locked = Boolean(errData.locked || response.status === 423);
+      err.lockedUntil = errData.lockedUntil;
+      err.remainingSeconds = errData.remainingSeconds;
+      err.remainingMinutes = errData.remainingMinutes;
+      err.remainingAttempts = errData.attemptsLeft;
+      err.tier = errData.tier;
+      throw err;
     }
 
     const data = await response.json();
@@ -205,6 +213,38 @@ export const authService = {
     syncService.sync().catch((e) => console.warn('[Auth] Initial sync pull failed:', e));
 
     return profile;
+  },
+
+  /**
+   * Dispatches a password reset link to user's registered email
+   */
+  async requestPasswordReset(email: string): Promise<{ message: string }> {
+    const response = await fetch(`${BACKEND_URL}/auth/forgot-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email.trim().toLowerCase() }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.message || 'Failed to request password reset.');
+    }
+    return data;
+  },
+
+  /**
+   * Resets password with token and immediately unlocks account
+   */
+  async resetPassword(token: string, newPassword: string): Promise<{ message: string; success: boolean }> {
+    const response = await fetch(`${BACKEND_URL}/auth/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: token.trim(), newPassword }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.message || 'Failed to reset password.');
+    }
+    return data;
   },
 
   /**

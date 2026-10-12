@@ -10,13 +10,21 @@ import android.util.Log
 class SmsReceiver : BroadcastReceiver() {
 
     companion object {
-        private val OTP_PATTERN = Regex(
-            "(?i)\\b(otp|one[ -]?time (password|pin)|verification code|passcode)\\b[^0-9]{0,25}\\d{4,8}"
+        private val TRANSACTION_INDICATOR_PATTERN = Regex(
+            "(?i)\\b(debited|credited|withdrawn|spent|paid|sent|deposited|refunded|done at|purchase of|txn of|transaction of|transfer to|transfer from|trf to|trf from|avl bal|available balance)\\b"
         )
 
-        private val OTP_PATTERN_REVERSE = Regex(
-            "(?i)\\b\\d{4,8}\\b[^0-9]{0,25}\\b(is (your|the) )?(otp|one[ -]?time (password|pin)|verification code)\\b"
+        private val TRUE_OTP_PATTERN = Regex(
+            "(?i)\\b(?:is\\s+(?:your\\s+)?otp|your\\s+otp\\s+is|use\\s+otp|enter\\s+otp|otp\\s+to\\s+verify|otp\\s+for\\s+(?:txn|transaction|login)|secret\\s+(?:otp|code)|verification\\s+code\\s+is|is\\s+the\\s+verification\\s+code|one\\s*time\\s*password\\s*is)\\b"
         )
+
+        private fun isOtpPrompt(body: String): Boolean {
+            // Never drop alerts that indicate actual financial balance or money movement
+            if (TRANSACTION_INDICATOR_PATTERN.containsMatchIn(body)) {
+                return false
+            }
+            return TRUE_OTP_PATTERN.containsMatchIn(body)
+        }
 
         private val DEFAULT_BANK_SENDERS = setOf(
             "HDFCBK", "HDFCBN", "HDFCLT", "HDFCAL", "HDFCCC", "HDFCSM",
@@ -61,8 +69,8 @@ class SmsReceiver : BroadcastReceiver() {
                     val body = msgList.joinToString(separator = "") { it.displayMessageBody ?: "" }
                     val timestamp = msgList.firstOrNull()?.timestampMillis ?: System.currentTimeMillis()
 
-                    // Strict on-device filtering: drop OTPs and non-bank messages before anything leaves the device
-                    if (!isAllowedBankSender(context, sender) || OTP_PATTERN.containsMatchIn(body) || OTP_PATTERN_REVERSE.containsMatchIn(body)) {
+                    // Strict on-device filtering: drop OTP prompts and non-bank messages before anything leaves the device
+                    if (!isAllowedBankSender(context, sender) || isOtpPrompt(body)) {
                         continue
                     }
 

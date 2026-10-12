@@ -65,6 +65,14 @@ import { getExecutiveGreeting, getSessionGreeting } from '../constants/aiGreetin
 import { SmsSenderTagsManager } from '../components/SmsSenderTagsManager';
 import { getSmsSenderSuggestions, formatSmsSenderTags } from '../constants/bankSmsSenders';
 import { isExcludedFromBudget } from '../services/budgetService';
+import {
+  EXECUTIVE_PROMPT_SETS,
+  getWeeklySetIndex,
+  getRandomCardIndex,
+} from '../constants/executivePrompts';
+import { QuickActionsRow } from '../components/QuickActionsRow';
+import { FinancialCalendarScreen } from '../screens/FinancialCalendarScreen';
+import { ReviewTransactionsModal } from './ReviewTransactionsModal';
 
 const POPULAR_BANKS = [
   { code: 'SBIN', name: 'State Bank of India', short: 'SBI Bank' },
@@ -275,7 +283,7 @@ if (Platform.OS === 'web') {
         confirmText: confirmBtn?.text || 'OK',
         isDestructive: confirmBtn?.style === 'destructive',
         icon: confirmBtn?.style === 'destructive' ? 'trash-2' : 'alert-triangle',
-        onConfirm: confirmBtn?.onPress || (() => {}),
+        onConfirm: confirmBtn?.onPress || (() => { }),
         onCancel: cancelBtn?.onPress,
       });
     }
@@ -1074,7 +1082,7 @@ const SpendingDonutChart: React.FC<SpendingDonutChartProps> = ({
   }, [data]);
 
   // Leave room for outer percentage badges around the ring
-  const ringPadding = 44;
+  const ringPadding = 48;
   const radius = (size - ringPadding) / 2;
   const cx = size / 2;
   const cy = size / 2;
@@ -1135,15 +1143,25 @@ const SpendingDonutChart: React.FC<SpendingDonutChartProps> = ({
       label: string;
     }> = [];
 
-    // Provide percentage badges for all slices up to top 5 (matching the legend)
-    data.forEach((item, index) => {
+    // Provide percentage badges for all slices around the circle
+    data.forEach((item) => {
       const sweepAngle = (item.value / total) * 360;
       const pct = (item.value / total) * 100;
       const midAngleDeg = currentAngle + sweepAngle / 2;
 
-      if (index < 5 && item.value > 0) {
-        // Exact decimal percentage up to 2 decimal places (e.g. 52.10%, 28.76%, 16.81%, 2.12%, 0.21%)
-        const pctText = pct <= 0 ? '0%' : (pct % 1 === 0 ? `${pct}%` : `${pct.toFixed(2)}%`);
+      if (item.value > 0) {
+        // Exact percentage formatting: show 2 decimals if < 0.1% (e.g. 0.09%), 1 decimal otherwise (e.g. 12.6%)
+        const pctText =
+          pct <= 0
+            ? '0%'
+            : pct < 0.01
+              ? '<0.01%'
+              : pct < 0.1
+                ? `${pct.toFixed(2)}%`
+                : pct % 1 === 0
+                  ? `${pct}%`
+                  : `${pct.toFixed(1)}%`;
+
         rawBadges.push({
           pctText,
           color: item.color,
@@ -1158,10 +1176,10 @@ const SpendingDonutChart: React.FC<SpendingDonutChartProps> = ({
     if (rawBadges.length === 0) return [];
 
     // Multi-pass angular relaxation to guarantee adjacent badges never overlap
-    const minGapDeg = 30;
+    const minGapDeg = 38;
     const adjustedAngles = rawBadges.map((b) => b.angle);
 
-    for (let pass = 0; pass < 12; pass++) {
+    for (let pass = 0; pass < 30; pass++) {
       for (let i = 0; i < adjustedAngles.length; i++) {
         for (let j = i + 1; j < adjustedAngles.length; j++) {
           let diff = adjustedAngles[j] - adjustedAngles[i];
@@ -1176,14 +1194,14 @@ const SpendingDonutChart: React.FC<SpendingDonutChartProps> = ({
               adjustedAngles[j] += push;
             } else {
               adjustedAngles[i] += push;
-              adjustedAngles[j] += push;
+              adjustedAngles[j] -= push;
             }
           }
         }
       }
     }
 
-    const labelRadius = radius + strokeWidth / 2 + 10;
+    const labelRadius = radius + strokeWidth / 2 + 7;
     return rawBadges.map((badge, idx) => {
       const rad = (adjustedAngles[idx] * Math.PI) / 180;
       return {
@@ -1778,6 +1796,38 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
     }
   };
 
+  const formatCompactTime = (timestamp: number | string) => {
+    if (!timestamp) return '';
+    const d = new Date(Number(timestamp));
+    if (isNaN(d.getTime())) return '';
+    const now = new Date();
+    const isToday = d.toDateString() === now.toDateString();
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const isYesterday = d.toDateString() === yesterday.toDateString();
+
+    const timeStr = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+    if (isToday) return timeStr;
+    if (isYesterday) return 'Yesterday';
+    return d.toLocaleDateString([], { day: 'numeric', month: 'short' });
+  };
+
+  const getOneLineNotification = (title: string, body: string) => {
+    let t = (title || '').trim();
+    let b = (body || '').trim();
+
+    // If title has content and isn't generic, use title
+    if (t && t.length > 3 && !t.toLowerCase().startsWith('notification') && !t.toLowerCase().startsWith('alert')) {
+      return t;
+    }
+    // Otherwise fallback to first energetic phrase of body
+    if (b) {
+      const firstSentence = b.split(/[.!?]/)[0].trim();
+      return firstSentence ? `${firstSentence}!` : b;
+    }
+    return t || 'AI Alert!';
+  };
+
   return (
     <Modal
       visible={visible}
@@ -1786,20 +1836,66 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
       onRequestClose={onClose}
     >
       <View style={styles.modalOverlayFull}>
-        <View style={[styles.modalCardFull, { height: '85%' }]}>
+        <View
+          style={[
+            styles.modalCardFull,
+            {
+              height: '85%',
+              padding: 0,
+              overflow: 'hidden',
+              backgroundColor: isDark ? '#101016' : '#ffffff',
+            },
+          ]}
+        >
           {/* Header */}
-          <View style={navStyles.modalHeader}>
+          <View
+            style={{
+              flexDirection: 'row',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              paddingHorizontal: 20,
+              paddingTop: 18,
+              paddingBottom: 14,
+              borderBottomWidth: 1,
+              borderBottomColor: isDark ? '#1e1e28' : '#eff0f5',
+            }}
+          >
             <View>
-              <Text style={navStyles.modalTitle}>Notifications</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Text style={{ fontSize: 18, fontWeight: '800', color: colors.text }}>Notifications</Text>
+                {unreadCount > 0 ? (
+                  <View
+                    style={{
+                      backgroundColor: 'rgba(45, 186, 78, 0.15)',
+                      paddingHorizontal: 7,
+                      paddingVertical: 2,
+                      borderRadius: 8,
+                      borderWidth: 1,
+                      borderColor: 'rgba(45, 186, 78, 0.25)',
+                    }}
+                  >
+                    <Text style={{ color: '#2dba4e', fontSize: 10, fontWeight: '800' }}>
+                      {unreadCount} NEW
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
               <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
-                AI agent briefs and anomalies
+                Regent AI briefs & executive anomalies
               </Text>
             </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               {unreadCount > 0 && (
                 <TouchableOpacity
                   onPress={handleMarkAllRead}
-                  style={{ marginRight: 16, backgroundColor: colors.buttonSecondaryBackground, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: colors.border }}
+                  style={{
+                    backgroundColor: colors.buttonSecondaryBackground,
+                    paddingHorizontal: 10,
+                    paddingVertical: 6,
+                    borderRadius: 8,
+                    borderWidth: 1,
+                    borderColor: colors.border,
+                  }}
                   activeOpacity={0.7}
                 >
                   <Text style={{ color: colors.accent, fontSize: 11, fontWeight: '700' }}>Mark all read</Text>
@@ -1810,7 +1906,7 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
                 style={navStyles.closeBtn}
                 activeOpacity={0.7}
               >
-                <Feather name="x" size={20} color="#8E8E9F" />
+                <Feather name="x" size={18} color="#8E8E9F" />
               </TouchableOpacity>
             </View>
           </View>
@@ -1822,7 +1918,7 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
               <Ionicons name="notifications-off-outline" size={48} color="#8E8E9F" style={{ marginBottom: 12 }} />
               <Text style={{ color: colors.text, fontSize: 16, fontWeight: '700', textAlign: 'center' }}>All caught up!</Text>
               <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 4, textAlign: 'center', lineHeight: 18 }}>
-                AI Agents are actively monitoring SMS logs and budget anomalies. You will be notified here when an action is required.
+                Regent AI is actively monitoring SMS logs and budget anomalies. You will be notified here when action is required.
               </Text>
             </View>
           ) : (
@@ -1830,10 +1926,12 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
               data={notifications}
               keyExtractor={(item) => item.id}
               showsVerticalScrollIndicator={false}
-              contentContainerStyle={{ paddingBottom: 20 }}
+              contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 24 }}
               renderItem={({ item }) => {
                 const isUnread = !item.readStatus;
                 const isCorrection = item.payload?.action === 'category_correction';
+                const oneLineMessage = getOneLineNotification(item.title, item.body);
+                const isAlert = item.type === 'anomaly' || item.type === 'budget_alert';
 
                 return (
                   <TouchableOpacity
@@ -1844,100 +1942,138 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
                       }
                     }}
                     style={{
-                      backgroundColor: colors.inputBackground,
+                      backgroundColor: isUnread
+                        ? (isDark ? 'rgba(45, 186, 78, 0.05)' : 'rgba(45, 186, 78, 0.04)')
+                        : (isDark ? '#15151e' : '#f9fafc'),
                       borderWidth: 1,
-                      borderColor: isUnread ? colors.accent : colors.border,
+                      borderColor: isUnread
+                        ? (isDark ? 'rgba(45, 186, 78, 0.35)' : 'rgba(45, 186, 78, 0.4)')
+                        : (isDark ? '#232330' : '#e7e9f2'),
                       borderRadius: 14,
-                      padding: 16,
-                      marginVertical: 6,
-                      shadowColor: colors.shadowColor,
-                      shadowOffset: { width: 0, height: 2 },
-                      shadowOpacity: 0.03,
-                      shadowRadius: 4,
+                      paddingHorizontal: 12,
+                      paddingVertical: 10,
+                      marginVertical: 3.5,
+                      shadowColor: '#000',
+                      shadowOffset: { width: 0, height: 1 },
+                      shadowOpacity: isDark ? 0.2 : 0.04,
+                      shadowRadius: 2,
                       elevation: 1,
                     }}
                   >
                     <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
-                      {/* Icon type */}
-                      <View style={{
-                        width: 32,
-                        height: 32,
-                        borderRadius: 16,
-                        backgroundColor: isUnread ? colors.accentMuted : (isDark ? '#1e1e2c' : '#f0f4f8'),
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        marginRight: 10,
-                        marginTop: 2,
-                      }}>
-                        <Ionicons
-                          name={item.type === 'anomaly' || item.type === 'budget_alert' ? 'warning-outline' : 'chatbubble-ellipses-outline'}
-                          size={16}
-                          color={isUnread ? colors.accent : colors.textSecondary}
+                      {/* Regent AI Official Logo Badge */}
+                      <View
+                        style={{
+                          width: 32,
+                          height: 32,
+                          borderRadius: 9,
+                          backgroundColor: isDark ? '#16231a' : '#ebf8f0',
+                          borderWidth: 1,
+                          borderColor: isUnread
+                            ? (isDark ? 'rgba(45, 186, 78, 0.5)' : '#2dba4e')
+                            : (isDark ? '#243b2a' : '#ccecd7'),
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          marginRight: 10,
+                          marginTop: 1,
+                          position: 'relative',
+                        }}
+                      >
+                        <Image
+                          source={require('../../assets/tree.png')}
+                          style={{ width: 19, height: 19 }}
+                          resizeMode="contain"
                         />
-                      </View>
-
-                      <View style={{ flex: 1 }}>
-                        <Text style={{ color: colors.text, fontSize: 14, fontWeight: '700' }}>
-                          {item.title}
-                        </Text>
-                        <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 4, lineHeight: 18 }}>
-                          {item.body}
-                        </Text>
-
-                        {/* Category Correction Actions */}
-                        {isCorrection && isUnread && (
-                          <View style={{ flexDirection: 'row', marginTop: 12 }}>
-                            <TouchableOpacity
-                              style={{
-                                backgroundColor: colors.accent,
-                                paddingHorizontal: 12,
-                                paddingVertical: 6,
-                                borderRadius: 8,
-                                marginRight: 10,
-                              }}
-                              onPress={() => handleAction(item, 'approve')}
-                              activeOpacity={0.8}
-                            >
-                              <Text style={{ color: '#24292e', fontSize: 12, fontWeight: '800' }}>
-                                Approve {item.payload.suggestedCategory}
-                              </Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              style={{
-                                borderWidth: 1,
-                                borderColor: colors.border,
-                                paddingHorizontal: 12,
-                                paddingVertical: 6,
-                                borderRadius: 8,
-                              }}
-                              onPress={() => handleAction(item, 'keep_old')}
-                              activeOpacity={0.8}
-                            >
-                              <Text style={{ color: colors.text, fontSize: 12, fontWeight: '700' }}>
-                                Keep {item.payload.oldCategory}
-                              </Text>
-                            </TouchableOpacity>
-                          </View>
+                        {isAlert && (
+                          <View
+                            style={{
+                              position: 'absolute',
+                              bottom: -2,
+                              right: -2,
+                              width: 8,
+                              height: 8,
+                              borderRadius: 4,
+                              backgroundColor: '#f59e0b',
+                              borderWidth: 1.5,
+                              borderColor: isDark ? '#15151e' : '#ffffff',
+                            }}
+                          />
                         )}
+                      </View>
 
-                        {/* Relative time */}
-                        <Text style={{ color: colors.textTertiary, fontSize: 10, marginTop: 8 }}>
-                          {new Date(item.createdAt).toLocaleString('en-IN')}
+                      {/* Message Content: Clean, Full, NEVER truncated! */}
+                      <View style={{ flex: 1, marginRight: 8 }}>
+                        <Text
+                          style={{
+                            color: colors.text,
+                            fontSize: 13,
+                            fontWeight: '700',
+                            lineHeight: 18,
+                          }}
+                        >
+                          {oneLineMessage}
                         </Text>
                       </View>
 
-                      {/* Read status dot */}
-                      {isUnread && (
-                        <View style={{
-                          width: 8,
-                          height: 8,
-                          borderRadius: 4,
-                          backgroundColor: colors.accent,
-                          marginLeft: 8,
-                          marginTop: 6,
-                        }} />
-                      )}
+                      {/* Right: Timestamp & Unread Dot */}
+                      <View style={{ alignItems: 'flex-end', marginLeft: 2 }}>
+                        <Text
+                          style={{
+                            color: colors.textTertiary || '#8E8E9F',
+                            fontSize: 10,
+                            fontWeight: '600',
+                          }}
+                        >
+                          {formatCompactTime(item.createdAt)}
+                        </Text>
+                        {isUnread && (
+                          <View
+                            style={{
+                              width: 6,
+                              height: 6,
+                              borderRadius: 3,
+                              backgroundColor: '#2dba4e',
+                              marginTop: 4,
+                            }}
+                          />
+                        )}
+                      </View>
                     </View>
+
+                    {/* Category Correction Actions (If needed) */}
+                    {isCorrection && isUnread && (
+                      <View style={{ flexDirection: 'row', marginTop: 8, gap: 8, marginLeft: 42 }}>
+                        <TouchableOpacity
+                          style={{
+                            backgroundColor: '#2dba4e',
+                            paddingHorizontal: 11,
+                            paddingVertical: 5,
+                            borderRadius: 7,
+                          }}
+                          onPress={() => handleAction(item, 'approve')}
+                          activeOpacity={0.8}
+                        >
+                          <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '800' }}>
+                            Approve {item.payload?.suggestedCategory}
+                          </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={{
+                            borderWidth: 1,
+                            borderColor: colors.border,
+                            paddingHorizontal: 11,
+                            paddingVertical: 5,
+                            borderRadius: 7,
+                          }}
+                          onPress={() => handleAction(item, 'keep_old')}
+                          activeOpacity={0.8}
+                        >
+                          <Text style={{ color: colors.text, fontSize: 11, fontWeight: '700' }}>
+                            Keep {item.payload?.oldCategory}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
                   </TouchableOpacity>
                 );
               }}
@@ -2160,37 +2296,53 @@ const AppTopBar = ({ onOpenAddBank }: AppTopBarProps) => {
   );
 };
 
-const TransactionRowItem = React.memo(({ tx, styles }: { tx: any; styles: any }) => (
-  <View style={styles.txItem}>
-    <View style={styles.txLeft}>
-      <View style={styles.txIconBg}>
-        <Feather
-          name={tx.category === 'food' ? 'coffee' : tx.category === 'transport' ? 'navigation' : 'tag'}
-          size={16}
-          color="#2dba4e"
-        />
-      </View>
-      <View style={styles.txMeta}>
-        <Text style={styles.merchantName}>{tx.merchant}</Text>
-        <Text style={styles.txDate}>{new Date(tx.timestamp).toLocaleDateString('en-IN')}</Text>
-      </View>
-    </View>
-    <View style={styles.txRight}>
-      <Text style={styles.txAmount}>-₹{tx.amount}</Text>
-      {tx.isAnomaly && (
-        <View style={styles.anomalyBadge}>
-          <Text style={styles.anomalyText}>Anomaly</Text>
+const TransactionRowItem = React.memo(({ tx, styles }: { tx: any; styles: any }) => {
+  const isCredit = tx.type === 'credit';
+  const amountVal = Math.abs(parseFloat(tx.amount || 0));
+  const formattedAmount = `${isCredit ? '+' : '-'}₹${amountVal.toLocaleString('en-IN')}`;
+
+  return (
+    <View style={styles.txItem}>
+      <View style={styles.txLeft}>
+        <View style={styles.txIconBg}>
+          <Feather
+            name={tx.category === 'food' ? 'coffee' : tx.category === 'transport' ? 'navigation' : 'tag'}
+            size={16}
+            color="#2dba4e"
+          />
         </View>
-      )}
+        <View style={styles.txMeta}>
+          <Text style={styles.merchantName} numberOfLines={1} ellipsizeMode="tail">
+            {tx.merchant || 'Unknown Merchant'}
+          </Text>
+          <Text style={styles.txDate} numberOfLines={1}>
+            {new Date(tx.timestamp).toLocaleDateString('en-IN')}
+          </Text>
+        </View>
+      </View>
+      <View style={styles.txRight}>
+        <Text
+          style={[styles.txAmount, isCredit && { color: '#2dba4e' }]}
+          numberOfLines={1}
+        >
+          {formattedAmount}
+        </Text>
+        {tx.isAnomaly && (
+          <View style={styles.anomalyBadge}>
+            <Text style={styles.anomalyText} numberOfLines={1}>Anomaly</Text>
+          </View>
+        )}
+      </View>
     </View>
-  </View>
-));
+  );
+});
 
 const DashboardScreen = () => {
   const { colors, isDark } = useTheme();
   const styles = getStyles(colors);
   const navStyles = getNavStyles(colors);
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation<any>();
   const { sync } = useSyncDb();
 
   const user = useAuthStore((state) => state.user);
@@ -2203,6 +2355,8 @@ const DashboardScreen = () => {
   const bankProfiles = useBankStore((state) => state.bankProfiles);
   const [addBankModalVisible, setAddBankModalVisible] = useState(false);
   const [netWorthModalVisible, setNetWorthModalVisible] = useState(false);
+  const [reviewModalVisible, setReviewModalVisible] = useState(false);
+  const [isPrivacyMasked, setIsPrivacyMasked] = useState(false);
 
   // Slide Animation for Onboarding notification banner
   const bannerY = useSharedValue(-100);
@@ -2246,6 +2400,12 @@ const DashboardScreen = () => {
 
   const snapshots = useAnalyticsStore((state) => state.snapshots);
   const incomeCurrentMonth = useAnalyticsStore((state) => state.incomeCurrentMonth);
+
+  const pendingReviewCount = useMemo(() => {
+    return (transactions || []).filter(
+      (tx) => !tx.bankProfileId || tx.status === 'pending_review'
+    ).length;
+  }, [transactions]);
 
   // Fetch data on screen focus with cached SWR
   useFocusEffect(
@@ -2296,11 +2456,35 @@ const DashboardScreen = () => {
     const entries = Object.entries(map).filter(([_, val]) => val > 0);
     entries.sort((a, b) => b[1] - a[1]);
 
-    return entries.map(([key, value], index) => {
-      const formattedLabel = key
-        .replace(/_/g, ' ')
-        .replace(/\b\w/g, (c) => c.toUpperCase());
+    // Cap to exactly 5 items: if > 5 categories, show top 4 and bundle remaining as 5th 'Others' option
+    if (entries.length <= 5) {
+      return entries.map(([key, value], index) => {
+        const cleanKey = key.toLowerCase().trim();
+        const formattedLabel = cleanKey === 'miscellaneous'
+          ? 'Misc'
+          : key
+            .replace(/_/g, ' ')
+            .replace(/\b\w/g, (c) => c.toUpperCase());
+        const color = getSpendingCategoryColor(cleanKey, isDark, index);
+
+        return {
+          label: formattedLabel,
+          value,
+          color,
+        };
+      });
+    }
+
+    const top4 = entries.slice(0, 4);
+    const remaining = entries.slice(4);
+
+    const result = top4.map(([key, value], index) => {
       const cleanKey = key.toLowerCase().trim();
+      const formattedLabel = cleanKey === 'miscellaneous'
+        ? 'Misc'
+        : key
+          .replace(/_/g, ' ')
+          .replace(/\b\w/g, (c) => c.toUpperCase());
       const color = getSpendingCategoryColor(cleanKey, isDark, index);
 
       return {
@@ -2309,6 +2493,15 @@ const DashboardScreen = () => {
         color,
       };
     });
+
+    const othersTotal = remaining.reduce((sum, [_, val]) => sum + val, 0);
+    result.push({
+      label: 'Others',
+      value: othersTotal,
+      color: getSpendingCategoryColor('other', isDark, 4),
+    });
+
+    return result;
   }, [transactions, filterCategory, isDark]);
 
   const recentTransactions = useMemo(() => {
@@ -2357,7 +2550,9 @@ const DashboardScreen = () => {
           activeOpacity={0.8}
         >
           <Text style={styles.cardTitle}>Total Net Worth</Text>
-          <Text style={styles.cardBigNumber}>₹{liveNetWorth.toLocaleString('en-IN')}</Text>
+          <Text style={styles.cardBigNumber}>
+            {isPrivacyMasked ? '₹ •••••' : `₹${liveNetWorth.toLocaleString('en-IN')}`}
+          </Text>
           <Text style={styles.cardFooter}>Active Wealth Compounder</Text>
         </TouchableOpacity>
 
@@ -2398,16 +2593,35 @@ const DashboardScreen = () => {
           <View style={styles.cardHalf}>
             <Text style={styles.cardTitle}>Spent (Current Month)</Text>
             <Text style={styles.cardBigNumberSmall}>
-              ₹{currentMonthExpenses.toLocaleString('en-IN')}
+              {isPrivacyMasked ? '₹ •••••' : `₹${currentMonthExpenses.toLocaleString('en-IN')}`}
             </Text>
           </View>
           <View style={styles.cardHalf}>
             <Text style={styles.cardTitle}>Income (Current Month)</Text>
             <Text style={[styles.cardBigNumberSmall, { color: colors.accent }]}>
-              ₹{incomeCurrentMonth.toLocaleString('en-IN')}
+              {isPrivacyMasked ? '₹ •••••' : `₹${incomeCurrentMonth.toLocaleString('en-IN')}`}
             </Text>
           </View>
         </View>
+
+        {/* Paytm-Style Quick Actions Horizontal Row */}
+        <QuickActionsRow
+          onOpenCalendar={() => {
+            try {
+              if (navigation && typeof navigation.navigate === 'function') {
+                navigation.navigate('FinancialCalendar', {
+                  userCreatedAt: user?.createdAt,
+                });
+              } else if (navigationRef?.isReady?.()) {
+                (navigationRef.navigate as any)('FinancialCalendar', {
+                  userCreatedAt: user?.createdAt,
+                });
+              }
+            } catch (err) {
+              console.warn('[Calendar Navigation Error]:', err);
+            }
+          }}
+        />
 
         {/* Category Horizontal Filter Row */}
         <View style={styles.filterWrapper}>
@@ -2440,23 +2654,23 @@ const DashboardScreen = () => {
               {filterCategory === null ? 'Spending breakdown' : `${filterCategory.toUpperCase()} breakdown`}
             </Text>
             <View style={styles.donutRow}>
-              <View style={{ width: 156, height: 156, justifyContent: 'center', alignItems: 'center' }}>
-                <SpendingDonutChart data={donutData} size={156} strokeWidth={14} />
+              <View style={{ width: 140, height: 140, justifyContent: 'center', alignItems: 'center', flexShrink: 0 }}>
+                <SpendingDonutChart data={donutData} size={140} strokeWidth={13} />
               </View>
               <View style={styles.donutLegend}>
-                {donutData.slice(0, 5).map((item, index) => (
+                {donutData.map((item, index) => (
                   <View key={index} style={styles.legendItem}>
                     <View style={[styles.legendIndicator, { backgroundColor: item.color }]} />
-                    <Text style={[styles.legendText, { color: colors.textSecondary }]} numberOfLines={1}>
-                      {item.label}: <Text style={{ color: colors.text, fontWeight: '700' }}>₹{item.value.toLocaleString('en-IN')}</Text>
-                    </Text>
+                    <View style={styles.legendTextWrapper}>
+                      <Text style={styles.legendCategoryText} numberOfLines={1} ellipsizeMode="tail">
+                        {item.label}:
+                      </Text>
+                      <Text style={styles.legendAmountText} numberOfLines={1}>
+                        ₹{item.value.toLocaleString('en-IN')}
+                      </Text>
+                    </View>
                   </View>
                 ))}
-                {donutData.length > 5 && (
-                  <Text style={{ fontSize: 10, color: colors.textSecondary, marginTop: 2, fontStyle: 'italic' }}>
-                    +{donutData.length - 5} more categories
-                  </Text>
-                )}
               </View>
             </View>
           </View>
@@ -2494,6 +2708,18 @@ const DashboardScreen = () => {
         snapshots={snapshots}
         liveNetWorth={liveNetWorth}
         loading={false}
+      />
+
+      {/* Review Transactions Modal */}
+      <ReviewTransactionsModal
+        visible={reviewModalVisible}
+        onClose={() => setReviewModalVisible(false)}
+        bank={null}
+        rawTransactions={[]}
+        onConfirmSuccess={async () => {
+          setReviewModalVisible(false);
+          await sync();
+        }}
       />
     </View>
   );
@@ -2704,76 +2930,19 @@ const ChatScreen = () => {
     });
   };
 
-  const EXECUTIVE_PROMPTS = [
-    {
-      id: 'liquidity',
-      icon: 'briefcase',
-      title: 'Total Liquidity & Balances',
-      query: 'What is my total liquidity across all connected bank accounts?',
-    },
-    {
-      id: 'cashflow',
-      icon: 'activity',
-      title: 'Cash Flow & Burn Rate',
-      query: 'Analyze my net cash flow and monthly burn rate this month.',
-    },
-    {
-      id: 'budgets',
-      icon: 'target',
-      title: 'Budget & Capital Allocation',
-      query: 'Review my remaining budget and category spending limits.',
-    },
-    {
-      id: 'expenses',
-      icon: 'trending-down',
-      title: 'Top Expense Analysis',
-      query: 'What are my largest single transactions and expenses recently?',
-    },
-    {
-      id: 'inflows',
-      icon: 'dollar-sign',
-      title: 'Income & Credit Inflow',
-      query: 'Summarize all credit deposits and salary inflows this month.',
-    },
-    {
-      id: 'goals',
-      icon: 'award',
-      title: 'Savings & Wealth Goals',
-      query: 'What is my progress toward my active savings targets?',
-    },
-    {
-      id: 'recurring',
-      icon: 'repeat',
-      title: 'Recurring Subscriptions & Bills',
-      query: 'Identify all my recurring payments and utility charges.',
-    },
-    {
-      id: 'lifestyle',
-      icon: 'coffee',
-      title: 'Dining & Lifestyle Spending',
-      query: 'How much have I spent on food, dining, and travel recently?',
-    },
-    {
-      id: 'networth',
-      icon: 'pie-chart',
-      title: 'Monthly Net Worth Snapshot',
-      query: 'Calculate my total estimated net worth across all accounts.',
-    },
-    {
-      id: 'tax',
-      icon: 'zap',
-      title: 'Financial Optimization Tips',
-      query: 'Provide 3 actionable tips to optimize my monthly cash flow.',
-    },
-    {
-      id: 'security',
-      icon: 'shield',
-      title: 'Anomaly & Security Check',
-      query: 'Were there any unusual spikes or suspicious transactions?',
-    },
-  ];
+  const [activeSetIndex, setActiveSetIndex] = useState<number>(() => {
+    const saved = mmkvStorage.getNumber('regent_active_prompt_set_idx');
+    if (saved !== undefined && !isNaN(saved)) {
+      return ((saved % EXECUTIVE_PROMPT_SETS.length) + EXECUTIVE_PROMPT_SETS.length) % EXECUTIVE_PROMPT_SETS.length;
+    }
+    return getWeeklySetIndex();
+  });
 
-  const [cardIndex, setCardIndex] = useState(0);
+  const activeSet = EXECUTIVE_PROMPT_SETS[activeSetIndex] || EXECUTIVE_PROMPT_SETS[0];
+  const activeDeck = activeSet.cards;
+
+  // Dynamic opening card on fresh open so every open or different user sees a new card
+  const [cardIndex, setCardIndex] = useState<number>(() => getRandomCardIndex(11));
   const pan = React.useRef(new RNAnimated.ValueXY()).current;
 
   const cardRotate = pan.x.interpolate({
@@ -2788,10 +2957,25 @@ const ChatScreen = () => {
     extrapolate: 'clamp',
   });
 
+  const advanceToNextSet = useCallback(() => {
+    pan.setValue({ x: 0, y: 0 });
+    setActiveSetIndex((prev) => {
+      const next = (prev + 1) % EXECUTIVE_PROMPT_SETS.length;
+      mmkvStorage.setNumber('regent_active_prompt_set_idx', next);
+      return next;
+    });
+    setCardIndex(0);
+  }, [pan]);
+
+  const restartCurrentSet = useCallback(() => {
+    pan.setValue({ x: 0, y: 0 });
+    setCardIndex(0);
+  }, [pan]);
+
   const nextCard = useCallback(() => {
     pan.setValue({ x: 0, y: 0 });
-    setCardIndex((prev) => (prev + 1) % (EXECUTIVE_PROMPTS.length + 1));
-  }, [pan, EXECUTIVE_PROMPTS.length]);
+    setCardIndex((prev) => (prev + 1) % (activeDeck.length + 1));
+  }, [pan, activeDeck.length]);
 
   const panResponder = useMemo(
     () =>
@@ -2827,9 +3011,9 @@ const ChatScreen = () => {
     [pan, nextCard]
   );
 
-  const currentCard = EXECUTIVE_PROMPTS[cardIndex];
-  const nextCard1 = cardIndex < EXECUTIVE_PROMPTS.length ? EXECUTIVE_PROMPTS[(cardIndex + 1) % EXECUTIVE_PROMPTS.length] : null;
-  const nextCard2 = cardIndex < EXECUTIVE_PROMPTS.length ? EXECUTIVE_PROMPTS[(cardIndex + 2) % EXECUTIVE_PROMPTS.length] : null;
+  const currentCard = activeDeck[cardIndex];
+  const nextCard1 = cardIndex < activeDeck.length ? activeDeck[(cardIndex + 1) % activeDeck.length] : null;
+  const nextCard2 = cardIndex < activeDeck.length ? activeDeck[(cardIndex + 2) % activeDeck.length] : null;
 
   return (
     <View style={[styles.container, { paddingTop: 0 }]}>
@@ -2879,7 +3063,7 @@ const ChatScreen = () => {
             </View>
 
             {/* Stacked Card Deck (11 cards) or End-Of-Deck Card */}
-            {cardIndex < EXECUTIVE_PROMPTS.length ? (
+            {cardIndex < activeDeck.length ? (
               <View style={{ width: '100%', alignItems: 'center' }}>
                 <View style={styles.deckContainer}>
                   {/* 3rd Card Behind */}
@@ -2958,7 +3142,7 @@ const ChatScreen = () => {
                 </View>
 
                 <Text style={styles.deckSwipeHint}>
-                  Swipe left or right for next suggestion
+                  Swipe for next card • Set {activeSetIndex + 1} of 11 ({activeSet.badge})
                 </Text>
               </View>
             ) : (
@@ -2967,29 +3151,26 @@ const ChatScreen = () => {
                 <View style={styles.endIconCircle}>
                   <Feather name="check" size={20} color={colors.accent} />
                 </View>
-                <Text style={styles.endTitle}>All suggestions explored</Text>
+                <Text style={styles.endTitle}>Set {activeSetIndex + 1} Explored ({activeSet.badge})</Text>
                 <Text style={styles.endSub}>
-                  Type your custom question below or replay executive suggestions.
+                  You've viewed all 11 prompts in "{activeSet.category}". Tap Next Set to explore more, or replay this set.
                 </Text>
                 <View style={styles.endActionRow}>
                   <TouchableOpacity
                     style={styles.endBtnPrimary}
-                    onPress={() => {
-                      setCardIndex(0);
-                      pan.setValue({ x: 0, y: 0 });
-                    }}
+                    onPress={advanceToNextSet}
                     activeOpacity={0.8}
                   >
-                    <Feather name="rotate-ccw" size={14} color="#ffffff" style={{ marginRight: 6 }} />
-                    <Text style={styles.endBtnPrimaryText}>Start Over</Text>
+                    <Feather name="arrow-right" size={14} color="#ffffff" style={{ marginRight: 6 }} />
+                    <Text style={styles.endBtnPrimaryText}>Next Set (Set {((activeSetIndex + 1) % 11) + 1}/11)</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={styles.endBtnSecondary}
-                    onPress={() => inputRef.current?.focus()}
+                    onPress={restartCurrentSet}
                     activeOpacity={0.8}
                   >
-                    <Feather name="edit-3" size={14} color={colors.text} style={{ marginRight: 6 }} />
-                    <Text style={styles.endBtnSecondaryText}>Ask Myself</Text>
+                    <Feather name="rotate-ccw" size={14} color={colors.text} style={{ marginRight: 6 }} />
+                    <Text style={styles.endBtnSecondaryText}>Start Over</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -3049,8 +3230,8 @@ const ChatScreen = () => {
                             copiedIndex === index
                               ? '#10B981'
                               : isUser
-                              ? (colors.isDark ? '#6ee7b7' : '#047857')
-                              : colors.textSecondary
+                                ? (colors.isDark ? '#6ee7b7' : '#047857')
+                                : colors.textSecondary
                           }
                         />
                         <Text
@@ -3061,8 +3242,8 @@ const ChatScreen = () => {
                                 copiedIndex === index
                                   ? '#10B981'
                                   : isUser
-                                  ? (colors.isDark ? '#6ee7b7' : '#047857')
-                                  : colors.textSecondary,
+                                    ? (colors.isDark ? '#6ee7b7' : '#047857')
+                                    : colors.textSecondary,
                             },
                           ]}
                         >
@@ -4375,6 +4556,15 @@ export default function AppNavigator() {
                       headerShown: false,
                     }}
                   />
+                  <Stack.Screen
+                    name="FinancialCalendar"
+                    component={FinancialCalendarScreen}
+                    options={{
+                      presentation: 'card',
+                      animation: 'slide_from_bottom',
+                      headerShown: false,
+                    }}
+                  />
                 </>
               )}
             </Stack.Navigator>
@@ -4798,6 +4988,7 @@ const getStyles = (colors: any) => StyleSheet.create({
     color: colors.buttonSecondaryText,
   },
   donutCardContainer: {
+    paddingHorizontal: 14,
     paddingBottom: 14,
   },
   donutRow: {
@@ -4807,26 +4998,42 @@ const getStyles = (colors: any) => StyleSheet.create({
   },
   donutLegend: {
     flex: 1,
-    marginLeft: 28,
+    marginLeft: 24,
     justifyContent: 'center',
+    minWidth: 0,
   },
   legendItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 7,
+    marginBottom: 8,
+    minWidth: 0,
   },
   legendIndicator: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    marginRight: 10,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 8,
     flexShrink: 0,
   },
-  legendText: {
+  legendTextWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    minWidth: 0,
+  },
+  legendCategoryText: {
     color: colors.textSecondary,
     fontSize: 12,
     fontWeight: '600',
     flexShrink: 1,
+    minWidth: 0,
+  },
+  legendAmountText: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: '700',
+    flexShrink: 0,
+    marginLeft: 4,
   },
   txItem: {
     flexDirection: 'row',
@@ -4839,6 +5046,9 @@ const getStyles = (colors: any) => StyleSheet.create({
   txLeft: {
     flexDirection: 'row',
     alignItems: 'center',
+    flex: 1,
+    minWidth: 0,
+    marginRight: 14,
   },
   txIconBg: {
     width: 36,
@@ -4850,8 +5060,11 @@ const getStyles = (colors: any) => StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
+    flexShrink: 0,
   },
   txMeta: {
+    flex: 1,
+    minWidth: 0,
     justifyContent: 'center',
   },
   merchantName: {
@@ -4866,6 +5079,8 @@ const getStyles = (colors: any) => StyleSheet.create({
   },
   txRight: {
     alignItems: 'flex-end',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
   txAmount: {
     color: colors.text,

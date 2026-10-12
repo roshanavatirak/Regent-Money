@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, BadRequestException, ConflictException, OnModuleInit } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException, ConflictException, HttpException, HttpStatus, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
@@ -9,6 +9,7 @@ import { v2 as cloudinary } from 'cloudinary';
 import { OAuth2Client } from 'google-auth-library';
 import { User } from '../users/entities/user.entity';
 import { MailService } from '../mail/mail.service';
+import { RedisService } from '../redis/redis.service';
 
 @Injectable()
 export class AuthService implements OnModuleInit {
@@ -18,6 +19,7 @@ export class AuthService implements OnModuleInit {
     private readonly jwtService: JwtService,
     private readonly mailService: MailService,
     private readonly configService: ConfigService,
+    private readonly redisService: RedisService,
   ) { }
 
   async onModuleInit() {
@@ -158,37 +160,157 @@ export class AuthService implements OnModuleInit {
     return { message: 'Your email has been successfully verified! You can now log in.' };
   }
 
+  private getLockKeyForUser(userId: string): string {
+    return `auth:lock:u:${userId}`;
+  }
+
+  private getLockKeyForAnon(identifier: string): string {
+    return `auth:lock:anon:${identifier.trim().toLowerCase()}`;
+  }
+
+  private async getLockoutStateFromRedis(lockKey: string): Promise<{ attempts: number; violations: number; lockedUntil: number; tier: number } | null> {
+    const raw = await this.redisService.get(lockKey);
+    if (!raw) return null;
+
+    try {
+      const parsed = JSON.parse(raw);
+      const now = Date.now();
+      if (parsed.l && now < parsed.l) {
+        return { attempts: parsed.a || 0, violations: parsed.v || 1, lockedUntil: parsed.l, tier: parsed.v || 1 };
+      }
+      return { attempts: parsed.a || 0, violations: parsed.v || 0, lockedUntil: 0, tier: 0 };
+    } catch {
+      return null;
+    }
+  }
+
   async login(dto: { emailOrMobile: string; password?: string }) {
     const input = dto.emailOrMobile.trim();
     const isEmail = input.includes('@');
+    const normalizedIdentifier = isEmail ? input.toLowerCase() : input;
 
-    // 1. Find user by email or phone
+    // 1. Look up user by email or phone so lockout is universally bound to the exact account
     const user = await this.userRepository.findOne({
       where: isEmail
-        ? { email: input.toLowerCase(), isDeleted: false }
-        : { phone: input, isDeleted: false },
+        ? { email: normalizedIdentifier, isDeleted: false }
+        : { phone: normalizedIdentifier, isDeleted: false },
     });
+
+    // Determine the universal Redis lock key (keyed by user.id if user exists, else anonymous identifier)
+    const lockKey = user ? this.getLockKeyForUser(user.id) : this.getLockKeyForAnon(normalizedIdentifier);
+
+    // 2. Check if account is currently locked out in Redis (universal across all devices & methods)
+    const lockState = await this.getLockoutStateFromRedis(lockKey);
+    if (lockState && lockState.lockedUntil > Date.now()) {
+      const remainingSec = Math.max(1, Math.ceil((lockState.lockedUntil - Date.now()) / 1000));
+      const remainingMin = Math.ceil(remainingSec / 60);
+      const tierLabel = lockState.tier === 2 ? '24 hours' : '30 minutes';
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.LOCKED || 423,
+          error: 'AccountLocked',
+          message: `Account is temporarily locked for ${tierLabel}. Try again in ${remainingMin} min left (${remainingSec}s). Reset your password to unlock immediately.`,
+          lockedUntil: lockState.lockedUntil,
+          remainingSeconds: remainingSec,
+          remainingMinutes: remainingMin,
+          tier: lockState.tier,
+          locked: true,
+        },
+        HttpStatus.LOCKED || 423,
+      );
+    }
 
     if (!user) {
       throw new UnauthorizedException('Invalid email/mobile number or password.');
     }
 
-    // 2. Validate password
+    // 3. Validate password
+    let passwordValid = false;
     if (user.passwordHash && dto.password) {
-      const isMatch = await bcrypt.compare(dto.password, user.passwordHash);
-      if (!isMatch) {
-        throw new UnauthorizedException('Invalid email/mobile number or password.');
-      }
-    } else {
-      throw new UnauthorizedException('Invalid credentials.');
+      passwordValid = await bcrypt.compare(dto.password, user.passwordHash);
     }
 
-    // 3. Check email verification status
+    if (!passwordValid) {
+      // Handle failed password attempt (3 attempt rule, tracked universally in Redis)
+      const currentAttempts = (lockState?.attempts || 0) + 1;
+      const currentViolations = lockState?.violations || 0;
+
+      if (currentAttempts < 3) {
+        // Attempt 1 or 2: record attempt universally in Redis with 2-hour sliding window
+        const attemptsLeft = 3 - currentAttempts;
+        await this.redisService.set(
+          lockKey,
+          JSON.stringify({ a: currentAttempts, v: currentViolations, l: 0 }),
+          7200,
+        );
+        throw new UnauthorizedException({
+          statusCode: 401,
+          message: `Invalid password. ${attemptsLeft} attempt${attemptsLeft === 1 ? '' : 's'} remaining before account lockout.`,
+          attemptsLeft,
+          attemptsCount: currentAttempts,
+        });
+      } else {
+        // Attempt 3: Trigger universal account lockout in Redis
+        const nextViolation = currentViolations + 1;
+        if (nextViolation === 1) {
+          // Tier 1: 30 minutes lockout
+          const lockDurationSec = 30 * 60; // 1,800 seconds
+          const lockedUntil = Date.now() + lockDurationSec * 1000;
+          await this.redisService.set(
+            lockKey,
+            JSON.stringify({ a: 0, v: 1, l: lockedUntil }),
+            lockDurationSec + 3600,
+          );
+          throw new HttpException(
+            {
+              statusCode: HttpStatus.LOCKED || 423,
+              error: 'AccountLocked',
+              message: 'Account locked for 30 minutes due to 3 failed attempts. Reset your password to unlock immediately.',
+              lockedUntil,
+              remainingSeconds: lockDurationSec,
+              remainingMinutes: 30,
+              tier: 1,
+              locked: true,
+            },
+            HttpStatus.LOCKED || 423,
+          );
+        } else {
+          // Tier 2: 24 hours lockout (if user fails 3 more times after 30 min lock expires)
+          const lockDurationSec = 24 * 60 * 60; // 86,400 seconds
+          const lockedUntil = Date.now() + lockDurationSec * 1000;
+          await this.redisService.set(
+            lockKey,
+            JSON.stringify({ a: 0, v: 2, l: lockedUntil }),
+            lockDurationSec + 7200,
+          );
+          throw new HttpException(
+            {
+              statusCode: HttpStatus.LOCKED || 423,
+              error: 'AccountLocked',
+              message: 'Account locked for 24 hours due to repeated failed attempts. Reset your password to unlock immediately.',
+              lockedUntil,
+              remainingSeconds: lockDurationSec,
+              remainingMinutes: 24 * 60,
+              tier: 2,
+              locked: true,
+            },
+            HttpStatus.LOCKED || 423,
+          );
+        }
+      }
+    }
+
+    // 4. Password is valid! Clear failed attempts and lockouts universally from Redis
+    if (lockState && (lockState.attempts > 0 || lockState.lockedUntil > 0)) {
+      await this.redisService.del(lockKey);
+    }
+
+    // 5. Check email verification status
     if (!user.isVerified) {
       throw new UnauthorizedException('Please verify your email address before logging in.');
     }
 
-    // 4. Generate JWT token
+    // 6. Generate JWT token
     const tokenPayload = { sub: user.id, email: user.email };
     const accessToken = this.jwtService.sign(tokenPayload);
 
@@ -208,6 +330,78 @@ export class AuthService implements OnModuleInit {
     return {
       profile,
       accessToken,
+    };
+  }
+
+  /**
+   * Request password reset link. Generates a secure token stored in Redis with 15-min TTL.
+   */
+  async requestPasswordReset(email: string): Promise<{ message: string }> {
+    const sanitizedEmail = email.trim().toLowerCase();
+    const user = await this.userRepository.findOne({
+      where: { email: sanitizedEmail, isDeleted: false },
+    });
+
+    // To prevent email enumeration, always return friendly message
+    if (!user) {
+      return { message: 'If an account exists with this email, a password reset link has been dispatched.' };
+    }
+
+    const resetToken = crypto.randomBytes(24).toString('hex');
+    // Store in Redis for 15 minutes (900 seconds)
+    await this.redisService.set(`pwd_reset:${resetToken}`, user.id, 900);
+
+    // Send email via MailService
+    await this.mailService.sendPasswordResetEmail(user.email || sanitizedEmail, user.name || '', resetToken);
+
+    return { message: 'Password reset link sent to your email. Check your inbox.' };
+  }
+
+  /**
+   * Reset password and instantly unlock account.
+   */
+  async resetPassword(token: string, newPassword: string): Promise<{ message: string; success: boolean }> {
+    if (!token || !newPassword || newPassword.length < 6) {
+      throw new BadRequestException('Valid reset token and password (at least 6 characters) are required.');
+    }
+
+    // 1. Verify token from Redis
+    const userId = await this.redisService.get(`pwd_reset:${token}`);
+    if (!userId) {
+      throw new BadRequestException('Password reset token is invalid or has expired. Please request a new link.');
+    }
+
+    // 2. Find user
+    const user = await this.userRepository.findOne({
+      where: { id: userId, isDeleted: false },
+    });
+
+    if (!user) {
+      throw new BadRequestException('User account not found.');
+    }
+
+    // 3. Update password in PostgreSQL
+    user.passwordHash = await bcrypt.hash(newPassword, 10);
+    user.updatedAt = Date.now();
+    await this.userRepository.save(user);
+
+    // 4. Immediately clear token from Redis
+    await this.redisService.del(`pwd_reset:${token}`);
+
+    // 5. Instantly clear universal user lockout & attempt key in Redis across all devices
+    await this.redisService.del(this.getLockKeyForUser(user.id));
+    if (user.email) {
+      await this.redisService.del(this.getLockKeyForAnon(user.email));
+    }
+    if (user.phone) {
+      await this.redisService.del(this.getLockKeyForAnon(user.phone));
+    }
+
+    console.log(`[AuthService] Password reset successful. Account unlocked for user ${user.id} (${user.email}).`);
+
+    return {
+      success: true,
+      message: 'Password successfully updated! Your account is now active and unlocked.',
     };
   }
 

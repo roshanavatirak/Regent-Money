@@ -11,6 +11,7 @@ import {
   StyleSheet,
   Platform,
   useWindowDimensions,
+  Switch,
 } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Feather } from '@expo/vector-icons';
@@ -83,8 +84,9 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
   const styles = useMemo(() => getStyles(colors, isDark), [colors, isDark]);
 
   const [items, setItems] = useState<EditableTransactionItem[]>([]);
+  const [updateAccountBalance, setUpdateAccountBalance] = useState<boolean>(true);
+  const [useExactClosingBalance, setUseExactClosingBalance] = useState<boolean>(false);
   const [statementBalance, setStatementBalance] = useState<string>('');
-  const [applyStatementBalance, setApplyStatementBalance] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
 
   useEffect(() => {
@@ -116,9 +118,12 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
         })
       );
 
+      // Default balance update is ON
+      setUpdateAccountBalance(true);
+
       if (detectedFinalBalance !== undefined && detectedFinalBalance !== null) {
         setStatementBalance(String(detectedFinalBalance));
-        setApplyStatementBalance(true);
+        setUseExactClosingBalance(true);
       } else {
         // Fallback: check if the last item has balanceAfter
         const lastWithBalance = [...rawTransactions]
@@ -126,16 +131,16 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
           .find((t) => t.balanceAfter !== undefined && t.balanceAfter !== null);
         if (lastWithBalance && lastWithBalance.balanceAfter !== undefined && lastWithBalance.balanceAfter !== null) {
           setStatementBalance(String(lastWithBalance.balanceAfter));
-          setApplyStatementBalance(true);
+          setUseExactClosingBalance(true);
         } else {
           setStatementBalance('');
-          setApplyStatementBalance(false);
+          setUseExactClosingBalance(false);
         }
       }
     }
   }, [visible, rawTransactions, detectedFinalBalance]);
 
-  // Calculations for live summary header
+  // Calculations for live summary header & balance adjustments
   const totals = useMemo(() => {
     let debitsSum = 0;
     let creditsSum = 0;
@@ -155,6 +160,23 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
 
     return { debitsSum, creditsSum, validCount, totalCount: items.length };
   }, [items]);
+
+  const currentBankBalance = useMemo(() => {
+    const b = Number(bank?.currentBalance);
+    return isNaN(b) ? 0 : b;
+  }, [bank?.currentBalance]);
+
+  const netFlow = totals.creditsSum - totals.debitsSum;
+  const projectedBalance = currentBankBalance + netFlow;
+
+  const parsedStatementBalance = useMemo(() => {
+    if (!useExactClosingBalance || !statementBalance.trim()) return undefined;
+    const p = parseFloat(statementBalance.trim());
+    return isNaN(p) ? undefined : p;
+  }, [useExactClosingBalance, statementBalance]);
+
+  const finalEffectiveBalance =
+    parsedStatementBalance !== undefined ? parsedStatementBalance : projectedBalance;
 
   const updateItem = (id: string, field: keyof EditableTransactionItem, value: any) => {
     setItems((prev) =>
@@ -224,13 +246,9 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
       const token = authService.getAccessToken();
       if (!token) throw new Error('Session authentication missing.');
 
-      const parsedFinalBalance =
-        applyStatementBalance && statementBalance.trim() !== ''
-          ? parseFloat(statementBalance)
-          : undefined;
-
       const payload = {
         bankProfileId: bank.id,
+        applyBalanceChange: updateAccountBalance,
         transactions: items.map((it) => {
           let itemTimestamp: number | undefined = undefined;
           const trimmedDate = it.date.trim();
@@ -277,7 +295,7 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
             balanceAfter: it.balanceAfter.trim() ? parseFloat(it.balanceAfter) : null,
           };
         }),
-        updatedBalance: !isNaN(parsedFinalBalance as number) ? parsedFinalBalance : undefined,
+        updatedBalance: updateAccountBalance ? finalEffectiveBalance : undefined,
       };
 
       const res = await fetch(`${BACKEND_URL}/sync/ocr-sync`, {
@@ -336,50 +354,143 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
             </TouchableOpacity>
           </View>
 
-          {/* Statement Ending Balance Card */}
-          <View style={styles.statementBalanceCard}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-              <View style={{ flex: 1, marginRight: 12 }}>
-                <Text style={styles.balanceCardLabel}>Real Ending Statement Balance</Text>
-                <Text style={styles.balanceCardHint}>
-                  Captured from statement balance column. Replaces account balance with real bank value.
-                </Text>
-              </View>
-              <TouchableOpacity
-                onPress={() => setApplyStatementBalance(!applyStatementBalance)}
+          {/* Top Master Balance Update Toggle Card */}
+          <View
+            style={[
+              styles.masterBalanceCard,
+              updateAccountBalance ? styles.masterBalanceCardActive : styles.masterBalanceCardInactive,
+            ]}
+          >
+            <View style={styles.masterBalanceHeaderRow}>
+              <View
                 style={[
-                  styles.toggleChip,
-                  applyStatementBalance ? styles.toggleChipActive : styles.toggleChipInactive,
+                  styles.masterBalanceIconWrap,
+                  updateAccountBalance ? styles.masterBalanceIconActive : styles.masterBalanceIconInactive,
                 ]}
-                activeOpacity={0.8}
               >
                 <Feather
-                  name={applyStatementBalance ? 'check-square' : 'square'}
-                  size={16}
-                  color={applyStatementBalance ? '#2dba4e' : '#8E8E9F'}
+                  name={updateAccountBalance ? 'trending-up' : 'slash'}
+                  size={18}
+                  color={updateAccountBalance ? '#2dba4e' : '#8E8E9F'}
                 />
-                <Text
-                  style={[
-                    styles.toggleChipText,
-                    applyStatementBalance ? { color: '#2dba4e' } : { color: '#8E8E9F' },
-                  ]}
-                >
-                  {applyStatementBalance ? 'Apply to Bank' : 'Ignore'}
+              </View>
+              <View style={{ flex: 1, marginHorizontal: 10 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Text style={styles.masterBalanceTitle}>Update Account Balance</Text>
+                  <View
+                    style={[
+                      styles.statusBadge,
+                      updateAccountBalance ? styles.statusBadgeActive : styles.statusBadgeInactive,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.statusBadgeText,
+                        updateAccountBalance ? styles.statusBadgeTextActive : styles.statusBadgeTextInactive,
+                      ]}
+                    >
+                      {updateAccountBalance ? 'ENABLED' : 'OFF'}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={styles.masterBalanceSubtitle}>
+                  {updateAccountBalance
+                    ? 'Statement transactions will adjust your bank balance'
+                    : 'Records transactions only • Balance stays unchanged'}
                 </Text>
-              </TouchableOpacity>
+              </View>
+              <Switch
+                value={updateAccountBalance}
+                onValueChange={(val) => setUpdateAccountBalance(val)}
+                trackColor={{ false: isDark ? '#2c2c38' : '#d5d7e2', true: '#2dba4e' }}
+                thumbColor="#FFFFFF"
+                ios_backgroundColor={isDark ? '#2c2c38' : '#d5d7e2'}
+              />
             </View>
 
-            {applyStatementBalance && (
-              <View style={styles.balanceInputRow}>
-                <Text style={styles.currencyPrefix}>₹</Text>
-                <TextInput
-                  style={styles.balanceInput}
-                  value={statementBalance}
-                  onChangeText={setStatementBalance}
-                  keyboardType="numeric"
-                  placeholder="0.00"
-                  placeholderTextColor={colors.textTertiary}
-                />
+            {updateAccountBalance ? (
+              <View style={styles.balanceImpactContainer}>
+                {/* Visual Impact Flow */}
+                <View style={styles.impactFlowRow}>
+                  <View style={styles.flowBalanceBox}>
+                    <Text style={styles.flowLabel}>CURRENT</Text>
+                    <Text style={styles.flowAmount}>
+                      ₹{currentBankBalance.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                    </Text>
+                  </View>
+
+                  <View style={styles.flowArrowBox}>
+                    <Feather name="arrow-right" size={16} color={colors.textTertiary || '#8E8E9F'} />
+                    <View
+                      style={[
+                        styles.netFlowPill,
+                        netFlow >= 0 ? styles.netFlowPillCredit : styles.netFlowPillDebit,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.netFlowPillText,
+                          netFlow >= 0 ? styles.netFlowTextCredit : styles.netFlowTextDebit,
+                        ]}
+                      >
+                        {netFlow >= 0
+                          ? `+₹${netFlow.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
+                          : `-₹${Math.abs(netFlow).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={[styles.flowBalanceBox, styles.flowBalanceBoxHighlight]}>
+                    <Text style={styles.flowLabelHighlight}>NEW BALANCE</Text>
+                    <Text style={styles.flowAmountHighlight}>
+                      ₹{finalEffectiveBalance.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Optional Override with exact Statement Closing Balance */}
+                <View style={styles.closingBalanceToggleRow}>
+                  <TouchableOpacity
+                    style={styles.overrideCheckbox}
+                    activeOpacity={0.7}
+                    onPress={() => setUseExactClosingBalance(!useExactClosingBalance)}
+                  >
+                    <Feather
+                      name={useExactClosingBalance ? 'check-square' : 'square'}
+                      size={15}
+                      color={useExactClosingBalance ? '#2dba4e' : '#8E8E9F'}
+                    />
+                    <Text style={styles.overrideCheckboxLabel}>
+                      Override with exact statement closing balance
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {useExactClosingBalance && (
+                  <View style={styles.exactBalanceInputRow}>
+                    <Text style={styles.exactCurrencyPrefix}>₹</Text>
+                    <TextInput
+                      style={styles.exactBalanceInput}
+                      value={statementBalance}
+                      onChangeText={setStatementBalance}
+                      keyboardType="numeric"
+                      placeholder="0.00"
+                      placeholderTextColor={colors.textTertiary}
+                    />
+                    {detectedFinalBalance !== undefined && detectedFinalBalance !== null && (
+                      <View style={styles.detectedBadge}>
+                        <Text style={styles.detectedBadgeText}>OCR Detected</Text>
+                      </View>
+                    )}
+                  </View>
+                )}
+              </View>
+            ) : (
+              <View style={styles.balanceDisabledBanner}>
+                <Feather name="shield" size={14} color="#8E8E9F" />
+                <Text style={styles.balanceDisabledBannerText}>
+                  Safe Mode: Bank balance will remain ₹{currentBankBalance.toLocaleString('en-IN')}. Only transactions will be imported.
+                </Text>
               </View>
             )}
           </View>
@@ -696,69 +807,210 @@ const getStyles = (colors: any, isDark: boolean) =>
       alignItems: 'center',
       justifyContent: 'center',
     },
-    statementBalanceCard: {
+    masterBalanceCard: {
       marginHorizontal: 16,
       marginTop: 12,
       padding: 14,
       borderRadius: 16,
-      backgroundColor: isDark ? '#181822' : '#f6f7fb',
       borderWidth: 1,
-      borderColor: isDark ? '#2b2b3b' : '#e5e7f0',
     },
-    balanceCardLabel: {
+    masterBalanceCardActive: {
+      backgroundColor: isDark ? 'rgba(45, 186, 78, 0.06)' : 'rgba(45, 186, 78, 0.05)',
+      borderColor: isDark ? 'rgba(45, 186, 78, 0.3)' : 'rgba(45, 186, 78, 0.35)',
+    },
+    masterBalanceCardInactive: {
+      backgroundColor: isDark ? '#161620' : '#f7f8fc',
+      borderColor: isDark ? '#262633' : '#e4e6f0',
+    },
+    masterBalanceHeaderRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    masterBalanceIconWrap: {
+      width: 36,
+      height: 36,
+      borderRadius: 10,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    masterBalanceIconActive: {
+      backgroundColor: 'rgba(45, 186, 78, 0.15)',
+    },
+    masterBalanceIconInactive: {
+      backgroundColor: isDark ? '#242430' : '#ebeef5',
+    },
+    masterBalanceTitle: {
+      fontSize: 14,
+      fontWeight: '800',
+      color: colors.text,
+    },
+    statusBadge: {
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: 6,
+    },
+    statusBadgeActive: {
+      backgroundColor: 'rgba(45, 186, 78, 0.18)',
+    },
+    statusBadgeInactive: {
+      backgroundColor: isDark ? '#272736' : '#e5e7f0',
+    },
+    statusBadgeText: {
+      fontSize: 10,
+      fontWeight: '800',
+      letterSpacing: 0.5,
+    },
+    statusBadgeTextActive: {
+      color: '#2dba4e',
+    },
+    statusBadgeTextInactive: {
+      color: '#8E8E9F',
+    },
+    masterBalanceSubtitle: {
+      fontSize: 11,
+      color: colors.textSecondary || '#8E8E9F',
+      marginTop: 2,
+      lineHeight: 15,
+    },
+    balanceImpactContainer: {
+      marginTop: 12,
+      paddingTop: 12,
+      borderTopWidth: 1,
+      borderTopColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
+    },
+    impactFlowRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      backgroundColor: isDark ? '#0e0e14' : '#ffffff',
+      padding: 10,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: isDark ? '#262635' : '#e6e8f2',
+    },
+    flowBalanceBox: {
+      flex: 1,
+      alignItems: 'flex-start',
+    },
+    flowBalanceBoxHighlight: {
+      alignItems: 'flex-end',
+    },
+    flowLabel: {
+      fontSize: 10,
+      fontWeight: '700',
+      color: colors.textTertiary || '#8E8E9F',
+      letterSpacing: 0.4,
+      marginBottom: 2,
+    },
+    flowLabelHighlight: {
+      fontSize: 10,
+      fontWeight: '800',
+      color: '#2dba4e',
+      letterSpacing: 0.4,
+      marginBottom: 2,
+    },
+    flowAmount: {
       fontSize: 13,
       fontWeight: '700',
       color: colors.text,
     },
-    balanceCardHint: {
-      fontSize: 11,
-      color: colors.textTertiary || '#8E8E9F',
-      marginTop: 2,
-      lineHeight: 15,
+    flowAmountHighlight: {
+      fontSize: 14,
+      fontWeight: '900',
+      color: '#2dba4e',
     },
-    toggleChip: {
+    flowArrowBox: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 6,
+    },
+    netFlowPill: {
+      marginTop: 2,
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: 6,
+    },
+    netFlowPillCredit: {
+      backgroundColor: 'rgba(45, 186, 78, 0.12)',
+    },
+    netFlowPillDebit: {
+      backgroundColor: 'rgba(239, 68, 68, 0.12)',
+    },
+    netFlowPillText: {
+      fontSize: 10,
+      fontWeight: '800',
+    },
+    netFlowTextCredit: {
+      color: '#2dba4e',
+    },
+    netFlowTextDebit: {
+      color: '#ef4444',
+    },
+    closingBalanceToggleRow: {
+      marginTop: 8,
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    overrideCheckbox: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 6,
-      paddingHorizontal: 10,
-      paddingVertical: 6,
-      borderRadius: 8,
-      borderWidth: 1,
+      paddingVertical: 4,
     },
-    toggleChipActive: {
-      backgroundColor: 'rgba(45, 186, 78, 0.1)',
-      borderColor: '#2dba4e',
+    overrideCheckboxLabel: {
+      fontSize: 11,
+      fontWeight: '600',
+      color: colors.textSecondary || '#8E8E9F',
     },
-    toggleChipInactive: {
-      backgroundColor: 'transparent',
-      borderColor: isDark ? '#333344' : '#d8d8e4',
-    },
-    toggleChipText: {
-      fontSize: 12,
-      fontWeight: '700',
-    },
-    balanceInputRow: {
+    exactBalanceInputRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      marginTop: 10,
-      backgroundColor: isDark ? '#0e0e14' : '#ffffff',
+      marginTop: 6,
+      backgroundColor: isDark ? '#0a0a0f' : '#ffffff',
       borderRadius: 10,
       paddingHorizontal: 12,
       borderWidth: 1,
       borderColor: isDark ? '#2f2f40' : '#e0e2ec',
     },
-    currencyPrefix: {
-      fontSize: 18,
+    exactCurrencyPrefix: {
+      fontSize: 16,
       fontWeight: '800',
       color: '#2dba4e',
       marginRight: 6,
     },
-    balanceInput: {
+    exactBalanceInput: {
       flex: 1,
-      fontSize: 18,
+      fontSize: 15,
       fontWeight: '800',
       color: colors.text,
-      paddingVertical: 8,
+      paddingVertical: 6,
+    },
+    detectedBadge: {
+      backgroundColor: 'rgba(45, 186, 78, 0.15)',
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 6,
+    },
+    detectedBadgeText: {
+      fontSize: 10,
+      fontWeight: '700',
+      color: '#2dba4e',
+    },
+    balanceDisabledBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      marginTop: 10,
+      paddingTop: 10,
+      borderTopWidth: 1,
+      borderTopColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.05)',
+    },
+    balanceDisabledBannerText: {
+      flex: 1,
+      fontSize: 11,
+      color: colors.textTertiary || '#8E8E9F',
+      lineHeight: 15,
     },
     summaryRibbon: {
       flexDirection: 'row',

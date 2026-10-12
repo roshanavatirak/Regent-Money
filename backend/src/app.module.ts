@@ -52,7 +52,28 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
       inject: [ConfigService],
       useFactory: async (configService: ConfigService) => {
         const dbUrl = configService.get<string>('DATABASE_URL');
-        const isSupabase = dbUrl?.includes('supabase');
+        const supabaseCa = configService.get<string>('SUPABASE_CA_CERT')?.replace(/\\n/g, '\n');
+        const isSupabase = dbUrl?.includes('supabase') || !!supabaseCa;
+
+        if (isSupabase && !supabaseCa && process.env.NODE_ENV === 'production') {
+          throw new Error('FATAL: SUPABASE_CA_CERT is required in production. Refusing to boot.');
+        }
+
+        const getSslConfig = (hostname?: string) => {
+          if (!isSupabase) return false;
+          if (supabaseCa) {
+            return {
+              ca: supabaseCa,
+              rejectUnauthorized: true,
+              ...(hostname ? { servername: hostname } : {}),
+            };
+          }
+          console.warn('[Security Notice] SUPABASE_CA_CERT is not provided. Set SUPABASE_CA_CERT in Render to enforce rejectUnauthorized: true.');
+          return {
+            rejectUnauthorized: false,
+            ...(hostname ? { servername: hostname } : {}),
+          };
+        };
 
         let connectionOptions: any = {
           type: 'postgres',
@@ -70,7 +91,7 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
             Notification,
           ],
           synchronize: false, // Set to false to avoid altering tables automatically, schemas exist
-          ssl: isSupabase ? { rejectUnauthorized: false } : false,
+          ssl: getSslConfig(),
         };
 
         if (dbUrl) {
@@ -79,12 +100,9 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
           if (isSupabase) {
             try {
               const parsedUrl = new URL(dbUrl);
-              connectionOptions.ssl = {
-                rejectUnauthorized: false,
-                servername: parsedUrl.hostname,
-              };
+              connectionOptions.ssl = getSslConfig(parsedUrl.hostname);
             } catch {
-              connectionOptions.ssl = { rejectUnauthorized: false };
+              connectionOptions.ssl = getSslConfig();
             }
           }
         }

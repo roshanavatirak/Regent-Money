@@ -25,16 +25,19 @@ export function parseSMS(sender: string, body: string): ParsedTransaction | null
   }
 
   // 2. Exclude genuine OTP requests and marketing spam
-  // NOTE: Many bank transaction SMS include disclaimers like "Never share OTP with anyone" or "Bank never asks for OTP".
-  // We only reject messages that are prompt requests for OTP verification, NOT security disclaimers.
-  const isSecurityDisclaimer = /\b(?:never\s*share|do\s*not\s*share|don't\s*share|never\s*ask|not\s*ask|never\s*call|disclose|beware\s*of)\b.*?\b(?:otp|password|pin|cvv)\b/i.test(lower);
-  if (
-    !isSecurityDisclaimer &&
-    /\b(?:is\s*your\s*otp|your\s*otp\s*is|use\s*otp|enter\s*otp|otp\s*to\s*verify|otp\s*for\s*(?:txn|transaction|login)|secret\s*(?:otp|code)|verification\s*code\s*is|is\s*the\s*verification\s*code|one\s*time\s*password\s*is)\b/i.test(
-      lower,
-    )
-  ) {
-    return null;
+  // NOTE: If message contains financial transaction indicators (debited, credited, spent, etc.),
+  // any mention of OTP is merely a security disclaimer ("never share OTP") and must NOT be rejected.
+  const hasTxIndicator = /\b(?:debited|credited|withdrawn|spent|paid|sent|deposited|refunded|done\s*at|purchase\s*of|txn\s*of|transaction\s*of|transfer\s*to|transfer\s*from|trf\s*to|trf\s*from|avl\s*bal|available\s*balance)\b/i.test(lower);
+  if (!hasTxIndicator) {
+    const isSecurityDisclaimer = /\b(?:never\s*share|do\s*not\s*share|don't\s*share|never\s*ask|not\s*ask|never\s*call|disclose|beware\s*of)\b.*?\b(?:otp|password|pin|cvv)\b/i.test(lower);
+    if (
+      !isSecurityDisclaimer &&
+      /\b(?:is\s*your\s*otp|your\s*otp\s*is|use\s*otp|enter\s*otp|otp\s*to\s*verify|otp\s*for\s*(?:txn|transaction|login)|secret\s*(?:otp|code)|verification\s*code\s*is|is\s*the\s*verification\s*code|one\s*time\s*password\s*is)\b/i.test(
+        lower,
+      )
+    ) {
+      return null;
+    }
   }
   if (/\b(?:pre-approved\s*loan|apply\s*now|claim\s*your\s*reward|congratulations!?\s*you\s*are\s*eligible)\b/i.test(lower)) {
     return null;
@@ -51,7 +54,7 @@ export function parseSMS(sender: string, body: string): ParsedTransaction | null
   ) {
     type = 'credit';
   } else if (
-    /\b(?:debited|debit|sent|paid|spent|withdrawn|used\s*for|used\s*at|purchase\s*of|transferred\s*to|trf\s*to|\bdr\b|txn\s*of|transaction\s*of|transaction\s*on|txn\s*on|charged|payment\s*of|payment\s*to|vpa\s*debited|deducted|auto-debit|auto-debited|money\s*sent)\b/i.test(
+    /\b(?:debited|debit|sent|paid|spent|withdrawn|used\s*for|used\s*at|purchase\s*of|transferred\s*to|trf\s*to|\bdr\b|txn\s*of|transaction\s*of|transaction\s*on|txn\s*on|done\s*at|done\s*on|done\s*for|charged|payment\s*of|payment\s*to|vpa\s*debited|deducted|auto-debit|auto-debited|money\s*sent)\b/i.test(
       textWithoutCard,
     )
   ) {
@@ -110,26 +113,8 @@ export function parseSMS(sender: string, body: string): ParsedTransaction | null
   }
 
   // 5. Extract Account Number / Suffix
-  let accountSuffix = 'XXXX';
-  const accountRegexes = [
-    /(?:a\/c|ac|acct|account|card|vpa)\s*(?:no\.?|number|ending(?:\s*in|\s*with)?)?\s*[:\-\s]*([A-Za-z0-9*._]{2,24})/i,
-    /([A-Za-z0-9*]{4,20})\s*(?:debited|credited|-credited|-debited)/i,
-    /(?:from|in)\s+(?:account|a\/c|card)\s+([A-Za-z0-9*._]{2,24})/i,
-  ];
-
-  for (const rx of accountRegexes) {
-    const match = clean.match(rx);
-    if (match && match[1]) {
-      const digitsOnly = match[1].replace(/\D/g, '');
-      if (digitsOnly.length >= 4) {
-        accountSuffix = digitsOnly.slice(-4);
-        break;
-      } else if (digitsOnly.length > 0) {
-        accountSuffix = digitsOnly;
-        break;
-      }
-    }
-  }
+  // Matches: "A/C X4020", "Debit Card X6090", "A/C **9876", "Card ending with 4567", "A/c ...4020", "AC 5039"
+  const accountSuffix = extractAccountSuffix(clean);
 
   // 6. Extract Merchant / Beneficiary / Counterparty
   let merchant = '';
@@ -189,44 +174,45 @@ export function parseSMS(sender: string, body: string): ParsedTransaction | null
   }
 
   // 7. Detect Bank Name
-  const combinedText = `${sender || ''} ${clean}`.toUpperCase();
-  let bankName = 'Bank';
+  // Priority 1: Authoritative Sender Header (DLT header: e.g. AD-SBIINB, VK-KOTAKB)
+  let bankName = detectBankFromSender(sender) || 'Bank';
 
-  if (combinedText.includes('SBI') || combinedText.includes('STATE BANK')) {
-    bankName = 'SBI';
-  } else if (combinedText.includes('KOTAK') || combinedText.includes('KKBK')) {
-    bankName = 'Kotak';
-  } else if (combinedText.includes('HDFC')) {
-    bankName = 'HDFC';
-  } else if (combinedText.includes('ICICI')) {
-    bankName = 'ICICI';
-  } else if (combinedText.includes('AXIS')) {
-    bankName = 'Axis';
-  } else if (combinedText.includes('PNB') || combinedText.includes('PUNJAB')) {
-    bankName = 'PNB';
-  } else if (combinedText.includes('BOB') || combinedText.includes('BANK OF BARODA') || combinedText.includes('BARODA')) {
-    bankName = 'Bank of Baroda';
-  } else if (combinedText.includes('CANARA') || combinedText.includes('CANBNK')) {
-    bankName = 'Canara Bank';
-  } else if (combinedText.includes('UNION BANK') || combinedText.includes('UBISMS')) {
-    bankName = 'Union Bank';
-  } else if (combinedText.includes('INDUSIND')) {
-    bankName = 'IndusInd';
-  } else if (combinedText.includes('IDFC')) {
-    bankName = 'IDFC First';
-  } else if (combinedText.includes('PAYTM') || combinedText.includes('PPBL')) {
-    bankName = 'Paytm Payments Bank';
-  } else if (combinedText.includes('FEDERAL') || combinedText.includes('FEDBNK') || combinedText.includes('JUPITER') || combinedText.includes('FIMONEY') || combinedText.includes('EPICFI')) {
-    bankName = 'Federal Bank';
-  } else if (combinedText.includes('AUBANK') || combinedText.includes('AU BANK')) {
-    bankName = 'AU Small Finance';
-  } else if (combinedText.includes('RBL')) {
-    bankName = 'RBL Bank';
-  } else if (
-    /\b(?:YES\s*BANK|YESBANK)\b/i.test(combinedText) ||
-    (sender && sender.toUpperCase().includes('YESB'))
-  ) {
-    bankName = 'Yes Bank';
+  // Priority 2: Full text fallback only when sender is unknown/generic
+  if (bankName === 'Bank') {
+    const cleanUpper = clean.toUpperCase();
+    if (cleanUpper.includes('SBI') || cleanUpper.includes('STATE BANK')) {
+      bankName = 'SBI';
+    } else if (cleanUpper.includes('KOTAK') || cleanUpper.includes('KKBK')) {
+      bankName = 'Kotak';
+    } else if (cleanUpper.includes('HDFC')) {
+      bankName = 'HDFC';
+    } else if (cleanUpper.includes('ICICI')) {
+      bankName = 'ICICI';
+    } else if (cleanUpper.includes('AXIS')) {
+      bankName = 'Axis';
+    } else if (cleanUpper.includes('PNB') || cleanUpper.includes('PUNJAB')) {
+      bankName = 'PNB';
+    } else if (cleanUpper.includes('BOB') || cleanUpper.includes('BANK OF BARODA') || cleanUpper.includes('BARODA')) {
+      bankName = 'Bank of Baroda';
+    } else if (cleanUpper.includes('CANARA') || cleanUpper.includes('CANBNK')) {
+      bankName = 'Canara Bank';
+    } else if (cleanUpper.includes('UNION BANK') || cleanUpper.includes('UBISMS')) {
+      bankName = 'Union Bank';
+    } else if (cleanUpper.includes('INDUSIND')) {
+      bankName = 'IndusInd';
+    } else if (cleanUpper.includes('IDFC')) {
+      bankName = 'IDFC First';
+    } else if (cleanUpper.includes('PAYTM') || cleanUpper.includes('PPBL')) {
+      bankName = 'Paytm Payments Bank';
+    } else if (cleanUpper.includes('FEDERAL') || cleanUpper.includes('FEDBNK') || cleanUpper.includes('JUPITER') || cleanUpper.includes('FIMONEY') || cleanUpper.includes('EPICFI')) {
+      bankName = 'Federal Bank';
+    } else if (cleanUpper.includes('AUBANK') || cleanUpper.includes('AU BANK')) {
+      bankName = 'AU Small Finance';
+    } else if (cleanUpper.includes('RBL')) {
+      bankName = 'RBL Bank';
+    } else if (/\b(?:YES\s*BANK|YESBANK)\b/i.test(cleanUpper)) {
+      bankName = 'Yes Bank';
+    }
   }
 
   // 7.5 Extract UPI Reference / RRN / Bank Ref Number
@@ -284,4 +270,65 @@ function sanitizeMerchantName(name: string): string {
   if (lower.includes('starbucks')) return 'Starbucks';
 
   return cleaned;
+}
+
+/**
+ * Authoritatively identifies bank from the SMS sender header (e.g. AD-SBIINB -> SBI, VK-KOTAKB -> Kotak).
+ * Prevents false detections where message text mentions another bank (e.g. "paid to SBI Life Insurance").
+ */
+export function detectBankFromSender(sender: string): string | null {
+  if (!sender) return null;
+  const clean = sender.toUpperCase().replace(/^[A-Z]{2}-/i, '').replace(/[^A-Z0-9]/g, '');
+  if (clean.includes('SBI') || clean.includes('SBIN')) return 'SBI';
+  if (clean.includes('KOTAK') || clean.includes('KKBK') || clean.includes('KMBLTD')) return 'Kotak';
+  if (clean.includes('HDFC')) return 'HDFC';
+  if (clean.includes('ICICI')) return 'ICICI';
+  if (clean.includes('AXIS') || clean.includes('UTIB')) return 'Axis';
+  if (clean.includes('PNB') || clean.includes('PUNB')) return 'PNB';
+  if (clean.includes('BOB') || clean.includes('BARB')) return 'Bank of Baroda';
+  if (clean.includes('CANARA') || clean.includes('CNRB') || clean.includes('CANBNK')) return 'Canara Bank';
+  if (clean.includes('UNION') || clean.includes('UBIN') || clean.includes('UBISMS')) return 'Union Bank';
+  if (clean.includes('INDUS') || clean.includes('INDB')) return 'IndusInd';
+  if (clean.includes('IDFC')) return 'IDFC First';
+  if (clean.includes('PAYTM') || clean.includes('PPBL')) return 'Paytm Payments Bank';
+  if (clean.includes('FEDERAL') || clean.includes('FEDBNK') || clean.includes('JUPITER') || clean.includes('FIMONEY') || clean.includes('EPICFI')) return 'Federal Bank';
+  if (clean.includes('AUBANK') || clean.includes('AU BANK')) return 'AU Small Finance';
+  if (clean.includes('RBL') || clean.includes('RATN')) return 'RBL Bank';
+  if (clean.includes('YESB') || clean.includes('YESBNK')) return 'Yes Bank';
+  if (clean.includes('BOI') || clean.includes('BOIND') || clean.includes('BKID')) return 'Bank of India';
+  return null;
+}
+
+/**
+ * Extracts account or card suffix with strict word boundaries and digit groups.
+ * Scans all candidate matches in the SMS and prioritizes masked patterns (e.g. X6090, **1234, ...4020).
+ */
+export function extractAccountSuffix(cleanText: string): string {
+  const rx = /\b(?:a\/c|acct|account|ac|card)\b[^0-9]{0,25}?([xX*.]*)(\d{3,18})\b/gi;
+  const candidates: Array<{ suffix: string; hasMask: boolean }> = [];
+  let m: RegExpExecArray | null;
+  while ((m = rx.exec(cleanText)) !== null) {
+    const mask = m[1] || '';
+    const digits = m[2];
+    candidates.push({
+      suffix: digits.slice(-4),
+      hasMask: mask.length > 0,
+    });
+  }
+
+  // Also check pattern where suffix precedes debited/credited: "XX1234 debited"
+  if (candidates.length === 0) {
+    const rxPre = /\b([xX*.]*)(\d{4,18})\s*(?:debited|credited|-credited|-debited)\b/gi;
+    while ((m = rxPre.exec(cleanText)) !== null) {
+      candidates.push({
+        suffix: m[2].slice(-4),
+        hasMask: (m[1] || '').length > 0,
+      });
+    }
+  }
+
+  if (candidates.length === 0) return 'XXXX';
+  // Prefer the match with a mask (e.g. X6090, **1234, ...4020) over bare numbers
+  const maskedCandidate = candidates.find((c) => c.hasMask);
+  return maskedCandidate ? maskedCandidate.suffix : candidates[0].suffix;
 }
