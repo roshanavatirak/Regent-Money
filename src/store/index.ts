@@ -918,5 +918,19 @@ export const useTermsModalStore = create<TermsModalState>((set) => ({
   closeTermsModal: () => set({ isOpen: false, isReadOnly: false }),
 }));
 
+// 14. Privacy Policy Modal Store
+export interface PrivacyModalState {
+  isOpen: boolean;
+  openPrivacyModal: () => void;
+  closePrivacyModal: () => void;
+}
+
+export const usePrivacyModalStore = create<PrivacyModalState>((set) => ({
+  isOpen: false,
+  openPrivacyModal: () => set({ isOpen: true }),
+  closePrivacyModal: () => set({ isOpen: false }),
+}));
+
+
 
 

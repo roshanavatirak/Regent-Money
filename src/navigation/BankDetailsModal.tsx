@@ -22,7 +22,6 @@ import { Feather, Ionicons } from '@expo/vector-icons';
 import { BankIcon } from '../components/BankIcon';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
-import TextRecognition from '@react-native-ml-kit/text-recognition';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme, useBankStore } from '../store';
 import { useTransactionStore } from '../store';

@@ -1,5 +1,5 @@
 // Application Navigation & Screen Hierarchy (Clean Bundle)
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -27,7 +27,7 @@ import {
   Animated as RNAnimated,
 } from 'react-native';
 import { NavigationContainer, useFocusEffect, createNavigationContainerRef, useNavigation } from '@react-navigation/native';
-import { createBottomTabNavigator, BottomTabBarProps } from '@react-navigation/bottom-tabs';
+import { createMaterialTopTabNavigator, MaterialTopTabBarProps } from '@react-navigation/material-top-tabs';
 
 import { navigationRef } from './navigationRef';
 export { navigationRef };
@@ -57,6 +57,7 @@ import { AppSplashScreen } from '../components/AppSplashScreen';
 import { NotificationPermissionModal } from '../components/NotificationPermissionModal';
 import { SmsPermissionModal } from '../components/SmsPermissionModal';
 import { TermsAndConditionsModal } from '../components/TermsAndConditionsModal';
+import { PrivacyPolicyModal } from '../components/PrivacyPolicyModal';
 import { smsPermissionService } from '../services/smsPermissionService';
 import { updateService, UpdateInfo } from '../services/updateService';
 import { ACCOUNT_TYPES } from './EditBankScreen';
@@ -235,6 +236,7 @@ import {
   useSidebarStore,
   useAppUpdateStore,
   useTermsModalStore,
+  usePrivacyModalStore,
 } from '../store';
 import { biometricService } from '../services/biometricService';
 import { BiometricLockOverlay } from '../components/BiometricLockOverlay';
@@ -246,6 +248,7 @@ import { getBackendUrl } from '../config/api';
 const BACKEND_URL = getBackendUrl();
 import { WelcomeScreen, LoginScreen, SignupScreen, AuthLandingScreen } from './authScreens';
 import { OnboardingScreen } from './OnboardingScreen';
+import { AutoTrackingSetupScreen, TRACKING_SETUP_KEY } from './AutoTrackingSetupScreen';
 import { syncService } from '../services/syncService';
 import { BankDetailsModal } from './BankDetailsModal';
 import { ProfileScreen } from './ProfileScreen';
@@ -2357,6 +2360,13 @@ const DashboardScreen = () => {
   const [netWorthModalVisible, setNetWorthModalVisible] = useState(false);
   const [reviewModalVisible, setReviewModalVisible] = useState(false);
   const [isPrivacyMasked, setIsPrivacyMasked] = useState(false);
+  const [isSmsPermissionActive, setIsSmsPermissionActive] = useState(true);
+
+  useEffect(() => {
+    if (Platform.OS === 'android') {
+      smsPermissionService.isPermissionGranted().then(setIsSmsPermissionActive);
+    }
+  }, []);
 
   // Slide Animation for Onboarding notification banner
   const bannerY = useSharedValue(-100);
@@ -2539,6 +2549,31 @@ const DashboardScreen = () => {
               activeOpacity={0.8}
             >
               <Text style={styles.bannerActionText}>Add Bank</Text>
+            </TouchableOpacity>
+          </Animated.View>
+        )}
+
+        {/* Soft Recovery Banner for Skipped SMS Auto-Tracking */}
+        {Platform.OS === 'android' && !isSmsPermissionActive && (
+          <Animated.View
+            entering={FadeIn.delay(200).duration(600)}
+            style={styles.autoTrackingSoftBanner}
+          >
+            <View style={styles.autoTrackingIconWrap}>
+              <MaterialCommunityIcons name="message-processing-outline" size={20} color="#2dba4e" />
+            </View>
+            <View style={{ flex: 1, paddingHorizontal: 10 }}>
+              <Text style={styles.autoTrackingBannerTitle}>Turn on auto-tracking</Text>
+              <Text style={styles.autoTrackingBannerDesc}>
+                Automatically log expenses from your bank SMS.
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.autoTrackingActionBtn}
+              onPress={() => navigation.navigate('AutoTrackingSetup')}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.autoTrackingActionText}>Set Up</Text>
             </TouchableOpacity>
           </Animated.View>
         )}
@@ -3719,7 +3754,7 @@ const BanksScreen = () => {
 // ----------------------------------------------------
 // Navigators & Navigation Container
 // ----------------------------------------------------
-const Tab = createBottomTabNavigator();
+const Tab = createMaterialTopTabNavigator();
 const Stack = createNativeStackNavigator();
 
 interface TabItemConfig {
@@ -3911,8 +3946,9 @@ const CustomTabButton = ({
   );
 };
 
-const CustomBottomTabBar = ({ state, descriptors, navigation, insets }: BottomTabBarProps) => {
+const CustomBottomTabBar = ({ state, descriptors, navigation }: MaterialTopTabBarProps) => {
   const { colors, isDark } = useTheme();
+  const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
 
@@ -4028,10 +4064,14 @@ const CustomBottomTabBar = ({ state, descriptors, navigation, insets }: BottomTa
 function TabNavigator() {
   return (
     <Tab.Navigator
+      tabBarPosition="bottom"
+      backBehavior="history"
       tabBar={(props) => <CustomBottomTabBar {...props} />}
       screenOptions={{
-        headerShown: false,
+        swipeEnabled: true,
         lazy: true,
+        lazyPreloadDistance: 1,
+        animationEnabled: true,
       }}
     >
       <Tab.Screen name="Home" component={DashboardScreen} />
@@ -4278,6 +4318,7 @@ export default function AppNavigator() {
 
   const [splashFinished, setSplashFinished] = useState(false);
   const hasSeenOnboarding = mmkvStorage.getBoolean('has_seen_onboarding_v1') ?? false;
+  const hasSetupTracking = mmkvStorage.getBoolean(TRACKING_SETUP_KEY) ?? false;
 
   const updateInfo = useAppUpdateStore((state) => state.updateInfo);
   const updateModalVisible = useAppUpdateStore((state) => state.updateModalVisible);
@@ -4287,44 +4328,28 @@ export default function AppNavigator() {
   const [smsModalVisible, setSmsModalVisible] = useState(false);
 
   const termsModalState = useTermsModalStore();
+  const privacyModalState = usePrivacyModalStore();
   const isTermsAccepted = Boolean(user?.termsAccepted);
   const showMandatoryTerms = Boolean(user && !isTermsAccepted && splashFinished && !isLoading);
   const showTermsModal = showMandatoryTerms || termsModalState.isOpen;
-  const isReadOnlyTerms = Boolean(isTermsAccepted && termsModalState.isOpen);
+  const isReadOnlyTerms = !showMandatoryTerms;
 
   useEffect(() => {
     if (!splashFinished || isLoading || !user || !user.termsAccepted || Platform.OS === 'web') return;
 
-    let timer: any = null;
-    const checkPermissionsFlow = async () => {
+    const syncGrantedPermissions = async () => {
       try {
-        // 1. Check SMS permission first (core real-time auto-tracking feature)
-        const isSmsGranted = await smsPermissionService.isPermissionGranted();
-        if (!isSmsGranted && !smsPermissionService.hasBeenPrompted()) {
-          timer = setTimeout(() => {
-            setSmsModalVisible(true);
-          }, 1000);
-          return;
-        }
-
-        // 2. Then check Notification permission
+        // If notification permission was already granted previously, register push token silently
         const isNotificationGranted = await notificationService.isPermissionGranted();
         if (isNotificationGranted) {
           await notificationService.registerForPushNotifications();
-        } else if (!notificationService.hasBeenPrompted()) {
-          timer = setTimeout(() => {
-            setNotificationModalVisible(true);
-          }, 1200);
         }
       } catch (e) {
         // Silent fail
       }
     };
 
-    checkPermissionsFlow();
-    return () => {
-      if (timer) clearTimeout(timer);
-    };
+    syncGrantedPermissions();
   }, [splashFinished, isLoading, user]);
 
   useEffect(() => {
@@ -4465,7 +4490,17 @@ export default function AppNavigator() {
                 </>
               ) : (
                 <>
-                  <Stack.Screen name="Main" component={TabNavigator} />
+                  {!hasSetupTracking && Platform.OS === 'android' ? (
+                    <>
+                      <Stack.Screen name="AutoTrackingSetup" component={AutoTrackingSetupScreen} />
+                      <Stack.Screen name="Main" component={TabNavigator} />
+                    </>
+                  ) : (
+                    <>
+                      <Stack.Screen name="Main" component={TabNavigator} />
+                      <Stack.Screen name="AutoTrackingSetup" component={AutoTrackingSetupScreen} />
+                    </>
+                  )}
                   <Stack.Screen
                     name="EditProfile"
                     component={EditProfileScreen}
@@ -4583,24 +4618,18 @@ export default function AppNavigator() {
           readOnly={isReadOnlyTerms}
           onDismiss={() => termsModalState.closeTermsModal()}
         />
+        <PrivacyPolicyModal
+          visible={privacyModalState.isOpen}
+          onDismiss={() => privacyModalState.closePrivacyModal()}
+        />
         <NotificationPermissionModal
           visible={notificationModalVisible}
           onDismiss={() => setNotificationModalVisible(false)}
         />
         <SmsPermissionModal
           visible={smsModalVisible}
-          onDismiss={() => {
-            setSmsModalVisible(false);
-            if (!notificationService.hasBeenPrompted()) {
-              setTimeout(() => setNotificationModalVisible(true), 800);
-            }
-          }}
-          onGranted={() => {
-            setSmsModalVisible(false);
-            if (!notificationService.hasBeenPrompted()) {
-              setTimeout(() => setNotificationModalVisible(true), 800);
-            }
-          }}
+          onDismiss={() => setSmsModalVisible(false)}
+          onGranted={() => setSmsModalVisible(false)}
         />
         {!splashFinished && (
           <AppSplashScreen onFinish={() => setSplashFinished(true)} />
@@ -5602,6 +5631,48 @@ const getStyles = (colors: any) => StyleSheet.create({
     color: colors.buttonSecondaryText,
     fontSize: 11,
     fontWeight: '700',
+  },
+  autoTrackingSoftBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(45, 186, 78, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(45, 186, 78, 0.25)',
+    borderRadius: 16,
+    padding: 12,
+    marginTop: 8,
+    marginBottom: 16,
+  },
+  autoTrackingIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(45, 186, 78, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  autoTrackingBannerTitle: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  autoTrackingBannerDesc: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  autoTrackingActionBtn: {
+    backgroundColor: '#2dba4e',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    marginLeft: 8,
+  },
+  autoTrackingActionText: {
+    color: '#0B0E14',
+    fontSize: 12,
+    fontWeight: '800',
   },
   modalOverlayFull: {
     flex: 1,

@@ -1,4 +1,5 @@
 import * as Notifications from 'expo-notifications';
+import { isRunningInExpoGo } from 'expo';
 import { Platform } from 'react-native';
 import { useNotificationStore, useAuthStore } from '../store';
 import { BACKEND_URL, getBackendUrl } from '../config/api';
@@ -246,6 +247,12 @@ export const notificationService = {
       // Configure Android Channels and schedule direct 9 AM & 9 PM local alarms
       await this.setupChannels();
       await this.scheduleDailyHumorNotifications();
+
+      // In Expo Go on Android, remote push tokens are not supported (SDK 53+). Local scheduled notifications remain fully active.
+      if (Platform.OS === 'android' && isRunningInExpoGo()) {
+        console.log('[NotificationService] Running in Expo Go on Android. Skipping remote push token registration; local notifications active.');
+        return 'expo_go_local_active';
+      }
 
       // Retrieve Expo Push token for remote backend broadcasts
       try {

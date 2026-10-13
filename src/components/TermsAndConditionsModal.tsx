@@ -153,117 +153,117 @@ export const TermsAndConditionsModal: React.FC<TermsAndConditionsModalProps> = (
               showsVerticalScrollIndicator={true}
               nestedScrollEnabled={true}
             >
-              {/* Introduction */}
-              <View style={styles.section}>
-                <Text style={styles.sectionHeader}>1. Acceptance of Terms</Text>
-                <Text style={styles.paragraph}>
-                  Welcome to Regent Money. By creating an account, accessing, or using the Regent Money
-                  mobile application and associated services (collectively, the &ldquo;Service&rdquo;),
-                  you acknowledge that you have read, understood, and agree to be bound by these Terms and
-                  Conditions (&ldquo;Terms&rdquo;) and our Privacy Policy.
-                </Text>
-                <Text style={styles.paragraph}>
-                  If you do not agree to these Terms in their entirety, you must not access or use the
-                  Service. Acceptance is required to ensure consistent protection and regulatory compliance
-                  across all financial intelligence tools provided.
-                </Text>
-              </View>
+                {/* Section 1 */}
+                <View style={styles.section}>
+                  <Text style={styles.sectionHeader}>1. Acceptance of Terms</Text>
+                  <Text style={styles.paragraph}>
+                    Welcome to Regent Money. By creating an account, accessing, or using the Regent Money
+                    mobile application and associated services (collectively, the &ldquo;Service&rdquo;),
+                    you acknowledge that you have read, understood, and agree to be bound by these Terms and
+                    Conditions (&ldquo;Terms&rdquo;) and our Privacy Policy.
+                  </Text>
+                  <Text style={styles.paragraph}>
+                    If you do not agree to these Terms in their entirety, you must not access or use the
+                    Service. Acceptance is required to ensure consistent protection and regulatory compliance
+                    across all financial intelligence tools provided.
+                  </Text>
+                </View>
 
-              {/* Automated SMS & Bank Synchronization */}
-              <View style={styles.section}>
-                <Text style={styles.sectionHeader}>2. Financial Tracking & On-Device SMS Intelligence</Text>
-                <Text style={styles.paragraph}>
-                  Regent Money offers automated expense tracking by processing financial transaction SMS
-                  notifications delivered by your authorized banking institutions, credit card issuers, and UPI
-                  providers.
-                </Text>
-                <View style={styles.bulletList}>
-                  <View style={styles.bulletItem}>
-                    <Ionicons name="checkmark-done" size={14} color="#10B981" style={styles.bulletIcon} />
-                    <Text style={styles.bulletText}>
-                      <Text style={styles.boldText}>Strict Read-Only Parsing: </Text>
-                      The app monitors transactional notifications on-device. We never access, transmit, or store
-                      personal conversations, contacts, OTPs, or non-financial messages.
-                    </Text>
-                  </View>
-                  <View style={styles.bulletItem}>
-                    <Ionicons name="checkmark-done" size={14} color="#10B981" style={styles.bulletIcon} />
-                    <Text style={styles.bulletText}>
-                      <Text style={styles.boldText}>Non-Custodial Architecture: </Text>
-                      Regent Money is not a bank, broker, or custodian. The Service does not initiate debit
-                      transfers, alter banking balances, or control your funds. All money movements take place solely
-                      within your bank&rsquo;s official channels.
-                    </Text>
-                  </View>
-                  <View style={styles.bulletItem}>
-                    <Ionicons name="checkmark-done" size={14} color="#10B981" style={styles.bulletIcon} />
-                    <Text style={styles.bulletText}>
-                      <Text style={styles.boldText}>Privacy by Design: </Text>
-                      All pattern recognition and merchant identification runs locally through native algorithms.
-                      Your raw SMS messages are never sold or shared with third-party advertisers.
-                    </Text>
+                {/* Section 2 */}
+                <View style={styles.section}>
+                  <Text style={styles.sectionHeader}>2. Financial Tracking & On-Device SMS Intelligence</Text>
+                  <Text style={styles.paragraph}>
+                    Regent Money offers automated expense tracking by processing financial transaction SMS
+                    notifications delivered by your authorized banking institutions, credit card issuers, and UPI
+                    providers.
+                  </Text>
+                  <View style={styles.bulletList}>
+                    <View style={styles.bulletItem}>
+                      <Ionicons name="checkmark-done" size={14} color="#10B981" style={styles.bulletIcon} />
+                      <Text style={styles.bulletText}>
+                        <Text style={styles.boldText}>Strict Read-Only Parsing: </Text>
+                        The app monitors transactional notifications on-device. We never access, transmit, or store
+                        personal conversations, contacts, OTPs, or non-financial messages.
+                      </Text>
+                    </View>
+                    <View style={styles.bulletItem}>
+                      <Ionicons name="checkmark-done" size={14} color="#10B981" style={styles.bulletIcon} />
+                      <Text style={styles.bulletText}>
+                        <Text style={styles.boldText}>Non-Custodial Architecture: </Text>
+                        Regent Money is not a bank, broker, or custodian. The Service does not initiate debit
+                        transfers, alter banking balances, or control your funds. All money movements take place solely
+                        within your bank&rsquo;s official channels.
+                      </Text>
+                    </View>
+                    <View style={styles.bulletItem}>
+                      <Ionicons name="checkmark-done" size={14} color="#10B981" style={styles.bulletIcon} />
+                      <Text style={styles.bulletText}>
+                        <Text style={styles.boldText}>Privacy by Design: </Text>
+                        All pattern recognition and merchant identification runs locally through native algorithms.
+                        Your raw SMS messages are never sold or shared with third-party advertisers.
+                      </Text>
+                    </View>
                   </View>
                 </View>
-              </View>
 
-              {/* User Account & Security */}
-              <View style={styles.section}>
-                <Text style={styles.sectionHeader}>3. Account Security & Biometric Protection</Text>
-                <Text style={styles.paragraph}>
-                  You are solely responsible for maintaining the confidentiality of your login credentials,
-                  including your Google account, password, and device passcode.
-                </Text>
-                <Text style={styles.paragraph}>
-                  You may enable biometric authentication (Fingerprint, Face Unlock) within Regent Money.
-                  Biometric signatures are evaluated securely within your device&rsquo;s hardware Trusted Execution
-                  Environment (TEE) or Keystore and are never transmitted to our remote servers.
-                </Text>
-              </View>
-
-              {/* Disclaimers */}
-              <View style={styles.section}>
-                <Text style={styles.sectionHeader}>4. Financial & Investment Disclaimer</Text>
-                <Text style={styles.paragraph}>
-                  All financial metrics, automated categorizations, net worth calculations, budget summaries,
-                  and daily scheduled notifications provided by Regent Money are for personal informational and
-                  budgeting convenience only.
-                </Text>
-                <Text style={styles.paragraph}>
-                  None of the data or insights generated by the Service constitute professional financial, tax,
-                  legal, or investment advice. You should consult certified financial professionals before making
-                  substantial monetary decisions.
-                </Text>
-              </View>
-
-              {/* Data Protection */}
-              <View style={styles.section}>
-                <Text style={styles.sectionHeader}>5. Data Encryption & Storage</Text>
-                <Text style={styles.paragraph}>
-                  We utilize AES-256 local storage encryption and TLS 1.3 network layer protection. You have the
-                  unrestricted right to request account data deletion, export your transaction history, or revoke
-                  SMS monitoring permissions at any time through the in-app Privacy Center.
-                </Text>
-              </View>
-
-              {/* Termination & Updates */}
-              <View style={styles.section}>
-                <Text style={styles.sectionHeader}>6. Modifications to Terms</Text>
-                <Text style={styles.paragraph}>
-                  Regent Money reserves the right to modify these Terms to accommodate legislative changes or
-                  product enhancements. Continued use of the Service following published updates constitutes your
-                  binding acceptance of the revised Terms.
-                </Text>
-              </View>
-
-              {/* End of Document Anchor */}
-              <View style={styles.endAnchor}>
-                <View style={styles.endBrandingWrap}>
-                  <Text style={styles.endFromLabel}>FROM</Text>
-                  <Text style={styles.endStudioBrand}>RAO DEV STUDIOS</Text>
+                {/* Section 3 */}
+                <View style={styles.section}>
+                  <Text style={styles.sectionHeader}>3. Account Security & Biometric Protection</Text>
+                  <Text style={styles.paragraph}>
+                    You are solely responsible for maintaining the confidentiality of your login credentials,
+                    including your Google account, password, and device passcode.
+                  </Text>
+                  <Text style={styles.paragraph}>
+                    You may enable biometric authentication (Fingerprint, Face Unlock) within Regent Money.
+                    Biometric signatures are evaluated securely within your device&rsquo;s hardware Trusted Execution
+                    Environment (TEE) or Keystore and are never transmitted to our remote servers.
+                  </Text>
                 </View>
-                <Text style={styles.endTimestamp}>Effective Date: October 2026 &bull; Version 2.0</Text>
-              </View>
-            </ScrollView>
+
+                {/* Section 4 */}
+                <View style={styles.section}>
+                  <Text style={styles.sectionHeader}>4. Financial & Investment Disclaimer</Text>
+                  <Text style={styles.paragraph}>
+                    All financial metrics, automated categorizations, net worth calculations, budget summaries,
+                    and daily scheduled notifications provided by Regent Money are for personal informational and
+                    budgeting convenience only.
+                  </Text>
+                  <Text style={styles.paragraph}>
+                    None of the data or insights generated by the Service constitute professional financial, tax,
+                    legal, or investment advice. You should consult certified financial professionals before making
+                    substantial monetary decisions.
+                  </Text>
+                </View>
+
+                {/* Section 5 */}
+                <View style={styles.section}>
+                  <Text style={styles.sectionHeader}>5. Data Encryption & Storage</Text>
+                  <Text style={styles.paragraph}>
+                    We utilize AES-256 local storage encryption and TLS 1.3 network layer protection. You have the
+                    unrestricted right to request account data deletion, export your transaction history, or revoke
+                    SMS monitoring permissions at any time through the in-app Privacy Center.
+                  </Text>
+                </View>
+
+                {/* Section 6 */}
+                <View style={styles.section}>
+                  <Text style={styles.sectionHeader}>6. Modifications to Terms</Text>
+                  <Text style={styles.paragraph}>
+                    Regent Money reserves the right to modify these Terms to accommodate legislative changes or
+                    product enhancements. Continued use of the Service following published updates constitutes your
+                    binding acceptance of the revised Terms.
+                  </Text>
+                </View>
+
+                {/* End of Document Anchor */}
+                <View style={styles.endAnchor}>
+                  <View style={styles.endBrandingWrap}>
+                    <Text style={styles.endFromLabel}>FROM</Text>
+                    <Text style={styles.endStudioBrand}>RAO DEV STUDIOS</Text>
+                  </View>
+                  <Text style={styles.endTimestamp}>Effective Date: October 2026 &bull; Version 2.0</Text>
+                </View>
+              </ScrollView>
 
             {/* Quick jump to bottom helper when user hasn't scrolled down */}
             {!hasScrolledToBottom && !readOnly && (

@@ -1,4 +1,5 @@
 import { Platform, NativeModules } from 'react-native';
+import { isRunningInExpoGo } from 'expo';
 import { mmkvStorage } from '../db/mmkv';
 import { useAuthStore, UserProfile, useSecurityStore, AutoLockTimeout } from '../store';
 import { syncService } from './syncService';
@@ -160,6 +161,9 @@ export const authService = {
       useAuthStore.getState().setUser(profile);
       syncNativeAuthCredentials(data.accessToken);
 
+      // Auto-accept terms locally and on backend since user agreed inline during signup
+      this.acceptTerms().catch(() => {});
+
       // Initial database push
       syncService.sync().catch((e) => console.warn('[Auth] Initial sync push failed:', e));
     }
@@ -251,6 +255,12 @@ export const authService = {
    * Native Google Login flow (stub or bridged verification via ID token)
    */
   async signInWithGoogleNative(forceAccountPicker: boolean = false): Promise<UserProfile> {
+    if (isRunningInExpoGo()) {
+      throw new Error(
+        'Google Sign-In uses native Google Play Services, which is not supported in Expo Go. Please sign in with Email & Password in Expo Go, or test Google Sign-In in a standalone APK.'
+      );
+    }
+
     const webClientId = getGoogleWebClientId();
     if (!webClientId) {
       throw new Error('Google Web Client ID is not configured.');
@@ -315,6 +325,11 @@ export const authService = {
       tokenStore.setAccessToken(data.accessToken);
       useAuthStore.getState().setUser(profile);
       syncNativeAuthCredentials(data.accessToken, profile?.id);
+
+      // Auto-accept terms if not yet accepted (user agreed via Google button notice)
+      if (!profile.termsAccepted) {
+        this.acceptTerms().catch(() => {});
+      }
 
       // Initial database sync
       syncService.sync().catch((e) => console.warn('[Auth] Google Native login sync failed:', e));

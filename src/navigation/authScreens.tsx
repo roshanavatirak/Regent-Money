@@ -1,378 +1,692 @@
-// Auth Screens - Login, Signup & Welcome (Regent Money)
-import React, { useState, useRef, useEffect } from 'react';
+// Auth screens: Welcome, Auth landing, Login and Signup (Regent Money)
+// Same light canvas, green and money agent as the launch intro and onboarding.
+
+import React, { ComponentProps, ReactNode, useEffect, useState, useRef } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  ScrollView,
   ActivityIndicator,
-  Platform,
-  Keyboard,
+  Image,
+  KeyboardAvoidingView,
   Modal,
-  Dimensions,
-  Image
+  Platform,
+  Pressable,
+  StyleProp,
+  StyleSheet,
+  Text,
+  TextInput,
+  TextInputProps,
+  useWindowDimensions,
+  View,
+  ViewStyle,
 } from 'react-native';
 import { KeyboardScreen } from '../components/KeyboardScreen';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { authService, LastGoogleUser } from '../services/authService';
 import { getGoogleWebClientId } from '../config/auth';
-import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
-import { useTheme, showGlobalAlert } from '../store';
+import Animated, {
+  FadeIn,
+  FadeInDown,
+  FadeOut,
+  SlideInDown,
+  ZoomIn,
+  interpolateColor,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
+import Svg, { Defs, RadialGradient, Rect, Stop } from 'react-native-svg';
+import { showGlobalAlert, useTermsModalStore, usePrivacyModalStore } from '../store';
 import { StatusBar } from 'expo-status-bar';
 import { CloudflareTurnstile } from '../components/CloudflareTurnstile';
+import { RegentWordmark, WM_H, WM_W } from '../components/RegentWordmark';
+import { AGENT_H, AGENT_W, MoneyAgent, nudgeNo, sayHi, useAgentControls } from '../components/MoneyAgent';
 
-const { width } = Dimensions.get('window');
+/* ------------------------------------------------------------------ */
+/* Tokens                                                             */
+/* ------------------------------------------------------------------ */
 
+const C = {
+  bg: '#fafbfc',
+  white: '#ffffff',
+  green: '#2dba4e',
+  greenDeep: '#1f8f3a',
+  mist: '#e7f7eb',
+  ink: '#1c252e',
+  body: '#5b6672',
+  muted: '#8a94a0',
+  line: '#e3e8ed',
+  disabled: '#c9d1d8',
+  danger: '#d93838',
+  dangerInk: '#b42318',
+  dangerBg: '#fdf1f1',
+  dangerLine: '#f4cccc',
+  amber: '#d9930d',
+};
 
-// ----------------------------------------------------
-// Google Auth Button with LinkedIn-Style "Last Used" Card
-// ----------------------------------------------------
+const SOFT = { damping: 16, stiffness: 190 };
+const PERCH = { x: 508, y: 37.5 }; // top of the "n" in Regent, wordmark units
+
+type IconName = ComponentProps<typeof Feather>['name'];
+
+const openTerms = () => useTermsModalStore.getState().openTermsModal(true);
+const openPrivacy = () => usePrivacyModalStore.getState().openPrivacyModal();
+
+/* ------------------------------------------------------------------ */
+/* Building blocks                                                    */
+/* ------------------------------------------------------------------ */
+
+function Glow({ id, size, strength }: { id: string; size: number; strength: number }) {
+  return (
+    <Svg width={size} height={size}>
+      <Defs>
+        <RadialGradient id={id} cx="50%" cy="50%" r="50%">
+          <Stop offset="0" stopColor={C.green} stopOpacity={strength} />
+          <Stop offset="0.55" stopColor={C.green} stopOpacity={strength * 0.35} />
+          <Stop offset="1" stopColor={C.green} stopOpacity={0} />
+        </RadialGradient>
+      </Defs>
+      <Rect width={size} height={size} fill={`url(#${id})`} />
+    </Svg>
+  );
+}
+
+/** Soft green light in two corners, same as the intro and onboarding. */
+function Backdrop() {
+  const { width: W } = useWindowDimensions();
+  const size = W * 1.5;
+  return (
+    <View pointerEvents="none" style={[StyleSheet.absoluteFill, { overflow: 'hidden' }]}>
+      <View style={{ position: 'absolute', left: -size * 0.42, top: -size * 0.5 }}>
+        <Glow id="authGlowTop" size={size} strength={0.11} />
+      </View>
+      <View style={{ position: 'absolute', right: -size * 0.45, bottom: -size * 0.5 }}>
+        <Glow id="authGlowLow" size={size} strength={0.08} />
+      </View>
+    </View>
+  );
+}
+
+type PressScaleProps = {
+  onPress?: () => void;
+  disabled?: boolean;
+  style?: StyleProp<ViewStyle>;
+  children: ReactNode;
+  accessibilityLabel?: string;
+};
+
+/** Pressable that gives a little under the finger. */
+function PressScale({ onPress, disabled, style, children, accessibilityLabel }: PressScaleProps) {
+  const pressed = useSharedValue(0);
+  const anim = useAnimatedStyle(() => ({ transform: [{ scale: 1 - pressed.value * 0.035 }] }));
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      onPressIn={() => {
+        pressed.value = withTiming(1, { duration: 90 });
+      }}
+      onPressOut={() => {
+        pressed.value = withSpring(0, SOFT);
+      }}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      accessibilityState={{ disabled: !!disabled }}
+    >
+      <Animated.View style={[style, anim]}>{children}</Animated.View>
+    </Pressable>
+  );
+}
+
+type ButtonProps = {
+  label: string;
+  onPress?: () => void;
+  variant?: 'primary' | 'secondary';
+  loading?: boolean;
+  disabled?: boolean;
+  leading?: ReactNode;
+  style?: StyleProp<ViewStyle>;
+};
+
+function Button({ label, onPress, variant = 'primary', loading, disabled, leading, style }: ButtonProps) {
+  const primary = variant === 'primary';
+  return (
+    <PressScale
+      onPress={onPress}
+      disabled={disabled || loading}
+      accessibilityLabel={label}
+      style={[styles.btn, primary ? styles.btnPrimary : styles.btnSecondary, disabled && styles.btnDisabled, style]}
+    >
+      {loading ? (
+        <ActivityIndicator color={primary ? C.white : C.green} />
+      ) : (
+        <>
+          {leading}
+          <Text style={[styles.btnText, !primary && styles.btnTextSecondary]}>{label}</Text>
+        </>
+      )}
+    </PressScale>
+  );
+}
+
+function BackButton({ onPress }: { onPress: () => void }) {
+  return (
+    <PressScale onPress={onPress} style={styles.back} accessibilityLabel="Go back">
+      <Feather name="arrow-left" size={20} color={C.ink} />
+    </PressScale>
+  );
+}
+
+type FieldProps = TextInputProps & {
+  label: string;
+  icon: IconName;
+  inputRef?: React.Ref<TextInput>;
+  right?: ReactNode;
+  footer?: ReactNode;
+  invalid?: boolean;
+};
+
+/** Label, field with a green focus ring, optional accessory and helper. */
+function Field({ label, icon, inputRef, right, footer, invalid = false, onFocus, onBlur, style, ...input }: FieldProps) {
+  const focus = useSharedValue(0);
+  const [focused, setFocused] = useState(false);
+  const box = useAnimatedStyle(
+    () => ({
+      borderColor: interpolateColor(focus.value, [0, 1], [invalid ? C.dangerLine : C.line, C.green]),
+      shadowOpacity: focus.value * 0.16,
+    }),
+    [invalid],
+  );
+  return (
+    <View style={styles.field}>
+      <Text style={styles.label}>{label}</Text>
+      <Animated.View style={[styles.inputBox, box]}>
+        <Feather name={icon} size={18} color={focused ? C.green : C.muted} />
+        <TextInput
+          ref={inputRef}
+          style={[styles.input, style]}
+          placeholderTextColor={C.muted}
+          selectionColor={C.green}
+          onFocus={e => {
+            setFocused(true);
+            focus.value = withTiming(1, { duration: 180 });
+            onFocus?.(e);
+          }}
+          onBlur={e => {
+            setFocused(false);
+            focus.value = withTiming(0, { duration: 180 });
+            onBlur?.(e);
+          }}
+          {...input}
+        />
+        {right}
+      </Animated.View>
+      {footer}
+    </View>
+  );
+}
+
+function EyeToggle({ hidden, onToggle }: { hidden: boolean; onToggle: () => void }) {
+  return (
+    <Pressable
+      onPress={onToggle}
+      hitSlop={10}
+      style={styles.eye}
+      accessibilityRole="button"
+      accessibilityLabel={hidden ? 'Show password' : 'Hide password'}
+    >
+      <Feather name={hidden ? 'eye-off' : 'eye'} size={18} color={C.muted} />
+    </Pressable>
+  );
+}
+
+function Checkbox({
+  checked,
+  onToggle,
+  label,
+  children,
+}: {
+  checked: boolean;
+  onToggle: () => void;
+  label: string;
+  children: ReactNode;
+}) {
+  const v = useSharedValue(checked ? 1 : 0);
+  useEffect(() => {
+    v.value = withSpring(checked ? 1 : 0, SOFT);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checked]);
+  const box = useAnimatedStyle(() => ({
+    backgroundColor: interpolateColor(v.value, [0, 1], [C.white, C.green]),
+    borderColor: interpolateColor(v.value, [0, 1], [C.disabled, C.green]),
+  }));
+  const tick = useAnimatedStyle(() => ({ opacity: v.value, transform: [{ scale: 0.4 + v.value * 0.6 }] }));
+  return (
+    <Pressable
+      onPress={onToggle}
+      hitSlop={6}
+      style={styles.checkRow}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked }}
+      accessibilityLabel={label}
+    >
+      <Animated.View style={[styles.checkbox, box]}>
+        <Animated.View style={tick}>
+          <Feather name="check" size={13} color={C.white} />
+        </Animated.View>
+      </Animated.View>
+      {children}
+    </Pressable>
+  );
+}
+
+function ErrorBanner({ message }: { message: string }) {
+  return (
+    <Animated.View
+      entering={FadeInDown.duration(260)}
+      exiting={FadeOut.duration(160)}
+      style={styles.banner}
+      accessibilityRole="alert"
+      accessibilityLiveRegion="polite"
+    >
+      <Feather name="alert-circle" size={16} color={C.danger} />
+      <Text style={styles.bannerText}>{message}</Text>
+    </Animated.View>
+  );
+}
+
+function Divider() {
+  return (
+    <View style={styles.divider}>
+      <View style={styles.dividerLine} />
+      <Text style={styles.dividerText}>or</Text>
+      <View style={styles.dividerLine} />
+    </View>
+  );
+}
+
+function LegalNotice() {
+  return (
+    <Text style={styles.notice} numberOfLines={1} adjustsFontSizeToFit>
+      By continuing, you agree to our{' '}
+      <Text style={styles.noticeLink} onPress={openTerms}>
+        Terms
+      </Text>{' '}
+      and{' '}
+      <Text style={styles.noticeLink} onPress={openPrivacy}>
+        Privacy Policy
+      </Text>
+      .
+    </Text>
+  );
+}
+
+function TrustRow() {
+  return (
+    <View style={styles.trust}>
+      {/* <Feather name="smartphone" size={13} color={C.greenDeep} /> */}
+      <Text style={styles.trustText}>End-to-End Encrypted</Text>
+    </View>
+  );
+}
+
+/** Bottom sheet with a dimmed backdrop; tapping outside closes it. */
+function Sheet({
+  visible,
+  title,
+  onClose,
+  children,
+}: {
+  visible: boolean;
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const insets = useSafeAreaInsets();
+  return (
+    <Modal visible={visible} transparent animationType="fade" statusBarTranslucent onRequestClose={onClose}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.sheetWrap}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close" />
+        <Animated.View
+          entering={SlideInDown.springify().damping(20)}
+          style={[styles.sheet, { paddingBottom: 24 + insets.bottom }]}
+        >
+          <View style={styles.grabber} />
+          <View style={styles.sheetHead}>
+            <Text style={styles.sheetTitle}>{title}</Text>
+            <Pressable onPress={onClose} hitSlop={10} style={styles.sheetClose} accessibilityLabel="Close">
+              <Feather name="x" size={18} color={C.body} />
+            </Pressable>
+          </View>
+          {children}
+        </Animated.View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* The agent reacts to the form                                       */
+/* ------------------------------------------------------------------ */
+
+type FocusKind = 'text' | 'secret';
+
+/**
+ * Looks at what you type, covers its eyes for passwords,
+ * and peeks when you choose to show the password.
+ */
+function useFormAgent(reveal: boolean) {
+  const agent = useAgentControls();
+  const [focus, setFocus] = useState<FocusKind | null>(null);
+
+  useEffect(() => {
+    agent.lookY.value = withTiming(focus ? 1 : 0, { duration: 220 });
+    agent.cover.value = withSpring(focus === 'secret' ? 1 : 0, SOFT);
+    agent.peek.value = withSpring(focus === 'secret' && reveal ? 1 : 0, SOFT);
+    if (focus !== 'text') agent.lookX.value = withTiming(0, { duration: 220 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus, reveal]);
+
+  const typed = (length: number) => {
+    agent.lookX.value = withTiming(Math.max(-1, Math.min(1, -0.9 + length / 14)), { duration: 120 });
+  };
+  const bind = (kind: FocusKind, length?: number) => ({
+    onFocus: () => {
+      setFocus(kind);
+      if (length != null) typed(length);
+    },
+    onBlur: () => setFocus(f => (f === kind ? null : f)),
+  });
+  return { agent, typed, bind };
+}
+
+/* ------------------------------------------------------------------ */
+/* Google sign-in (one-tap card for the last used account)            */
+/* ------------------------------------------------------------------ */
+
 interface GoogleAuthButtonProps {
-  styles: any;
   loading: boolean;
   setLoading: (val: boolean) => void;
 }
 
-const GoogleAuthButton: React.FC<GoogleAuthButtonProps> = ({
-  styles,
-  loading,
-  setLoading,
-}) => {
-  const [lastGoogleUser, setLastGoogleUser] = useState<LastGoogleUser | null>(() => authService.getLastGoogleUser());
+const GoogleAuthButton: React.FC<GoogleAuthButtonProps> = ({ loading, setLoading }) => {
+  const [lastGoogleUser, setLastGoogleUser] = useState<LastGoogleUser | null>(() =>
+    authService.getLastGoogleUser(),
+  );
 
   useEffect(() => {
     setLastGoogleUser(authService.getLastGoogleUser());
   }, []);
 
-  const handleDirectLastUserLogin = async () => {
-    if (!lastGoogleUser?.email) return;
+  const signIn = async (forceSwitch: boolean) => {
     const webClientId = getGoogleWebClientId();
-
-    if (Platform.OS !== 'web' && webClientId) {
-      setLoading(true);
-      try {
-        await authService.signInWithGoogleNative(false);
-        setLastGoogleUser(authService.getLastGoogleUser());
-      } catch (e: any) {
-        if (e.code === 'SIGN_IN_CANCELLED' || e.message?.includes('cancelled')) {
-          console.log('[Auth] Google Sign-In cancelled.');
-        } else {
-          showGlobalAlert('Google Sign-In Failed', e.message);
-        }
-      } finally {
-        setLoading(false);
-      }
-    } else {
+    if (Platform.OS === 'web' || !webClientId) {
       showGlobalAlert(
         'Mobile Feature',
-        'Google Sign-In is only supported on the mobile app. Please sign in using your Email & Password.'
+        'Google Sign-In is only supported on the mobile app. Please sign in using your Email & Password.',
       );
+      return;
     }
-  };
-
-  const handleSwitchAccount = async () => {
-    const webClientId = getGoogleWebClientId();
-    if (Platform.OS !== 'web' && webClientId) {
-      setLoading(true);
-      try {
-        await authService.signInWithGoogleNative(true);
-        setLastGoogleUser(authService.getLastGoogleUser());
-      } catch (e: any) {
-        if (e.code === 'SIGN_IN_CANCELLED' || e.message?.includes('cancelled')) {
-          console.log('[Auth] Google Sign-In cancelled.');
-        } else {
-          showGlobalAlert('Google Sign-In Failed', e.message);
-        }
-      } finally {
-        setLoading(false);
+    setLoading(true);
+    try {
+      await authService.signInWithGoogleNative(forceSwitch);
+      setLastGoogleUser(authService.getLastGoogleUser());
+    } catch (e: any) {
+      if (
+        e.message?.includes('developer error') ||
+        e.code === 'DEVELOPER_ERROR' ||
+        e.message?.includes('DEVELOPER_ERROR')
+      ) {
+        showGlobalAlert(
+          'Configuration Notice',
+          'Google Web Client ID is mismatching, or your SHA-1 fingerprint is not configured in the Google Cloud Console for Android Package Name (com.anonymous.regentmoney). Please check settings.',
+        );
+      } else if (e.code === 'SIGN_IN_CANCELLED' || e.message?.includes('cancelled')) {
+        console.log('[Auth] Google Sign-In cancelled.');
+      } else {
+        showGlobalAlert('Google Sign-In Failed', e.message);
       }
-    } else {
-      showGlobalAlert(
-        'Mobile Feature',
-        'Google Sign-In is only supported on the mobile app. Please sign in using your Email & Password.'
-      );
-    }
-  };
-
-  const handleGooglePress = async (forceSwitch: boolean = false) => {
-    const webClientId = getGoogleWebClientId();
-    if (Platform.OS !== 'web' && webClientId) {
-      setLoading(true);
-      try {
-        await authService.signInWithGoogleNative(forceSwitch);
-        setLastGoogleUser(authService.getLastGoogleUser());
-      } catch (e: any) {
-        if (
-          e.message?.includes('developer error') ||
-          e.code === 'DEVELOPER_ERROR' ||
-          e.message?.includes('DEVELOPER_ERROR')
-        ) {
-          showGlobalAlert(
-            'Configuration Notice',
-            'Google Web Client ID is mismatching, or your SHA-1 fingerprint is not configured in the Google Cloud Console for Android Package Name (com.anonymous.regentmoney). Please check settings.'
-          );
-        } else if (e.code === 'SIGN_IN_CANCELLED' || e.message?.includes('cancelled')) {
-          console.log('[Auth] Google Sign-In cancelled.');
-        } else {
-          showGlobalAlert('Google Sign-In Failed', e.message);
-        }
-      } finally {
-        setLoading(false);
-      }
-    } else {
-      showGlobalAlert(
-        'Mobile Feature',
-        'Google Sign-In is only supported on the mobile app. Please sign in using your Email & Password.'
-      );
+    } finally {
+      setLoading(false);
     }
   };
 
   if (lastGoogleUser?.email) {
     const displayName = lastGoogleUser.name || lastGoogleUser.email.split('@')[0];
+    const firstName = displayName.split(' ')[0];
     const initial = (lastGoogleUser.name || lastGoogleUser.email).charAt(0).toUpperCase();
 
     return (
-      <View style={styles.linkedInGoogleContainer}>
-        {/* Main 1-Tap Google Button - Directly logs in as lastGoogleUser */}
-        <TouchableOpacity
-          style={styles.linkedInGoogleCard}
-          onPress={handleDirectLastUserLogin}
-          activeOpacity={0.85}
+      <View>
+        <PressScale
+          onPress={() => signIn(false)}
+          disabled={loading}
+          style={styles.lastUser}
+          accessibilityLabel={`Continue with Google as ${firstName}`}
         >
-          <View style={styles.linkedInAvatarWrap}>
-            {lastGoogleUser.photo ? (
-              <Image source={{ uri: lastGoogleUser.photo }} style={styles.linkedInAvatarImage} />
-            ) : (
-              <View style={styles.linkedInAvatarFallback}>
-                <Text style={styles.linkedInAvatarInitial}>{initial}</Text>
-              </View>
-            )}
-          </View>
-
-          <View style={styles.linkedInMeta}>
-            <View style={styles.linkedInNameRow}>
-              <Text style={styles.linkedInContinueText} numberOfLines={1}>
-                Continue as {displayName.split(' ')[0]}
+          {lastGoogleUser.photo ? (
+            <Image source={{ uri: lastGoogleUser.photo }} style={styles.avatar} />
+          ) : (
+            <View style={[styles.avatar, styles.avatarFallback]}>
+              <Text style={styles.avatarInitial}>{initial}</Text>
+            </View>
+          )}
+          <View style={styles.lastUserMeta}>
+            <View style={styles.lastUserRow}>
+              <Text style={styles.lastUserName} numberOfLines={1}>
+                Continue as {firstName}
               </Text>
-              <View style={styles.lastUsedBadge}>
-                <Text style={styles.lastUsedBadgeText}>Last used</Text>
+              <View style={styles.lastUsedPill}>
+                <Text style={styles.lastUsedText} numberOfLines={1}>
+                  Last used
+                </Text>
               </View>
             </View>
-            <Text style={styles.linkedInEmailText} numberOfLines={1}>
+            <Text style={styles.lastUserEmail} numberOfLines={1}>
               {lastGoogleUser.email}
             </Text>
           </View>
-
-          <View style={styles.googleIconBadge}>
-            <Ionicons name="logo-google" size={18} color="#FFFFFF" />
+          <View style={styles.googleBadge}>
+            {loading ? (
+              <ActivityIndicator size="small" color={C.green} />
+            ) : (
+              <Ionicons name="logo-google" size={16} color={C.ink} />
+            )}
           </View>
-        </TouchableOpacity>
+        </PressScale>
 
-        {/* Change / Switch Account Option */}
-        <TouchableOpacity
-          style={styles.switchAccountBtn}
-          onPress={handleSwitchAccount}
-          activeOpacity={0.7}
+        <Pressable
+          onPress={() => signIn(true)}
+          disabled={loading}
+          hitSlop={6}
+          style={styles.switchAccount}
+          accessibilityRole="button"
         >
-          <Ionicons name="swap-horizontal" size={14} color="#10B981" style={{ marginRight: 6 }} />
-          <Text style={styles.switchAccountBtnText}>Switch Google account</Text>
-        </TouchableOpacity>
+          <Feather name="repeat" size={13} color={C.greenDeep} />
+          <Text style={styles.switchAccountText}>Use another Google account</Text>
+        </Pressable>
       </View>
     );
   }
 
   return (
-    <TouchableOpacity
-      style={styles.googleBtnLuxury}
-      onPress={() => handleGooglePress(false)}
-      activeOpacity={0.85}
-    >
-      <Ionicons name="logo-google" size={18} color="#FFFFFF" style={{ marginRight: 10 }} />
-      <Text style={styles.googleBtnLuxuryText}>Continue with Google</Text>
-    </TouchableOpacity>
+    <Button
+      variant="secondary"
+      label="Continue with Google"
+      leading={<Ionicons name="logo-google" size={18} color={C.ink} style={styles.btnIcon} />}
+      onPress={() => signIn(false)}
+      loading={loading}
+    />
   );
 };
 
-// ----------------------------------------------------
-// 1. Welcome Screen
-// ----------------------------------------------------
-export const WelcomeScreen = ({ navigation }: { navigation: any }) => {
-  const { colors } = useTheme();
-  const styles = getStyles(colors);
-  const insets = useSafeAreaInsets();
-  const [loading, setLoading] = useState(false);
+/* ------------------------------------------------------------------ */
+/* 1. Welcome and 1B. Auth landing                                    */
+/* ------------------------------------------------------------------ */
+
+/** The intro's last frame: the logo with the agent standing on the "n", waving. */
+function Hero({ width }: { width: number }) {
+  const agent = useAgentControls();
+  const S = width / WM_W;
+  const logoH = WM_H * S;
+  const size = width / 300; // same proportion as the intro
+  const aw = AGENT_W * size;
+  const ah = AGENT_H * size;
+  const top = ah + 4;
+
+  useEffect(() => {
+    sayHi(agent, 1250);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 24) }]}>
-      {/* Ambient Neon Glow */}
-      <View style={styles.neonGlow} />
+    <View style={{ width, height: top + logoH }}>
+      <Animated.View entering={FadeInDown.delay(120).duration(700)} style={{ position: 'absolute', left: 0, top }}>
+        <RegentWordmark height={logoH} />
+      </Animated.View>
+      <MoneyAgent
+        size={size}
+        controls={agent}
+        dropIn
+        dropDelay={620}
+        style={{ position: 'absolute', left: PERCH.x * S - aw / 2, top: top + PERCH.y * S - ah }}
+      />
+    </View>
+  );
+}
 
-      <View style={styles.welcomeMainContent}>
-        {/* Top/Center Branding */}
-        <Animated.View entering={FadeIn.delay(100).duration(800)} style={styles.welcomeBranding}>
-          <View style={styles.logoBadgeLuxury}>
-            <Image
-              source={require('../../assets/insideicon.png')}
-              style={styles.logoImageInside}
-              resizeMode="contain"
-            />
-          </View>
-          <Text style={styles.welcomeHeaderSmall}>WELCOME TO</Text>
-          <Text style={styles.welcomeHeaderBig}>REGENT MONEY</Text>
-          <Text style={styles.welcomeSlogan}>Master your wealth. In absolute privacy.</Text>
+function Landing({ navigation, returning }: { navigation: any; returning: boolean }) {
+  const insets = useSafeAreaInsets();
+  const { width: W } = useWindowDimensions();
+  const [loading, setLoading] = useState(false);
+
+  const primary = returning ? { label: 'Log in', to: 'Login' } : { label: 'Create account', to: 'Signup' };
+  const secondary = returning ? { label: 'Create account', to: 'Signup' } : { label: 'Log in', to: 'Login' };
+
+  return (
+    <View style={[styles.screen, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 20) }]}>
+      <StatusBar style="dark" />
+      <Backdrop />
+
+      <View style={styles.heroArea}>
+        <Hero width={Math.min(W * 0.68, 280)} />
+        <Animated.Text entering={FadeInDown.delay(480).duration(650)} style={styles.tagline}>
+          {returning ? 'Good to see you again.' : 'Your money, sorted by an agent\nthat works for you.'}
+        </Animated.Text>
+      </View>
+
+      <View style={styles.actions}>
+        <Animated.View entering={FadeInDown.delay(620).duration(600)}>
+          <Button label={primary.label} onPress={() => navigation.navigate(primary.to)} disabled={loading} />
         </Animated.View>
-
-        {/* Bottom Interaction Actions */}
-        <Animated.View entering={FadeInDown.delay(300).duration(800)} style={styles.actionsContainer}>
-          {loading ? (
-            <ActivityIndicator size="large" color="#2dba4e" style={{ marginVertical: 24 }} />
-          ) : (
-            <>
-              <TouchableOpacity
-                style={styles.primaryBtnLuxury}
-                onPress={() => navigation.navigate('Signup')}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.primaryBtnLuxuryText}>Create Account</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.secondaryBtnLuxury}
-                onPress={() => navigation.navigate('Login')}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.secondaryBtnLuxuryText}>Log In</Text>
-              </TouchableOpacity>
-
-              <View style={styles.dividerRow}>
-                <View style={styles.dividerLine} />
-                <Text style={styles.dividerText}>OR</Text>
-                <View style={styles.dividerLine} />
-              </View>
-
-              <GoogleAuthButton
-                styles={styles}
-                loading={loading}
-                setLoading={setLoading}
-              />
-            </>
-          )}
-
-          <Text style={styles.legalNotice}>
-            End-to-End Encrypted
-          </Text>
+        <Animated.View entering={FadeInDown.delay(700).duration(600)}>
+          <Button
+            variant="secondary"
+            label={secondary.label}
+            onPress={() => navigation.navigate(secondary.to)}
+            disabled={loading}
+            style={styles.stack}
+          />
+        </Animated.View>
+        <Animated.View entering={FadeIn.delay(800).duration(600)}>
+          <Divider />
+        </Animated.View>
+        <Animated.View entering={FadeInDown.delay(860).duration(600)}>
+          <GoogleAuthButton loading={loading} setLoading={setLoading} />
+          <LegalNotice />
+        </Animated.View>
+        <Animated.View entering={FadeIn.delay(1000).duration(700)}>
+          <TrustRow />
         </Animated.View>
       </View>
     </View>
   );
-};
+}
 
-// ----------------------------------------------------
-// 1B. Auth Landing Screen (For Returning / Logged-Out Users)
-// No "WELCOME TO" message since the user is already onboarded.
-// Primary action is "Log In".
-// ----------------------------------------------------
-export const AuthLandingScreen = ({ navigation }: { navigation: any }) => {
-  const { colors } = useTheme();
-  const styles = getStyles(colors);
-  const insets = useSafeAreaInsets();
-  const [loading, setLoading] = useState(false);
+export const WelcomeScreen = ({ navigation }: { navigation: any }) => (
+  <Landing navigation={navigation} returning={false} />
+);
 
+/** For returning or logged-out users: Log in comes first. */
+export const AuthLandingScreen = ({ navigation }: { navigation: any }) => (
+  <Landing navigation={navigation} returning />
+);
+
+/* ------------------------------------------------------------------ */
+/* Shared form header                                                 */
+/* ------------------------------------------------------------------ */
+
+function FormHeader({
+  title,
+  subtitle,
+  agent,
+  onBack,
+}: {
+  title: string;
+  subtitle: string;
+  agent: ReturnType<typeof useAgentControls>;
+  onBack: () => void;
+}) {
   return (
-    <View style={[styles.container, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 24) }]}>
-      {/* Ambient Neon Glow */}
-      <View style={styles.neonGlow} />
-
-      <View style={styles.welcomeMainContent}>
-        {/* Top/Center Branding - NO "WELCOME TO" message! */}
-        <Animated.View entering={FadeIn.delay(100).duration(800)} style={styles.welcomeBranding}>
-          <View style={styles.logoBadgeLuxury}>
-            <Image
-              source={require('../../assets/insideicon.png')}
-              style={styles.logoImageInside}
-              resizeMode="contain"
-            />
-          </View>
-          <Text style={styles.welcomeHeaderBig}>REGENT MONEY</Text>
-          <Text style={styles.welcomeSlogan}>Master your wealth. In absolute privacy.</Text>
+    <>
+      <Animated.View entering={FadeIn.duration(400)}>
+        <BackButton onPress={onBack} />
+      </Animated.View>
+      <View style={styles.headRow}>
+        <Animated.View entering={FadeInDown.delay(80).duration(550)} style={styles.headText}>
+          <Text style={styles.title}>{title}</Text>
+          <Text style={styles.subtitle}>{subtitle}</Text>
         </Animated.View>
-
-        {/* Bottom Interaction Actions - Log In is Primary */}
-        <Animated.View entering={FadeInDown.delay(300).duration(800)} style={styles.actionsContainer}>
-          {loading ? (
-            <ActivityIndicator size="large" color="#2dba4e" style={{ marginVertical: 24 }} />
-          ) : (
-            <>
-              <TouchableOpacity
-                style={styles.primaryBtnLuxury}
-                onPress={() => navigation.navigate('Login')}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.primaryBtnLuxuryText}>Log In</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.secondaryBtnLuxury}
-                onPress={() => navigation.navigate('Signup')}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.secondaryBtnLuxuryText}>Create Account</Text>
-              </TouchableOpacity>
-
-              <View style={styles.dividerRow}>
-                <View style={styles.dividerLine} />
-                <Text style={styles.dividerText}>OR</Text>
-                <View style={styles.dividerLine} />
-              </View>
-
-              <GoogleAuthButton
-                styles={styles}
-                loading={loading}
-                setLoading={setLoading}
-              />
-            </>
-          )}
-
-          <Text style={styles.legalNotice}>
-            End-to-End Encrypted
-          </Text>
-        </Animated.View>
+        <MoneyAgent size={1.3} controls={agent} dropIn dropDelay={220} />
       </View>
-    </View>
+    </>
   );
+}
+
+const formatRemainingTime = (seconds: number): string => {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s < 10 ? '0' : ''}${s}s`;
+  return `${s}s`;
 };
 
-// ----------------------------------------------------
-// 2. Login Screen
-// ----------------------------------------------------
+/* ------------------------------------------------------------------ */
+/* 2. Login                                                           */
+/* ------------------------------------------------------------------ */
+
 export const LoginScreen = ({ navigation }: { navigation: any }) => {
-  const { colors } = useTheme();
-  const styles = getStyles(colors);
   const insets = useSafeAreaInsets();
-  const scrollViewRef = useRef<ScrollView>(null);
+  const passwordRef = useRef<TextInput>(null);
   const [emailOrMobile, setEmailOrMobile] = useState('');
   const [password, setPassword] = useState('');
   const [secureText, setSecureText] = useState(true);
   const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [errorTick, setErrorTick] = useState(0);
   const [turnstileToken, setTurnstileToken] = useState('');
 
-  // Lockout State & Real-Time Countdown
+  // Lockout state and live countdown
   const [lockoutUntil, setLockoutUntil] = useState<number | null>(null);
   const [lockoutRemainingSec, setLockoutRemainingSec] = useState<number>(0);
   const [lockoutTier, setLockoutTier] = useState<number>(1);
 
-  // Forgot / Reset Password Modal
+  // Forgot / reset password sheet
   const [showForgotModal, setShowForgotModal] = useState<boolean>(false);
   const [resetEmail, setResetEmail] = useState<string>('');
   const [resetSending, setResetSending] = useState<boolean>(false);
   const [resetMsg, setResetMsg] = useState<{ text: string; error: boolean } | null>(null);
 
-  // Live seconds countdown ticker
+  const face = useFormAgent(!secureText);
+  const locked = lockoutRemainingSec > 0;
+
+  const fail = (message: string) => {
+    setError(message);
+    setErrorTick(t => t + 1);
+  };
+
   useEffect(() => {
     if (!lockoutUntil) return;
     const tick = () => {
@@ -388,32 +702,33 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
     return () => clearInterval(interval);
   }, [lockoutUntil]);
 
-  const formatRemainingTime = (seconds: number): string => {
-    if (seconds >= 3600) {
-      const h = Math.floor(seconds / 3600);
-      const m = Math.floor((seconds % 3600) / 60);
-      const s = seconds % 60;
-      return `${h}h ${m}m left (${s}s)`;
-    }
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    if (m > 0) {
-      return `${m} min left (${m}m ${s < 10 ? '0' : ''}${s}s)`;
-    }
-    return `${s}s left`;
+  // the agent's mood follows the form
+  useEffect(() => {
+    face.agent.mood.value = withTiming(locked ? -1 : loading ? 1 : 0, { duration: 300 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locked, loading]);
+  useEffect(() => {
+    if (errorTick) nudgeNo(face.agent, locked ? -1 : 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [errorTick]);
+
+  const openForgot = () => {
+    if (emailOrMobile.includes('@')) setResetEmail(emailOrMobile);
+    setResetMsg(null);
+    setShowForgotModal(true);
   };
 
   const handleLogin = async () => {
-    if (lockoutRemainingSec > 0) {
-      setError(`Account is temporarily locked. Try again in ${formatRemainingTime(lockoutRemainingSec)} or reset your password.`);
+    if (locked) {
+      fail(`Account is temporarily locked. Try again in ${formatRemainingTime(lockoutRemainingSec)} or reset your password.`);
       return;
     }
     if (!emailOrMobile.trim() || !password) {
-      setError('Please enter both Email/Mobile and Password');
+      fail('Please enter both Email/Mobile and Password');
       return;
     }
     if (Platform.OS === 'web' && !turnstileToken) {
-      setError('Please complete the Cloudflare security verification');
+      fail('Please complete the Cloudflare security verification');
       return;
     }
     setError('');
@@ -425,9 +740,9 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
         setLockoutUntil(e.lockedUntil || Date.now() + (e.remainingSeconds || 1800) * 1000);
         setLockoutTier(e.tier || 1);
         setLockoutRemainingSec(e.remainingSeconds || 1800);
-        setError(e.message || 'Account locked due to 3 failed attempts.');
+        fail(e.message || 'Account locked due to 3 failed attempts.');
       } else {
-        setError(e.message);
+        fail(e.message);
       }
     } finally {
       setLoading(false);
@@ -453,234 +768,195 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={styles.screen}>
+      <StatusBar style="dark" />
+      <Backdrop />
       <KeyboardScreen
-        contentContainerStyle={[
-          styles.formScrollContent,
-          {
-            paddingTop: insets.top + 20,
-          }
-        ]}
+        contentContainerStyle={[styles.form, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 28 }]}
         showsVerticalScrollIndicator={false}
         keyboardDismissMode="on-drag"
       >
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-          <Feather name="arrow-left" size={22} color={colors.text} />
-        </TouchableOpacity>
+        <FormHeader
+          title="Welcome back"
+          subtitle="Log in to see where your money went."
+          agent={face.agent}
+          onBack={() => navigation.goBack()}
+        />
 
-        <View style={styles.authHeaderSection}>
-          <View style={[styles.logoBadgeSmall, { alignSelf: 'flex-start' }]}>
-            <Image
-              source={require('../../assets/icon.png')}
-              style={styles.logoImageSmall}
-            />
-          </View>
-          <Text style={styles.authHeaderTitle}>Welcome Back</Text>
-          <Text style={styles.authHeaderDesc}>Enter your credentials to access Regent Money</Text>
-        </View>
-
-        {/* Live Lockout Banner or Standard Error */}
-        {lockoutRemainingSec > 0 ? (
-          <View style={[styles.errorContainer, { backgroundColor: 'rgba(255, 82, 82, 0.15)', borderColor: '#FF5252', padding: 14, flexDirection: 'column', alignItems: 'flex-start' }]}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-              <Feather name="lock" size={16} color="#FF5252" style={{ marginRight: 8 }} />
-              <Text style={{ color: '#FF5252', fontWeight: '800', fontSize: 14 }}>
-                {lockoutTier === 2 ? 'Account Locked (24 Hours)' : 'Account Locked (30 Minutes)'}
+        {locked ? (
+          <Animated.View entering={FadeInDown.duration(300)} style={[styles.banner, styles.lockout]}>
+            <View style={styles.lockoutHead}>
+              <Feather name="lock" size={16} color={C.danger} />
+              <Text style={styles.lockoutTitle}>
+                {lockoutTier === 2 ? 'Account locked for 24 hours' : 'Account locked for 30 minutes'}
               </Text>
             </View>
-            <Text style={{ color: '#ffffff', fontSize: 13, fontWeight: '700', marginBottom: 6 }}>
-              ⏳ Try again in: {formatRemainingTime(lockoutRemainingSec)}
+            <View style={styles.lockoutTimer}>
+              <Feather name="clock" size={14} color={C.ink} />
+              <Text style={styles.lockoutTimerText}>Try again in {formatRemainingTime(lockoutRemainingSec)}</Text>
+            </View>
+            <Text style={styles.lockoutBody}>
+              There were 3 failed attempts. Reset your password by email to unlock right away.
             </Text>
-            <Text style={{ color: '#aaa', fontSize: 12, lineHeight: 16 }}>
-              Exceeded 3 failed attempts. If you are stuck, you can reset your password via email to unlock immediately.
-            </Text>
-            <TouchableOpacity
-              style={{ marginTop: 10, backgroundColor: '#2dba4e', paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8 }}
-              onPress={() => {
-                if (emailOrMobile.includes('@')) setResetEmail(emailOrMobile);
-                setShowForgotModal(true);
-              }}
-              activeOpacity={0.8}
-            >
-              <Text style={{ color: '#ffffff', fontSize: 12, fontWeight: '800' }}>Reset Password to Unlock</Text>
-            </TouchableOpacity>
-          </View>
+            <PressScale onPress={openForgot} style={styles.lockoutBtn} accessibilityLabel="Reset password to unlock">
+              <Text style={styles.lockoutBtnText}>Reset password to unlock</Text>
+            </PressScale>
+          </Animated.View>
         ) : error ? (
-          <View style={styles.errorContainer}>
-            <Feather name="alert-circle" size={16} color="#fafbfc" style={{ marginRight: 8 }} />
-            <Text style={styles.errorTextInline}>{error}</Text>
-          </View>
+          <ErrorBanner key={errorTick} message={error} />
         ) : null}
 
-        <View style={styles.formSection}>
-          <Text style={styles.inputLabel}>Email or Mobile Number</Text>
-          <View style={styles.inputContainer}>
-            <Feather name="mail" size={16} color="#8E8E9F" style={styles.inputIcon} />
-            <TextInput
-              style={styles.formInput}
-              placeholder="e.g. name@domain.com or 9876543210"
-              placeholderTextColor="#555"
-              autoCapitalize="none"
-              keyboardType="email-address"
-              value={emailOrMobile}
-              onChangeText={setEmailOrMobile}
-            />
-          </View>
+        <Animated.View entering={FadeInDown.delay(160).duration(550)}>
+          <Field
+            label="Email or mobile number"
+            icon="mail"
+            placeholder="name@domain.com or 9876543210"
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="email-address"
+            textContentType="username"
+            autoComplete="username"
+            returnKeyType="next"
+            value={emailOrMobile}
+            onChangeText={t => {
+              setEmailOrMobile(t);
+              face.typed(t.length);
+            }}
+            onSubmitEditing={() => passwordRef.current?.focus()}
+            {...face.bind('text', emailOrMobile.length)}
+          />
+          <Field
+            label="Password"
+            icon="lock"
+            inputRef={passwordRef}
+            placeholder="Your password"
+            secureTextEntry={secureText}
+            autoCapitalize="none"
+            textContentType="password"
+            autoComplete="password"
+            returnKeyType="go"
+            value={password}
+            onChangeText={setPassword}
+            onSubmitEditing={handleLogin}
+            right={<EyeToggle hidden={secureText} onToggle={() => setSecureText(s => !s)} />}
+            {...face.bind('secret')}
+          />
 
-          <Text style={styles.inputLabel}>Password</Text>
-          <View style={styles.inputContainer}>
-            <Feather name="lock" size={16} color="#8E8E9F" style={styles.inputIcon} />
-            <TextInput
-              style={styles.formInput}
-              placeholder="••••••••"
-              placeholderTextColor="#555"
-              secureTextEntry={secureText}
-              autoCapitalize="none"
-              value={password}
-              onChangeText={setPassword}
-              onFocus={() => {
-                setTimeout(() => {
-                  scrollViewRef.current?.scrollToEnd({ animated: true });
-                }, 120);
-              }}
-            />
-            <TouchableOpacity onPress={() => setSecureText(!secureText)} style={styles.eyeBtn}>
-              <Feather name={secureText ? "eye-off" : "eye"} size={16} color="#8E8E9F" />
-            </TouchableOpacity>
-          </View>
-
-          {/* Remember Me and Forgot Password in One Clean Row */}
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, marginBottom: 4 }}>
-            <TouchableOpacity
-              style={styles.rememberMeRow}
-              onPress={() => setRememberMe(!rememberMe)}
-              activeOpacity={0.8}
-            >
-              <View style={[styles.checkbox, rememberMe && styles.checkboxChecked]}>
-                {rememberMe && <Feather name="check" size={12} color="#fafbfc" />}
-              </View>
-              <Text style={styles.rememberMeLabel}>Remember 30 days</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={() => {
-                if (emailOrMobile.includes('@')) setResetEmail(emailOrMobile);
-                setShowForgotModal(true);
-              }}
-              activeOpacity={0.7}
-            >
-              <Text style={{ color: colors.accent, fontSize: 12, fontWeight: '700' }}>Forgot password?</Text>
-            </TouchableOpacity>
+          <View style={styles.rowBetween}>
+            <Checkbox checked={rememberMe} onToggle={() => setRememberMe(r => !r)} label="Stay logged in for 30 days">
+              <Text style={styles.checkLabel}>Stay logged in</Text>
+            </Checkbox>
+            <Pressable onPress={openForgot} hitSlop={8} accessibilityRole="button">
+              <Text style={styles.link}>Forgot password?</Text>
+            </Pressable>
           </View>
 
           <CloudflareTurnstile
-            onVerify={(token) => {
+            onVerify={token => {
               setTurnstileToken(token);
               setError('');
             }}
             onExpire={() => setTurnstileToken('')}
           />
 
-          {loading ? (
-            <ActivityIndicator size="large" color="#2dba4e" style={{ marginTop: 24 }} />
-          ) : (
-            <TouchableOpacity
-              style={[
-                styles.primaryBtn,
-                styles.submitBtnMargin,
-                styles.neonBorder,
-                lockoutRemainingSec > 0 && { opacity: 0.5, backgroundColor: '#333' },
-              ]}
-              onPress={handleLogin}
-              disabled={lockoutRemainingSec > 0}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.primaryBtnText}>
-                {lockoutRemainingSec > 0 ? `Locked (${formatRemainingTime(lockoutRemainingSec)})` : 'Log In'}
-              </Text>
-            </TouchableOpacity>
-          )}
+          <Button
+            label={locked ? `Locked for ${formatRemainingTime(lockoutRemainingSec)}` : 'Log in'}
+            onPress={handleLogin}
+            loading={loading}
+            disabled={locked}
+            style={styles.submit}
+          />
 
-          <View style={styles.switchAuthRow}>
-            <Text style={styles.switchAuthLabel}>Don't have an account? </Text>
-            <TouchableOpacity onPress={() => navigation.navigate('Signup')}>
-              <Text style={styles.switchAuthLink}>Sign Up</Text>
-            </TouchableOpacity>
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>New to Regent Money? </Text>
+            <Pressable onPress={() => navigation.navigate('Signup')} hitSlop={8} accessibilityRole="button">
+              <Text style={styles.link}>Create account</Text>
+            </Pressable>
           </View>
-        </View>
+        </Animated.View>
       </KeyboardScreen>
 
-      {/* Forgot Password / Instant Unlock Modal */}
-      <Modal
-        visible={showForgotModal}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => setShowForgotModal(false)}
-      >
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-          <View style={{ width: '100%', maxWidth: 420, backgroundColor: colors.card, borderRadius: 20, borderWidth: 1, borderColor: colors.border, padding: 24 }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <Feather name="key" size={18} color={colors.accent} style={{ marginRight: 8 }} />
-                <Text style={{ fontSize: 17, fontWeight: '800', color: colors.text }}>Reset Password</Text>
-              </View>
-              <TouchableOpacity onPress={() => setShowForgotModal(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                <Feather name="x" size={20} color={colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
-
-            <Text style={{ fontSize: 13, color: colors.textSecondary, lineHeight: 18, marginBottom: 16 }}>
-              Enter your registered email. We will send a secure reset link that <Text style={{ color: colors.text, fontWeight: '700' }}>instantly clears any active account lockouts</Text> and reactivates your account.
-            </Text>
-
-            {resetMsg && (
-              <View style={[styles.errorContainer, { backgroundColor: resetMsg.error ? 'rgba(255, 82, 82, 0.15)' : 'rgba(45, 186, 78, 0.15)', borderColor: resetMsg.error ? '#FF5252' : '#2dba4e', marginBottom: 14 }]}>
-                <Feather name={resetMsg.error ? "alert-circle" : "check-circle"} size={16} color={resetMsg.error ? "#FF5252" : "#2dba4e"} style={{ marginRight: 8 }} />
-                <Text style={{ color: resetMsg.error ? '#FF5252' : '#2dba4e', fontSize: 12, fontWeight: '600', flex: 1 }}>{resetMsg.text}</Text>
-              </View>
-            )}
-
-            <Text style={styles.inputLabel}>Registered Email Address</Text>
-            <View style={styles.inputContainer}>
-              <Feather name="mail" size={16} color="#8E8E9F" style={styles.inputIcon} />
-              <TextInput
-                style={styles.formInput}
-                placeholder="name@domain.com"
-                placeholderTextColor="#555"
-                autoCapitalize="none"
-                keyboardType="email-address"
-                value={resetEmail}
-                onChangeText={setResetEmail}
-              />
-            </View>
-
-            <TouchableOpacity
-              style={[styles.primaryBtn, { marginTop: 18 }]}
-              onPress={handleSendResetLink}
-              disabled={resetSending}
-              activeOpacity={0.8}
-            >
-              {resetSending ? (
-                <ActivityIndicator size="small" color="#ffffff" />
-              ) : (
-                <Text style={styles.primaryBtnText}>Send Reset Link & Unlock</Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      <Sheet visible={showForgotModal} title="Reset your password" onClose={() => setShowForgotModal(false)}>
+        <Text style={styles.sheetBody}>
+          Enter the email you signed up with. We'll send a reset link, and opening it also clears any lockout on your
+          account.
+        </Text>
+        {resetMsg && (
+          <Animated.View
+            entering={FadeInDown.duration(240)}
+            style={[styles.banner, !resetMsg.error && styles.bannerOk]}
+            accessibilityRole="alert"
+          >
+            <Feather
+              name={resetMsg.error ? 'alert-circle' : 'check-circle'}
+              size={16}
+              color={resetMsg.error ? C.danger : C.green}
+            />
+            <Text style={[styles.bannerText, !resetMsg.error && styles.bannerTextOk]}>{resetMsg.text}</Text>
+          </Animated.View>
+        )}
+        <Field
+          label="Email address"
+          icon="mail"
+          placeholder="name@domain.com"
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="email-address"
+          textContentType="emailAddress"
+          autoComplete="email"
+          returnKeyType="send"
+          value={resetEmail}
+          onChangeText={setResetEmail}
+          onSubmitEditing={handleSendResetLink}
+        />
+        <Button label="Send reset link" onPress={handleSendResetLink} loading={resetSending} style={styles.submit} />
+      </Sheet>
     </View>
   );
 };
 
-// ----------------------------------------------------
-// 3. Signup Screen
-// ----------------------------------------------------
+/* ------------------------------------------------------------------ */
+/* 3. Signup                                                          */
+/* ------------------------------------------------------------------ */
+
+function passwordStrength(pw: string) {
+  if (!pw) return { score: 0, label: 'At least 6 characters', color: C.muted };
+  if (pw.length < 6) return { score: 1, label: 'Too short', color: C.danger };
+  const passed = [
+    pw.length >= 10,
+    /[a-z]/.test(pw) && /[A-Z]/.test(pw),
+    /\d/.test(pw),
+    /[^A-Za-z0-9]/.test(pw),
+  ].filter(Boolean).length;
+  const score = Math.max(1, passed);
+  return [
+    { score: 1, label: 'Weak', color: C.danger },
+    { score: 2, label: 'Fair', color: C.amber },
+    { score: 3, label: 'Good', color: C.green },
+    { score: 4, label: 'Strong', color: C.greenDeep },
+  ][score - 1];
+}
+
+function StrengthMeter({ password }: { password: string }) {
+  const s = passwordStrength(password);
+  return (
+    <View style={styles.meter}>
+      <View style={styles.meterBars}>
+        {[1, 2, 3, 4].map(i => (
+          <View key={i} style={[styles.meterBar, i <= s.score && { backgroundColor: s.color }]} />
+        ))}
+      </View>
+      <Text style={[styles.meterText, { color: s.color }]}>{s.label}</Text>
+    </View>
+  );
+}
+
 export const SignupScreen = ({ navigation }: { navigation: any }) => {
-  const { colors } = useTheme();
-  const styles = getStyles(colors);
   const insets = useSafeAreaInsets();
-  const scrollViewRef = useRef<ScrollView>(null);
+  const emailRef = useRef<TextInput>(null);
+  const phoneRef = useRef<TextInput>(null);
+  const passwordRef = useRef<TextInput>(null);
+  const confirmRef = useRef<TextInput>(null);
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -691,33 +967,57 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
   const [secureText, setSecureText] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [errorTick, setErrorTick] = useState(0);
   const [turnstileToken, setTurnstileToken] = useState('');
   const [showVerifyModal, setShowVerifyModal] = useState(false);
   const [registeredEmail, setRegisteredEmail] = useState('');
+  // Consent must be an active choice, so the box starts unticked.
+  const [agreeTerms, setAgreeTerms] = useState(false);
+
+  const face = useFormAgent(!secureText);
+  const matches = confirmPassword.length > 0 && confirmPassword === password;
+
+  const fail = (message: string) => {
+    setError(message);
+    setErrorTick(t => t + 1);
+  };
+
+  useEffect(() => {
+    face.agent.mood.value = withTiming(loading ? 1 : matches ? 0.8 : 0, { duration: 300 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, matches]);
+  useEffect(() => {
+    if (errorTick) nudgeNo(face.agent, matches ? 0.8 : 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [errorTick]);
 
   const handleSignup = async () => {
     if (!name.trim() || !email.trim() || !phone.trim() || !password || !confirmPassword) {
-      setError('Please fill in all input fields');
+      fail('Please fill in all input fields');
       return;
     }
     if (!email.includes('@')) {
-      setError('Please enter a valid email address');
+      fail('Please enter a valid email address');
       return;
     }
     if (phone.trim().length < 10) {
-      setError('Please enter a valid mobile number');
+      fail('Please enter a valid mobile number');
       return;
     }
     if (password.length < 6) {
-      setError('Password must be at least 6 characters long');
+      fail('Password must be at least 6 characters long');
       return;
     }
     if (password !== confirmPassword) {
-      setError('Passwords do not match');
+      fail('Passwords do not match');
+      return;
+    }
+    if (!agreeTerms) {
+      fail('Please agree to the Terms of Service & Privacy Policy');
       return;
     }
     if (Platform.OS === 'web' && !turnstileToken) {
-      setError('Please complete the Cloudflare security verification');
+      fail('Please complete the Cloudflare security verification');
       return;
     }
 
@@ -730,843 +1030,424 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
         setShowVerifyModal(true);
       }
     } catch (e: any) {
-      setError(e.message);
+      fail(e.message);
     } finally {
       setLoading(false);
     }
   };
 
+  const closeVerify = () => {
+    setShowVerifyModal(false);
+    navigation.navigate('Login');
+  };
+
   return (
-    <View style={styles.container}>
+    <View style={styles.screen}>
+      <StatusBar style="dark" />
+      <Backdrop />
       <KeyboardScreen
-        contentContainerStyle={[
-          styles.formScrollContent,
-          {
-            paddingTop: insets.top + 20,
-          }
-        ]}
+        contentContainerStyle={[styles.form, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 28 }]}
         showsVerticalScrollIndicator={false}
         keyboardDismissMode="on-drag"
       >
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-          <Feather name="arrow-left" size={22} color={colors.text} />
-        </TouchableOpacity>
+        <FormHeader
+          title="Create your account"
+          subtitle="Start tracking your money in under a minute."
+          agent={face.agent}
+          onBack={() => navigation.goBack()}
+        />
 
-        <View style={styles.authHeaderSection}>
-          <View style={[styles.logoBadgeSmall, { alignSelf: 'flex-start' }]}>
-            <Image
-              source={require('../../assets/icon.png')}
-              style={styles.logoImageSmall}
-            />
-          </View>
-          <Text style={styles.authHeaderTitle}>Create Account</Text>
-          <Text style={styles.authHeaderDesc}>Start tracking and simulating offline wealth securely</Text>
-        </View>
+        {error ? <ErrorBanner key={errorTick} message={error} /> : null}
 
-        {error ? (
-          <View style={styles.errorContainer}>
-            <Feather name="alert-circle" size={16} color="#fafbfc" style={{ marginRight: 8 }} />
-            <Text style={styles.errorTextInline}>{error}</Text>
-          </View>
-        ) : null}
-
-        <View style={styles.formSection}>
-          <Text style={styles.inputLabel}>Full Name</Text>
-          <View style={styles.inputContainer}>
-            <Feather name="user" size={16} color="#8E8E9F" style={styles.inputIcon} />
-            <TextInput
-              style={styles.formInput}
-              placeholder="e.g. John Doe"
-              placeholderTextColor="#555"
-              value={name}
-              onChangeText={setName}
-            />
-          </View>
-
-          <Text style={styles.inputLabel}>Email Address</Text>
-          <View style={styles.inputContainer}>
-            <Feather name="mail" size={16} color="#8E8E9F" style={styles.inputIcon} />
-            <TextInput
-              style={styles.formInput}
-              placeholder="e.g. name@domain.com"
-              placeholderTextColor="#555"
-              autoCapitalize="none"
-              keyboardType="email-address"
-              value={email}
-              onChangeText={setEmail}
-            />
-          </View>
-
-          <Text style={styles.inputLabel}>Mobile Number</Text>
-          <View style={styles.inputContainer}>
-            <Feather name="phone" size={16} color="#8E8E9F" style={styles.inputIcon} />
-            <TextInput
-              style={styles.formInput}
-              placeholder="e.g. 9876543210"
-              placeholderTextColor="#555"
-              autoCapitalize="none"
-              keyboardType="phone-pad"
-              value={phone}
-              onChangeText={setPhone}
-            />
-          </View>
-
-          <Text style={styles.inputLabel}>Password (Min 6 chars)</Text>
-          <View style={styles.inputContainer}>
-            <Feather name="lock" size={16} color="#8E8E9F" style={styles.inputIcon} />
-            <TextInput
-              style={styles.formInput}
-              placeholder="••••••••"
-              placeholderTextColor="#555"
-              secureTextEntry={secureText}
-              autoCapitalize="none"
-              value={password}
-              onChangeText={setPassword}
-              onFocus={() => {
-                setTimeout(() => {
-                  scrollViewRef.current?.scrollToEnd({ animated: true });
-                }, 120);
-              }}
-            />
-            <TouchableOpacity onPress={() => setSecureText(!secureText)} style={styles.eyeBtn}>
-              <Feather name={secureText ? "eye-off" : "eye"} size={16} color="#8E8E9F" />
-            </TouchableOpacity>
-          </View>
-
-          <Text style={styles.inputLabel}>Confirm Password</Text>
-          <View style={styles.inputContainer}>
-            <Feather name="shield" size={16} color="#8E8E9F" style={styles.inputIcon} />
-            <TextInput
-              style={styles.formInput}
-              placeholder="••••••••"
-              placeholderTextColor="#555"
-              secureTextEntry={secureText}
-              autoCapitalize="none"
-              value={confirmPassword}
-              onChangeText={setConfirmPassword}
-              onFocus={() => {
-                setTimeout(() => {
-                  scrollViewRef.current?.scrollToEnd({ animated: true });
-                }, 120);
-              }}
-            />
-          </View>
+        <Animated.View entering={FadeInDown.delay(160).duration(550)}>
+          <Field
+            label="Full name"
+            icon="user"
+            placeholder="e.g. Aarav Sharma"
+            autoCapitalize="words"
+            textContentType="name"
+            autoComplete="name"
+            returnKeyType="next"
+            value={name}
+            onChangeText={t => {
+              setName(t);
+              face.typed(t.length);
+            }}
+            onSubmitEditing={() => emailRef.current?.focus()}
+            {...face.bind('text', name.length)}
+          />
+          <Field
+            label="Email address"
+            icon="mail"
+            inputRef={emailRef}
+            placeholder="name@domain.com"
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="email-address"
+            textContentType="emailAddress"
+            autoComplete="email"
+            returnKeyType="next"
+            value={email}
+            onChangeText={t => {
+              setEmail(t);
+              face.typed(t.length);
+            }}
+            onSubmitEditing={() => phoneRef.current?.focus()}
+            {...face.bind('text', email.length)}
+          />
+          <Field
+            label="Mobile number"
+            icon="phone"
+            inputRef={phoneRef}
+            placeholder="9876543210"
+            keyboardType="phone-pad"
+            textContentType="telephoneNumber"
+            autoComplete="tel"
+            returnKeyType="next"
+            value={phone}
+            onChangeText={t => {
+              setPhone(t);
+              face.typed(t.length);
+            }}
+            onSubmitEditing={() => passwordRef.current?.focus()}
+            {...face.bind('text', phone.length)}
+          />
+          <Field
+            label="Password"
+            icon="lock"
+            inputRef={passwordRef}
+            placeholder="Create a password"
+            secureTextEntry={secureText}
+            autoCapitalize="none"
+            textContentType="newPassword"
+            autoComplete="password-new"
+            returnKeyType="next"
+            value={password}
+            onChangeText={setPassword}
+            onSubmitEditing={() => confirmRef.current?.focus()}
+            right={<EyeToggle hidden={secureText} onToggle={() => setSecureText(s => !s)} />}
+            footer={<StrengthMeter password={password} />}
+            {...face.bind('secret')}
+          />
+          <Field
+            label="Confirm password"
+            icon="shield"
+            inputRef={confirmRef}
+            placeholder="Type it again"
+            secureTextEntry={secureText}
+            autoCapitalize="none"
+            textContentType="newPassword"
+            autoComplete="password-new"
+            returnKeyType="done"
+            value={confirmPassword}
+            onChangeText={setConfirmPassword}
+            invalid={confirmPassword.length > 0 && !password.startsWith(confirmPassword)}
+            right={
+              matches ? (
+                <Animated.View entering={ZoomIn.springify().damping(12)} style={styles.matchBadge}>
+                  <Feather name="check" size={13} color={C.white} />
+                </Animated.View>
+              ) : null
+            }
+            {...face.bind('secret')}
+          />
 
           <CloudflareTurnstile
-            onVerify={(token) => {
+            onVerify={token => {
               setTurnstileToken(token);
               setError('');
             }}
             onExpire={() => setTurnstileToken('')}
           />
 
-          {loading ? (
-            <ActivityIndicator size="large" color="#2dba4e" style={{ marginTop: 24 }} />
-          ) : (
-            <TouchableOpacity
-              style={[styles.primaryBtn, styles.submitBtnMargin, styles.neonBorder]}
-              onPress={handleSignup}
-              activeOpacity={0.8}
+          <View style={styles.terms}>
+            <Checkbox
+              checked={agreeTerms}
+              onToggle={() => setAgreeTerms(prev => !prev)}
+              label="I agree to the Terms of Service and Privacy Policy"
             >
-              <Text style={styles.primaryBtnText}>Register</Text>
-            </TouchableOpacity>
-          )}
-
-          <View style={styles.switchAuthRow}>
-            <Text style={styles.switchAuthLabel}>Already have an account? </Text>
-            <TouchableOpacity onPress={() => navigation.navigate('Login')}>
-              <Text style={styles.switchAuthLink}>Log In</Text>
-            </TouchableOpacity>
+              <Text style={styles.termsText}>
+                I agree to the{' '}
+                <Text style={styles.noticeLink} onPress={openTerms}>
+                  Terms of Service
+                </Text>{' '}
+                and{' '}
+                <Text style={styles.noticeLink} onPress={openPrivacy}>
+                  Privacy Policy
+                </Text>
+              </Text>
+            </Checkbox>
           </View>
-        </View>
+
+          <Button label="Create account" onPress={handleSignup} loading={loading} style={styles.submit} />
+
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>Already have an account? </Text>
+            <Pressable onPress={() => navigation.navigate('Login')} hitSlop={8} accessibilityRole="button">
+              <Text style={styles.link}>Log in</Text>
+            </Pressable>
+          </View>
+        </Animated.View>
       </KeyboardScreen>
 
-      {/* Verify Email Modal Sheet */}
-      <Modal
-        visible={showVerifyModal}
-        transparent
-        animationType="fade"
-        statusBarTranslucent
-        navigationBarTranslucent
-        onRequestClose={() => {
-          setShowVerifyModal(false);
-          navigation.navigate('Login');
-        }}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Verify Your Email</Text>
-              <TouchableOpacity
-                onPress={() => {
-                  setShowVerifyModal(false);
-                  navigation.navigate('Login');
-                }}
-                style={styles.closeBtn}
-              >
-                <Feather name="x" size={20} color="#8E8E9F" />
-              </TouchableOpacity>
-            </View>
-
-            <View style={{ alignItems: 'center', marginVertical: 20 }}>
-              <View style={{
-                width: 60,
-                height: 60,
-                borderRadius: 30,
-                backgroundColor: 'rgba(45, 186, 78, 0.1)',
-                justifyContent: 'center',
-                alignItems: 'center',
-                marginBottom: 16
-              }}>
-                <Feather name="mail" size={30} color="#2dba4e" />
-              </View>
-              <Text style={[styles.modalSubtitle, { textAlign: 'center', paddingHorizontal: 10 }]}>
-                We have sent a verification email to:
-              </Text>
-              <Text style={{ color: colors.text, fontWeight: '700', fontSize: 15, marginVertical: 8 }}>
-                {registeredEmail}
-              </Text>
-              <Text style={[styles.authHeaderDesc, { textAlign: 'center', paddingHorizontal: 15, marginTop: 4, lineHeight: 18 }]}>
-                Please check your inbox (including your spam folder) and click the link to confirm your registration. Once confirmed, you can log in to your account.
-              </Text>
-            </View>
-
-            <TouchableOpacity
-              style={[styles.primaryBtn, { width: '100%', marginVertical: 10 }]}
-              onPress={() => {
-                setShowVerifyModal(false);
-                navigation.navigate('Login');
-              }}
-            >
-              <Text style={styles.primaryBtnText}>Back to Log In</Text>
-            </TouchableOpacity>
+      <Sheet visible={showVerifyModal} title="Check your inbox" onClose={closeVerify}>
+        <View style={styles.verifyArt}>
+          <View style={styles.verifyCircle}>
+            <Feather name="mail" size={30} color={C.green} />
           </View>
+          <Animated.View entering={ZoomIn.delay(350).springify().damping(10)} style={styles.verifyTick}>
+            <Feather name="check" size={13} color={C.white} />
+          </Animated.View>
         </View>
-      </Modal>
+        <Text style={[styles.sheetBody, styles.center]}>We sent a confirmation link to</Text>
+        <Text style={styles.verifyEmail}>{registeredEmail}</Text>
+        <Text style={[styles.sheetBody, styles.center]}>
+          Open it to confirm your account, then log in. If it isn't there, check your spam folder.
+        </Text>
+        <Button label="Back to log in" onPress={closeVerify} style={styles.submit} />
+      </Sheet>
     </View>
   );
 };
 
-// ----------------------------------------------------
-// Styling
-// ----------------------------------------------------
-const getStyles = (colors: any) => StyleSheet.create({
-  container: {
+/* ------------------------------------------------------------------ */
+/* Styles                                                             */
+/* ------------------------------------------------------------------ */
+
+const shadow = (color: string, opacity: number, radius: number, y: number, elevation: number) => ({
+  shadowColor: color,
+  shadowOpacity: opacity,
+  shadowRadius: radius,
+  shadowOffset: { width: 0, height: y },
+  elevation,
+});
+
+const styles = StyleSheet.create({
+  screen: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: C.bg,
+    overflow: 'hidden',
+    height: '100%',
+    maxHeight: '100%',
   },
-  scrollContent: {
-    paddingHorizontal: 24,
+  center: { textAlign: 'center' },
+
+  /* landing */
+  heroArea: {
+    flex: 1,
+    alignItems: 'center',
     justifyContent: 'center',
-    flexGrow: 1,
-  },
-  formScrollContent: {
-    paddingHorizontal: 24,
-    flexGrow: 1,
-    justifyContent: 'flex-start',
-  },
-  neonGlow: {
-    position: 'absolute',
-    top: -100,
-    left: width * 0.15,
-    width: width * 0.7,
-    height: width * 0.7,
-    borderRadius: (width * 0.7) / 2,
-    backgroundColor: colors.isDark ? 'rgba(45, 186, 78, 0.08)' : 'rgba(45, 186, 78, 0.04)',
-    filter: 'blur(80px)',
-  },
-  welcomeMainContent: {
-    flex: 1,
-    justifyContent: 'space-between',
     paddingHorizontal: 28,
+    minHeight: 0,
   },
-  welcomeBranding: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    flex: 1,
-    marginTop: 20,
-  },
-  logoBadgeLuxury: {
-    width: 84,
-    height: 84,
-    borderRadius: 26,
-    backgroundColor: '#FFFFFF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 24,
-    shadowColor: '#2dba4e',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.35,
-    shadowRadius: 20,
-    elevation: 10,
-    overflow: 'hidden',
-    padding: 8,
-  },
-  logoImageInside: {
-    width: '100%',
-    height: '100%',
-  },
-  logoBadge: {
-    width: 64,
-    height: 64,
-    borderRadius: 20,
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 16,
-    shadowColor: colors.accent,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 3,
-    overflow: 'hidden',
-  },
-  logoImage: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 20,
-  },
-  logoBadgeSmall: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: colors.border,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 16,
-    overflow: 'hidden',
-    shadowColor: colors.accent,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    elevation: 2,
-  },
-  logoImageSmall: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 14,
-  },
-  welcomeHeaderSmall: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#2dba4e',
-    letterSpacing: 3,
-    marginBottom: 6,
-    textTransform: 'uppercase',
-  },
-  welcomeHeaderBig: {
-    fontSize: 34,
-    fontWeight: '900',
-    color: colors.text,
-    letterSpacing: 2,
-    textAlign: 'center',
-  },
-  welcomeSlogan: {
-    fontSize: 15,
-    color: colors.textSecondary,
-    marginTop: 8,
-    fontWeight: '500',
-    letterSpacing: 0.3,
-    textAlign: 'center',
-  },
-  actionsContainer: {
-    width: '100%',
-    marginBottom: 12,
-  },
-  primaryBtnLuxury: {
-    backgroundColor: '#2dba4e',
+  tagline: { marginTop: 16, fontSize: 16, lineHeight: 23, color: C.body, textAlign: 'center' },
+  actions: { paddingHorizontal: 24, paddingBottom: 6 },
+  stack: { marginTop: 12 },
+
+  /* buttons */
+  btn: {
+    height: 56,
     borderRadius: 28,
-    height: 54,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginVertical: 6,
-    shadowColor: '#2dba4e',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.35,
-    shadowRadius: 14,
-    elevation: 6,
-  },
-  primaryBtnLuxuryText: {
-    color: '#0B0E14',
-    fontSize: 16,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
-  secondaryBtnLuxury: {
-    backgroundColor: '#161B22',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)',
-    borderRadius: 28,
-    height: 54,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginVertical: 6,
-  },
-  secondaryBtnLuxuryText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
-    letterSpacing: 0.4,
-  },
-  googleBtnLuxury: {
-    backgroundColor: '#161B22',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
-    borderRadius: 28,
-    height: 54,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 20,
   },
-  googleBtnLuxuryText: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  linkedInGoogleContainer: {
-    width: '100%',
-    alignItems: 'center',
-    marginVertical: 4,
-  },
-  linkedInGoogleCard: {
-    width: '100%',
-    backgroundColor: '#161B22',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)',
-    borderRadius: 24,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  linkedInAvatarWrap: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    marginRight: 12,
-    overflow: 'hidden',
-  },
-  linkedInAvatarImage: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-  },
-  linkedInAvatarFallback: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#10B981',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  linkedInAvatarInitial: {
-    color: '#FFFFFF',
-    fontWeight: '800',
-    fontSize: 16,
-  },
-  linkedInMeta: {
-    flex: 1,
-    justifyContent: 'center',
-  },
-  linkedInNameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  linkedInContinueText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '700',
-    flexShrink: 1,
-  },
-  lastUsedBadge: {
-    backgroundColor: 'rgba(16, 185, 129, 0.18)',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-    marginLeft: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(16, 185, 129, 0.35)',
-  },
-  lastUsedBadgeText: {
-    color: '#10B981',
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.3,
-  },
-  linkedInEmailText: {
-    color: '#8E8E9F',
-    fontSize: 12,
-    marginTop: 2,
-  },
-  googleIconBadge: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 8,
-  },
-  switchAccountBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    marginTop: 8,
-  },
-  switchAccountBtnText: {
-    color: '#10B981',
-    fontSize: 13,
-    fontWeight: '600',
-    letterSpacing: 0.2,
-  },
-  legalNotice: {
-    color: colors.textTertiary,
-    fontSize: 11,
-    fontWeight: '600',
-    textAlign: 'center',
-    marginTop: 18,
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-  },
-  primaryBtn: {
-    backgroundColor: colors.accent,
-    borderRadius: 14,
-    paddingVertical: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: 52,
-    marginVertical: 6,
-  },
-  primaryBtnText: {
-    color: colors.buttonSecondaryText,
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  neonBorder: {
-    shadowColor: colors.accent,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 5,
-  },
-  secondaryBtn: {
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 14,
-    paddingVertical: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: 52,
-    marginVertical: 6,
-  },
-  secondaryBtnText: {
-    color: colors.text,
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  dividerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: 18,
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: colors.border,
-  },
-  dividerText: {
-    color: colors.textTertiary,
-    fontSize: 11,
-    fontWeight: '700',
-    marginHorizontal: 12,
-  },
-  googleBtn: {
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 14,
-    paddingVertical: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: 52,
-  },
-  googleBtnText: {
-    color: colors.text,
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  backBtn: {
+  btnPrimary: { backgroundColor: C.green, ...shadow(C.green, 0.3, 14, 8, 6) },
+  btnSecondary: { backgroundColor: C.white, borderWidth: 1, borderColor: C.line, ...shadow(C.ink, 0.05, 10, 4, 2) },
+  btnDisabled: { backgroundColor: C.disabled, shadowOpacity: 0, elevation: 0 },
+  btnText: { fontSize: 16, fontWeight: '700', color: C.white },
+  btnTextSecondary: { color: C.ink },
+  btnIcon: { marginRight: 10 },
+  back: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: colors.card,
+    backgroundColor: C.white,
     borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 10,
-    marginBottom: 24,
-  },
-  authHeaderSection: {
-    marginBottom: 28,
-  },
-  authHeaderTitle: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: colors.text,
-  },
-  authHeaderDesc: {
-    fontSize: 13,
-    color: colors.textSecondary,
-    marginTop: 6,
-    lineHeight: 20,
-  },
-  errorContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 82, 82, 0.1)',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 82, 82, 0.2)',
-    padding: 12,
-    marginBottom: 20,
-  },
-  errorTextInline: {
-    color: '#FF5252',
-    fontSize: 12,
-    fontWeight: '600',
-    flex: 1,
-  },
-  formSection: {
-    width: '100%',
-  },
-  inputLabel: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    fontWeight: '700',
-    marginBottom: 8,
-    marginTop: 14,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.inputBackground,
-    borderWidth: 1,
-    borderColor: colors.inputBorder,
-    borderRadius: 12,
-    height: 48,
-    paddingHorizontal: 12,
-    marginBottom: 6,
-  },
-  inputIcon: {
-    marginRight: 10,
-  },
-  formInput: {
-    flex: 1,
-    color: colors.text,
-    fontSize: 14,
-  },
-  eyeBtn: {
-    padding: 6,
-  },
-  submitBtnMargin: {
-    marginTop: 28,
-    marginBottom: 16,
-  },
-  switchAuthRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginVertical: 10,
-  },
-  switchAuthLabel: {
-    color: colors.textSecondary,
-    fontSize: 13,
-  },
-  switchAuthLink: {
-    color: colors.accent,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  // Modal Styles
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(36, 41, 46, 0.8)',
-    justifyContent: 'flex-end',
-  },
-  modalCard: {
-    backgroundColor: colors.card,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: 24,
-    maxHeight: '90%',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: colors.text,
-  },
-  closeBtn: {
-    padding: 6,
-  },
-  modalSubtitle: {
-    color: colors.textSecondary,
-    fontSize: 13,
-    lineHeight: 18,
-    marginBottom: 20,
-  },
-  googleAccountItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.inputBackground,
-    borderWidth: 1,
-    borderColor: colors.inputBorder,
-    borderRadius: 14,
-    padding: 12,
-    marginVertical: 6,
-  },
-  googleAvatar: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: colors.background,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  avatarText: {
-    color: colors.accent,
-    fontWeight: '800',
-    fontSize: 15,
-  },
-  googleMeta: {
-    flex: 1,
-  },
-  googleName: {
-    color: colors.text,
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  googleEmail: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    marginTop: 2,
-  },
-  customGoogleBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 14,
-    marginTop: 12,
-    borderWidth: 1,
-    borderColor: colors.accentMuted,
-    borderRadius: 14,
-    backgroundColor: colors.accentMuted,
-  },
-  customGoogleBtnText: {
-    color: colors.accent,
-    fontWeight: '700',
-    fontSize: 13,
-  },
-  input: {
-    backgroundColor: colors.inputBackground,
-    borderWidth: 1,
-    borderColor: colors.inputBorder,
-    borderRadius: 12,
-    height: 46,
-    paddingHorizontal: 12,
-    color: colors.text,
-    fontSize: 14,
-    marginBottom: 16,
-  },
-  buttonRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 12,
-  },
-  cancelBtn: {
-    width: '45%',
-    backgroundColor: colors.inputBackground,
-    borderWidth: 1,
-    borderColor: colors.inputBorder,
-    borderRadius: 12,
-    height: 46,
+    borderColor: C.line,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  cancelBtnText: {
-    color: colors.textSecondary,
-    fontWeight: '700',
-    fontSize: 14,
+
+  divider: { flexDirection: 'row', alignItems: 'center', marginVertical: 18 },
+  dividerLine: { flex: 1, height: 1, backgroundColor: C.line },
+  dividerText: { marginHorizontal: 12, fontSize: 13, color: C.muted },
+
+  notice: { marginTop: 12, fontSize: 11, lineHeight: 16, color: C.muted, textAlign: 'center', paddingHorizontal: 0 },
+  noticeLink: { color: C.greenDeep, fontWeight: '600', textDecorationLine: 'underline' },
+  trust: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 14 },
+  trustText: { fontSize: 12, fontWeight: '600', color: C.greenDeep },
+
+  /* google last-used card */
+  lastUser: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: C.white,
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 22,
+    paddingVertical: 12,
+    paddingLeft: 12,
+    paddingRight: 14,
+    ...shadow(C.ink, 0.06, 12, 4, 3),
   },
-  submitGoogleBtn: {
-    width: '50%',
-    backgroundColor: colors.accent,
-    borderRadius: 12,
-    height: 46,
+  avatar: { width: 42, height: 42, borderRadius: 21 },
+  avatarFallback: { backgroundColor: C.green, alignItems: 'center', justifyContent: 'center' },
+  avatarInitial: { color: C.white, fontSize: 17, fontWeight: '800' },
+  lastUserMeta: { flex: 1, marginLeft: 12 },
+  lastUserRow: { flexDirection: 'row', alignItems: 'center' },
+  lastUserName: { flexShrink: 1, fontSize: 15, fontWeight: '700', color: C.ink },
+  lastUsedPill: { marginLeft: 8, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 8, backgroundColor: C.mist },
+  lastUsedText: { fontSize: 11, fontWeight: '700', color: C.greenDeep },
+  lastUserEmail: { marginTop: 2, fontSize: 12, color: C.muted },
+  googleBadge: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: C.bg,
+    borderWidth: 1,
+    borderColor: C.line,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  submitGoogleBtnText: {
-    color: colors.buttonSecondaryText,
-    fontWeight: '800',
-    fontSize: 14,
-  },
-  errorText: {
-    color: '#FF5252',
-    fontSize: 12,
-    fontWeight: '700',
-    marginBottom: 12,
-    textAlign: 'center',
-  },
-  rememberMeRow: {
+  switchAccount: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 10 },
+  switchAccountText: { fontSize: 13, fontWeight: '600', color: C.greenDeep },
+
+  /* forms */
+  form: { paddingHorizontal: 24, flexGrow: 1 },
+  headRow: { flexDirection: 'row', alignItems: 'flex-end', marginTop: 18, marginBottom: 22 },
+  headText: { flex: 1, paddingRight: 8, paddingBottom: 6 },
+  title: { fontSize: 30, lineHeight: 36, fontWeight: '800', color: C.ink, letterSpacing: -0.6 },
+  subtitle: { marginTop: 8, fontSize: 15, lineHeight: 22, color: C.body },
+
+  field: { marginBottom: 16 },
+  label: { marginBottom: 8, fontSize: 13, fontWeight: '600', color: C.body },
+  inputBox: {
+    height: 56,
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 14,
-    marginBottom: 12,
-    alignSelf: 'flex-start',
-  },
-  checkbox: {
-    width: 20,
-    height: 20,
-    borderRadius: 6,
+    gap: 12,
+    paddingHorizontal: 16,
+    borderRadius: 16,
     borderWidth: 1.5,
-    borderColor: colors.border,
-    justifyContent: 'center',
+    backgroundColor: C.white,
+    shadowColor: C.green,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  input: { flex: 1, height: '100%', fontSize: 16, color: C.ink },
+  eye: { padding: 4 },
+  matchBadge: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: C.green,
     alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  meter: { flexDirection: 'row', alignItems: 'center', marginTop: 10, gap: 10 },
+  meterBars: { flex: 1, flexDirection: 'row', gap: 6 },
+  meterBar: { flex: 1, height: 4, borderRadius: 2, backgroundColor: C.line },
+  meterText: { width: 132, fontSize: 12, fontWeight: '600', textAlign: 'right' },
+
+  rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 },
+  checkRow: { flexDirection: 'row', alignItems: 'center', flexShrink: 1 },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 7,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
     marginRight: 10,
-    backgroundColor: 'transparent',
   },
-  checkboxChecked: {
-    backgroundColor: colors.accent,
-    borderColor: colors.accent,
+  checkLabel: { fontSize: 14, color: C.body },
+  link: { fontSize: 14, fontWeight: '700', color: C.greenDeep },
+  terms: { marginTop: 4 },
+  termsText: { flex: 1, fontSize: 13, lineHeight: 19, color: C.body },
+
+  submit: { marginTop: 22 },
+  switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 20 },
+  switchLabel: { fontSize: 14, color: C.body },
+
+  /* banners */
+  banner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 14,
+    marginBottom: 18,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: C.dangerLine,
+    backgroundColor: C.dangerBg,
   },
-  rememberMeLabel: {
-    color: colors.textSecondary,
-    fontSize: 13,
-    fontWeight: '500',
+  bannerText: { flex: 1, fontSize: 13, lineHeight: 19, fontWeight: '600', color: C.dangerInk },
+  bannerOk: { borderColor: '#c9ecd3', backgroundColor: C.mist },
+  bannerTextOk: { color: C.greenDeep },
+  lockout: { flexDirection: 'column', alignItems: 'flex-start', gap: 8 },
+  lockoutHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  lockoutTitle: { fontSize: 15, fontWeight: '800', color: C.dangerInk },
+  lockoutTimer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    backgroundColor: C.white,
   },
+  lockoutTimerText: { fontSize: 13, fontWeight: '700', color: C.ink, fontVariant: ['tabular-nums'] },
+  lockoutBody: { fontSize: 13, lineHeight: 19, color: C.body },
+  lockoutBtn: { marginTop: 2, paddingHorizontal: 14, paddingVertical: 9, borderRadius: 12, backgroundColor: C.green },
+  lockoutBtnText: { fontSize: 13, fontWeight: '700', color: C.white },
+
+  /* sheets */
+  sheetWrap: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(28,37,46,0.45)' },
+  sheet: {
+    backgroundColor: C.bg,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: 24,
+    paddingTop: 10,
+  },
+  grabber: { alignSelf: 'center', width: 40, height: 5, borderRadius: 3, backgroundColor: C.line, marginBottom: 14 },
+  sheetHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  sheetTitle: { fontSize: 20, fontWeight: '800', color: C.ink, letterSpacing: -0.3 },
+  sheetClose: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: C.white,
+    borderWidth: 1,
+    borderColor: C.line,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sheetBody: { fontSize: 14, lineHeight: 21, color: C.body, marginBottom: 16 },
+  verifyArt: { alignSelf: 'center', width: 76, height: 76, marginTop: 8, marginBottom: 18 },
+  verifyCircle: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: C.mist,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  verifyTick: {
+    position: 'absolute',
+    right: -2,
+    bottom: -2,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 3,
+    borderColor: C.bg,
+    backgroundColor: C.green,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  verifyEmail: { marginTop: -10, marginBottom: 14, fontSize: 16, fontWeight: '700', color: C.ink, textAlign: 'center' },
 });

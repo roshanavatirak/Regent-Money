@@ -3,250 +3,250 @@ export interface HumorousMessage {
   body: string;
 }
 
-// 30 Crazy, Energetic, Hilarious Morning Notifications (9:00 AM) - Strictly 1-line punchlines
+// 30 Crazy, Energetic, Hilarious Morning Notifications (9:00 AM)
 export const MORNING_HUMOR_MESSAGES: HumorousMessage[] = [
   {
-    title: '☕ ₹350 coffee? You better be drinking liquid gold today!',
+    title: '☕ Morning Reality Check',
     body: '₹350 coffee? You better be drinking liquid gold today!',
   },
   {
-    title: '💸 Your bank balance is begging for mercy this morning!',
+    title: '💸 Balance Alert',
     body: 'Your bank balance is begging for mercy this morning!',
   },
   {
-    title: '🥑 Avocado toast just robbed your retirement fund!',
+    title: '🥑 Breakfast Economics',
     body: 'Avocado toast just robbed your retirement fund!',
   },
   {
-    title: '👀 Peek at your bank before your debit card catches fire!',
-    body: 'Peek at your bank before your debit card catches fire!',
+    title: '👀 Early Inspection',
+    body: 'Peek at your balance before your debit card catches fire!',
   },
   {
-    title: '🧘 Deep breath: Your wallet barely survived yesterday!',
-    body: 'Deep breath: Your wallet barely survived yesterday!',
+    title: '🧘 Balance Breathwork',
+    body: 'Take a deep breath: your wallet barely survived yesterday!',
   },
   {
-    title: '🚀 Houston, we have an emergency: Zero budget discipline!',
+    title: '🚀 Budget Control',
     body: 'Houston, we have an emergency: Zero budget discipline!',
   },
   {
-    title: '💰 Goal today: Keep more rupees than you throw away!',
-    body: 'Goal today: Keep more rupees than you throw away!',
+    title: '💰 Daily Mission',
+    body: 'Today\'s goal: Keep more rupees than you throw away!',
   },
   {
-    title: '📱 Phone is at 100%, but your bank is at 2% battery!',
-    body: 'Phone is at 100%, but your bank is at 2% battery!',
+    title: '📱 Battery vs Bank',
+    body: 'Phone is at 100%, but your bank is on 2% battery!',
   },
   {
-    title: '☕ First coffee, then world financial domination!',
-    body: 'First coffee, then world financial domination!',
+    title: '☕ First Coffee',
+    body: 'First the coffee, then world financial domination!',
   },
   {
-    title: '🎯 Reminder: You are not Mukesh Ambani (at least not today)!',
-    body: 'Reminder: You are not Mukesh Ambani (at least not today)!',
+    title: '🎯 Friendly Reminder',
+    body: 'You are not Mukesh Ambani (at least not yet today)!',
   },
   {
-    title: '💡 Looking at your money won’t shrink it, we promise!',
-    body: 'Looking at your money won’t shrink it, we promise!',
+    title: '💡 Morning Wisdom',
+    body: 'Looking at your money won\'t shrink it, we promise!',
   },
   {
-    title: '💳 Card workout time: 30 seconds of pure discipline!',
+    title: '💳 Card Cooldown',
     body: 'Card workout time: 30 seconds of pure discipline!',
   },
   {
-    title: '🛡️ Cab surges and chai stalls are plotting against you!',
+    title: '🛡️ Commute Defense',
     body: 'Cab surges and chai stalls are plotting against you!',
   },
   {
-    title: '📊 Your bank account called. It demands an apology!',
+    title: '📊 Incoming Call',
     body: 'Your bank account called. It demands an apology!',
   },
   {
-    title: '🧐 Richer than yesterday? Only one way to find out!',
+    title: '🧐 Daily Wealth Check',
     body: 'Richer than yesterday? Only one way to find out!',
   },
   {
-    title: '🛑 Stop! Put the debit card down and step away slowly!',
+    title: '🛑 Card Freeze',
     body: 'Stop! Put the debit card down and step away slowly!',
   },
   {
-    title: '🌤️ Wake up, money master! Your treasury awaits inspection!',
+    title: '🌤️ Rise & Shine',
     body: 'Wake up, money master! Your treasury awaits inspection!',
   },
   {
-    title: '💸 Don’t let your salary play hide-and-seek today!',
+    title: '💸 Salary Watch',
     body: 'Don’t let your salary play hide-and-seek today!',
   },
   {
-    title: '🦁 Rule #1 of the jungle: Don’t spend money blind!',
-    body: 'Rule #1 of the jungle: Don’t spend money blind!',
+    title: '🦁 Rule of the Jungle',
+    body: 'Never spend money blindfolded!',
   },
   {
-    title: '📉 Inflation is sprinting, but your discipline is faster!',
+    title: '📉 Beating Inflation',
     body: 'Inflation is sprinting, but your discipline is faster!',
   },
   {
-    title: '🧠 9 AM Wisdom: Folding money in half doubles it instantly!',
-    body: '9 AM Wisdom: Folding money in half doubles it instantly!',
+    title: '🧠 9 AM Life Hack',
+    body: 'Folding money in half doubles it instantly!',
   },
   {
-    title: '🥑 Early retirement vs Artisan breakfast: Who is winning?',
-    body: 'Early retirement vs Artisan breakfast: Who is winning!',
+    title: '🥑 Breakfast Dilemma',
+    body: 'Early retirement vs artisan breakfast: Who is winning?',
   },
   {
-    title: '🌟 VIP Alert: Your money is currently behaving... barely!',
-    body: 'VIP Alert: Your money is currently behaving... barely!',
+    title: '🌟 Treasury Report',
+    body: 'Your money is currently behaving... barely!',
   },
   {
-    title: '🧾 Reconcile now before the receipt ghosts haunt your day!',
+    title: '🧾 Expense Tally',
     body: 'Reconcile now before the receipt ghosts haunt your day!',
   },
   {
-    title: '🏎️ Spending in the fast lane with no brakes? Slow down!',
+    title: '🏎️ Speed Limit',
     body: 'Spending in the fast lane with no brakes? Slow down!',
   },
   {
-    title: '👑 A true king counts the treasury before breakfast!',
+    title: '👑 Treasury Guard',
     body: 'A true king counts the treasury before breakfast!',
   },
   {
-    title: '🔍 Mystery money detected: Solve it before lunch breaks out!',
-    body: 'Mystery money detected: Solve it before lunch breaks out!',
+    title: '🔍 Mystery Money',
+    body: 'Mystery debits detected: Solve them before lunch breaks out!',
   },
   {
-    title: '🚀 Mission 9 AM: Financial sanity without crying!',
+    title: '🚀 Morning Checklist',
     body: 'Mission 9 AM: Financial sanity without crying!',
   },
   {
-    title: '🔥 10-second net worth check: Faster than an espresso shot!',
+    title: '🔥 Net Worth Check',
     body: '10-second net worth check: Faster than an espresso shot!',
   },
   {
-    title: '🌈 Manifesting wealth starts by looking at your real balance!',
+    title: '🌈 Wealth Manifestation',
     body: 'Manifesting wealth starts by looking at your real balance!',
   },
 ];
 
-// 30 Crazy, Energetic, Hilarious Evening Notifications (9:00 PM) - Strictly 1-line punchlines
+// 30 Crazy, Energetic, Hilarious Evening Notifications (9:00 PM)
 export const EVENING_HUMOR_MESSAGES: HumorousMessage[] = [
   {
-    title: '🍕 That ₹499 pizza was emotional support, not dinner!',
+    title: '🍕 Dinner Debrief',
     body: 'That ₹499 pizza was emotional support, not dinner!',
   },
   {
-    title: '🛒 Step away from "Buy Now" before buying another LED gadget!',
+    title: '🛒 Cart Intervention',
     body: 'Step away from "Buy Now" before buying another LED gadget!',
   },
   {
-    title: '💳 Your card ran an Olympic marathon today. Let it sleep!',
-    body: 'Your card ran an Olympic marathon today. Let it sleep!',
+    title: '💳 Card Cooldown',
+    body: 'Your card ran an Olympic marathon today. Let it rest!',
   },
   {
-    title: '😴 Sleep like a CEO: Zero midnight balance panic!',
+    title: '😴 CEO Sleep Mode',
     body: 'Sleep like a CEO: Zero midnight balance panic!',
   },
   {
-    title: '🛵 Swiggy delivery guy is basically your roommate now!',
-    body: 'Swiggy delivery guy is basically your roommate now!',
+    title: '🛵 Delivery Alert',
+    body: 'The Swiggy delivery driver is basically your roommate now!',
   },
   {
-    title: '📉 Did the wallet take a brutal beating today? Confess now!',
+    title: '📉 Daily Audit',
     body: 'Did the wallet take a brutal beating today? Confess now!',
   },
   {
-    title: '🎯 Daily Audit: You survived another wild day of capitalism!',
-    body: 'Daily Audit: You survived another wild day of capitalism!',
+    title: '🎯 Evening Reckoning',
+    body: 'You survived another wild day of modern capitalism!',
   },
   {
-    title: '🍷 Sip your tea and face the truth: How much did you spend?',
+    title: '🍷 Truth Time',
     body: 'Sip your tea and face the truth: How much did you spend?',
   },
   {
-    title: '🚨 Warning: Unchecked UPI expenses multiply in the dark!',
+    title: '🚨 UPI Warning',
     body: 'Warning: Unchecked UPI expenses multiply in the dark!',
   },
   {
-    title: '🛋️ Couch potato mode: Check the damage without moving a muscle!',
-    body: 'Couch potato mode: Check the damage without moving a muscle!',
+    title: '🛋️ Couch Potato Mode',
+    body: 'Check the damage without moving a single muscle!',
   },
   {
-    title: '🤫 We won’t tell anyone about those secret pastry orders!',
+    title: '🤫 Secret Spends',
     body: 'We won’t tell anyone about those secret pastry orders!',
   },
   {
-    title: '🧾 Enter receipts now before the taxman starts crying!',
+    title: '🧾 Receipt Duty',
     body: 'Enter receipts now before the taxman starts crying!',
   },
   {
-    title: '🦉 Night owls check their net worth before bingeing Netflix!',
+    title: '🦉 Night Owl Audit',
     body: 'Night owls check their net worth before bingeing Netflix!',
   },
   {
-    title: '🍿 Popcorn markup at 900%... and you paid it with a smile!',
+    title: '🍿 Movie Night',
     body: 'Popcorn markup at 900%... and you paid it with a smile!',
   },
   {
-    title: '✨ Peace is the best pillow: Log your spends and sleep well!',
+    title: '✨ Goodnight Routine',
     body: 'Peace is the best pillow: Log your spends and sleep well!',
   },
   {
-    title: '📦 Another delivery tomorrow? What did you buy at 2 AM?!',
+    title: '📦 Midnight Purchases',
     body: 'Another delivery tomorrow? What did you buy at 2 AM?!',
   },
   {
-    title: '🕯️ Candlelit dinner tonight or ₹10 Maggi tomorrow?',
+    title: '🕯️ Dinner Choices',
     body: 'Candlelit dinner tonight or ₹10 Maggi tomorrow?',
   },
   {
-    title: '🎮 Final boss of the day: Reconcile today’s debits!',
+    title: '🎮 Daily Boss Fight',
     body: 'Final boss of the day: Reconcile today’s debits!',
   },
   {
-    title: '🛍️ "Add to Cart" is free. Checkout is where tears happen!',
+    title: '🛍️ Cart vs Reality',
     body: '"Add to Cart" is free. Checkout is where tears happen!',
   },
   {
-    title: '🌙 Moon is shining, but your wallet is gently weeping!',
-    body: 'Moon is shining, but your wallet is gently weeping!',
+    title: '🌙 Midnight Confession',
+    body: 'The moon is shining, but your wallet is gently weeping!',
   },
   {
-    title: '💸 Where did today’s cash vanish? Auto-rickshaws and chai?!',
+    title: '💸 Cash Disappearance',
     body: 'Where did today’s cash vanish? Auto-rickshaws and chai?!',
   },
   {
-    title: '🛌 Don’t sleep on your savings goal, it has trust issues!',
+    title: '🛌 Savings Check-In',
     body: 'Don’t sleep on your savings goal, it has trust issues!',
   },
   {
-    title: '🔋 Recharge your battery and rescue your budget!',
-    body: 'Recharge your battery and rescue your budget!',
+    title: '🔋 Battery & Budget',
+    body: 'Recharge your phone and rescue your budget!',
   },
   {
-    title: '🏆 Gold medal in adulting: Log expenses and claim victory!',
-    body: 'Gold medal in adulting: Log expenses and claim victory!',
+    title: '🏆 Adulting Victory',
+    body: 'Log your expenses today and claim your adulting gold medal!',
   },
   {
-    title: '🛑 Halt! Routine evening checkpoint: Show your spending papers!',
-    body: 'Halt! Routine evening checkpoint: Show your spending papers!',
+    title: '🛑 Evening Checkpoint',
+    body: 'Routine checkpoint: Show your spending papers!',
   },
   {
-    title: '📉 Impulse buy struck again? No judgment, just log it!',
+    title: '📉 Impulse Buy Log',
     body: 'Impulse buy struck again? No judgment, just log it!',
   },
   {
-    title: '🎉 Celebrate the rupees you DIDN’T spend today!',
+    title: '🎉 Money Saved',
     body: 'Celebrate the rupees you DIDN’T spend today!',
   },
   {
-    title: '🧠 9 PM Brain: "Where did my entire paycheck vanish?!"',
-    body: '9 PM Brain: "Where did my entire paycheck vanish?!"',
+    title: '🧠 9 PM Thoughts',
+    body: '"Where did my entire paycheck vanish this week?!"',
   },
   {
-    title: '🌟 Close the books with billionaire energy tonight!',
+    title: '🌟 Books Closed',
     body: 'Close the books with billionaire energy tonight!',
   },
   {
-    title: '🌌 Sweet dreams and compounding interest for tomorrow!',
+    title: '🌌 Compounding Dreams',
     body: 'Sweet dreams and compounding interest for tomorrow!',
   },
 ];

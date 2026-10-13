@@ -37,31 +37,9 @@ export const SmsPermissionModal: React.FC<SmsPermissionModalProps> = ({
       const granted = await smsPermissionService.requestSmsPermissions();
       if (granted) {
         setLoading(false);
-        // Explain background sync before navigating to system battery settings
-        Alert.alert(
-          'Background Tracking',
-          'For instant tracking when the app is closed, allow Regent Money to run in the background in system settings.',
-          [
-            {
-              text: 'Continue',
-              onPress: async () => {
-                await smsPermissionService.requestBatteryOptimizationExemption();
-                smsCatchupService.reconcile().catch(() => {});
-                if (onGranted) onGranted();
-                onDismiss();
-              },
-            },
-            {
-              text: 'Skip',
-              style: 'cancel',
-              onPress: () => {
-                smsCatchupService.reconcile().catch(() => {});
-                if (onGranted) onGranted();
-                onDismiss();
-              },
-            },
-          ]
-        );
+        smsCatchupService.reconcile().catch(() => {});
+        if (onGranted) onGranted();
+        onDismiss();
         return;
       }
     } catch (e) {

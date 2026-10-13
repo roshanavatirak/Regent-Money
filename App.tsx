@@ -32,7 +32,7 @@ if (Platform.OS === 'web' && typeof console !== 'undefined') {
   };
 }
 
-// Configure font-display: swap on Web to prevent Chrome slow-network intervention warnings
+// Configure font-display: swap on Web and prevent outer window scrolling
 if (Platform.OS === 'web' && typeof document !== 'undefined') {
   const styleId = 'expo-vector-icons-font-display';
   if (!document.getElementById(styleId)) {
@@ -43,6 +43,15 @@ if (Platform.OS === 'web' && typeof document !== 'undefined') {
       @font-face { font-family: 'Ionicons'; font-display: swap; }
       @font-face { font-family: 'MaterialCommunityIcons'; font-display: swap; }
       @font-face { font-family: 'material-community'; font-display: swap; }
+      html, body {
+        height: 100%;
+        overflow: hidden;
+        overscroll-behavior: none;
+      }
+      #root {
+        height: 100%;
+        overflow: hidden;
+      }
     `;
     document.head.appendChild(style);
   }

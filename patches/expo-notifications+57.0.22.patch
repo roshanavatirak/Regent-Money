@@ -1,0 +1,120 @@
+diff --git a/node_modules/expo-notifications/build/DevicePushTokenAutoRegistration.fx.js b/node_modules/expo-notifications/build/DevicePushTokenAutoRegistration.fx.js
+index 85cd97c..35d348c 100644
+--- a/node_modules/expo-notifications/build/DevicePushTokenAutoRegistration.fx.js
++++ b/node_modules/expo-notifications/build/DevicePushTokenAutoRegistration.fx.js
+@@ -72,7 +72,7 @@ export async function __handlePersistedRegistrationInfoAsync(registrationInfo) {
+         console.warn('[expo-notifications] Error encountered while updating server registration with latest device push token.', e);
+     }
+ }
+-if (ServerRegistrationModule.getRegistrationInfoAsync) {
++if (ServerRegistrationModule?.getRegistrationInfoAsync) {
+     // A global scope (to get all the updates) device push token
+     // subscription, never cleared.
+     addPushTokenListener(async (token) => {
+@@ -103,7 +103,7 @@ if (ServerRegistrationModule.getRegistrationInfoAsync) {
+         console.error('[expo-notifications] Error reading persisted server registration info: ', e);
+     });
+ }
+-else {
++else if (ServerRegistrationModule) {
+     console.warn(`[expo-notifications] Error encountered while fetching auto-registration state, new tokens will not be automatically registered on server.`, new UnavailabilityError('ServerRegistrationModule', 'getRegistrationInfoAsync'));
+ }
+ //# sourceMappingURL=DevicePushTokenAutoRegistration.fx.js.map
+\ No newline at end of file
+diff --git a/node_modules/expo-notifications/build/PushTokenManager.native.js b/node_modules/expo-notifications/build/PushTokenManager.native.js
+index 27bd573..6c300d5 100644
+--- a/node_modules/expo-notifications/build/PushTokenManager.native.js
++++ b/node_modules/expo-notifications/build/PushTokenManager.native.js
+@@ -1,3 +1,3 @@
+-import { requireNativeModule } from 'expo-modules-core';
+-export default requireNativeModule('ExpoPushTokenManager');
++import { requireOptionalNativeModule } from 'expo-modules-core';
++export default requireOptionalNativeModule('ExpoPushTokenManager');
+ //# sourceMappingURL=PushTokenManager.native.js.map
+\ No newline at end of file
+diff --git a/node_modules/expo-notifications/build/ServerRegistrationModule.native.js b/node_modules/expo-notifications/build/ServerRegistrationModule.native.js
+index 359d085..6c1b618 100644
+--- a/node_modules/expo-notifications/build/ServerRegistrationModule.native.js
++++ b/node_modules/expo-notifications/build/ServerRegistrationModule.native.js
+@@ -1,3 +1,3 @@
+-import { requireNativeModule } from 'expo-modules-core';
+-export default requireNativeModule('NotificationsServerRegistrationModule');
++import { requireOptionalNativeModule } from 'expo-modules-core';
++export default requireOptionalNativeModule('NotificationsServerRegistrationModule');
+ //# sourceMappingURL=ServerRegistrationModule.native.js.map
+\ No newline at end of file
+diff --git a/node_modules/expo-notifications/build/TokenEmitter.js b/node_modules/expo-notifications/build/TokenEmitter.js
+index bd08d8f..e3ac391 100644
+--- a/node_modules/expo-notifications/build/TokenEmitter.js
++++ b/node_modules/expo-notifications/build/TokenEmitter.js
+@@ -31,6 +31,6 @@ const newTokenEventName = 'onDevicePushToken';
+  */
+ export function addPushTokenListener(listener) {
+     warnOfExpoGoPushUsage();
+-    return PushTokenManager.addListener(newTokenEventName, ({ devicePushToken }) => listener({ data: devicePushToken, type: Platform.OS }));
++    return PushTokenManager?.addListener?.(newTokenEventName, ({ devicePushToken }) => listener({ data: devicePushToken, type: Platform.OS })) ?? { remove: () => {} };
+ }
+ //# sourceMappingURL=TokenEmitter.js.map
+\ No newline at end of file
+diff --git a/node_modules/expo-notifications/build/TopicSubscriptionModule.android.js b/node_modules/expo-notifications/build/TopicSubscriptionModule.android.js
+index 644a8bb..5dfa905 100644
+--- a/node_modules/expo-notifications/build/TopicSubscriptionModule.android.js
++++ b/node_modules/expo-notifications/build/TopicSubscriptionModule.android.js
+@@ -1,3 +1,3 @@
+-import { requireNativeModule } from 'expo-modules-core';
+-export default requireNativeModule('ExpoTopicSubscriptionModule');
++import { requireOptionalNativeModule } from 'expo-modules-core';
++export default requireOptionalNativeModule('ExpoTopicSubscriptionModule');
+ //# sourceMappingURL=TopicSubscriptionModule.android.js.map
+\ No newline at end of file
+diff --git a/node_modules/expo-notifications/build/warnOfExpoGoPushUsage.js b/node_modules/expo-notifications/build/warnOfExpoGoPushUsage.js
+index 8260405..5198c48 100644
+--- a/node_modules/expo-notifications/build/warnOfExpoGoPushUsage.js
++++ b/node_modules/expo-notifications/build/warnOfExpoGoPushUsage.js
+@@ -4,13 +4,8 @@ let didWarn = false;
+ export const warnOfExpoGoPushUsage = () => {
+     if (isRunningInExpoGo() && !didWarn) {
+         const message = `expo-notifications: Android Push notifications (remote notifications) functionality provided by expo-notifications was removed from Expo Go with the release of SDK 53. Use a development build instead of Expo Go. Learn more at https://docs.expo.dev/develop/development-builds/introduction/.`;
+-        if (Platform.OS === 'android') {
+-            throw new Error(message);
+-        }
+-        else if (__DEV__) {
+-            didWarn = true;
+-            console.warn(message);
+-        }
++        didWarn = true;
++        console.warn(message);
+     }
+ };
+ //# sourceMappingURL=warnOfExpoGoPushUsage.js.map
+\ No newline at end of file
+diff --git a/node_modules/expo-notifications/src/TopicSubscriptionModule.android.ts b/node_modules/expo-notifications/src/TopicSubscriptionModule.android.ts
+index 2b9ed57..c9fb37b 100644
+--- a/node_modules/expo-notifications/src/TopicSubscriptionModule.android.ts
++++ b/node_modules/expo-notifications/src/TopicSubscriptionModule.android.ts
+@@ -1,5 +1,5 @@
+-import { requireNativeModule } from 'expo-modules-core';
++import { requireOptionalNativeModule } from 'expo-modules-core';
+ 
+ import type { TopicSubscriptionModule } from './TopicSubscriptionModule.types';
+ 
+-export default requireNativeModule<TopicSubscriptionModule>('ExpoTopicSubscriptionModule');
++export default requireOptionalNativeModule<TopicSubscriptionModule>('ExpoTopicSubscriptionModule');
+diff --git a/node_modules/expo-notifications/src/warnOfExpoGoPushUsage.ts b/node_modules/expo-notifications/src/warnOfExpoGoPushUsage.ts
+index c6883b3..50ca59b 100644
+--- a/node_modules/expo-notifications/src/warnOfExpoGoPushUsage.ts
++++ b/node_modules/expo-notifications/src/warnOfExpoGoPushUsage.ts
+@@ -7,11 +7,7 @@ export const warnOfExpoGoPushUsage = () => {
+   if (isRunningInExpoGo() && !didWarn) {
+     const message = `expo-notifications: Android Push notifications (remote notifications) functionality provided by expo-notifications was removed from Expo Go with the release of SDK 53. Use a development build instead of Expo Go. Learn more at https://docs.expo.dev/develop/development-builds/introduction/.`;
+ 
+-    if (Platform.OS === 'android') {
+-      throw new Error(message);
+-    } else if (__DEV__) {
+-      didWarn = true;
+-      console.warn(message);
+-    }
++    didWarn = true;
++    console.warn(message);
+   }
+ };
