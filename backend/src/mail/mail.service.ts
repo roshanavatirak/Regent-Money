@@ -14,10 +14,10 @@ export class MailService {
   }
 
   private initializeTransporter() {
-    const user = this.configService.get<string>('SMTP_USER');
-    const pass = this.configService.get<string>('SMTP_PASS');
+    const user = this.configService.get<string>('SMTP_USER')?.replace(/^["']|["']$/g, '').trim();
+    const pass = this.configService.get<string>('SMTP_PASS')?.replace(/^["']|["']$/g, '').trim();
 
-    if (user && pass && user !== 'your_gmail_address@gmail.com') {
+    if (user && pass) {
       this.transporter = nodemailer.createTransport({
         service: 'gmail',
         auth: { user, pass },
@@ -27,21 +27,15 @@ export class MailService {
   }
 
   private getEffectiveBackendUrl(): string {
-    const configuredUrl = this.configService.get<string>('BACKEND_URL')?.trim();
-    if (configuredUrl && !configuredUrl.includes('localhost') && !configuredUrl.includes('127.0.0.1')) {
+    const configuredUrl = (this.configService.get<string>('BACKEND_URL') || process.env.RENDER_EXTERNAL_URL || '')
+      ?.replace(/^["']|["']$/g, '')
+      .trim();
+
+    if (configuredUrl) {
       return configuredUrl.replace(/\/+$/, '');
     }
 
-    const renderUrl = process.env.RENDER_EXTERNAL_URL || this.configService.get<string>('RENDER_EXTERNAL_URL');
-    if (renderUrl) {
-      return renderUrl.replace(/\/+$/, '');
-    }
-
-    if (process.env.NODE_ENV === 'production') {
-      return 'https://regent-money.onrender.com';
-    }
-
-    return (configuredUrl || 'http://localhost:3000').replace(/\/+$/, '');
+    return 'http://localhost:3000';
   }
 
   /**
@@ -56,17 +50,25 @@ export class MailService {
   }): Promise<boolean> {
     const rawKey = this.configService.get<string>('BREVO_API_KEY');
     const apiKey = rawKey?.replace(/^["']|["']$/g, '').trim();
-    if (!apiKey || apiKey.includes('your_brevo_api_key_here')) {
-      this.logger.warn('[Brevo API] BREVO_API_KEY is missing or still set to placeholder in environment variables.');
+    if (!apiKey) {
+      this.logger.warn('[Brevo API] BREVO_API_KEY is not configured in environment variables.');
       return false;
     }
 
-    const senderEmail =
-      this.configService.get<string>('BREVO_SENDER_EMAIL')?.replace(/^["']|["']$/g, '').trim() ||
-      'roshanawatirak@gmail.com';
+    const senderEmail = this.configService
+      .get<string>('BREVO_SENDER_EMAIL')
+      ?.replace(/^["']|["']$/g, '')
+      .trim();
+    if (!senderEmail) {
+      this.logger.warn('[Brevo API] BREVO_SENDER_EMAIL is not configured in environment variables.');
+      return false;
+    }
+
     const senderName =
-      this.configService.get<string>('BREVO_SENDER_NAME')?.replace(/^["']|["']$/g, '').trim() ||
-      'Regent Money';
+      this.configService
+        .get<string>('BREVO_SENDER_NAME')
+        ?.replace(/^["']|["']$/g, '')
+        .trim() || 'Regent Money';
 
     try {
       const response = await fetch('https://api.brevo.com/v3/smtp/email', {

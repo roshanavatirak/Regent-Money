@@ -50,9 +50,9 @@ export class AuthService implements OnModuleInit {
       console.warn('[AuthService] Could not auto-migrate core.users columns:', err?.message || err);
     }
 
-    const cloudName = this.configService.get<string>('CLOUDINARY_CLOUD_NAME');
-    const apiKey = this.configService.get<string>('CLOUDINARY_API_KEY') || '285736315229939';
-    const apiSecret = this.configService.get<string>('CLOUDINARY_API_SECRET') || 'LeyD3tf1pxkJO4oww6HFKw3OvBg';
+    const cloudName = this.configService.get<string>('CLOUDINARY_CLOUD_NAME')?.trim();
+    const apiKey = this.configService.get<string>('CLOUDINARY_API_KEY')?.trim();
+    const apiSecret = this.configService.get<string>('CLOUDINARY_API_SECRET')?.trim();
     if (cloudName && apiKey && apiSecret) {
       cloudinary.config({
         cloud_name: cloudName,
@@ -683,10 +683,10 @@ export class AuthService implements OnModuleInit {
       throw new UnauthorizedException('User not found.');
     }
 
-    const cloudName = this.configService.get<string>('CLOUDINARY_CLOUD_NAME');
-    const apiKey = this.configService.get<string>('CLOUDINARY_API_KEY') || '285736315229939';
-    const apiSecret = this.configService.get<string>('CLOUDINARY_API_SECRET') || 'LeyD3tf1pxkJO4oww6HFKw3OvBg';
-    if (cloudName) {
+    const cloudName = this.configService.get<string>('CLOUDINARY_CLOUD_NAME')?.trim();
+    const apiKey = this.configService.get<string>('CLOUDINARY_API_KEY')?.trim();
+    const apiSecret = this.configService.get<string>('CLOUDINARY_API_SECRET')?.trim();
+    if (cloudName && apiKey && apiSecret) {
       try {
         cloudinary.config({
           cloud_name: cloudName,
