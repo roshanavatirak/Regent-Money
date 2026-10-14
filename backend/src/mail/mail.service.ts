@@ -54,13 +54,19 @@ export class MailService {
     htmlContent: string;
     textContent?: string;
   }): Promise<boolean> {
-    const apiKey = this.configService.get<string>('BREVO_API_KEY')?.trim();
-    if (!apiKey) return false;
+    const rawKey = this.configService.get<string>('BREVO_API_KEY');
+    const apiKey = rawKey?.replace(/^["']|["']$/g, '').trim();
+    if (!apiKey || apiKey.includes('your_brevo_api_key_here')) {
+      this.logger.warn('[Brevo API] BREVO_API_KEY is missing or still set to placeholder in environment variables.');
+      return false;
+    }
 
     const senderEmail =
-      this.configService.get<string>('BREVO_SENDER_EMAIL')?.trim() || 'roshanawatirak@gmail.com';
+      this.configService.get<string>('BREVO_SENDER_EMAIL')?.replace(/^["']|["']$/g, '').trim() ||
+      'roshanawatirak@gmail.com';
     const senderName =
-      this.configService.get<string>('BREVO_SENDER_NAME')?.trim() || 'Regent Money';
+      this.configService.get<string>('BREVO_SENDER_NAME')?.replace(/^["']|["']$/g, '').trim() ||
+      'Regent Money';
 
     try {
       const response = await fetch('https://api.brevo.com/v3/smtp/email', {
