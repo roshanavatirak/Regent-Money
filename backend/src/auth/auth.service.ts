@@ -160,6 +160,29 @@ export class AuthService implements OnModuleInit {
     return { message: 'Your email has been successfully verified! You can now log in.' };
   }
 
+  async resendVerificationEmail(email: string) {
+    const sanitizedEmail = email.trim().toLowerCase();
+    const user = await this.userRepository.findOne({
+      where: { email: sanitizedEmail, isDeleted: false },
+    });
+
+    if (!user) {
+      return { message: 'If this email is registered, a new verification link has been sent.' };
+    }
+
+    if (user.isVerified) {
+      return { message: 'Your account is already verified. You can log in directly.' };
+    }
+
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+    user.verificationToken = verificationToken;
+    user.updatedAt = Date.now();
+    await this.userRepository.save(user);
+
+    await this.mailService.sendVerificationEmail(user.email || sanitizedEmail, user.name || '', verificationToken);
+    return { message: 'A new verification link has been sent to your email.' };
+  }
+
   private getLockKeyForUser(userId: string): string {
     return `auth:lock:u:${userId}`;
   }

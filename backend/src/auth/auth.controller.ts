@@ -55,6 +55,16 @@ export class AuthController {
     return this.authService.requestPasswordReset(email);
   }
 
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
+  @Post('resend-verification')
+  @HttpCode(HttpStatus.OK)
+  async resendVerification(@Body('email') email: string) {
+    if (!email || !email.trim()) {
+      throw new BadRequestException('Email address is required.');
+    }
+    return this.authService.resendVerificationEmail(email);
+  }
+
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post('reset-password')
   @HttpCode(HttpStatus.OK)

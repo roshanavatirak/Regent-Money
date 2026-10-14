@@ -6,6 +6,7 @@ import {
   ActivityIndicator,
   Image,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -361,6 +362,104 @@ function Sheet({
           {children}
         </Animated.View>
       </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+interface EmailVerificationModalProps {
+  visible: boolean;
+  email: string;
+  onClose: () => void;
+  onProceedToLogin: () => void;
+}
+
+/**
+ * Clean, lightweight, professional verification popup shown immediately after signup.
+ */
+function EmailVerificationModal({ visible, email, onClose, onProceedToLogin }: EmailVerificationModalProps) {
+  const { width: W } = useWindowDimensions();
+  const [cooldown, setCooldown] = useState(0);
+  const [resending, setResending] = useState(false);
+  const [resendStatus, setResendStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const timer = setInterval(() => {
+      setCooldown(c => Math.max(0, c - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [cooldown]);
+
+  const handleResend = async () => {
+    if (cooldown > 0 || resending || !email) return;
+    setResending(true);
+    setResendStatus(null);
+    try {
+      const res = await authService.resendVerificationEmail(email);
+      setResendStatus(res.message || 'Link resent!');
+      setCooldown(30);
+    } catch (err: any) {
+      setResendStatus(err.message || 'Failed to resend');
+    } finally {
+      setResending(false);
+    }
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" statusBarTranslucent onRequestClose={onClose}>
+      <View style={styles.verifyModalBackdrop}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close modal" />
+        <Animated.View
+          entering={ZoomIn.duration(200)}
+          exiting={FadeOut.duration(150)}
+          style={[styles.verifyModalCard, { width: Math.min(W - 48, 340) }]}
+        >
+          {/* Close button */}
+          <Pressable onPress={onClose} style={styles.verifyModalCloseBtn} hitSlop={10} accessibilityLabel="Close">
+            <Feather name="x" size={16} color={C.muted} />
+          </Pressable>
+
+          {/* Clean circle with mail icon */}
+          <View style={styles.verifyIconClean}>
+            <Feather name="mail" size={24} color={C.green} />
+          </View>
+
+          {/* Title & message */}
+          <Text style={styles.verifyModalTitle}>Check your email</Text>
+          <Text style={styles.verifyModalBody}>
+            We've sent a verification link to{'\n'}
+            <Text style={styles.verifyEmailHighlight}>{email}</Text>
+          </Text>
+
+          {resendStatus && (
+            <Animated.Text entering={FadeIn.duration(180)} style={styles.verifyResendNotice}>
+              {resendStatus}
+            </Animated.Text>
+          )}
+
+          {/* Single clean primary button */}
+          <Button label="Back to Log In" onPress={onProceedToLogin} style={styles.verifyPrimaryBtn} />
+
+          {/* Subtle Resend option */}
+          <Pressable
+            onPress={handleResend}
+            disabled={cooldown > 0 || resending}
+            hitSlop={8}
+            style={styles.verifyResendRow}
+          >
+            {resending ? (
+              <ActivityIndicator size="small" color={C.green} />
+            ) : (
+              <Text style={styles.verifyResendText}>
+                Didn't receive it?{' '}
+                <Text style={[styles.verifyResendHighlight, cooldown > 0 && { color: C.muted }]}>
+                  {cooldown > 0 ? `Resend (${cooldown}s)` : 'Resend link'}
+                </Text>
+              </Text>
+            )}
+          </Pressable>
+        </Animated.View>
+      </View>
     </Modal>
   );
 }
@@ -1190,22 +1289,12 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
         </Animated.View>
       </KeyboardScreen>
 
-      <Sheet visible={showVerifyModal} title="Check your inbox" onClose={closeVerify}>
-        <View style={styles.verifyArt}>
-          <View style={styles.verifyCircle}>
-            <Feather name="mail" size={30} color={C.green} />
-          </View>
-          <Animated.View entering={ZoomIn.delay(350).springify().damping(10)} style={styles.verifyTick}>
-            <Feather name="check" size={13} color={C.white} />
-          </Animated.View>
-        </View>
-        <Text style={[styles.sheetBody, styles.center]}>We sent a confirmation link to</Text>
-        <Text style={styles.verifyEmail}>{registeredEmail}</Text>
-        <Text style={[styles.sheetBody, styles.center]}>
-          Open it to confirm your account, then log in. If it isn't there, check your spam folder.
-        </Text>
-        <Button label="Back to log in" onPress={closeVerify} style={styles.submit} />
-      </Sheet>
+      <EmailVerificationModal
+        visible={showVerifyModal}
+        email={registeredEmail}
+        onClose={closeVerify}
+        onProceedToLogin={closeVerify}
+      />
     </View>
   );
 };
@@ -1450,4 +1539,85 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   verifyEmail: { marginTop: -10, marginBottom: 14, fontSize: 16, fontWeight: '700', color: C.ink, textAlign: 'center' },
+
+  /* Clean, Lightweight Email Verification Popup */
+  verifyModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  verifyModalCard: {
+    backgroundColor: C.white,
+    borderRadius: 24,
+    paddingHorizontal: 24,
+    paddingTop: 30,
+    paddingBottom: 22,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: C.line,
+    ...shadow('rgba(15, 23, 42, 0.12)', 0.18, 20, 8, 8),
+  },
+  verifyModalCloseBtn: {
+    position: 'absolute',
+    top: 14,
+    right: 14,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  verifyIconClean: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: C.mist,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+  },
+  verifyModalTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: C.ink,
+    letterSpacing: -0.3,
+    textAlign: 'center',
+  },
+  verifyModalBody: {
+    fontSize: 14,
+    lineHeight: 21,
+    color: C.body,
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  verifyEmailHighlight: {
+    fontWeight: '700',
+    color: C.ink,
+  },
+  verifyResendNotice: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: C.greenDeep,
+    marginTop: 10,
+    textAlign: 'center',
+  },
+  verifyPrimaryBtn: {
+    width: '100%',
+    marginTop: 22,
+  },
+  verifyResendRow: {
+    marginTop: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  verifyResendText: {
+    fontSize: 13,
+    color: C.muted,
+  },
+  verifyResendHighlight: {
+    fontWeight: '700',
+    color: C.green,
+  },
 });

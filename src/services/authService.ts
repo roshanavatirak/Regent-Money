@@ -220,6 +220,22 @@ export const authService = {
   },
 
   /**
+   * Resends verification email with a fresh secure token
+   */
+  async resendVerificationEmail(email: string): Promise<{ message: string }> {
+    const response = await fetch(`${BACKEND_URL}/auth/resend-verification`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email.trim().toLowerCase() }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.message || 'Failed to resend verification link.');
+    }
+    return data;
+  },
+
+  /**
    * Dispatches a password reset link to user's registered email
    */
   async requestPasswordReset(email: string): Promise<{ message: string }> {
