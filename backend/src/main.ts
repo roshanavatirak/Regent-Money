@@ -1,6 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { Logger } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import * as dns from 'dns';
 import { timingSafeEqual } from 'crypto';
 
@@ -12,6 +12,15 @@ dns.setDefaultResultOrder('ipv4first');
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
   const app = await NestFactory.create(AppModule);
+
+  // Global validation pipe for strict DTO validation and mass-assignment protection
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  );
 
   // Increase payload limits for base64 image uploads to Cloudinary (up to 25MB)
   app.use(json({ limit: '25mb' }));

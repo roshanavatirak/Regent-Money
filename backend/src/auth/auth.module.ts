@@ -8,6 +8,7 @@ import { User } from '../users/entities/user.entity';
 import { MailModule } from '../mail/mail.module';
 
 import { TurnstileService } from './turnstile.service';
+import { JwtAuthGuard } from './jwt-auth.guard';
 
 @Module({
   imports: [
@@ -30,8 +31,8 @@ import { TurnstileService } from './turnstile.service';
       },
     }),
   ],
-  providers: [AuthService, TurnstileService],
+  providers: [AuthService, TurnstileService, JwtAuthGuard],
   controllers: [AuthController],
-  exports: [AuthService, TurnstileService, JwtModule],
+  exports: [AuthService, TurnstileService, JwtModule, JwtAuthGuard],
 })
 export class AuthModule {}

@@ -10,6 +10,7 @@ import { mmkvStorage } from '../db/mmkv';
 import { getBackendUrl } from '../config/api';
 import { notificationService } from './notificationService';
 import { tokenStore } from './tokenStore';
+import { apiFetch } from './apiClient';
 
 const BACKEND_URL = getBackendUrl();
 
@@ -29,7 +30,7 @@ export const syncService = {
 
     const user = useAuthStore.getState().user;
     const token = tokenStore.getAccessToken();
-    if (!user || !token) return;
+    if (!user || !token || user.role === 'admin' || user.role === 'superadmin') return;
 
     const baseUrl = getBackendUrl();
     const controller = new AbortController();
@@ -41,18 +42,16 @@ export const syncService = {
 
     try {
       const [snapshotsRes, incomeRes] = await Promise.all([
-        fetch(`${baseUrl}/sync/net-worth-snapshots`, {
+        apiFetch('/sync/net-worth-snapshots', {
           method: 'GET',
           headers: {
-            'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',
           },
           signal: controller.signal,
         }),
-        fetch(`${baseUrl}/sync/income-records`, {
+        apiFetch('/sync/income-records', {
           method: 'GET',
           headers: {
-            'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',
           },
           signal: controller.signal,
@@ -98,7 +97,7 @@ export const syncService = {
     if (isSyncing) return;
 
     const user = useAuthStore.getState().user;
-    if (!user) {
+    if (!user || user.role === 'admin' || user.role === 'superadmin') {
       return;
     }
 
@@ -128,10 +127,9 @@ export const syncService = {
       this.fetchAnalytics(force).catch(() => {});
       notificationService.fetchNotifications().catch(() => {});
 
-      const response = await fetch(`${baseUrl}/sync`, {
+      const response = await apiFetch('/sync', {
         method: 'GET',
         headers: {
-          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         signal: syncController.signal,

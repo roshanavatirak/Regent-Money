@@ -244,6 +244,51 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
         </View>
 
 
+        {/* Admin Portal Tile (Visible only for admin or superadmin) */}
+        {user?.role && ['admin', 'superadmin'].includes(user.role) && (
+          <TouchableOpacity
+            style={[
+              styles.card,
+              {
+                borderColor: '#EAB308',
+                backgroundColor: isDark ? 'rgba(234, 179, 8, 0.08)' : '#FEFCE8',
+                marginBottom: 12,
+              },
+            ]}
+            onPress={() => navigation.navigate('AdminDashboard')}
+            activeOpacity={0.8}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                <View
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 10,
+                    backgroundColor: 'rgba(234, 179, 8, 0.16)',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Feather name="shield" size={18} color="#CA8A04" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: colors.text }}>Admin Portal</Text>
+                    <View style={{ backgroundColor: '#EAB308', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4 }}>
+                      <Text style={{ fontSize: 9, fontWeight: '800', color: '#000' }}>ADMIN</Text>
+                    </View>
+                  </View>
+                  <Text style={{ fontSize: 11, color: colors.textSecondary, marginTop: 2 }}>
+                    Manage users, moderation & permanent account deletes
+                  </Text>
+                </View>
+              </View>
+              <Feather name="chevron-right" size={18} color={colors.textTertiary} />
+            </View>
+          </TouchableOpacity>
+        )}
+
         {/* Account Actions / Log Out */}
         <View style={[styles.card, { borderStyle: 'dashed' }]}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>

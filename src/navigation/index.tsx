@@ -74,6 +74,8 @@ import {
 import { QuickActionsRow } from '../components/QuickActionsRow';
 import { FinancialCalendarScreen } from '../screens/FinancialCalendarScreen';
 import { ReviewTransactionsModal } from './ReviewTransactionsModal';
+import { AdminDashboardScreen } from '../features/admin/AdminDashboardScreen';
+import { AdminTabNavigator } from '../features/admin/AdminTabNavigator';
 
 const POPULAR_BANKS = [
   { code: 'SBIN', name: 'State Bank of India', short: 'SBI Bank' },
@@ -4071,7 +4073,7 @@ function TabNavigator() {
         swipeEnabled: true,
         lazy: true,
         lazyPreloadDistance: 1,
-        animationEnabled: true,
+        animationEnabled: false,
       }}
     >
       <Tab.Screen name="Home" component={DashboardScreen} />
@@ -4335,7 +4337,7 @@ export default function AppNavigator() {
   const isReadOnlyTerms = !showMandatoryTerms;
 
   useEffect(() => {
-    if (!splashFinished || isLoading || !user || !user.termsAccepted || Platform.OS === 'web') return;
+    if (!splashFinished || isLoading || !user || !user.termsAccepted || Platform.OS === 'web' || user.role === 'admin' || user.role === 'superadmin') return;
 
     const syncGrantedPermissions = async () => {
       try {
@@ -4381,9 +4383,11 @@ export default function AppNavigator() {
       await authService.checkSession();
       // Sync notifications with backend
       notificationService.fetchNotifications().catch(() => { });
-      // Auto-scan recent SMS on Android once session and stores are completely hydrated
+      // Auto-scan recent SMS on Android once session and stores are completely hydrated (only for consumer users)
       if (Platform.OS === 'android') {
         setTimeout(() => {
+          const currentUser = useAuthStore.getState().user;
+          if (currentUser?.role === 'admin' || currentUser?.role === 'superadmin') return;
           const dynamicHours = smsCatchupService.getDynamicStartupLookback();
           smsCatchupService.reconcile(false, dynamicHours).catch((err) => {
             console.warn('[AppRoot] Initial SMS catchup notice:', err);
@@ -4406,9 +4410,12 @@ export default function AppNavigator() {
       } = useSecurityStore.getState();
 
       if (nextAppState === 'active') {
-        // Automatic catch-up scan dynamically calculated from last active time
-        const dynamicHours = smsCatchupService.getDynamicStartupLookback();
-        smsCatchupService.reconcile(false, dynamicHours).catch(() => { });
+        const currentUser = useAuthStore.getState().user;
+        if (currentUser?.role !== 'admin' && currentUser?.role !== 'superadmin') {
+          // Automatic catch-up scan dynamically calculated from last active time
+          const dynamicHours = smsCatchupService.getDynamicStartupLookback();
+          smsCatchupService.reconcile(false, dynamicHours).catch(() => { });
+        }
       }
 
       if (!biometricsEnabled) return;
@@ -4488,6 +4495,47 @@ export default function AppNavigator() {
                   <Stack.Screen name="Login" component={LoginScreen} />
                   <Stack.Screen name="Signup" component={SignupScreen} />
                 </>
+              ) : user?.role === 'admin' || user?.role === 'superadmin' ? (
+                <>
+                  <Stack.Screen name="Main" component={AdminTabNavigator} />
+                  <Stack.Screen name="AdminMain" component={AdminTabNavigator} />
+                  <Stack.Screen
+                    name="AdminDashboard"
+                    component={AdminDashboardScreen}
+                    options={{
+                      presentation: 'card',
+                      animation: 'slide_from_right',
+                      headerShown: false,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="EditProfile"
+                    component={EditProfileScreen}
+                    options={{
+                      presentation: 'card',
+                      animation: 'slide_from_bottom',
+                      headerShown: false,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="AppSettings"
+                    component={SettingsScreen}
+                    options={{
+                      presentation: 'card',
+                      animation: 'slide_from_right',
+                      headerShown: false,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="PrivacyCenter"
+                    component={PrivacyCenterScreen}
+                    options={{
+                      presentation: 'card',
+                      animation: 'slide_from_right',
+                      headerShown: false,
+                    }}
+                  />
+                </>
               ) : (
                 <>
                   {!hasSetupTracking && Platform.OS === 'android' ? (
@@ -4540,6 +4588,15 @@ export default function AppNavigator() {
                   <Stack.Screen
                     name="AppSettings"
                     component={SettingsScreen}
+                    options={{
+                      presentation: 'card',
+                      animation: 'slide_from_right',
+                      headerShown: false,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="AdminDashboard"
+                    component={AdminDashboardScreen}
                     options={{
                       presentation: 'card',
                       animation: 'slide_from_right',

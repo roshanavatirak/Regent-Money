@@ -79,4 +79,19 @@ export class User {
     from: (value: string) => value ? Number(value) : null
   }})
   termsAcceptedAt?: number | null;
+
+  @Column({ name: 'role', type: 'text', default: 'user' })
+  role?: string;
+
+  @Column({ name: 'is_banned', type: 'boolean', default: false })
+  isBanned?: boolean;
+
+  @Column({ name: 'banned_at', type: 'bigint', nullable: true, transformer: {
+    to: (value: number) => value ? String(value) : null,
+    from: (value: string) => value ? Number(value) : null
+  }})
+  bannedAt?: number | null;
+
+  @Column({ name: 'ban_reason', type: 'text', nullable: true })
+  banReason?: string | null;
 }

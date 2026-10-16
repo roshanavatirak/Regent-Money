@@ -23,6 +23,8 @@ import { Notification } from './notifications/entities/notification.entity';
 import { NotificationsModule } from './notifications/notifications.module';
 import { AiModule } from './ai/ai.module';
 import { RedisModule } from './redis/redis.module';
+import { AdminModule } from './admin/admin.module';
+import { AdminAuditLog } from './admin/entities/admin-audit-log.entity';
 import * as dns from 'dns';
 
 // Helper to resolve host to IPv4 address programmatically
@@ -89,6 +91,7 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
             UserMerchantTag,
             BudgetTransactionExclusion,
             Notification,
+            AdminAuditLog,
           ],
           synchronize: false, // Set to false to avoid altering tables automatically, schemas exist
           ssl: getSslConfig(),
@@ -112,6 +115,7 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
     }),
 
     AuthModule,
+    AdminModule,
     SyncModule,
     NotificationsModule,
     AiModule,

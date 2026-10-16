@@ -395,6 +395,8 @@ export interface UserProfile {
   incomeSourcesCount?: number | null;
   termsAccepted?: boolean;
   termsAcceptedAt?: number | null;
+  role?: 'user' | 'admin' | 'superadmin';
+  isBanned?: boolean;
 }
 
 export interface AuthState {

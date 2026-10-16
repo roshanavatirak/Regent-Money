@@ -45,9 +45,79 @@ export class AuthService implements OnModuleInit {
       await this.userRepository.query(`
         ALTER TABLE core.users ADD COLUMN IF NOT EXISTS income_sources_count INTEGER DEFAULT 1;
       `);
-      console.log('[AuthService] Profile & security columns verified on core.users table.');
+      await this.userRepository.query(`
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user';
+      `);
+      await this.userRepository.query(`
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS is_banned BOOLEAN NOT NULL DEFAULT FALSE;
+      `);
+      await this.userRepository.query(`
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS banned_at BIGINT;
+      `);
+      await this.userRepository.query(`
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS ban_reason TEXT;
+      `);
+      await this.userRepository.query(`
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_user_role') THEN
+            ALTER TABLE core.users ADD CONSTRAINT chk_user_role CHECK (role IN ('user', 'admin', 'superadmin'));
+          END IF;
+        END $$;
+      `);
+      await this.userRepository.query(`
+        CREATE INDEX IF NOT EXISTS idx_users_banned ON core.users(is_banned) WHERE is_banned = TRUE;
+      `);
+      await this.userRepository.query(`
+        CREATE INDEX IF NOT EXISTS idx_users_role ON core.users(role) WHERE role != 'user';
+      `);
+      await this.userRepository.query(`
+        CREATE EXTENSION IF NOT EXISTS pg_trgm;
+      `);
+      await this.userRepository.query(`
+        CREATE INDEX IF NOT EXISTS idx_users_search_trgm ON core.users USING gin (
+          (COALESCE(name, '') || ' ' || COALESCE(email, '') || ' ' || COALESCE(phone, '')) gin_trgm_ops
+        );
+      `);
+
+      // Create immutable audit log table
+      await this.userRepository.query(`
+        CREATE TABLE IF NOT EXISTS core.admin_audit_logs (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          admin_id TEXT NOT NULL,
+          target_user_id TEXT NOT NULL,
+          target_email_hmac TEXT,
+          action TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          metadata JSONB DEFAULT '{}'::jsonb,
+          created_at BIGINT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_audit_target ON core.admin_audit_logs(target_user_id);
+        CREATE INDEX IF NOT EXISTS idx_audit_admin ON core.admin_audit_logs(admin_id);
+      `);
+
+      // Audit log mutation prevention triggers (UPDATE, DELETE, TRUNCATE)
+      await this.userRepository.query(`
+        CREATE OR REPLACE FUNCTION core.prevent_audit_log_mutation()
+        RETURNS TRIGGER AS $$
+        BEGIN
+          RAISE EXCEPTION 'Security Violation: Records in core.admin_audit_logs are immutable and cannot be updated, deleted, or truncated.';
+        END;
+        $$ LANGUAGE plpgsql;
+
+        DROP TRIGGER IF EXISTS trg_prevent_audit_log_mutation ON core.admin_audit_logs;
+        CREATE TRIGGER trg_prevent_audit_log_mutation
+        BEFORE UPDATE OR DELETE ON core.admin_audit_logs
+        FOR EACH ROW EXECUTE FUNCTION core.prevent_audit_log_mutation();
+
+        DROP TRIGGER IF EXISTS trg_prevent_audit_log_truncate ON core.admin_audit_logs;
+        CREATE TRIGGER trg_prevent_audit_log_truncate
+        BEFORE TRUNCATE ON core.admin_audit_logs
+        EXECUTE FUNCTION core.prevent_audit_log_mutation();
+      `);
+
+      console.log('[AuthService] Profile, security & admin moderation columns/tables verified.');
     } catch (err: any) {
-      console.warn('[AuthService] Could not auto-migrate core.users columns:', err?.message || err);
+      console.warn('[AuthService] Could not auto-migrate core.users columns/audit tables:', err?.message || err);
     }
 
     const cloudName = this.configService.get<string>('CLOUDINARY_CLOUD_NAME')?.trim();
@@ -131,6 +201,8 @@ export class AuthService implements OnModuleInit {
       avatarUrl: savedUser.avatarUrl,
       createdAt: savedUser.createdAt,
       isVerified: savedUser.isVerified,
+      role: savedUser.role || 'user',
+      isBanned: savedUser.isBanned ?? false,
       termsAccepted: savedUser.termsAccepted ?? false,
       termsAcceptedAt: savedUser.termsAcceptedAt ?? null,
     };
@@ -323,6 +395,14 @@ export class AuthService implements OnModuleInit {
       }
     }
 
+    // 3.5 Check if user is deleted or banned
+    if (user.isDeleted) {
+      throw new UnauthorizedException('This account no longer exists.');
+    }
+    if (user.isBanned) {
+      throw new UnauthorizedException('Your account has been suspended by an administrator.');
+    }
+
     // 4. Password is valid! Clear failed attempts and lockouts universally from Redis
     if (lockState && (lockState.attempts > 0 || lockState.lockedUntil > 0)) {
       await this.redisService.del(lockKey);
@@ -334,7 +414,7 @@ export class AuthService implements OnModuleInit {
     }
 
     // 6. Generate JWT token
-    const tokenPayload = { sub: user.id, email: user.email };
+    const tokenPayload = { sub: user.id, email: user.email, role: user.role || 'user' };
     const accessToken = this.jwtService.sign(tokenPayload);
 
     const profile = {
@@ -346,6 +426,8 @@ export class AuthService implements OnModuleInit {
       avatarUrl: user.avatarUrl,
       createdAt: user.createdAt,
       isVerified: user.isVerified,
+      role: user.role || 'user',
+      isBanned: user.isBanned ?? false,
       termsAccepted: user.termsAccepted ?? false,
       termsAcceptedAt: user.termsAcceptedAt ?? null,
     };
@@ -503,8 +585,16 @@ export class AuthService implements OnModuleInit {
       user = (await this.userRepository.save(user)) as User;
     }
 
+    // 2.5 Check if account is deleted or banned
+    if (user.isDeleted) {
+      throw new UnauthorizedException('This account no longer exists.');
+    }
+    if (user.isBanned) {
+      throw new UnauthorizedException('Your account has been suspended by an administrator.');
+    }
+
     // 3. Issue the standard Regent Money JWT token
-    const tokenPayload = { sub: user.id, email: user.email };
+    const tokenPayload = { sub: user.id, email: user.email, role: user.role || 'user' };
     const accessToken = this.jwtService.sign(tokenPayload);
 
     const userProfile = {
@@ -516,6 +606,8 @@ export class AuthService implements OnModuleInit {
       avatarUrl: user.avatarUrl,
       createdAt: user.createdAt,
       isVerified: user.isVerified,
+      role: user.role || 'user',
+      isBanned: user.isBanned ?? false,
       termsAccepted: user.termsAccepted ?? false,
       termsAcceptedAt: user.termsAcceptedAt ?? null,
     };
@@ -636,6 +728,8 @@ export class AuthService implements OnModuleInit {
       currentIncome: user.currentIncome ? Number(user.currentIncome) : null,
       incomeSourcesCount: user.incomeSourcesCount ?? 1,
       authProvider: user.authProvider,
+      role: user.role || 'user',
+      isBanned: user.isBanned ?? false,
       biometricsEnabled: user.biometricsEnabled ?? false,
       autoLockTimeout: user.autoLockTimeout ?? 1,
       termsAccepted: user.termsAccepted ?? false,

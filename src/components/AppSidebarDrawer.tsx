@@ -184,31 +184,113 @@ export const AppSidebarDrawer: React.FC = () => {
               contentContainerStyle={styles.menuScrollContent}
               showsVerticalScrollIndicator={false}
             >
-              {/* Section 0: FINANCIAL PLANNING */}
-              <View style={styles.sectionBlock}>
-                <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
-                  FINANCIAL PLANNING
-                </Text>
+              {/* Section 0: FINANCIAL PLANNING (Only for consumer users) */}
+              {(!user?.role || !['admin', 'superadmin'].includes(user.role)) && (
+                <View style={styles.sectionBlock}>
+                  <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
+                    FINANCIAL PLANNING
+                  </Text>
 
-                {/* Budgets & Allocation */}
-                <TouchableOpacity
-                  style={styles.menuItem}
-                  onPress={() => {
-                    closeSidebar();
-                    setTimeout(() => {
-                      if (navigationRef.isReady()) {
-                        navigationRef.navigate('Main', { screen: 'Budgets' });
-                      }
-                    }, 120);
-                  }}
-                  activeOpacity={0.65}
-                >
-                  <View style={[styles.menuIconBox, { backgroundColor: isDark ? 'rgba(45, 186, 78, 0.12)' : 'rgba(22, 163, 74, 0.10)' }]}>
-                    <Ionicons name="pie-chart-outline" size={15} color={colors.accent} />
-                  </View>
-                  <Text style={[styles.menuTitle, { color: colors.text }]}>Budgets & Allocation</Text>
-                </TouchableOpacity>
-              </View>
+                  {/* Budgets & Allocation */}
+                  <TouchableOpacity
+                    style={styles.menuItem}
+                    onPress={() => {
+                      closeSidebar();
+                      setTimeout(() => {
+                        if (navigationRef.isReady()) {
+                          navigationRef.navigate('Main', { screen: 'Budgets' });
+                        }
+                      }, 120);
+                    }}
+                    activeOpacity={0.65}
+                  >
+                    <View style={[styles.menuIconBox, { backgroundColor: isDark ? 'rgba(45, 186, 78, 0.12)' : 'rgba(22, 163, 74, 0.10)' }]}>
+                      <Ionicons name="pie-chart-outline" size={15} color={colors.accent} />
+                    </View>
+                    <Text style={[styles.menuTitle, { color: colors.text }]}>Budgets & Allocation</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {/* Admin Section (Only for admin or superadmin) */}
+              {user?.role && ['admin', 'superadmin'].includes(user.role) && (
+                <View style={styles.sectionBlock}>
+                  <Text style={[styles.sectionTitle, { color: '#EAB308' }]}>
+                    ADMINISTRATION
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.menuItem}
+                    onPress={() => {
+                      closeSidebar();
+                      setTimeout(() => {
+                        if (navigationRef.isReady()) {
+                          navigationRef.navigate('AdminDashboard');
+                        }
+                      }, 120);
+                    }}
+                    activeOpacity={0.65}
+                  >
+                    <View style={[styles.menuIconBox, { backgroundColor: 'rgba(234, 179, 8, 0.16)' }]}>
+                      <Ionicons name="grid-outline" size={15} color="#EAB308" />
+                    </View>
+                    <Text style={[styles.menuTitle, { color: colors.text, fontWeight: '700' }]}>Console Dashboard</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.menuItem}
+                    onPress={() => {
+                      closeSidebar();
+                      setTimeout(() => {
+                        if (navigationRef.isReady()) {
+                          navigationRef.navigate('AdminUsers');
+                        }
+                      }, 120);
+                    }}
+                    activeOpacity={0.65}
+                  >
+                    <View style={[styles.menuIconBox, { backgroundColor: 'rgba(59, 130, 246, 0.16)' }]}>
+                      <Ionicons name="people-outline" size={15} color="#3B82F6" />
+                    </View>
+                    <Text style={[styles.menuTitle, { color: colors.text, fontWeight: '700' }]}>Users Directory</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.menuItem}
+                    onPress={() => {
+                      closeSidebar();
+                      setTimeout(() => {
+                        if (navigationRef.isReady()) {
+                          navigationRef.navigate('AdminLogs');
+                        }
+                      }, 120);
+                    }}
+                    activeOpacity={0.65}
+                  >
+                    <View style={[styles.menuIconBox, { backgroundColor: 'rgba(234, 179, 8, 0.16)' }]}>
+                      <Ionicons name="shield-checkmark-outline" size={15} color="#EAB308" />
+                    </View>
+                    <Text style={[styles.menuTitle, { color: colors.text, fontWeight: '700' }]}>Audit Trail & Logs</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.menuItem}
+                    onPress={() => {
+                      closeSidebar();
+                      setTimeout(() => {
+                        if (navigationRef.isReady()) {
+                          navigationRef.navigate('AdminSettings');
+                        }
+                      }, 120);
+                    }}
+                    activeOpacity={0.65}
+                  >
+                    <View style={[styles.menuIconBox, { backgroundColor: 'rgba(16, 185, 129, 0.16)' }]}>
+                      <Ionicons name="settings-outline" size={15} color="#10B981" />
+                    </View>
+                    <Text style={[styles.menuTitle, { color: colors.text, fontWeight: '700' }]}>Admin Settings</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
 
               {/* Section 1: PREFERENCES & SECURITY */}
               <View style={styles.sectionBlock}>

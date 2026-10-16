@@ -75,6 +75,11 @@ export const smsCatchupService = {
       return null;
     }
 
+    const currentUser = useAuthStore.getState().user;
+    if (currentUser?.role === 'admin' || currentUser?.role === 'superadmin') {
+      return null;
+    }
+
     const now = Date.now();
     // Throttle automatic scans to at most once per 60 seconds unless forced (manual is always forced)
     if (!force && now - lastReconcileTime < 60000) {

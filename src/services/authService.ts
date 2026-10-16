@@ -1,7 +1,7 @@
 import { Platform, NativeModules } from 'react-native';
 import { isRunningInExpoGo } from 'expo';
 import { mmkvStorage } from '../db/mmkv';
-import { useAuthStore, UserProfile, useSecurityStore, AutoLockTimeout } from '../store';
+import { useAuthStore, UserProfile, useSecurityStore, AutoLockTimeout, showGlobalAlert } from '../store';
 import { syncService } from './syncService';
 import { getGoogleWebClientId } from '../config/auth';
 import { BACKEND_URL, getBackendUrl } from '../config/api';
@@ -416,6 +416,15 @@ export const authService = {
         const profile = await res.json();
         useAuthStore.getState().updateUser(profile);
         return profile;
+      } else if (res.status === 403 || res.status === 401) {
+        const data = await res.json().catch(() => ({}));
+        if (data.code === 'USER_BANNED' || data.code === 'ACCOUNT_DELETED') {
+          await this.logOut();
+          showGlobalAlert(
+            data.code === 'USER_BANNED' ? 'Account Suspended' : 'Account Removed',
+            data.message || 'Your account has been suspended by an administrator.',
+          );
+        }
       }
     } catch (err) {
       console.warn('[AuthService] Failed to fetch profile:', err);
