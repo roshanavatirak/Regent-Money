@@ -308,10 +308,15 @@ function Divider() {
 
 function LegalNotice() {
   return (
-    <Text style={styles.notice} numberOfLines={1} adjustsFontSizeToFit>
+    <Text
+      style={styles.notice}
+      numberOfLines={1}
+      adjustsFontSizeToFit
+      minimumFontScale={0.8}
+    >
       By continuing, you agree to our{' '}
       <Text style={styles.noticeLink} onPress={openTerms}>
-        Terms
+        Terms of Use
       </Text>{' '}
       and{' '}
       <Text style={styles.noticeLink} onPress={openPrivacy}>
@@ -628,7 +633,7 @@ function Hero({ width }: { width: number }) {
   const agent = useAgentControls();
   const S = width / WM_W;
   const logoH = WM_H * S;
-  const size = width / 300; // same proportion as the intro
+  const size = (width / 240) * 0.8; // same proportion as the intro
   const aw = AGENT_W * size;
   const ah = AGENT_H * size;
   const top = ah + 4;
@@ -668,7 +673,7 @@ function Landing({ navigation, returning }: { navigation: any; returning: boolea
       <Backdrop />
 
       <View style={styles.heroArea}>
-        <Hero width={Math.min(W * 0.68, 280)} />
+        <Hero width={Math.min(W * 0.59, 240)} />
         <Animated.Text entering={FadeInDown.delay(480).duration(650)} style={styles.tagline}>
           {returning ? 'Good to see you again.' : 'Your money, sorted by an agent\nthat works for you.'}
         </Animated.Text>
@@ -1363,7 +1368,16 @@ const styles = StyleSheet.create({
   dividerLine: { flex: 1, height: 1, backgroundColor: C.line },
   dividerText: { marginHorizontal: 12, fontSize: 13, color: C.muted },
 
-  notice: { marginTop: 12, fontSize: 11, lineHeight: 16, color: C.muted, textAlign: 'center', paddingHorizontal: 0 },
+  notice: {
+    marginTop: 12,
+    fontSize: 10.5,
+    letterSpacing: -0.12,
+    lineHeight: 15,
+    color: C.muted,
+    textAlign: 'center',
+    paddingHorizontal: 0,
+    ...(Platform.OS === 'web' ? ({ whiteSpace: 'nowrap' } as any) : {}),
+  },
   noticeLink: { color: C.greenDeep, fontWeight: '600', textDecorationLine: 'underline' },
   trust: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 14 },
   trustText: { fontSize: 12, fontWeight: '600', color: C.greenDeep },

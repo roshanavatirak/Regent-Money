@@ -54,20 +54,20 @@ const DURATION = 5000;
 
 /* Key moments on the 5 s clock, in ms */
 const B = {
-  drop: 120,
-  land: 540,
-  chips: [1080, 1260, 1440], // each transaction reaches the agent
-  crouch: 1640,
-  takeoff: 1820,
-  perch: 2400, // lands on the "n" of Regent
-  regent: 1740, // first letter of "Regent" starts rising
-  money: 1940,
-  leaf: 2460,
-  notch: 2560,
-  sparkles: [2620, 2740, 2860],
-  wave: 2980,
-  footer: 3000,
-  exit: 4550,
+  drop: 100,
+  land: 260,
+  chips: [1100, 1750, 2400], // each transaction arrives, hovers legibly, then enters the agent
+  crouch: 2520,
+  takeoff: 2680,
+  regent: 2600, // first letter of "Regent" starts rising
+  money: 2780,
+  perch: 3160, // lands on the "n" of Regent
+  leaf: 3220,
+  notch: 3300,
+  sparkles: [3360, 3460, 3560],
+  wave: 3660,
+  footer: 3680,
+  exit: 4400,
 };
 
 const CHIPS = [
@@ -124,11 +124,11 @@ const CH = 72;
 const JUMP_H = 110;
 const BIG = 1.7; // the agent is bigger on its own, then shrinks onto the logo
 const SHADOW_W = 76;
-const CHIP_W = 168;
-const CHIP_H = 38;
+const CHIP_W = 182;
+const CHIP_H = 42;
 
 function layout(W: number, H: number) {
-  const logoW = Math.min(W * 0.74, 300);
+  const logoW = Math.min(W * 0.59, 240); // reduced by 20% (was 300)
   const S = logoW / WM_W;
   const logoH = WM_H * S;
   const left = (W - logoW) / 2;
@@ -219,46 +219,45 @@ function buildTimeline(t: Animated.Value, L: Layout) {
   const px = L.perchX - CW / 2;
   const py = L.perchY - CH;
   const apex = (B.takeoff + B.perch) / 2;
-  const size = v([[0, BIG], [B.takeoff, BIG], [B.perch, 1, inOutCubic, 20]]);
+  const size = v([[0, BIG], [B.takeoff, BIG], [B.perch, 0.8, inOutCubic, 20]]);
 
   // the "n" sinks a little under the agent's weight, then springs back
-  const dip = v([[0, 0], [B.perch, 0], [B.perch + 60, 5, outQuad], [B.perch + 480, 0, spring(1.5, 5), 24]]);
+  const dip = v([[0, 0], [B.perch, 0], [B.perch + 50, 4, outQuad], [B.perch + 380, 0, spring(1.5, 5), 24]]);
 
   const munch = (at: number): Key[] => [
-    [at - 40, 0],
-    [at + 5, 0.5, outQuad],
-    [at + 120, 0, spring(1, 6), 16],
+    [at - 30, 0],
+    [at + 5, 0.45, outQuad],
+    [at + 90, 0, spring(1, 6), 16],
   ];
   // > 0 squashes, < 0 stretches
   const squash = v([
     [0, 0],
     [B.drop, 0],
     [B.land - 20, -0.4, inQuad],
-    [B.land + 50, 1, outQuad],
-    [B.land + 420, 0, spring(2, 6), 24],
+    [B.land + 40, 1, outQuad],
+    [B.land + 350, 0, spring(2, 6), 24],
     ...munch(B.chips[0]),
     ...munch(B.chips[1]),
     ...munch(B.chips[2]),
     [B.crouch, 0],
     [B.takeoff, 0.8, outCubic],
-    [B.takeoff + 80, -0.5, outQuad],
-    [B.takeoff + 330, 0, inOutSine],
+    [B.takeoff + 70, -0.5, outQuad],
+    [B.takeoff + 280, 0, inOutSine],
     [B.perch, 0],
-    [B.perch + 50, 0.9, outQuad],
-    [B.perch + 450, 0, spring(2, 6), 24],
-    [3300, -0.05, inOutSine],
-    [3800, 0.04, inOutSine],
-    [4300, -0.04, inOutSine],
-    [4800, 0, inOutSine],
+    [B.perch + 40, 0.9, outQuad],
+    [B.perch + 360, 0, spring(2, 6), 24],
+    [B.perch + 600, -0.05, inOutSine],
+    [B.perch + 900, 0.04, inOutSine],
+    [B.exit - 150, 0, inOutSine],
   ]);
 
   const mouth = v([
-    [0, 0], [150, 0], [200, 1], [540, 1], [600, 0],
-    [1030, 0], [1070, 1], [1150, 0],
-    [1210, 0], [1250, 1], [1330, 0],
-    [1390, 0], [1430, 1], [1510, 0],
-    [1880, 0], [1940, 1], [2380, 1], [2460, 0],
-    [3150, 0], [3200, 1], [3500, 1], [3560, 0],
+    [0, 0], [100, 0], [140, 1], [350, 1], [400, 0],
+    [B.chips[0] - 120, 0], [B.chips[0] - 30, 1], [B.chips[0] + 80, 0],
+    [B.chips[1] - 120, 0], [B.chips[1] - 30, 1], [B.chips[1] + 80, 0],
+    [B.chips[2] - 120, 0], [B.chips[2] - 30, 1], [B.chips[2] + 80, 0],
+    [B.takeoff + 40, 0], [B.takeoff + 90, 1], [B.perch - 20, 1], [B.perch + 50, 0],
+    [B.wave + 140, 0], [B.wave + 180, 1], [B.wave + 420, 1], [B.wave + 460, 0],
   ]);
 
   const agent = {
@@ -271,52 +270,60 @@ function buildTimeline(t: Animated.Value, L: Layout) {
       ),
       dip,
     ),
-    flip: deg([[0, 0], [B.takeoff + 40, 0], [B.perch - 40, 360, inOutCubic, 24]]),
+    flip: deg([[0, 0], [B.takeoff + 30, 0], [B.perch - 30, 360, inOutCubic, 24]]),
     tilt: deg([
-      [0, 0], [880, 0], [980, -7, outQuad], [1100, -7], [1200, 6, inOutSine], [1290, 6], [1380, 0, inOutSine],
-      [2600, 0], [2700, -6, outQuad], [2900, -6], [3000, 0, inOutSine],
-      [3160, 4, outQuad], [3760, 4], [3960, 0, inOutSine],
+      [0, 0],
+      [450, 0], [630, -7, outQuad], [1020, -7], [1100, 0, inOutSine],
+      [1280, 6, inOutSine], [1670, 6], [1750, 0, inOutSine],
+      [1930, -3, inOutSine], [2320, -3], [2400, 0, inOutSine],
+      [B.perch + 150, 0], [B.perch + 250, -6, outQuad], [B.perch + 380, -6], [B.perch + 460, 0, inOutSine],
+      [B.wave + 120, 4, outQuad], [B.wave + 500, 4], [B.wave + 650, 0, inOutSine],
     ]),
     scaleX: squash.interpolate({ inputRange: [-1, 1], outputRange: [0.8, 1.2] }),
     scaleY: squash.interpolate({ inputRange: [-1, 1], outputRange: [1.24, 0.76] }),
     armL: deg([
-      [0, 150], [B.land, 150], [B.land + 260, 25, spring(1.5, 5), 20],
-      [B.chips[0] - 120, 25], [B.chips[0] - 20, 95, outQuad], [B.chips[0] + 120, 25, outCubic],
-      [B.crouch, 25], [B.takeoff, 10, outQuad], [B.takeoff + 80, 160, outQuad],
-      [B.perch - 100, 160], [B.perch + 80, 85, outQuad], [B.perch + 500, 25, spring(1.5, 5), 20],
+      [0, 150], [B.land, 150], [B.land + 200, 25, spring(1.5, 5), 20],
+      [B.chips[0] - 180, 25], [B.chips[0] - 40, 95, outQuad], [B.chips[0] + 100, 25, outCubic],
+      [B.chips[2] - 180, 25], [B.chips[2] - 40, 65, outQuad], [B.chips[2] + 100, 25, outCubic],
+      [B.crouch, 25], [B.takeoff, 10, outQuad], [B.takeoff + 70, 160, outQuad],
+      [B.perch - 80, 160], [B.perch + 60, 85, outQuad], [B.perch + 380, 25, spring(1.5, 5), 20],
     ]),
     armR: deg([
-      [0, -150], [B.land, -150], [B.land + 260, -25, spring(1.5, 5), 20],
-      [B.chips[1] - 120, -25], [B.chips[1] - 20, -95, outQuad], [B.chips[1] + 120, -25, outCubic],
-      [B.crouch, -25], [B.takeoff, -10, outQuad], [B.takeoff + 80, -160, outQuad],
-      [B.perch - 100, -160], [B.perch + 80, -85, outQuad], [B.perch + 500, -25, spring(1.5, 5), 20],
+      [0, -150], [B.land, -150], [B.land + 200, -25, spring(1.5, 5), 20],
+      [B.chips[1] - 180, -25], [B.chips[1] - 40, -95, outQuad], [B.chips[1] + 100, -25, outCubic],
+      [B.chips[2] - 180, -25], [B.chips[2] - 40, -65, outQuad], [B.chips[2] + 100, -25, outCubic],
+      [B.crouch, -25], [B.takeoff, -10, outQuad], [B.takeoff + 70, -160, outQuad],
+      [B.perch - 80, -160], [B.perch + 60, -85, outQuad], [B.perch + 380, -25, spring(1.5, 5), 20],
       // hello wave
-      [B.wave, -25], [B.wave + 180, -150, outBack(1.6)],
-      [B.wave + 300, -118, inOutSine], [B.wave + 420, -160, inOutSine],
-      [B.wave + 540, -118, inOutSine], [B.wave + 660, -160, inOutSine],
-      [B.wave + 780, -135, inOutSine], [B.wave + 980, -25, inOutCubic],
+      [B.wave, -25], [B.wave + 140, -150, outBack(1.6)],
+      [B.wave + 240, -118, inOutSine], [B.wave + 340, -160, inOutSine],
+      [B.wave + 440, -118, inOutSine], [B.wave + 540, -160, inOutSine],
+      [B.wave + 680, -25, inOutCubic],
     ]),
     sprout: deg([
-      [0, 0], [B.drop, 0], [B.land - 20, -14, inQuad], [B.land + 60, 22, outQuad], [B.land + 460, 0, spring(2, 5), 24],
-      [B.takeoff, 0], [B.takeoff + 80, -20, outQuad], [B.takeoff + 330, 0, inOutSine],
-      [B.perch, 0], [B.perch + 60, 24, outQuad], [B.perch + 500, 0, spring(2, 5), 24],
-      [3160, 0], [3460, 8, inOutSine], [3760, -6, inOutSine], [3960, 0, inOutSine],
+      [0, 0], [B.drop, 0], [B.land - 20, -14, inQuad], [B.land + 50, 22, outQuad], [B.land + 360, 0, spring(2, 5), 24],
+      [B.takeoff, 0], [B.takeoff + 70, -20, outQuad], [B.takeoff + 280, 0, inOutSine],
+      [B.perch, 0], [B.perch + 50, 24, outQuad], [B.perch + 380, 0, spring(2, 5), 24],
+      [B.wave + 140, 0], [B.wave + 340, 8, inOutSine], [B.wave + 540, -6, inOutSine], [B.wave + 680, 0, inOutSine],
     ]),
     lookX: v([
-      [0, 0], [700, 0], [780, -2.6, outQuad], [1080, -2.6], [1160, 2.6, inOutSine], [1260, 2.6],
-      [1330, 1, inOutSine], [1440, 1], [1540, 0, inOutSine],
-      [2600, 0], [2700, -2.6, outQuad], [2900, -2.6], [3000, 0, inOutSine],
+      [0, 0],
+      [450, 0], [630, -2.6, outQuad], [1020, -2.6], [1100, 0, inOutSine],
+      [1280, 2.6, inOutSine], [1670, 2.6], [1750, 0, inOutSine],
+      [1930, 1.2, inOutSine], [2320, 1.2], [2400, 0, inOutSine],
+      [B.perch + 150, 0], [B.perch + 250, -2.6, outQuad], [B.perch + 380, -2.6], [B.perch + 460, 0, inOutSine],
     ]),
     lookY: v([
-      [0, 0], [120, 0], [300, 2, outQuad], [540, 2], [640, 0, outQuad],
-      [1260, 0], [1330, -2.4, inOutSine], [1440, -2.4], [1540, 0, inOutSine],
-      [2600, 0], [2700, 2, outQuad], [2900, 2], [3000, 0, inOutSine],
+      [0, 0], [100, 0], [200, 2, outQuad], [350, 2], [420, 0, outQuad],
+      [1750, 0], [1950, -2.4, inOutSine], [2320, -2.4], [2400, 0, inOutSine],
+      [B.perch + 150, 0], [B.perch + 250, 2, outQuad], [B.perch + 380, 2], [B.perch + 460, 0, inOutSine],
     ]),
     blink: v([
-      [0, 1], [B.land - 10, 1], [B.land + 30, 0.15, outQuad], [B.land + 160, 1, outQuad],
-      [B.crouch + 20, 1], [B.crouch + 140, 0.45, outQuad], [B.crouch + 240, 1, outQuad],
-      [2840, 1], [2890, 0.1, inQuad], [2990, 1, outQuad],
-      [4080, 1], [4130, 0.1, inQuad], [4230, 1, outQuad],
+      [0, 1], [B.land - 10, 1], [B.land + 30, 0.15, outQuad], [B.land + 140, 1, outQuad],
+      [1200, 1], [1240, 0.2, inQuad], [1320, 1, outQuad],
+      [B.crouch + 20, 1], [B.crouch + 100, 0.45, outQuad], [B.crouch + 180, 1, outQuad],
+      [B.perch + 300, 1], [B.perch + 350, 0.1, inQuad], [B.perch + 430, 1, outQuad],
+      [B.exit - 250, 1], [B.exit - 200, 0.1, inQuad], [B.exit - 120, 1, outQuad],
     ]),
     mouth,
     smile: mouth.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }),
@@ -326,19 +333,59 @@ function buildTimeline(t: Animated.Value, L: Layout) {
   const mouthX = L.groundX;
   const mouthY = L.groundY - 22 * BIG;
   const chipFrom: [number, number, number][] = [
-    [-CHIP_W / 2 - 10, L.groundY - 130, -10],
-    [L.W + CHIP_W / 2 + 10, L.groundY - 175, 10],
-    [L.W * 0.72, -CHIP_H, -6],
+    [-CHIP_W / 2 - 20, L.groundY - 40, -6],
+    [L.W + CHIP_W / 2 + 20, L.groundY - 140, 8],
+    [L.groundX + 40, -CHIP_H - 20, -4],
   ];
+  const chipHover: [number, number][] = [
+    [L.groundX - 90, L.groundY - 78], // chip 0 floats clearly to the left
+    [L.groundX + 90, L.groundY - 82], // chip 1 floats clearly to the right
+    [L.groundX, L.groundY - 110],      // chip 2 floats clearly above
+  ];
+  const chipStarts = [450, 1100, 1750];
   const chips = chipFrom.map(([fx, fy, tilt], i) => {
+    const start = chipStarts[i];
     const end = B.chips[i];
-    const start = end - 400;
+    const arrive = start + 180;
+    const hoverEnd = end - 160;
+    const [hx, hy] = chipHover[i];
     return {
-      x: v([[0, fx - CHIP_W / 2], [start, fx - CHIP_W / 2], [end, mouthX - CHIP_W / 2, outCubic]]),
-      y: v([[0, fy - CHIP_H / 2], [start, fy - CHIP_H / 2], [end, mouthY - CHIP_H / 2, inOutSine]]),
-      scale: v([[0, 0.6], [start, 0.6], [start + 120, 1, outBack(1.4)], [end - 120, 0.9], [end, 0.08, inQuad]]),
-      opacity: v([[0, 0], [start, 0], [start + 80, 1], [end - 40, 1], [end, 0]]),
-      rotate: deg([[0, tilt], [start, tilt], [end - 80, 0, outQuad]]),
+      x: v([
+        [0, fx - CHIP_W / 2],
+        [start, fx - CHIP_W / 2],
+        [arrive, hx - CHIP_W / 2, outCubic],
+        [hoverEnd, (hx + mouthX) / 2 - CHIP_W / 2, linear],
+        [end, mouthX - CHIP_W / 2, inQuad],
+      ]),
+      y: v([
+        [0, fy - CHIP_H / 2],
+        [start, fy - CHIP_H / 2],
+        [arrive, hy - CHIP_H / 2, outCubic],
+        [hoverEnd, (hy + mouthY) / 2 - CHIP_H / 2, inOutSine],
+        [end, mouthY - CHIP_H / 2, inQuad],
+      ]),
+      scale: v([
+        [0, 0.6],
+        [start, 0.6],
+        [arrive, 1.05, outBack(1.2)],
+        [hoverEnd, 1.05],
+        [end - 80, 0.75, inQuad],
+        [end, 0.08, inQuad],
+      ]),
+      opacity: v([
+        [0, 0],
+        [start, 0],
+        [start + 60, 1],
+        [end - 30, 1],
+        [end, 0],
+      ]),
+      rotate: deg([
+        [0, tilt],
+        [start, tilt],
+        [arrive, 0, outQuad],
+        [hoverEnd, 0],
+        [end, tilt * 0.4, inQuad],
+      ]),
     };
   });
 
@@ -372,9 +419,9 @@ function buildTimeline(t: Animated.Value, L: Layout) {
 
   /* --- small touches ---------------------------------------------- */
   const sparkles = [
-    { x: L.left - 12, y: L.top + 150 * L.S, size: 14 },
-    { x: L.left + 640 * L.S, y: L.top + 190 * L.S, size: 11 },
-    { x: L.perchX - 36, y: L.perchY - CH + 2, size: 12 },
+    { x: L.left - 10, y: L.top + 150 * L.S, size: 12 },
+    { x: L.left + 640 * L.S, y: L.top + 190 * L.S, size: 10 },
+    { x: L.perchX - 28, y: L.perchY - CH * 0.8 + 2, size: 11 },
   ].map((spot, i) => {
     const at = B.sparkles[i];
     return {
@@ -417,17 +464,17 @@ function buildTimeline(t: Animated.Value, L: Layout) {
     shadow,
     puffs,
     halo: {
-      opacity: v([[0, 0], [1700, 0], [2700, 1, outCubic]]),
-      scale: v([[0, 0.7], [1700, 0.7], [2700, 1, outExpo]]),
+      opacity: v([[0, 0], [B.regent - 80, 0], [B.regent + 700, 1, outCubic]]),
+      scale: v([[0, 0.7], [B.regent - 80, 0.7], [B.regent + 700, 1, outExpo]]),
     },
     ambient: {
-      opacity: v([[0, 0], [700, 1, outCubic]]),
-      driftA: v([[0, 0], [DURATION, 22]]),
-      driftB: v([[0, 0], [DURATION, -20]]),
+      opacity: v([[0, 0], [450, 1, outCubic]]),
+      driftA: v([[0, 0], [DURATION, 18]]),
+      driftB: v([[0, 0], [DURATION, -18]]),
     },
     footer: {
-      opacity: v([[0, 0], [B.footer, 0], [B.footer + 500, 1, outCubic]]),
-      y: v([[0, 12], [B.footer, 12], [B.footer + 500, 0, outCubic]]),
+      opacity: v([[0, 0], [B.footer, 0], [B.footer + 400, 1, outCubic]]),
+      y: v([[0, 12], [B.footer, 12], [B.footer + 400, 0, outCubic]]),
     },
     exit: {
       opacity: v([[0, 1], [B.exit, 1], [DURATION, 0, inCubic]]),
@@ -832,25 +879,27 @@ const styles = StyleSheet.create({
     backgroundColor: C.white,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingLeft: 7,
+    paddingLeft: 8,
     paddingRight: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(28,37,46,0.06)',
     shadowColor: C.ink,
-    shadowOpacity: 0.1,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 5,
+    shadowOpacity: 0.14,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 6,
   },
   chipIcon: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
     backgroundColor: C.mist,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  chipIconText: { fontSize: 13, fontWeight: '800', color: C.green },
-  chipLabel: { flex: 1, marginLeft: 8, fontSize: 13, fontWeight: '600', color: C.ink },
-  chipAmount: { fontSize: 13, fontWeight: '700', color: C.ink },
+  chipIconText: { fontSize: 14, fontWeight: '800', color: C.green },
+  chipLabel: { flex: 1, marginLeft: 9, fontSize: 14, fontWeight: '700', color: C.ink },
+  chipAmount: { fontSize: 14, fontWeight: '800', color: C.ink },
 
   /* the agent (all sizes in a 60 × 72 box, feet at the bottom) */
   agent: { position: 'absolute', left: 0, top: 0, width: CW, height: CH },
