@@ -27,5 +27,24 @@ allprojects {
   }
 }
 
+subprojects {
+  afterEvaluate { project ->
+    if (project.hasProperty("android")) {
+      try {
+        project.android {
+          defaultConfig {
+            externalNativeBuild {
+              cmake {
+                arguments "-DCMAKE_POLICY_DEFAULT_CMP0057=NEW"
+              }
+            }
+          }
+        }
+      } catch (Exception ignored) {
+      }
+    }
+  }
+}
+
 apply plugin: "expo-root-project"
 apply plugin: "com.facebook.react.rootproject"

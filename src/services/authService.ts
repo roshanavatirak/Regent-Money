@@ -2,10 +2,19 @@ import { Platform, NativeModules } from 'react-native';
 import { isRunningInExpoGo } from 'expo';
 import { mmkvStorage } from '../db/mmkv';
 import { useAuthStore, UserProfile, useSecurityStore, AutoLockTimeout, showGlobalAlert } from '../store';
-import { syncService } from './syncService';
 import { getGoogleWebClientId } from '../config/auth';
 import { BACKEND_URL, getBackendUrl } from '../config/api';
 import { tokenStore } from './tokenStore';
+
+// Lazy loader to eliminate require cycle: syncService -> apiClient -> authService -> syncService
+const triggerSync = () => {
+  try {
+    const { syncService } = require('./syncService');
+    syncService?.sync()?.catch((e: any) => console.warn('[Auth] Initial sync failed:', e));
+  } catch (err) {
+    console.warn('[Auth] Failed to load syncService:', err);
+  }
+};
 
 const SESSION_KEY = 'auth_user_id';
 const USER_PROFILE_KEY = 'auth_user_profile';
@@ -104,9 +113,7 @@ export const authService = {
     if (token) {
       syncNativeAuthCredentials(token, cachedProfile?.id);
       this.fetchProfile().catch(() => { });
-      syncService.sync().catch((e) =>
-        console.log('[Auth] Background sync on session check notice:', e.message)
-      );
+      triggerSync();
     }
 
     // Sync security settings from backend
@@ -165,7 +172,7 @@ export const authService = {
       this.acceptTerms().catch(() => {});
 
       // Initial database push
-      syncService.sync().catch((e) => console.warn('[Auth] Initial sync push failed:', e));
+      triggerSync();
     }
 
     return { profile, sessionConfirmed };
@@ -214,7 +221,7 @@ export const authService = {
     syncNativeAuthCredentials(data.accessToken, profile?.id);
 
     // Initial database pull (downloads user transactions, budgets, goals)
-    syncService.sync().catch((e) => console.warn('[Auth] Initial sync pull failed:', e));
+    triggerSync();
 
     return profile;
   },
@@ -348,7 +355,7 @@ export const authService = {
       }
 
       // Initial database sync
-      syncService.sync().catch((e) => console.warn('[Auth] Google Native login sync failed:', e));
+      triggerSync();
 
       return profile;
     } catch (e: any) {

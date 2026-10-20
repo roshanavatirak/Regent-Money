@@ -121,11 +121,11 @@ export const AppSidebarDrawer: React.FC = () => {
             {/* Header Branding */}
             <View style={styles.header}>
               <View style={styles.brandRow}>
-                <View style={styles.logoBadge}>
+                <View style={[styles.logoBadge, { borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)' }]}>
                   <Image
                     source={require('../../assets/insideicon.png')}
                     style={styles.logoImage}
-                    resizeMode="cover"
+                    resizeMode="contain"
                   />
                 </View>
                 <View style={styles.brandTextCol}>
@@ -502,22 +502,22 @@ const styles = StyleSheet.create({
   brandRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
     flex: 1,
   },
   logoBadge: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
+    width: 38,
+    height: 38,
+    borderRadius: 10,
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'transparent',
+    borderWidth: 1,
   },
   logoImage: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
+    width: '100%',
+    height: '100%',
+    borderRadius: 10,
   },
   brandTextCol: {
     justifyContent: 'center',

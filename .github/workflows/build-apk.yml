@@ -53,6 +53,9 @@ jobs:
       - name: Install Node Dependencies
         run: npm ci || npm install --legacy-peer-deps
 
+      - name: Patch Native CMakeLists for NDK 27 Compatibility
+        run: node scripts/fix-cmake.js
+
       - name: Create .env for APK Bundling
         run: |
           cat << 'EOF' > .env
@@ -88,7 +91,20 @@ jobs:
         run: |
           cd android
           echo "Building Regent Money with versionCode: $APP_VERSION_CODE, versionName: $APP_VERSION"
-          ./gradlew assembleRelease -PversionCode=$APP_VERSION_CODE -PversionName=$APP_VERSION --no-daemon -x lint -x lintVitalRelease -x lintVitalAnalyzeRelease
+          ./gradlew assembleRelease -PversionCode=$APP_VERSION_CODE -PversionName=$APP_VERSION --no-daemon -x lint -x lintVitalRelease -x lintVitalAnalyzeRelease --stacktrace
+
+      - name: Print CMake Logs on Failure
+        if: failure()
+        run: |
+          echo "=== CMake Error / Output Logs ==="
+          find . -name "CMakeError.log" -o -name "CMakeOutput.log" | while read -r file; do
+            echo "--- $file ---"
+            cat "$file"
+          done
+          find node_modules/ -name "*.log" -path "*/.cxx/*" | while read -r file; do
+            echo "--- $file ---"
+            cat "$file"
+          done
 
       - name: Prepare Direct APK for Release
         run: |

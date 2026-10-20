@@ -27,7 +27,7 @@ export const CloudflareTurnstile: React.FC<CloudflareTurnstileProps> = ({
   onVerify,
   onError,
   onExpire,
-  theme = 'dark',
+  theme = 'light',
   style,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -39,26 +39,38 @@ export const CloudflareTurnstile: React.FC<CloudflareTurnstileProps> = ({
 
     // Inject custom styling to ensure full width alignment
     const styleId = 'cf-turnstile-custom-css';
-    if (!document.getElementById(styleId)) {
-      const styleTag = document.createElement('style');
+    let styleTag = document.getElementById(styleId) as HTMLStyleElement | null;
+    if (!styleTag) {
+      styleTag = document.createElement('style');
       styleTag.id = styleId;
-      styleTag.innerHTML = `
-        .cf-turnstile-fullwidth {
-          width: 100% !important;
-          display: flex !important;
-          justify-content: center !important;
-          align-items: center !important;
-        }
-        .cf-turnstile-fullwidth > div,
-        .cf-turnstile-fullwidth iframe {
-          width: 100% !important;
-          max-width: 100% !important;
-          border-radius: 14px !important;
-          box-sizing: border-box !important;
-        }
-      `;
       document.head.appendChild(styleTag);
     }
+    styleTag.innerHTML = `
+      .cf-turnstile-fullwidth {
+        width: 100% !important;
+        display: flex !important;
+        justify-content: center !important;
+        align-items: center !important;
+        border-radius: 14px !important;
+        overflow: visible !important;
+        position: relative !important;
+        z-index: 10 !important;
+        pointer-events: auto !important;
+      }
+      .cf-turnstile-fullwidth > div {
+        display: flex !important;
+        justify-content: center !important;
+        align-items: center !important;
+        pointer-events: auto !important;
+      }
+      .cf-turnstile-fullwidth iframe {
+        border-radius: 14px !important;
+        box-sizing: border-box !important;
+        pointer-events: auto !important;
+        position: relative !important;
+        z-index: 10 !important;
+      }
+    `;
 
     // Check if script is already present
     const existingScript = document.getElementById('cf-turnstile-script');
@@ -95,8 +107,9 @@ export const CloudflareTurnstile: React.FC<CloudflareTurnstileProps> = ({
       widgetIdRef.current = window.turnstile.render(containerRef.current, {
         sitekey: TURNSTILE_SITE_KEY,
         theme,
-        size: 'flexible',
+        size: 'normal',
         callback: (token: string) => {
+          console.log('[Turnstile] Verification successful, token received.');
           onVerify(token);
         },
         'error-callback': (err: any) => {
@@ -104,6 +117,7 @@ export const CloudflareTurnstile: React.FC<CloudflareTurnstileProps> = ({
           onError?.(err);
         },
         'expired-callback': () => {
+          console.log('[Turnstile] Token expired.');
           onExpire?.();
         },
       });
@@ -122,7 +136,7 @@ export const CloudflareTurnstile: React.FC<CloudflareTurnstileProps> = ({
   }, [scriptLoaded, theme]);
 
   return (
-    <View style={[styles.wrapper, style]}>
+    <View pointerEvents="auto" style={[styles.wrapper, style]}>
       {/* Container for Cloudflare widget on web */}
       <div
         ref={containerRef}
@@ -133,6 +147,9 @@ export const CloudflareTurnstile: React.FC<CloudflareTurnstileProps> = ({
           justifyContent: 'center',
           alignItems: 'center',
           minHeight: 65,
+          position: 'relative',
+          zIndex: 10,
+          pointerEvents: 'auto',
         }}
       />
     </View>
@@ -146,6 +163,7 @@ const styles = StyleSheet.create({
     alignItems: 'stretch',
     justifyContent: 'center',
     minHeight: 65,
+    zIndex: 10,
   },
 });
 

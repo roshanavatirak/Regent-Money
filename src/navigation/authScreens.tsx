@@ -25,6 +25,7 @@ import { Feather, Ionicons } from '@expo/vector-icons';
 import { authService, LastGoogleUser } from '../services/authService';
 import { getGoogleWebClientId } from '../config/auth';
 import Animated, {
+  Easing,
   FadeIn,
   FadeInDown,
   FadeOut,
@@ -32,11 +33,13 @@ import Animated, {
   ZoomIn,
   interpolateColor,
   useAnimatedStyle,
+  useReducedMotion,
   useSharedValue,
+  withRepeat,
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import Svg, { Defs, RadialGradient, Rect, Stop } from 'react-native-svg';
+import Svg, { Circle, Defs, RadialGradient, Rect, Stop } from 'react-native-svg';
 import { showGlobalAlert, useTermsModalStore, usePrivacyModalStore } from '../store';
 import { StatusBar } from 'expo-status-bar';
 import { CloudflareTurnstile } from '../components/CloudflareTurnstile';
@@ -296,45 +299,7 @@ function ErrorBanner({ message }: { message: string }) {
   );
 }
 
-function Divider() {
-  return (
-    <View style={styles.divider}>
-      <View style={styles.dividerLine} />
-      <Text style={styles.dividerText}>or</Text>
-      <View style={styles.dividerLine} />
-    </View>
-  );
-}
 
-function LegalNotice() {
-  return (
-    <Text
-      style={styles.notice}
-      numberOfLines={1}
-      adjustsFontSizeToFit
-      minimumFontScale={0.8}
-    >
-      By continuing, you agree to our{' '}
-      <Text style={styles.noticeLink} onPress={openTerms}>
-        Terms of Use
-      </Text>{' '}
-      and{' '}
-      <Text style={styles.noticeLink} onPress={openPrivacy}>
-        Privacy Policy
-      </Text>
-      .
-    </Text>
-  );
-}
-
-function TrustRow() {
-  return (
-    <View style={styles.trust}>
-      {/* <Feather name="smartphone" size={13} color={C.greenDeep} /> */}
-      <Text style={styles.trustText}>End-to-End Encrypted</Text>
-    </View>
-  );
-}
 
 /** Bottom sheet with a dimmed backdrop; tapping outside closes it. */
 function Sheet({
@@ -659,48 +624,174 @@ function Hero({ width }: { width: number }) {
   );
 }
 
+/** Three faint rings behind the cards, like ripples from a coin dropped in water. */
+function Rings({ size }: { size: number }) {
+  const r = size / 2;
+  return (
+    <View pointerEvents="none" style={{ position: 'absolute', width: size, height: size }}>
+      <Svg width={size} height={size}>
+        {[0.99, 0.76, 0.53].map((f, i) => (
+          <Circle
+            key={f}
+            cx={r}
+            cy={r}
+            r={r * f}
+            stroke={C.green}
+            strokeOpacity={0.08 + i * 0.04}
+            strokeWidth={1}
+            fill="none"
+          />
+        ))}
+      </Svg>
+    </View>
+  );
+}
+
+const SORTED = [
+  { icon: 'arrow-down-left' as IconName, name: 'Salary credited', amount: '+₹45,000', tag: 'Income' },
+  { icon: 'home' as IconName, name: 'House rent', amount: '₹14,000', tag: 'Rent' },
+];
+
+const CARD_TOP = 48; // how much of the goal card peeks out above the front card
+
+/**
+ * The one memorable moment on this screen: a small stack of cards showing
+ * the agent at work. Rows arrive one by one and each gets its category,
+ * then the stack floats gently. Floating stops when Reduce Motion is on.
+ */
+function AgentPreview({ width }: { width: number }) {
+  const reduceMotion = useReducedMotion();
+  const float = useSharedValue(0);
+
+  useEffect(() => {
+    if (reduceMotion) return;
+    float.value = withRepeat(withTiming(1, { duration: 3400, easing: Easing.inOut(Easing.sin) }), -1, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reduceMotion]);
+
+  const front = useAnimatedStyle(() => ({
+    transform: [{ translateY: -5 + float.value * 10 }, { rotate: '-1.5deg' }],
+  }));
+  const back = useAnimatedStyle(() => ({
+    transform: [{ translateY: 4 - float.value * 8 }, { rotate: '5deg' }],
+  }));
+
+  return (
+    <View style={[styles.previewWrap, { width, height: CARD_TOP + 160 }]}>
+      <Rings size={width * 1.45} />
+
+      {/* Goal card, tucked behind */}
+      <Animated.View entering={FadeIn.delay(900).duration(700)} style={[styles.goalCard, { width: width * 0.88 }]}>
+        <Animated.View style={[styles.goalInner, back]}>
+          <View style={styles.goalHead}>
+            <Text style={styles.goalTitle}>First bike</Text>
+            <Text style={styles.goalMeta}>65%</Text>
+          </View>
+          <View style={styles.goalTrack}>
+            <View style={[styles.goalFill, { width: '65%' }]} />
+          </View>
+        </Animated.View>
+      </Animated.View>
+
+      {/* Front card: what the agent sorted today */}
+      <Animated.View entering={FadeInDown.delay(700).duration(700)} style={[styles.feedCard, { width, top: CARD_TOP }]}>
+        <Animated.View style={[styles.feedInner, front]}>
+          <View style={styles.feedHead}>
+            <Text style={styles.feedTitle}>Sorted for you today</Text>
+          </View>
+
+          {SORTED.map((row, i) => (
+            <Animated.View
+              key={row.name}
+              entering={FadeInDown.delay(1100 + i * 260).duration(420)}
+              style={[styles.feedRow, i > 0 && styles.feedRowLine]}
+            >
+              <View style={styles.feedIcon}>
+                <Feather name={row.icon} size={14} color={C.greenDeep} />
+              </View>
+              <View style={styles.feedMeta}>
+                <Text style={styles.feedName} numberOfLines={1}>
+                  {row.name}
+                </Text>
+                <Text style={styles.feedAmount}>{row.amount}</Text>
+              </View>
+              <Animated.View entering={ZoomIn.delay(1300 + i * 260).springify().damping(13)} style={styles.tag}>
+                <Text style={styles.tagText}>{row.tag}</Text>
+              </Animated.View>
+            </Animated.View>
+          ))}
+        </Animated.View>
+      </Animated.View>
+    </View>
+  );
+}
+
+/**
+ * Replace your existing LegalNotice with this shorter one-line version.
+ * (Delete the old function so there's only one.)
+ */
+function LegalNotice() {
+  return (
+    <Text style={styles.notice} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+      By continuing, you agree to our{' '}
+      <Text style={styles.noticeLink} onPress={openTerms}>
+        Terms of Use
+      </Text>{' '}
+      and{' '}
+      <Text style={styles.noticeLink} onPress={openPrivacy}>
+        Privacy Policy
+      </Text>
+    </Text>
+  );
+}
+
 function Landing({ navigation, returning }: { navigation: any; returning: boolean }) {
   const insets = useSafeAreaInsets();
   const { width: W } = useWindowDimensions();
   const [loading, setLoading] = useState(false);
 
   const primary = returning ? { label: 'Log in', to: 'Login' } : { label: 'Create account', to: 'Signup' };
-  const secondary = returning ? { label: 'Create account', to: 'Signup' } : { label: 'Log in', to: 'Login' };
+  const swap = returning
+    ? { prompt: 'New here?', label: 'Create account', to: 'Signup' }
+    : { prompt: 'Already have an account?', label: 'Log in', to: 'Login' };
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 20) }]}>
+    <View style={[styles.screen, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 16) }]}>
       <StatusBar style="dark" />
       <Backdrop />
 
-      <View style={styles.heroArea}>
-        <Hero width={Math.min(W * 0.59, 240)} />
-        <Animated.Text entering={FadeInDown.delay(480).duration(650)} style={styles.tagline}>
-          {returning ? 'Good to see you again.' : 'Your money, sorted by an agent\nthat works for you.'}
-        </Animated.Text>
+      <View style={styles.landingLogo}>
+        <Hero width={Math.min(W * 0.4, 168)} />
       </View>
 
-      <View style={styles.actions}>
-        <Animated.View entering={FadeInDown.delay(620).duration(600)}>
+      <View style={styles.landingVisual}>
+        <AgentPreview width={Math.min(W - 120, 272)} />
+      </View>
+
+      <View style={styles.landingActions}>
+        <Animated.Text entering={FadeInDown.delay(500).duration(600)} style={styles.headline}>
+          {returning ? 'Welcome back' : 'Your money, sorted'}
+        </Animated.Text>
+        <Animated.Text entering={FadeInDown.delay(580).duration(600)} style={styles.subline}>
+          {returning ? 'Pick up where you left off.' : 'Tracked, budgeted and saved for you.'}
+        </Animated.Text>
+
+        <Animated.View entering={FadeInDown.delay(660).duration(600)}>
           <Button label={primary.label} onPress={() => navigation.navigate(primary.to)} disabled={loading} />
         </Animated.View>
-        <Animated.View entering={FadeInDown.delay(700).duration(600)}>
-          <Button
-            variant="secondary"
-            label={secondary.label}
-            onPress={() => navigation.navigate(secondary.to)}
-            disabled={loading}
-            style={styles.stack}
-          />
-        </Animated.View>
-        <Animated.View entering={FadeIn.delay(800).duration(600)}>
-          <Divider />
-        </Animated.View>
-        <Animated.View entering={FadeInDown.delay(860).duration(600)}>
+        <Animated.View entering={FadeInDown.delay(740).duration(600)} style={styles.buttonGap}>
           <GoogleAuthButton loading={loading} setLoading={setLoading} />
-          <LegalNotice />
         </Animated.View>
-        <Animated.View entering={FadeIn.delay(1000).duration(700)}>
-          <TrustRow />
+
+        <Animated.View entering={FadeIn.delay(860).duration(600)} style={styles.swapRow}>
+          <Text style={styles.switchLabel}>{swap.prompt} </Text>
+          <Pressable onPress={() => navigation.navigate(swap.to)} hitSlop={8} accessibilityRole="button">
+            <Text style={styles.link}>{swap.label}</Text>
+          </Pressable>
+        </Animated.View>
+
+        <Animated.View entering={FadeIn.delay(940).duration(600)} style={styles.legalWrap}>
+          <LegalNotice />
         </Animated.View>
       </View>
     </View>
@@ -715,6 +806,103 @@ export const WelcomeScreen = ({ navigation }: { navigation: any }) => (
 export const AuthLandingScreen = ({ navigation }: { navigation: any }) => (
   <Landing navigation={navigation} returning />
 );
+
+/* Spread into StyleSheet.create: { ...landingStyles, ... } (see STEP 3). */
+
+const landingStyles = {
+  /* landing */
+  landingLogo: { alignItems: 'center', paddingTop: 28 },
+  landingVisual: { flex: 1, alignItems: 'center', justifyContent: 'center', minHeight: 0 },
+  headline: {
+    fontSize: 30,
+    lineHeight: 36,
+    fontWeight: '800',
+    color: C.ink,
+    letterSpacing: -0.6,
+    textAlign: 'center',
+  },
+  subline: {
+    marginTop: 8,
+    marginBottom: 32,
+    fontSize: 15,
+    lineHeight: 22,
+    color: C.body,
+    textAlign: 'center',
+  },
+  swapRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 26 },
+  buttonGap: { marginTop: 14 },
+  landingActions: { paddingHorizontal: 28, paddingBottom: 12 },
+  legalWrap: { marginTop: 10 },
+
+  /* agent preview */
+  previewWrap: { alignItems: 'center', justifyContent: 'center' },
+  goalCard: { position: 'absolute', top: 0 },
+  goalInner: {
+    backgroundColor: C.mist,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#c9ecd3',
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 40,
+  },
+  goalHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  goalTitle: { fontSize: 13, fontWeight: '800', color: C.greenDeep },
+  goalMeta: { fontSize: 11, fontWeight: '600', color: C.greenDeep, fontVariant: ['tabular-nums'] as any },
+  goalTrack: { height: 6, borderRadius: 3, backgroundColor: C.white, overflow: 'hidden' },
+  goalFill: { height: '100%', borderRadius: 3, backgroundColor: C.green },
+
+  feedCard: { position: 'absolute' },
+  feedInner: {
+    backgroundColor: C.white,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: C.line,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 6,
+    shadowColor: '#0f3d2a',
+    shadowOpacity: 0.14,
+    shadowRadius: 28,
+    shadowOffset: { width: 0, height: 16 },
+    elevation: 10,
+  },
+  feedHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
+  feedTitle: { fontSize: 14, fontWeight: '800', color: C.ink, letterSpacing: -0.2 },
+  lockChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    backgroundColor: C.mist,
+  },
+  lockText: { fontSize: 10.5, fontWeight: '700', color: C.greenDeep },
+  feedRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 11 },
+  feedRowLine: { borderTopWidth: 1, borderTopColor: '#eef2f5' },
+  feedIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 11,
+    backgroundColor: C.mist,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  feedMeta: { flex: 1, marginLeft: 12, marginRight: 8 },
+  feedName: { fontSize: 13.5, fontWeight: '700', color: C.ink },
+  feedAmount: { marginTop: 1, fontSize: 12, color: C.muted, fontVariant: ['tabular-nums'] as any },
+  tag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 10,
+    backgroundColor: C.green,
+  },
+  tagText: { fontSize: 11, fontWeight: '800', color: C.white },
+} as const;
 
 /* ------------------------------------------------------------------ */
 /* Shared form header                                                 */
@@ -760,13 +948,75 @@ const formatRemainingTime = (seconds: number): string => {
 /* 2. Login                                                           */
 /* ------------------------------------------------------------------ */
 
+/** On web, browsers paint autofilled inputs light blue. Keep them white. */
+function useWebAutofillFix() {
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined') return;
+    if (document.getElementById('rm-autofill-fix')) return;
+    const el = document.createElement('style');
+    el.id = 'rm-autofill-fix';
+    el.textContent = `
+      input:-webkit-autofill,
+      input:-webkit-autofill:hover,
+      input:-webkit-autofill:focus {
+        -webkit-box-shadow: 0 0 0 1000px ${C.white} inset !important;
+        -webkit-text-fill-color: ${C.ink} !important;
+        caret-color: ${C.green};
+        transition: background-color 9999s ease-out 0s;
+      }
+      input:focus { outline: none; }
+    `;
+    document.head.appendChild(el);
+  }, []);
+}
+
+type RowProps = TextInputProps & {
+  icon: IconName;
+  inputRef?: React.Ref<TextInput>;
+  prefix?: string;
+  right?: ReactNode;
+  onActive?: (active: boolean) => void;
+};
+
+/** One row inside the grouped card: icon, optional prefix, input, optional accessory. */
+function GroupRow({ icon, inputRef, prefix, right, onActive, onFocus, onBlur, style, ...input }: RowProps) {
+  const [focused, setFocused] = useState(false);
+  return (
+    <View style={styles.gRow}>
+      <Feather name={icon} size={18} color={focused ? C.green : C.muted} />
+      {prefix ? <Text style={styles.gPrefix}>{prefix}</Text> : null}
+      <TextInput
+        ref={inputRef}
+        style={[styles.gInput, style]}
+        placeholderTextColor={C.muted}
+        selectionColor={C.green}
+        accessibilityLabel={typeof input.placeholder === 'string' ? input.placeholder : undefined}
+        onFocus={e => {
+          setFocused(true);
+          onActive?.(true);
+          onFocus?.(e);
+        }}
+        onBlur={e => {
+          setFocused(false);
+          onActive?.(false);
+          onBlur?.(e);
+        }}
+        {...input}
+      />
+      {right}
+    </View>
+  );
+}
+
 export const LoginScreen = ({ navigation }: { navigation: any }) => {
+  useWebAutofillFix();
   const insets = useSafeAreaInsets();
   const passwordRef = useRef<TextInput>(null);
   const [emailOrMobile, setEmailOrMobile] = useState('');
   const [password, setPassword] = useState('');
   const [secureText, setSecureText] = useState(true);
   const [rememberMe, setRememberMe] = useState(true);
+  const [active, setActive] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [errorTick, setErrorTick] = useState(0);
@@ -824,15 +1074,15 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
 
   const handleLogin = async () => {
     if (locked) {
-      fail(`Account is temporarily locked. Try again in ${formatRemainingTime(lockoutRemainingSec)} or reset your password.`);
+      fail(`Your account is locked. Try again in ${formatRemainingTime(lockoutRemainingSec)} or reset your password.`);
       return;
     }
     if (!emailOrMobile.trim() || !password) {
-      fail('Please enter both Email/Mobile and Password');
+      fail('Enter your email or mobile number and password.');
       return;
     }
     if (Platform.OS === 'web' && !turnstileToken) {
-      fail('Please complete the Cloudflare security verification');
+      fail('Complete the security check to continue.');
       return;
     }
     setError('');
@@ -856,16 +1106,16 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
   const handleSendResetLink = async () => {
     const targetEmail = resetEmail.trim() || (emailOrMobile.includes('@') ? emailOrMobile.trim() : '');
     if (!targetEmail || !targetEmail.includes('@')) {
-      setResetMsg({ text: 'Please enter a valid registered email address.', error: true });
+      setResetMsg({ text: 'Enter the email address you signed up with.', error: true });
       return;
     }
     setResetSending(true);
     setResetMsg(null);
     try {
       const res = await authService.requestPasswordReset(targetEmail);
-      setResetMsg({ text: res.message || 'Reset link sent! Check your inbox to unlock immediately.', error: false });
+      setResetMsg({ text: res.message || 'Reset link sent. Check your inbox to unlock right away.', error: false });
     } catch (err: any) {
-      setResetMsg({ text: err.message || 'Failed to send reset link.', error: true });
+      setResetMsg({ text: err.message || 'Couldn’t send the reset link. Try again.', error: true });
     } finally {
       setResetSending(false);
     }
@@ -876,16 +1126,21 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
       <StatusBar style="dark" />
       <Backdrop />
       <KeyboardScreen
-        contentContainerStyle={[styles.form, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 28 }]}
+        contentContainerStyle={[styles.form, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 24 }]}
         showsVerticalScrollIndicator={false}
         keyboardDismissMode="on-drag"
       >
-        <FormHeader
-          title="Welcome back"
-          subtitle="Log in to see where your money went."
-          agent={face.agent}
-          onBack={() => navigation.goBack()}
-        />
+        <Animated.View entering={FadeIn.duration(400)}>
+          <BackButton onPress={() => navigation.goBack()} />
+        </Animated.View>
+
+        <View style={styles.suHead}>
+          <Animated.View entering={FadeInDown.delay(80).duration(550)} style={styles.suHeadText}>
+            <Text style={styles.suTitle}>Welcome back</Text>
+            <Text style={styles.suSub}>Log in to your account.</Text>
+          </Animated.View>
+          <MoneyAgent size={1.05} controls={face.agent} dropIn dropDelay={220} />
+        </View>
 
         {locked ? (
           <Animated.View entering={FadeInDown.duration(300)} style={[styles.banner, styles.lockout]}>
@@ -910,11 +1165,13 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
           <ErrorBanner key={errorTick} message={error} />
         ) : null}
 
-        <Animated.View entering={FadeInDown.delay(160).duration(550)}>
-          <Field
-            label="Email or mobile number"
-            icon="mail"
-            placeholder="name@domain.com or 9876543210"
+        <Animated.View
+          entering={FadeInDown.delay(160).duration(550)}
+          style={[styles.group, active && styles.groupActive]}
+        >
+          <GroupRow
+            icon="user"
+            placeholder="Email or mobile number"
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="email-address"
@@ -927,13 +1184,14 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
               face.typed(t.length);
             }}
             onSubmitEditing={() => passwordRef.current?.focus()}
+            onActive={setActive}
             {...face.bind('text', emailOrMobile.length)}
           />
-          <Field
-            label="Password"
+          <View style={styles.gDivider} />
+          <GroupRow
             icon="lock"
             inputRef={passwordRef}
-            placeholder="Your password"
+            placeholder="Password"
             secureTextEntry={secureText}
             autoCapitalize="none"
             textContentType="password"
@@ -942,20 +1200,24 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
             value={password}
             onChangeText={setPassword}
             onSubmitEditing={handleLogin}
+            onActive={setActive}
             right={<EyeToggle hidden={secureText} onToggle={() => setSecureText(s => !s)} />}
             {...face.bind('secret')}
           />
+        </Animated.View>
 
-          <View style={styles.rowBetween}>
+        <Animated.View entering={FadeInDown.delay(240).duration(550)}>
+          <View style={styles.liOptions}>
             <Checkbox checked={rememberMe} onToggle={() => setRememberMe(r => !r)} label="Stay logged in for 30 days">
               <Text style={styles.checkLabel}>Stay logged in</Text>
             </Checkbox>
             <Pressable onPress={openForgot} hitSlop={8} accessibilityRole="button">
-              <Text style={styles.link}>Forgot password?</Text>
+              <Text style={styles.liForgot}>Forgot password?</Text>
             </Pressable>
           </View>
 
           <CloudflareTurnstile
+            theme="light"
             onVerify={token => {
               setTurnstileToken(token);
               setError('');
@@ -968,11 +1230,11 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
             onPress={handleLogin}
             loading={loading}
             disabled={locked}
-            style={styles.submit}
+            style={styles.suSubmit}
           />
 
           <View style={styles.switchRow}>
-            <Text style={styles.switchLabel}>New to Regent Money? </Text>
+            <Text style={styles.switchLabel}>New here? </Text>
             <Pressable onPress={() => navigation.navigate('Signup')} hitSlop={8} accessibilityRole="button">
               <Text style={styles.link}>Create account</Text>
             </Pressable>
@@ -982,7 +1244,7 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
 
       <Sheet visible={showForgotModal} title="Reset your password" onClose={() => setShowForgotModal(false)}>
         <Text style={styles.sheetBody}>
-          Enter the email you signed up with. We'll send a reset link, and opening it also clears any lockout on your
+          Enter the email you signed up with. We’ll send a reset link, and opening it also clears any lockout on your
           account.
         </Text>
         {resetMsg && (
@@ -999,76 +1261,47 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
             <Text style={[styles.bannerText, !resetMsg.error && styles.bannerTextOk]}>{resetMsg.text}</Text>
           </Animated.View>
         )}
-        <Field
-          label="Email address"
-          icon="mail"
-          placeholder="name@domain.com"
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="email-address"
-          textContentType="emailAddress"
-          autoComplete="email"
-          returnKeyType="send"
-          value={resetEmail}
-          onChangeText={setResetEmail}
-          onSubmitEditing={handleSendResetLink}
-        />
-        <Button label="Send reset link" onPress={handleSendResetLink} loading={resetSending} style={styles.submit} />
+        <View style={styles.group}>
+          <GroupRow
+            icon="mail"
+            placeholder="Email address"
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="email-address"
+            textContentType="emailAddress"
+            autoComplete="email"
+            returnKeyType="send"
+            value={resetEmail}
+            onChangeText={setResetEmail}
+            onSubmitEditing={handleSendResetLink}
+          />
+        </View>
+        <Button label="Send reset link" onPress={handleSendResetLink} loading={resetSending} style={styles.suSubmit} />
       </Sheet>
     </View>
   );
 };
 
+
 /* ------------------------------------------------------------------ */
 /* 3. Signup                                                          */
 /* ------------------------------------------------------------------ */
 
-function passwordStrength(pw: string) {
-  if (!pw) return { score: 0, label: 'At least 6 characters', color: C.muted };
-  if (pw.length < 6) return { score: 1, label: 'Too short', color: C.danger };
-  const passed = [
-    pw.length >= 10,
-    /[a-z]/.test(pw) && /[A-Z]/.test(pw),
-    /\d/.test(pw),
-    /[^A-Za-z0-9]/.test(pw),
-  ].filter(Boolean).length;
-  const score = Math.max(1, passed);
-  return [
-    { score: 1, label: 'Weak', color: C.danger },
-    { score: 2, label: 'Fair', color: C.amber },
-    { score: 3, label: 'Good', color: C.green },
-    { score: 4, label: 'Strong', color: C.greenDeep },
-  ][score - 1];
-}
-
-function StrengthMeter({ password }: { password: string }) {
-  const s = passwordStrength(password);
-  return (
-    <View style={styles.meter}>
-      <View style={styles.meterBars}>
-        {[1, 2, 3, 4].map(i => (
-          <View key={i} style={[styles.meterBar, i <= s.score && { backgroundColor: s.color }]} />
-        ))}
-      </View>
-      <Text style={[styles.meterText, { color: s.color }]}>{s.label}</Text>
-    </View>
-  );
-}
 
 export const SignupScreen = ({ navigation }: { navigation: any }) => {
+  useWebAutofillFix();
   const insets = useSafeAreaInsets();
   const emailRef = useRef<TextInput>(null);
   const phoneRef = useRef<TextInput>(null);
   const passwordRef = useRef<TextInput>(null);
-  const confirmRef = useRef<TextInput>(null);
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
 
   const [secureText, setSecureText] = useState(true);
+  const [active, setActive] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [errorTick, setErrorTick] = useState(0);
@@ -1079,56 +1312,53 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
   const [agreeTerms, setAgreeTerms] = useState(false);
 
   const face = useFormAgent(!secureText);
-  const matches = confirmPassword.length > 0 && confirmPassword === password;
+  const ready = name.trim() && email.includes('@') && phone.length === 10 && password.length >= 6;
 
   const fail = (message: string) => {
     setError(message);
     setErrorTick(t => t + 1);
   };
 
+  // the agent brightens up once everything is filled in
   useEffect(() => {
-    face.agent.mood.value = withTiming(loading ? 1 : matches ? 0.8 : 0, { duration: 300 });
+    face.agent.mood.value = withTiming(loading ? 1 : ready ? 0.8 : 0, { duration: 300 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, matches]);
+  }, [loading, ready]);
   useEffect(() => {
-    if (errorTick) nudgeNo(face.agent, matches ? 0.8 : 0);
+    if (errorTick) nudgeNo(face.agent, 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [errorTick]);
 
   const handleSignup = async () => {
-    if (!name.trim() || !email.trim() || !phone.trim() || !password || !confirmPassword) {
-      fail('Please fill in all input fields');
+    if (!name.trim() || !email.trim() || !phone || !password) {
+      fail('Fill in all four fields to continue.');
       return;
     }
     if (!email.includes('@')) {
-      fail('Please enter a valid email address');
+      fail('Enter a valid email address.');
       return;
     }
-    if (phone.trim().length < 10) {
-      fail('Please enter a valid mobile number');
+    if (phone.length !== 10) {
+      fail('Enter your 10-digit mobile number.');
       return;
     }
     if (password.length < 6) {
-      fail('Password must be at least 6 characters long');
-      return;
-    }
-    if (password !== confirmPassword) {
-      fail('Passwords do not match');
+      fail('Use at least 6 characters for your password.');
       return;
     }
     if (!agreeTerms) {
-      fail('Please agree to the Terms of Service & Privacy Policy');
+      fail('Agree to the Terms of Use and Privacy Policy to continue.');
       return;
     }
     if (Platform.OS === 'web' && !turnstileToken) {
-      fail('Please complete the Cloudflare security verification');
+      fail('Complete the security check to continue.');
       return;
     }
 
     setError('');
     setLoading(true);
     try {
-      const result = await authService.signUp(name.trim(), email.trim(), phone.trim(), password, turnstileToken);
+      const result = await authService.signUp(name.trim(), email.trim(), phone, password, turnstileToken);
       if (!result.sessionConfirmed) {
         setRegisteredEmail(email.trim());
         setShowVerifyModal(true);
@@ -1150,24 +1380,31 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
       <StatusBar style="dark" />
       <Backdrop />
       <KeyboardScreen
-        contentContainerStyle={[styles.form, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 28 }]}
+        contentContainerStyle={[styles.form, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 24 }]}
         showsVerticalScrollIndicator={false}
         keyboardDismissMode="on-drag"
       >
-        <FormHeader
-          title="Create your account"
-          subtitle="Start tracking your money in under a minute."
-          agent={face.agent}
-          onBack={() => navigation.goBack()}
-        />
+        <Animated.View entering={FadeIn.duration(400)}>
+          <BackButton onPress={() => navigation.goBack()} />
+        </Animated.View>
+
+        <View style={styles.suHead}>
+          <Animated.View entering={FadeInDown.delay(80).duration(550)} style={styles.suHeadText}>
+            <Text style={styles.suTitle}>Create account</Text>
+            <Text style={styles.suSub}>Takes less than a minute.</Text>
+          </Animated.View>
+          <MoneyAgent size={1.05} controls={face.agent} dropIn dropDelay={220} />
+        </View>
 
         {error ? <ErrorBanner key={errorTick} message={error} /> : null}
 
-        <Animated.View entering={FadeInDown.delay(160).duration(550)}>
-          <Field
-            label="Full name"
+        <Animated.View
+          entering={FadeInDown.delay(160).duration(550)}
+          style={[styles.group, active && styles.groupActive]}
+        >
+          <GroupRow
             icon="user"
-            placeholder="e.g. Aarav Sharma"
+            placeholder="Full name"
             autoCapitalize="words"
             textContentType="name"
             autoComplete="name"
@@ -1178,13 +1415,14 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
               face.typed(t.length);
             }}
             onSubmitEditing={() => emailRef.current?.focus()}
+            onActive={setActive}
             {...face.bind('text', name.length)}
           />
-          <Field
-            label="Email address"
+          <View style={styles.gDivider} />
+          <GroupRow
             icon="mail"
             inputRef={emailRef}
-            placeholder="name@domain.com"
+            placeholder="Email address"
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="email-address"
@@ -1197,83 +1435,60 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
               face.typed(t.length);
             }}
             onSubmitEditing={() => phoneRef.current?.focus()}
+            onActive={setActive}
             {...face.bind('text', email.length)}
           />
-          <Field
-            label="Mobile number"
-            icon="phone"
+          <View style={styles.gDivider} />
+          <GroupRow
+            icon="smartphone"
             inputRef={phoneRef}
-            placeholder="9876543210"
-            keyboardType="phone-pad"
+            prefix="+91"
+            placeholder="Mobile number"
+            keyboardType="number-pad"
             textContentType="telephoneNumber"
             autoComplete="tel"
+            maxLength={10}
             returnKeyType="next"
             value={phone}
             onChangeText={t => {
-              setPhone(t);
-              face.typed(t.length);
+              const digits = t.replace(/\D/g, '');
+              setPhone(digits);
+              face.typed(digits.length);
             }}
             onSubmitEditing={() => passwordRef.current?.focus()}
+            onActive={setActive}
             {...face.bind('text', phone.length)}
           />
-          <Field
-            label="Password"
+          <View style={styles.gDivider} />
+          <GroupRow
             icon="lock"
             inputRef={passwordRef}
-            placeholder="Create a password"
-            secureTextEntry={secureText}
-            autoCapitalize="none"
-            textContentType="newPassword"
-            autoComplete="password-new"
-            returnKeyType="next"
-            value={password}
-            onChangeText={setPassword}
-            onSubmitEditing={() => confirmRef.current?.focus()}
-            right={<EyeToggle hidden={secureText} onToggle={() => setSecureText(s => !s)} />}
-            footer={<StrengthMeter password={password} />}
-            {...face.bind('secret')}
-          />
-          <Field
-            label="Confirm password"
-            icon="shield"
-            inputRef={confirmRef}
-            placeholder="Type it again"
+            placeholder="Password"
             secureTextEntry={secureText}
             autoCapitalize="none"
             textContentType="newPassword"
             autoComplete="password-new"
             returnKeyType="done"
-            value={confirmPassword}
-            onChangeText={setConfirmPassword}
-            invalid={confirmPassword.length > 0 && !password.startsWith(confirmPassword)}
-            right={
-              matches ? (
-                <Animated.View entering={ZoomIn.springify().damping(12)} style={styles.matchBadge}>
-                  <Feather name="check" size={13} color={C.white} />
-                </Animated.View>
-              ) : null
-            }
+            value={password}
+            onChangeText={setPassword}
+            onSubmitEditing={handleSignup}
+            onActive={setActive}
+            right={<EyeToggle hidden={secureText} onToggle={() => setSecureText(s => !s)} />}
             {...face.bind('secret')}
           />
+        </Animated.View>
 
-          <CloudflareTurnstile
-            onVerify={token => {
-              setTurnstileToken(token);
-              setError('');
-            }}
-            onExpire={() => setTurnstileToken('')}
-          />
-
-          <View style={styles.terms}>
+        <Animated.View entering={FadeInDown.delay(240).duration(550)}>
+          <View style={styles.suTerms}>
             <Checkbox
               checked={agreeTerms}
               onToggle={() => setAgreeTerms(prev => !prev)}
-              label="I agree to the Terms of Service and Privacy Policy"
+              label="I agree to the Terms of Use and Privacy Policy"
             >
               <Text style={styles.termsText}>
                 I agree to the{' '}
                 <Text style={styles.noticeLink} onPress={openTerms}>
-                  Terms of Service
+                  Terms of Use
                 </Text>{' '}
                 and{' '}
                 <Text style={styles.noticeLink} onPress={openPrivacy}>
@@ -1283,7 +1498,16 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
             </Checkbox>
           </View>
 
-          <Button label="Create account" onPress={handleSignup} loading={loading} style={styles.submit} />
+          <CloudflareTurnstile
+            theme="light"
+            onVerify={token => {
+              setTurnstileToken(token);
+              setError('');
+            }}
+            onExpire={() => setTurnstileToken('')}
+          />
+
+          <Button label="Create account" onPress={handleSignup} loading={loading} style={styles.suSubmit} />
 
           <View style={styles.switchRow}>
             <Text style={styles.switchLabel}>Already have an account? </Text>
@@ -1304,6 +1528,47 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
   );
 };
 
+
+/* Spread into StyleSheet.create: { ...loginStyles, ... } (see STEP 3). */
+const loginStyles = {
+  liOptions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 20,
+  },
+  liForgot: { fontSize: 14, fontWeight: '600', color: C.greenDeep },
+} as const;
+
+/* Spread into StyleSheet.create: { ...signupStyles, ... } (see STEP 3). */
+const signupStyles = {
+  suHead: { flexDirection: 'row', alignItems: 'flex-end', marginTop: 20, marginBottom: 26 },
+  suHeadText: { flex: 1, paddingRight: 8, paddingBottom: 4 },
+  suTitle: { fontSize: 32, lineHeight: 38, fontWeight: '800', color: C.ink, letterSpacing: -0.9 },
+  suSub: { marginTop: 6, fontSize: 15, lineHeight: 21, color: C.body },
+
+  group: {
+    backgroundColor: C.white,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: C.line,
+    paddingHorizontal: 18,
+    shadowColor: '#0f3d2a',
+    shadowOpacity: 0.07,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 4,
+  },
+  groupActive: { borderColor: C.green, shadowColor: C.green, shadowOpacity: 0.14 },
+  gRow: { height: 60, flexDirection: 'row', alignItems: 'center', gap: 14 },
+  gDivider: { height: 1, backgroundColor: '#eef2f5', marginLeft: 32 },
+  gPrefix: { fontSize: 16, fontWeight: '600', color: C.ink, marginRight: -4 },
+  gInput: { flex: 1, height: '100%', fontSize: 16, color: C.ink },
+
+  suTerms: { marginTop: 20 },
+  suSubmit: { marginTop: 24 },
+} as const;
+
 /* ------------------------------------------------------------------ */
 /* Styles                                                             */
 /* ------------------------------------------------------------------ */
@@ -1317,6 +1582,9 @@ const shadow = (color: string, opacity: number, radius: number, y: number, eleva
 });
 
 const styles = StyleSheet.create({
+  ...landingStyles,
+  ...signupStyles,
+  ...loginStyles,
   screen: {
     flex: 1,
     backgroundColor: C.bg,
@@ -1325,18 +1593,6 @@ const styles = StyleSheet.create({
     maxHeight: '100%',
   },
   center: { textAlign: 'center' },
-
-  /* landing */
-  heroArea: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 28,
-    minHeight: 0,
-  },
-  tagline: { marginTop: 16, fontSize: 16, lineHeight: 23, color: C.body, textAlign: 'center' },
-  actions: { paddingHorizontal: 24, paddingBottom: 6 },
-  stack: { marginTop: 12 },
 
   /* buttons */
   btn: {
