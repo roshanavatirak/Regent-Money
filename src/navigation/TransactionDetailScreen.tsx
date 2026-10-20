@@ -15,7 +15,7 @@ import {
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { useTheme, showGlobalConfirm, useBankStore, useTransactionStore } from '../store';
+import { useTheme, showGlobalConfirm, useBankStore, useTransactionStore, useIncomeStore } from '../store';
 import { authService } from '../services/authService';
 import { getBackendUrl } from '../config/api';
 import { TagPaymentModal } from '../components/TagPaymentModal';
@@ -185,15 +185,20 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
         useBankStore.getState().updateBankBalance(transaction.bankProfileId, res.updatedBalance);
       }
 
-      // Update transaction store if transaction exists there
-      try {
+      // Update appropriate store based on transaction type
+      if (transaction.type === 'credit') {
+        useIncomeStore.getState().updateIncomeRecordState(transaction.id, {
+          amount: parsedAmount,
+          category: selectedCategory,
+          merchant: note.trim() || selectedCategory,
+          source: note.trim() || selectedCategory,
+        });
+      } else {
         useTransactionStore.getState().updateTransactionState(transaction.id, {
           amount: parsedAmount,
           category: selectedCategory,
           merchant: note.trim() || selectedCategory,
         });
-      } catch (err) {
-        // Store might not track all modal transactions
       }
 
       // Save user learning rule for this merchant ONLY if user opted to update default!
@@ -266,11 +271,11 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
             useBankStore.getState().updateBankBalance(transaction.bankProfileId, res.updatedBalance);
           }
 
-          // Remove from transaction store if present
-          try {
+          // Remove from appropriate store based on transaction type
+          if (transaction.type === 'credit') {
+            useIncomeStore.getState().removeIncomeRecordState(transaction.id);
+          } else {
             useTransactionStore.getState().removeTransactionState(transaction.id);
-          } catch (err) {
-            // Store might not track all
           }
 
           if (typeof props.onSuccess === 'function') {

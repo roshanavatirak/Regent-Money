@@ -567,6 +567,7 @@ export const authService = {
       mmkvStorage.delete(USER_PROFILE_KEY);
       tokenStore.clearAccessToken();
       mmkvStorage.delete('auth_remember_me');
+      mmkvStorage.delete('cache_income_records');
     } catch (e: any) {
       console.error('[Auth] Failed to delete MMKV session keys:', e.message);
     }

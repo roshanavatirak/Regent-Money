@@ -14,7 +14,7 @@ import {
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { useTheme, useBankStore } from '../store';
+import { useTheme, useBankStore, useTransactionStore, useIncomeStore } from '../store';
 import { authService } from '../services/authService';
 import { getBackendUrl } from '../config/api';
 import { KeyboardScreen } from '../components/KeyboardScreen';
@@ -163,6 +163,32 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
 
       // Update Zustand bank store directly
       useBankStore.getState().updateBankBalance(bank.id, updatedBalance);
+
+      // Optimistically update relevant local stores for instant display
+      if (type === 'credit' && result.record) {
+        useIncomeStore.getState().addIncomeRecordState({
+          id: result.record.id,
+          amount: parsedAmount,
+          category: selectedCategory,
+          merchant: note.trim() || selectedCategory,
+          source: note.trim() || selectedCategory,
+          timestamp: result.record.timestamp ? Number(result.record.timestamp) : Date.now(),
+          bankProfileId: bank.id,
+          updatedAt: Date.now(),
+          type: 'credit',
+        });
+      } else if (type === 'debit' && result.record) {
+        useTransactionStore.getState().addTransactionState({
+          id: result.record.id,
+          amount: parsedAmount,
+          category: selectedCategory,
+          merchant: note.trim() || selectedCategory,
+          timestamp: result.record.timestamp ? Number(result.record.timestamp) : Date.now(),
+          bankProfileId: bank.id,
+          type: 'debit',
+          status: 'confirmed',
+        });
+      }
 
       if (props.onSuccess) {
         props.onSuccess({

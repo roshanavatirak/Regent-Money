@@ -75,6 +75,78 @@ export const useTransactionStore = create<TransactionState>((set) => ({
   setFilterCategory: (filterCategory) => set({ filterCategory }),
 }));
 
+// 1b. Income Store (Persistent credits/income cache in MMKV)
+export interface IncomeRecordType {
+  id: string;
+  amount: number;
+  source: string;
+  merchant?: string;
+  category: string;
+  timestamp: number;
+  bankProfileId: string | null;
+  updatedAt?: number;
+  type: 'credit';
+}
+
+export interface IncomeState {
+  incomeRecords: IncomeRecordType[];
+  isLoading: boolean;
+  setIncomeRecords: (records: IncomeRecordType[]) => void;
+  addIncomeRecordState: (record: IncomeRecordType) => void;
+  updateIncomeRecordState: (id: string, updatedFields: Partial<IncomeRecordType>) => void;
+  removeIncomeRecordState: (id: string) => void;
+  setLoading: (loading: boolean) => void;
+}
+
+export const useIncomeStore = create<IncomeState>((set) => ({
+  incomeRecords: loadCached<IncomeRecordType[]>('cache_income_records', []),
+  isLoading: false,
+  setIncomeRecords: (incomeRecords) => {
+    const seen = new Set<string>();
+    const deduplicated: IncomeRecordType[] = [];
+    for (const r of incomeRecords) {
+      if (!r || !r.id) continue;
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      deduplicated.push({
+        ...r,
+        merchant: r.merchant || r.source || 'Income',
+        source: r.source || r.merchant || 'Income',
+        type: 'credit',
+      });
+    }
+    mmkvStorage.setObject('cache_income_records', deduplicated);
+    set({ incomeRecords: deduplicated });
+  },
+  addIncomeRecordState: (rec) =>
+    set((state) => {
+      const normalized: IncomeRecordType = {
+        ...rec,
+        merchant: rec.merchant || rec.source || 'Income',
+        source: rec.source || rec.merchant || 'Income',
+        type: 'credit',
+      };
+      const updated = [normalized, ...state.incomeRecords.filter((r) => r.id !== rec.id)];
+      mmkvStorage.setObject('cache_income_records', updated);
+      return { incomeRecords: updated };
+    }),
+  updateIncomeRecordState: (id, updatedFields) =>
+    set((state) => {
+      const updated = state.incomeRecords.map((r) =>
+        r.id === id ? { ...r, ...updatedFields } : r
+      );
+      mmkvStorage.setObject('cache_income_records', updated);
+      return { incomeRecords: updated };
+    }),
+  removeIncomeRecordState: (id) =>
+    set((state) => {
+      const updated = state.incomeRecords.filter((r) => r.id !== id);
+      mmkvStorage.setObject('cache_income_records', updated);
+      return { incomeRecords: updated };
+    }),
+  setLoading: (isLoading) => set({ isLoading }),
+}));
+
 // 2. Budget Store
 export type BudgetPeriodType =
   | 'monthly'
@@ -737,6 +809,9 @@ export const rehydrateAllStores = async () => {
   try {
     const txs = mmkvStorage.getObject<any[]>('cache_transactions');
     if (txs && txs.length > 0) useTransactionStore.getState().setTransactions(txs);
+
+    const incomes = mmkvStorage.getObject<IncomeRecordType[]>('cache_income_records');
+    if (incomes && incomes.length > 0) useIncomeStore.getState().setIncomeRecords(incomes);
 
     const budgets = mmkvStorage.getObject<BudgetCategory[]>('cache_budgets');
     if (budgets && budgets.length > 0) useBudgetStore.getState().setBudgets(budgets);

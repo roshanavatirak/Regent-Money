@@ -23,8 +23,7 @@ import { BankIcon } from '../components/BankIcon';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { useNavigation } from '@react-navigation/native';
-import { useTheme, useBankStore } from '../store';
-import { useTransactionStore } from '../store';
+import { useTheme, useBankStore, useTransactionStore, useIncomeStore } from '../store';
 import { authService } from '../services/authService';
 import { parseStatementTextWithAI } from '../services/aiService';
 import { syncService } from '../services/syncService';
@@ -51,6 +50,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
   const styles = getStyles(colors);
 
   const transactions = useTransactionStore((state) => state.transactions);
+  const allIncomeRecords = useIncomeStore((state) => state.incomeRecords);
 
   const [localBank, setLocalBank] = useState<any>(bank);
 
@@ -62,8 +62,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
   
   const [activeTab, setActiveTab] = useState<'all' | 'debits' | 'credits'>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [incomeRecords, setIncomeRecords] = useState<any[]>([]);
-  const [loadingIncome, setLoadingIncome] = useState(false);
+  const [isRevalidatingIncome, setIsRevalidatingIncome] = useState(false);
   const [processingOcr, setProcessingOcr] = useState(false);
   const [ocrStatusText, setOcrStatusText] = useState('');
 
@@ -226,10 +225,11 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
     }
   };
 
-  // Fetch Income Records for Credit transactions
+  // Fetch Income Records in background for SWR cache refresh
   const fetchIncomeRecords = async () => {
-    if (!bank) return;
-    setLoadingIncome(true);
+    const currentId = activeBank?.id || bank?.id;
+    if (!currentId) return;
+    setIsRevalidatingIncome(true);
     try {
       const token = authService.getAccessToken();
       if (!token) return;
@@ -245,65 +245,79 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
       if (!response.ok) throw new Error('Failed to fetch income records');
       const data = await response.json();
       
-      const mappedIncome = (data || [])
-        .filter((inc: any) => (inc.bankProfileId ?? inc.bank_profile_id) === bank.id)
-        .map((inc: any) => ({
-          id: inc.id,
-          amount: parseFloat(inc.amount || 0),
-          category: inc.category || 'income',
-          merchant: inc.source || 'Income',
-          timestamp: Number(inc.timestamp || Date.now()),
-          type: 'credit',
-        }));
-      setIncomeRecords(mappedIncome);
+      const mappedIncome = (data || []).map((inc: any) => ({
+        id: inc.id,
+        amount: parseFloat(inc.amount || 0),
+        category: inc.category || 'income',
+        merchant: inc.source || inc.merchant || 'Income',
+        source: inc.source || inc.merchant || 'Income',
+        timestamp: Number(inc.timestamp || Date.now()),
+        bankProfileId: inc.bankProfileId ?? inc.bank_profile_id ?? null,
+        updatedAt: inc.updatedAt ? Number(inc.updatedAt) : undefined,
+        type: 'credit' as const,
+      }));
+      useIncomeStore.getState().setIncomeRecords(mappedIncome);
     } catch (e) {
-      console.warn('Error fetching income records:', e);
+      console.warn('Error fetching income records in background:', e);
     } finally {
-      setLoadingIncome(false);
+      setIsRevalidatingIncome(false);
     }
   };
 
   useEffect(() => {
-    if (visible && bank) {
+    if (visible && (bank || activeBank)) {
       fetchIncomeRecords();
     }
-  }, [visible, bank]);
+  }, [visible, bank?.id, activeBank?.id]);
 
-  // Filter transactions for this bank
+  // Filter transactions and income reactively from offline MMKV-backed stores
   const currentBankId = activeBank?.id || bank?.id;
-  const bankDebits = currentBankId
-    ? transactions
-        .filter((tx) => tx.bankProfileId === currentBankId)
-        .map((tx) => ({ ...tx, type: 'debit' }))
-    : [];
 
-  const rawMergedList = [...bankDebits, ...incomeRecords].sort((a, b) => {
-    const diff = (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0);
-    if (diff !== 0) return diff;
-    return (Number(b.updatedAt || 0)) - (Number(a.updatedAt || 0));
-  });
+  const bankDebits = useMemo(() => {
+    if (!currentBankId) return [];
+    return transactions
+      .filter((tx) => tx.bankProfileId === currentBankId)
+      .map((tx) => ({ ...tx, type: 'debit' as const }));
+  }, [transactions, currentBankId]);
 
-  // Deduplicate transactions by unique database ID or reference ID without dropping legitimate same-day payments
+  const bankCredits = useMemo(() => {
+    if (!currentBankId) return [];
+    return allIncomeRecords
+      .filter((inc) => (inc.bankProfileId ?? (inc as any).bank_profile_id) === currentBankId)
+      .map((inc) => ({
+        ...inc,
+        merchant: inc.merchant || inc.source || 'Income',
+        source: inc.source || inc.merchant || 'Income',
+        type: 'credit' as const,
+      }));
+  }, [allIncomeRecords, currentBankId]);
+
+  const rawMergedList = useMemo(() => {
+    return [...bankDebits, ...bankCredits].sort((a, b) => {
+      const diff = (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0);
+      if (diff !== 0) return diff;
+      return (Number((b as any).updatedAt || 0)) - (Number((a as any).updatedAt || 0));
+    });
+  }, [bankDebits, bankCredits]);
+
+  // Deduplicate transactions strictly by unique database ID or verified reference ID
   const mergedList = useMemo(() => {
-    const seen = new Set<string>();
+    const seenIds = new Set<string>();
+    const seenRefs = new Set<string>();
     const result: any[] = [];
     for (const item of rawMergedList) {
       if (!item) continue;
-      if (item.id && seen.has(`id:${item.id}`)) continue;
-      if (item.id) seen.add(`id:${item.id}`);
+      if (item.id) {
+        if (seenIds.has(item.id)) continue;
+        seenIds.add(item.id);
+      }
 
       const refId = item.referenceId || (item.smsId && item.smsId.startsWith('ref_') ? item.smsId : null);
       if (refId) {
-        if (seen.has(`ref:${refId}`)) continue;
-        seen.add(`ref:${refId}`);
-        result.push(item);
-        continue;
+        if (seenRefs.has(refId)) continue;
+        seenRefs.add(refId);
       }
 
-      // Fallback: only skip if identical type, amount, merchant and millisecond timestamp
-      const sig = `sig:${item.type || 'debit'}_${Math.round(Number(item.amount) * 100)}_${item.timestamp}`;
-      if (seen.has(sig)) continue;
-      seen.add(sig);
       result.push(item);
     }
     return result;
@@ -799,7 +813,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
             </View>
 
             {/* Transactions List with Paytm-style Sticky Month Headers */}
-            {loadingIncome ? (
+            {sections.length === 0 && isRevalidatingIncome ? (
               <ActivityIndicator size="small" color="#2dba4e" style={{ marginTop: 20 }} />
             ) : sections.length === 0 ? (
               <View style={styles.emptyContainer}>

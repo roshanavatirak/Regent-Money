@@ -5,6 +5,7 @@ import {
   useGoalsStore, 
   useBankStore,
   useAnalyticsStore,
+  useIncomeStore,
 } from '../store';
 import { mmkvStorage } from '../db/mmkv';
 import { getBackendUrl } from '../config/api';
@@ -220,6 +221,21 @@ export const syncService = {
         smsConsent: b.smsConsent ?? b.sms_consent ?? false,
       }));
       useBankStore.getState().setBankProfiles(mappedBanks);
+
+      // 5. Map Income Records (Credits)
+      const rawIncome = data.incomeRecords || [];
+      const mappedIncome = rawIncome.map((inc: any) => ({
+        id: inc.id,
+        amount: parseFloat(inc.amount || 0),
+        category: inc.category || 'income',
+        merchant: inc.source || inc.merchant || 'Income',
+        source: inc.source || inc.merchant || 'Income',
+        timestamp: Number(inc.timestamp || Date.now()),
+        bankProfileId: inc.bankProfileId ?? inc.bank_profile_id ?? null,
+        updatedAt: inc.updatedAt ? Number(inc.updatedAt) : undefined,
+        type: 'credit' as const,
+      }));
+      useIncomeStore.getState().setIncomeRecords(mappedIncome);
     } catch (err: any) {
       clearTimeout(syncTimeoutId);
       if (err?.name !== 'AbortError' && !err?.message?.includes?.('abort')) {
