@@ -249,10 +249,10 @@ const getStyles = (colors: any, isDark: boolean) =>
       gap: 12,
     },
     logoBadge: {
-      width: 40,
-      height: 40,
-      borderRadius: 10,
-      backgroundColor: isDark ? '#1A202C' : '#F1F5F9',
+      width: 42,
+      height: 42,
+      borderRadius: 11,
+      backgroundColor: 'transparent',
       borderWidth: 1,
       borderColor: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.08)',
       overflow: 'hidden',
@@ -260,6 +260,7 @@ const getStyles = (colors: any, isDark: boolean) =>
     logoImage: {
       width: '100%',
       height: '100%',
+      borderRadius: 11,
     },
     headerTitleRow: {
       flexDirection: 'row',
@@ -267,16 +268,16 @@ const getStyles = (colors: any, isDark: boolean) =>
       gap: 5,
     },
     brandTitle: {
-      fontSize: 14,
+      fontSize: 16,
       fontWeight: '900',
       color: isDark ? '#FFFFFF' : '#0B0E14',
-      letterSpacing: 1.5,
+      letterSpacing: 1.2,
     },
     brandAccent: {
-      fontSize: 14,
+      fontSize: 16,
       fontWeight: '900',
       color: '#10B981',
-      letterSpacing: 1.5,
+      letterSpacing: 1.2,
     },
     headerSubtitle: {
       fontSize: 11,

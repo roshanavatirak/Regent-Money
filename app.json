@@ -45,8 +45,8 @@
       "package": "com.anonymous.regentmoney",
       "versionCode": 122,
       "adaptiveIcon": {
-        "foregroundImage": "./assets/appicon.png",
-        "backgroundColor": "#FFFFFF"
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#04190F"
       },
       "softwareKeyboardLayoutMode": "resize",
       "allowBackup": false
