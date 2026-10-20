@@ -92,7 +92,7 @@ const SLIDES: SlideCopy[] = [
   {
     id: 'private',
     title: 'Your money data\nstays on your phone',
-    body: 'Bank messages are read and stored on this device. Personal chats are never opened, and your data is never sold.',
+    body: 'Bank messages are read and stored securely on this device with end-to-end encryption. Your financial data is completely private and never sold.',
   },
   {
     id: 'goals',
