@@ -35,6 +35,14 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
+      - name: Set up Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27b
+          link-to-sdk: true
+          local-cache: true
+
       - name: Accept Android SDK Licenses
         run: |
           yes | sdkmanager --licenses || true
@@ -72,6 +80,7 @@ jobs:
 
       - name: Build Android Release APK
         env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
           EXPO_PUBLIC_BACKEND_URL: ${{ secrets.EXPO_PUBLIC_BACKEND_URL || 'https://regent-money.onrender.com' }}
           EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: ${{ secrets.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '55231273460-epfomp35a43c6d15bhilb92i6btl6jt9.apps.googleusercontent.com' }}
           EXPO_PUBLIC_TURNSTILE_SITE_KEY: ${{ secrets.EXPO_PUBLIC_TURNSTILE_SITE_KEY || '0x4AAAAAAFS21ZDrV2b2WG7k' }}
