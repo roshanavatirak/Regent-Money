@@ -306,6 +306,19 @@ export class AuthController {
     return this.authService.uploadAvatar(req.user.id, body.fileData);
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Post('account/request-deletion')
+  @HttpCode(HttpStatus.OK)
+  async requestAccountDeletion(
+    @Req() req: any,
+    @Body() body: { password?: string; reasonCode: string; customFeedback?: string },
+  ) {
+    if (!body?.reasonCode) {
+      throw new BadRequestException('Reason code is required.');
+    }
+    return this.authService.requestAccountDeletion(req.user.id, body);
+  }
+
   @Get('verify')
   async verify(@Query('token') token: string, @Res() res: Response) {
     try {

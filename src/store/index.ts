@@ -469,6 +469,9 @@ export interface UserProfile {
   termsAcceptedAt?: number | null;
   role?: 'user' | 'admin' | 'superadmin';
   isBanned?: boolean;
+  isScheduledForDeletion?: boolean;
+  deletionCooldownUntil?: number | null;
+  deletionDeadline?: number | null;
 }
 
 export interface AuthState {
@@ -486,6 +489,9 @@ export const useAuthStore = create<AuthState>((set) => ({
     if (user) {
       mmkvStorage.setObject('auth_user_profile', user);
       mmkvStorage.setObject('user_profile', user);
+    } else {
+      mmkvStorage.delete('auth_user_profile');
+      mmkvStorage.delete('user_profile');
     }
     set({ user });
   },
@@ -846,7 +852,7 @@ export interface ConfirmOptions {
   confirmText?: string;
   cancelText?: string;
   isDestructive?: boolean;
-  icon?: 'trash-2' | 'alert-triangle' | 'help-circle' | 'info' | 'log-out';
+  icon?: 'trash-2' | 'alert-triangle' | 'help-circle' | 'info' | 'log-out' | string;
   onConfirm: () => void | Promise<void>;
   onCancel?: () => void;
 }

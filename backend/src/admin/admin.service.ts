@@ -6,7 +6,8 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, LessThanOrEqual } from 'typeorm';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import { v2 as cloudinary } from 'cloudinary';
@@ -342,6 +343,73 @@ export class AdminService {
     const match = avatarUrl.match(/\/upload\/(?:v\d+\/)?(.+)\.[a-zA-Z0-9]+$/);
     if (match && match[1]) {
       await cloudinary.uploader.destroy(match[1]);
+    }
+  }
+
+  /**
+   * Automated cron running every hour to permanently purge accounts
+   * whose 7-day scheduled deletion grace period has expired.
+   */
+  @Cron(CronExpression.EVERY_HOUR)
+  async purgeExpiredScheduledAccounts() {
+    const now = Date.now();
+    try {
+      const expiredUsers = await this.userRepo.find({
+        where: {
+          isScheduledForDeletion: true,
+          deletionDeadline: LessThanOrEqual(now),
+        },
+      });
+
+      if (!expiredUsers || expiredUsers.length === 0) return;
+
+      this.logger.log(`[AccountPurgeCron] Purging ${expiredUsers.length} account(s) past 7-day grace period.`);
+
+      for (const target of expiredUsers) {
+        try {
+          const targetUserId = target.id;
+          const hmac = target.email ? this.getHmac(target.email) : null;
+          const finalReason = 'Automated 7-day expiration hard purge';
+          const avatarUrl = target.avatarUrl;
+
+          // Atomic purge across all 18 database cascade tables
+          await this.dataSource.transaction(async (manager) => {
+            // 1. Audit log
+            await manager.query(
+              `INSERT INTO core.admin_audit_logs (admin_id, target_user_id, target_email_hmac, action, reason, created_at)
+               VALUES ($1, $2, $3, 'PURGE_EXPIRED_ACCOUNT', $4, $5)`,
+              ['SYSTEM_CRON', targetUserId, hmac, finalReason, now],
+            );
+
+            // 2. Cascade delete records in all child & parent tables
+            for (const entry of CASCADE_DELETE_TABLES) {
+              await manager.query(
+                `DELETE FROM ${entry.schema}.${entry.table} WHERE ${entry.column} = $1`,
+                [targetUserId],
+              );
+            }
+          });
+
+          // Post-commit Redis cleanup
+          await Promise.allSettled([
+            this.redisService.set(`user:status:${targetUserId}`, 'deleted', 30 * 86400),
+            this.redisService.del(`user:role:${targetUserId}`),
+            this.redisService.del(`auth:lock:u:${targetUserId}`),
+            this.redisService.del(`auth:refresh:${targetUserId}`),
+            this.redisService.del(`auth:session:${targetUserId}`),
+          ]);
+
+          if (avatarUrl && avatarUrl.includes('res.cloudinary.com')) {
+            this.deleteCloudinaryAsset(avatarUrl).catch(() => {});
+          }
+
+          this.logger.log(`[AccountPurgeCron] Successfully purged expired account: ${targetUserId}`);
+        } catch (err: any) {
+          this.logger.error(`[AccountPurgeCron] Error purging user ${target.id}:`, err?.message || err);
+        }
+      }
+    } catch (e: any) {
+      this.logger.error('[AccountPurgeCron] Failed to run purge cron:', e?.message || e);
     }
   }
 }

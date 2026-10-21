@@ -32,6 +32,7 @@ import { createMaterialTopTabNavigator, MaterialTopTabBarProps } from '@react-na
 import { navigationRef } from './navigationRef';
 export { navigationRef };
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import * as Font from 'expo-font';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import Animated, {
@@ -43,6 +44,8 @@ import Animated, {
   withDelay,
   withSpring,
   FadeIn,
+  Easing,
+  interpolate,
   runOnJS,
 } from 'react-native-reanimated';
 import { KeyboardAvoidingView, useKeyboardHandler } from 'react-native-keyboard-controller';
@@ -51,7 +54,10 @@ import { Canvas, ImageSVG, useSVG, LinearGradient, vec, Group, Path, Skia } from
 
 import { mmkvStorage } from '../db/mmkv';
 import { useSyncDb } from '../services/useSyncDb';
+import { CategoryIcon } from '../components/CategoryIcon';
+import { getCategoryColor } from '../constants/categories';
 import { GoalsScreen } from './GoalsScreen';
+import { RegentChatScreen } from './RegentChatScreen';
 import { UpdateModal } from './UpdateModal';
 import { AppSplashScreen } from '../components/AppSplashScreen';
 import { NotificationPermissionModal } from '../components/NotificationPermissionModal';
@@ -264,6 +270,7 @@ import { SuggestFeatureScreen } from './SuggestFeatureScreen';
 import { ReportBugScreen } from './ReportBugScreen';
 import { BudgetScreen } from './BudgetScreen';
 import { CreateBudgetScreen } from './CreateBudgetScreen';
+import { HomeDashboard, DashboardCategory } from './HomeDashboard';
 import { smsCatchupService } from '../services/smsCatchupService';
 import * as Clipboard from 'expo-clipboard';
 import { FormattedChatMessage } from '../components/FormattedChatMessage';
@@ -1065,8 +1072,7 @@ export const PALETTE_FALLBACK = [
 ];
 
 export const getSpendingCategoryColor = (categoryKey: string, _isDark?: boolean, index = 0): string => {
-  const cleanKey = categoryKey.toLowerCase().trim();
-  return SPENDING_CHART_COLORS[cleanKey] || PALETTE_FALLBACK[index % PALETTE_FALLBACK.length];
+  return getCategoryColor(categoryKey);
 };
 
 interface SpendingDonutChartProps {
@@ -1748,18 +1754,95 @@ interface NotificationsModalProps {
   onClose: () => void;
 }
 
+type NotifKind = 'insight' | 'tip' | 'alert' | 'budget' | 'review';
+type NotifFilter = 'all' | 'insights' | 'alerts' | 'review';
+
+// Strips leading emoji from backend titles; the icon tile carries the meaning instead
+const LEADING_EMOJI = /^(?:[\u2190-\u2BFF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|\uD83E[\uDC00-\uDFFF]|[\uFE0F\u200D]|\s)+/;
+
+const cleanTitle = (title?: string) => {
+  const t = (title || '').replace(LEADING_EMOJI, '').trim();
+  if (!t) return 'Update from Regent';
+  return t.charAt(0).toUpperCase() + t.slice(1);
+};
+
+const getNotifKind = (n: any): NotifKind => {
+  if (n.payload?.action === 'category_correction') return 'review';
+  if (n.type === 'anomaly') return 'alert';
+  if (n.type === 'budget_alert') return 'budget';
+  const text = `${n.type || ''} ${n.title || ''}`.toLowerCase();
+  if (text.includes('tip') || text.includes('hack') || text.includes('rule')) return 'tip';
+  return 'insight';
+};
+
+const NOTIF_KIND_STYLE: Record<
+  NotifKind,
+  { icon: keyof typeof Ionicons.glyphMap; light: [string, string]; dark: [string, string] }
+> = {
+  insight: { icon: 'sparkles-outline', light: ['#E3F7EE', '#0B6B44'], dark: ['rgba(52, 211, 153, 0.16)', '#6EE7B7'] },
+  tip: { icon: 'bulb-outline', light: ['#ECE6FF', '#4B2DB8'], dark: ['rgba(139, 124, 246, 0.2)', '#C4B8FF'] },
+  alert: { icon: 'warning-outline', light: ['#FFE3D6', '#A63A12'], dark: ['rgba(255, 138, 107, 0.18)', '#FFB29E'] },
+  budget: { icon: 'pie-chart-outline', light: ['#FFF1D6', '#8A5A00'], dark: ['rgba(255, 176, 32, 0.18)', '#FFD27A'] },
+  review: { icon: 'pricetag-outline', light: ['#DCEBFF', '#1450A3'], dark: ['rgba(59, 130, 246, 0.18)', '#93C5FD'] },
+};
+
+const matchesNotifFilter = (kind: NotifKind, filter: NotifFilter) => {
+  if (filter === 'all') return true;
+  if (filter === 'insights') return kind === 'insight' || kind === 'tip';
+  if (filter === 'alerts') return kind === 'alert' || kind === 'budget';
+  return kind === 'review';
+};
+
+const dayGroupLabel = (ts: number) => {
+  const d = new Date(ts);
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const diffDays = Math.floor((startOfToday.getTime() - new Date(d).setHours(0, 0, 0, 0)) / 86400000);
+  if (diffDays <= 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return 'This week';
+  return 'Earlier';
+};
+
+const formatNotifTime = (timestamp: number | string) => {
+  if (!timestamp) return '';
+  const d = new Date(Number(timestamp));
+  if (isNaN(d.getTime())) return '';
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) {
+    return d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true });
+  }
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) {
+    return d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true });
+  }
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+};
+
 const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
   const { colors, isDark } = useTheme();
-  const styles = getStyles(colors);
-  const navStyles = getNavStyles(colors);
+  const insets = useSafeAreaInsets();
 
   const notifications = useNotificationStore((state) => state.notifications);
   const isLoading = useNotificationStore((state) => state.isLoading);
   const unreadCount = useNotificationStore((state) => state.unreadCount);
 
-  const handleMarkAllRead = async () => {
-    await notificationService.markAllAsRead();
-  };
+  const [filter, setFilter] = useState<NotifFilter>('all');
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [resolvedIds, setResolvedIds] = useState<Set<string>>(new Set());
+  const [busyId, setBusyId] = useState<string | null>(null);
+  // Remember which items were unread when the sheet opened, so they stay
+  // highlighted while the user reads, even after they're marked read.
+  const [newIds, setNewIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (visible) {
+      setNewIds(new Set(notifications.filter((n: any) => !n.readStatus).map((n: any) => n.id)));
+      setFilter('all');
+      setExpandedId(null);
+    }
+  }, [visible]);
 
   useEffect(() => {
     if (visible && unreadCount > 0) {
@@ -1767,322 +1850,382 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
     }
   }, [visible, unreadCount]);
 
+  const display = Font.isLoaded('BricolageGrotesque_800ExtraBold') ? 'BricolageGrotesque_800ExtraBold' : undefined;
+  const ink = colors.text;
+  const muted = colors.textSecondary;
+  const sheetBg = isDark ? colors.background : '#F3F6F4';
+  const cardBg = colors.card;
+  const line = isDark ? colors.border : '#E1E9E4';
+  const FOREST = '#0B3D2C';
+  const LIME = '#B8F36B';
+
+  const items = useMemo(
+    () =>
+      notifications.map((n: any) => ({
+        raw: n,
+        id: n.id,
+        kind: getNotifKind(n),
+        title: cleanTitle(n.title),
+        body: (n.body || '').trim(),
+        ts: Number(n.createdAt) || 0,
+        isNew: newIds.has(n.id),
+      })),
+    [notifications, newIds]
+  );
+
+  const reviewCount = items.filter(
+    (i) => i.kind === 'review' && !i.raw.readStatus && !resolvedIds.has(i.id)
+  ).length;
+
+  // Hero card: the newest unread insight or tip (only on the "All" tab)
+  const featured = useMemo(() => {
+    if (filter !== 'all') return null;
+    return items.find((i) => i.isNew && (i.kind === 'insight' || i.kind === 'tip')) || null;
+  }, [items, filter]);
+
+  const sections = useMemo(() => {
+    const order = ['Today', 'Yesterday', 'This week', 'Earlier'];
+    const map: Record<string, typeof items> = {};
+    items
+      .filter((i) => matchesNotifFilter(i.kind, filter) && i.id !== featured?.id)
+      .forEach((i) => {
+        const label = dayGroupLabel(i.ts);
+        (map[label] = map[label] || []).push(i);
+      });
+    return order.filter((k) => map[k]?.length).map((k) => ({ title: k, data: map[k] }));
+  }, [items, filter, featured]);
+
   const handleAction = async (notification: any, actionName: 'approve' | 'keep_old') => {
     const payload = notification.payload;
     if (!payload) return;
-
+    setBusyId(notification.id);
     try {
       const accessToken = authService.getAccessToken();
       if (!accessToken) return;
 
       if (payload.action === 'category_correction') {
         const categoryToUse = actionName === 'approve' ? payload.suggestedCategory : payload.oldCategory;
-
         const response = await fetch(`${BACKEND_URL}/sync/transaction/${payload.transactionId}/category`, {
           method: 'PATCH',
           headers: {
-            'Authorization': `Bearer ${accessToken}`,
+            Authorization: `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ category: categoryToUse }),
         });
-
-        if (!response.ok) {
-          throw new Error('Failed to update category');
-        }
-
+        if (!response.ok) throw new Error('Could not update the category. Try again.');
         await syncService.sync();
-        Alert.alert('Success', `Transaction category set to "${categoryToUse}"`);
       }
 
       await notificationService.markAsRead(notification.id);
+      setResolvedIds((prev) => new Set(prev).add(notification.id));
     } catch (e: any) {
-      Alert.alert('Action Failed', e.message || 'Unable to complete action.');
+      Alert.alert('Not updated', e.message || 'Could not complete this action. Try again.');
+    } finally {
+      setBusyId(null);
     }
   };
 
-  const formatCompactTime = (timestamp: number | string) => {
-    if (!timestamp) return '';
-    const d = new Date(Number(timestamp));
-    if (isNaN(d.getTime())) return '';
-    const now = new Date();
-    const isToday = d.toDateString() === now.toDateString();
-    const yesterday = new Date(now);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const isYesterday = d.toDateString() === yesterday.toDateString();
-
-    const timeStr = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
-    if (isToday) return timeStr;
-    if (isYesterday) return 'Yesterday';
-    return d.toLocaleDateString([], { day: 'numeric', month: 'short' });
+  const openRegent = () => {
+    onClose();
+    if (navigationRef?.isReady?.()) {
+      (navigationRef.navigate as any)('Main', { screen: 'Regent' });
+    }
   };
 
-  const getOneLineNotification = (title: string, body: string) => {
-    let t = (title || '').trim();
-    let b = (body || '').trim();
+  const FILTERS: { key: NotifFilter; label: string; count?: number }[] = [
+    { key: 'all', label: 'All' },
+    { key: 'insights', label: 'Insights' },
+    { key: 'alerts', label: 'Alerts' },
+    { key: 'review', label: 'To review', count: reviewCount },
+  ];
 
-    // If title has content and isn't generic, use title
-    if (t && t.length > 3 && !t.toLowerCase().startsWith('notification') && !t.toLowerCase().startsWith('alert')) {
-      return t;
-    }
-    // Otherwise fallback to first energetic phrase of body
-    if (b) {
-      const firstSentence = b.split(/[.!?]/)[0].trim();
-      return firstSentence ? `${firstSentence}!` : b;
-    }
-    return t || 'AI Alert!';
-  };
+  const renderRow = (item: (typeof items)[number], isLast: boolean) => {
+    const style = NOTIF_KIND_STYLE[item.kind];
+    const [tileBg, tileFg] = isDark ? style.dark : style.light;
+    const expanded = expandedId === item.id;
+    const showActions =
+      item.kind === 'review' && !item.raw.readStatus && !resolvedIds.has(item.id) && item.raw.payload;
+    const resolved = resolvedIds.has(item.id);
 
-  return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="slide"
-      onRequestClose={onClose}
-    >
-      <View style={styles.modalOverlayFull}>
+    return (
+      <Pressable
+        key={item.id}
+        onPress={() => setExpandedId(expanded ? null : item.id)}
+        style={{
+          flexDirection: 'row',
+          gap: 12,
+          padding: 14,
+          borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth,
+          borderBottomColor: line,
+        }}
+        accessibilityRole="button"
+        accessibilityLabel={`${item.title}. ${item.body}`}
+        accessibilityState={{ expanded }}
+      >
         <View
-          style={[
-            styles.modalCardFull,
-            {
-              height: '85%',
-              padding: 0,
-              overflow: 'hidden',
-              backgroundColor: isDark ? '#101016' : '#ffffff',
-            },
-          ]}
+          style={{
+            width: 42,
+            height: 42,
+            borderRadius: 14,
+            backgroundColor: tileBg,
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
         >
-          {/* Header */}
-          <View
-            style={{
-              flexDirection: 'row',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              paddingHorizontal: 20,
-              paddingTop: 18,
-              paddingBottom: 14,
-              borderBottomWidth: 1,
-              borderBottomColor: isDark ? '#1e1e28' : '#eff0f5',
-            }}
-          >
-            <View>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Text style={{ fontSize: 18, fontWeight: '800', color: colors.text }}>Notifications</Text>
-                {unreadCount > 0 ? (
-                  <View
-                    style={{
-                      backgroundColor: 'rgba(45, 186, 78, 0.15)',
-                      paddingHorizontal: 7,
-                      paddingVertical: 2,
-                      borderRadius: 8,
-                      borderWidth: 1,
-                      borderColor: 'rgba(45, 186, 78, 0.25)',
-                    }}
-                  >
-                    <Text style={{ color: '#2dba4e', fontSize: 10, fontWeight: '800' }}>
-                      {unreadCount} NEW
-                    </Text>
-                  </View>
-                ) : null}
-              </View>
-              <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
-                Regent AI briefs & executive anomalies
-              </Text>
-            </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              {unreadCount > 0 && (
-                <TouchableOpacity
-                  onPress={handleMarkAllRead}
-                  style={{
-                    backgroundColor: colors.buttonSecondaryBackground,
-                    paddingHorizontal: 10,
-                    paddingVertical: 6,
-                    borderRadius: 8,
-                    borderWidth: 1,
-                    borderColor: colors.border,
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Text style={{ color: colors.accent, fontSize: 11, fontWeight: '700' }}>Mark all read</Text>
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity
-                onPress={onClose}
-                style={navStyles.closeBtn}
-                activeOpacity={0.7}
-              >
-                <Feather name="x" size={18} color="#8E8E9F" />
-              </TouchableOpacity>
+          <Ionicons name={style.icon} size={19} color={tileFg} />
+        </View>
+
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <Text
+              numberOfLines={1}
+              style={{
+                flex: 1,
+                fontSize: 15,
+                fontWeight: item.isNew ? '700' : '600',
+                color: item.isNew ? ink : isDark ? 'rgba(234, 242, 238, 0.85)' : '#3A4A42',
+              }}
+            >
+              {item.title}
+            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={{ fontSize: 12, color: muted }}>{formatNotifTime(item.ts)}</Text>
+              {item.isNew && <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#16A34A' }} />}
             </View>
           </View>
 
-          {isLoading ? (
-            <ActivityIndicator size="large" color={colors.accent} style={{ marginTop: 40 }} />
-          ) : notifications.length === 0 ? (
-            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20 }}>
-              <Ionicons name="notifications-off-outline" size={48} color="#8E8E9F" style={{ marginBottom: 12 }} />
-              <Text style={{ color: colors.text, fontSize: 16, fontWeight: '700', textAlign: 'center' }}>All caught up!</Text>
-              <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 4, textAlign: 'center', lineHeight: 18 }}>
-                Regent AI is actively monitoring SMS logs and budget anomalies. You will be notified here when action is required.
-              </Text>
-            </View>
-          ) : (
-            <FlatList
-              data={notifications}
-              keyExtractor={(item) => item.id}
-              showsVerticalScrollIndicator={false}
-              contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 24 }}
-              renderItem={({ item }) => {
-                const isUnread = !item.readStatus;
-                const isCorrection = item.payload?.action === 'category_correction';
-                const oneLineMessage = getOneLineNotification(item.title, item.body);
-                const isAlert = item.type === 'anomaly' || item.type === 'budget_alert';
+          {!!item.body && (
+            <Text
+              numberOfLines={expanded ? undefined : 2}
+              style={{ fontSize: 13, lineHeight: 19, color: muted, marginTop: 3 }}
+            >
+              {item.body}
+            </Text>
+          )}
 
-                return (
+          {showActions && (
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+              {busyId === item.id ? (
+                <ActivityIndicator size="small" color={colors.accent} />
+              ) : (
+                <>
                   <TouchableOpacity
-                    activeOpacity={0.85}
-                    onPress={() => {
-                      if (isUnread) {
-                        notificationService.markAsRead(item.id);
-                      }
-                    }}
+                    onPress={() => handleAction(item.raw, 'approve')}
+                    activeOpacity={0.8}
                     style={{
-                      backgroundColor: isUnread
-                        ? (isDark ? 'rgba(45, 186, 78, 0.05)' : 'rgba(45, 186, 78, 0.04)')
-                        : (isDark ? '#15151e' : '#f9fafc'),
-                      borderWidth: 1,
-                      borderColor: isUnread
-                        ? (isDark ? 'rgba(45, 186, 78, 0.35)' : 'rgba(45, 186, 78, 0.4)')
-                        : (isDark ? '#232330' : '#e7e9f2'),
-                      borderRadius: 14,
-                      paddingHorizontal: 12,
-                      paddingVertical: 10,
-                      marginVertical: 3.5,
-                      shadowColor: '#000',
-                      shadowOffset: { width: 0, height: 1 },
-                      shadowOpacity: isDark ? 0.2 : 0.04,
-                      shadowRadius: 2,
-                      elevation: 1,
+                      backgroundColor: isDark ? LIME : FOREST,
+                      borderRadius: 999,
+                      height: 36,
+                      paddingHorizontal: 14,
+                      justifyContent: 'center',
                     }}
                   >
-                    <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
-                      {/* Regent AI Official Logo Badge */}
-                      <View
-                        style={{
-                          width: 32,
-                          height: 32,
-                          borderRadius: 9,
-                          backgroundColor: isDark ? '#16231a' : '#ebf8f0',
-                          borderWidth: 1,
-                          borderColor: isUnread
-                            ? (isDark ? 'rgba(45, 186, 78, 0.5)' : '#2dba4e')
-                            : (isDark ? '#243b2a' : '#ccecd7'),
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          marginRight: 10,
-                          marginTop: 1,
-                          position: 'relative',
-                        }}
-                      >
-                        <Image
-                          source={require('../../assets/tree.png')}
-                          style={{ width: 19, height: 19 }}
-                          resizeMode="contain"
-                        />
-                        {isAlert && (
-                          <View
-                            style={{
-                              position: 'absolute',
-                              bottom: -2,
-                              right: -2,
-                              width: 8,
-                              height: 8,
-                              borderRadius: 4,
-                              backgroundColor: '#f59e0b',
-                              borderWidth: 1.5,
-                              borderColor: isDark ? '#15151e' : '#ffffff',
-                            }}
-                          />
-                        )}
-                      </View>
-
-                      {/* Message Content: Clean, Full, NEVER truncated! */}
-                      <View style={{ flex: 1, marginRight: 8 }}>
-                        <Text
-                          style={{
-                            color: colors.text,
-                            fontSize: 13,
-                            fontWeight: '700',
-                            lineHeight: 18,
-                          }}
-                        >
-                          {oneLineMessage}
-                        </Text>
-                      </View>
-
-                      {/* Right: Timestamp & Unread Dot */}
-                      <View style={{ alignItems: 'flex-end', marginLeft: 2 }}>
-                        <Text
-                          style={{
-                            color: colors.textTertiary || '#8E8E9F',
-                            fontSize: 10,
-                            fontWeight: '600',
-                          }}
-                        >
-                          {formatCompactTime(item.createdAt)}
-                        </Text>
-                        {isUnread && (
-                          <View
-                            style={{
-                              width: 6,
-                              height: 6,
-                              borderRadius: 3,
-                              backgroundColor: '#2dba4e',
-                              marginTop: 4,
-                            }}
-                          />
-                        )}
-                      </View>
-                    </View>
-
-                    {/* Category Correction Actions (If needed) */}
-                    {isCorrection && isUnread && (
-                      <View style={{ flexDirection: 'row', marginTop: 8, gap: 8, marginLeft: 42 }}>
-                        <TouchableOpacity
-                          style={{
-                            backgroundColor: '#2dba4e',
-                            paddingHorizontal: 11,
-                            paddingVertical: 5,
-                            borderRadius: 7,
-                          }}
-                          onPress={() => handleAction(item, 'approve')}
-                          activeOpacity={0.8}
-                        >
-                          <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '800' }}>
-                            Approve {item.payload?.suggestedCategory}
-                          </Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={{
-                            borderWidth: 1,
-                            borderColor: colors.border,
-                            paddingHorizontal: 11,
-                            paddingVertical: 5,
-                            borderRadius: 7,
-                          }}
-                          onPress={() => handleAction(item, 'keep_old')}
-                          activeOpacity={0.8}
-                        >
-                          <Text style={{ color: colors.text, fontSize: 11, fontWeight: '700' }}>
-                            Keep {item.payload?.oldCategory}
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
-                    )}
+                    <Text style={{ color: isDark ? FOREST : '#FFFFFF', fontSize: 12, fontWeight: '700' }}>
+                      Yes, {item.raw.payload.suggestedCategory}
+                    </Text>
                   </TouchableOpacity>
-                );
+                  <TouchableOpacity
+                    onPress={() => handleAction(item.raw, 'keep_old')}
+                    activeOpacity={0.8}
+                    style={{
+                      borderWidth: 1,
+                      borderColor: line,
+                      backgroundColor: cardBg,
+                      borderRadius: 999,
+                      height: 36,
+                      paddingHorizontal: 14,
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Text style={{ color: ink, fontSize: 12, fontWeight: '600' }}>
+                      Keep {item.raw.payload.oldCategory}
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+          )}
+
+          {resolved && item.kind === 'review' && (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 8 }}>
+              <Feather name="check" size={13} color={colors.accent} />
+              <Text style={{ fontSize: 12, color: colors.accent, fontWeight: '600' }}>Category updated</Text>
+            </View>
+          )}
+        </View>
+      </Pressable>
+    );
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" statusBarTranslucent onRequestClose={onClose}>
+      <View style={{ flex: 1, backgroundColor: 'rgba(7, 17, 13, 0.55)', justifyContent: 'flex-end' }}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close notifications" />
+
+        <View
+          style={{
+            height: '90%',
+            width: '100%',
+            maxWidth: 640,
+            alignSelf: 'center',
+            backgroundColor: sheetBg,
+            borderTopLeftRadius: 28,
+            borderTopRightRadius: 28,
+            overflow: 'hidden',
+          }}
+        >
+          <View style={{ width: 40, height: 5, borderRadius: 3, backgroundColor: isDark ? 'rgba(255,255,255,0.18)' : '#C9D4CE', alignSelf: 'center', marginTop: 10 }} />
+
+          {/* Header */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 14 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <Text style={{ fontSize: 26, color: ink, fontFamily: display, fontWeight: display ? undefined : '800', letterSpacing: -0.6 }}>
+                Notifications
+              </Text>
+              {newIds.size > 0 && (
+                <View style={{ backgroundColor: LIME, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 3 }}>
+                  <Text style={{ color: FOREST, fontSize: 12, fontWeight: '700' }}>{newIds.size} new</Text>
+                </View>
+              )}
+            </View>
+            <TouchableOpacity
+              onPress={onClose}
+              activeOpacity={0.7}
+              accessibilityLabel="Close"
+              style={{
+                width: 44,
+                height: 44,
+                borderRadius: 22,
+                borderWidth: 1,
+                borderColor: line,
+                backgroundColor: cardBg,
+                alignItems: 'center',
+                justifyContent: 'center',
               }}
-            />
+            >
+              <Feather name="x" size={18} color={ink} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Filter chips */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={{ flexGrow: 0 }}
+            contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 16, gap: 8 }}
+          >
+            {FILTERS.map((f) => {
+              const active = filter === f.key;
+              return (
+                <TouchableOpacity
+                  key={f.key}
+                  onPress={() => setFilter(f.key)}
+                  activeOpacity={0.8}
+                  accessibilityState={{ selected: active }}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 6,
+                    height: 36,
+                    paddingHorizontal: 14,
+                    borderRadius: 999,
+                    backgroundColor: active ? (isDark ? LIME : FOREST) : cardBg,
+                    borderWidth: active ? 0 : 1,
+                    borderColor: line,
+                  }}
+                >
+                  <Text style={{ fontSize: 13, fontWeight: active ? '700' : '600', color: active ? (isDark ? FOREST : '#FFFFFF') : ink }}>
+                    {f.label}
+                  </Text>
+                  {!!f.count && (
+                    <View style={{ backgroundColor: '#FF5A36', borderRadius: 999, minWidth: 18, height: 18, paddingHorizontal: 5, alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '700' }}>{f.count}</Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+
+          {isLoading && notifications.length === 0 ? (
+            <ActivityIndicator size="large" color={colors.accent} style={{ marginTop: 48 }} />
+          ) : (
+            <ScrollView
+              style={{ flex: 1 }}
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={{ paddingBottom: insets.bottom + 32 }}
+            >
+              {/* Featured card */}
+              {featured && (
+                <Animated.View
+                  entering={FadeIn.duration(350)}
+                  style={{
+                    marginHorizontal: 16,
+                    marginTop: 18,
+                    backgroundColor: FOREST,
+                    borderRadius: 26,
+                    padding: 18,
+                    overflow: 'hidden',
+                  }}
+                >
+                  <View style={{ position: 'absolute', width: 180, height: 180, borderRadius: 90, borderWidth: 1, borderColor: 'rgba(184, 243, 107, 0.2)', right: -60, top: -70 }} />
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <View style={{ width: 28, height: 28, borderRadius: 9, backgroundColor: LIME, alignItems: 'center', justifyContent: 'center' }}>
+                        <Ionicons name="sparkles" size={14} color={FOREST} />
+                      </View>
+                      <Text style={{ color: LIME, fontSize: 12, fontWeight: '700' }}>Latest from Regent</Text>
+                    </View>
+                    <Text style={{ color: '#B5CEC1', fontSize: 12 }}>{formatNotifTime(featured.ts)}</Text>
+                  </View>
+                  <Text style={{ color: '#FFFFFF', fontSize: 22, marginTop: 12, letterSpacing: -0.4, fontFamily: display, fontWeight: display ? undefined : '800' }}>
+                    {featured.title}
+                  </Text>
+                  {!!featured.body && (
+                    <Text style={{ color: '#D9E7DF', fontSize: 14, lineHeight: 20, marginTop: 6 }}>{featured.body}</Text>
+                  )}
+                  <View style={{ flexDirection: 'row', gap: 8, marginTop: 14 }}>
+                    <TouchableOpacity
+                      onPress={openRegent}
+                      activeOpacity={0.85}
+                      style={{ backgroundColor: LIME, borderRadius: 999, height: 40, paddingHorizontal: 16, justifyContent: 'center' }}
+                    >
+                      <Text style={{ color: FOREST, fontSize: 13, fontWeight: '700' }}>Ask Regent about this</Text>
+                    </TouchableOpacity>
+                  </View>
+                </Animated.View>
+              )}
+
+              {/* Grouped list */}
+              {sections.map((section, sIndex) => (
+                <Animated.View key={section.title} entering={FadeIn.delay(80 + sIndex * 60).duration(300)}>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: muted, paddingHorizontal: 22, paddingTop: 20, paddingBottom: 8 }}>
+                    {section.title}
+                  </Text>
+                  <View style={{ marginHorizontal: 16, backgroundColor: cardBg, borderWidth: 1, borderColor: line, borderRadius: 22, overflow: 'hidden' }}>
+                    {section.data.map((item, i) => renderRow(item, i === section.data.length - 1))}
+                  </View>
+                </Animated.View>
+              ))}
+
+              {/* Empty state */}
+              {!featured && sections.length === 0 && (
+                <View style={{ alignItems: 'center', paddingHorizontal: 32, paddingTop: 64 }}>
+                  <View style={{ width: 64, height: 64, borderRadius: 22, backgroundColor: isDark ? 'rgba(184, 243, 107, 0.12)' : '#E3F7EE', alignItems: 'center', justifyContent: 'center' }}>
+                    <Ionicons name="notifications-outline" size={28} color={isDark ? LIME : '#0B6B44'} />
+                  </View>
+                  <Text style={{ color: ink, fontSize: 17, fontWeight: '700', marginTop: 16, textAlign: 'center' }}>
+                    {filter === 'all' ? "You're all caught up" : 'Nothing here yet'}
+                  </Text>
+                  <Text style={{ color: muted, fontSize: 13, lineHeight: 19, marginTop: 6, textAlign: 'center' }}>
+                    {filter === 'review'
+                      ? 'When Regent is unsure about a category, it will ask you here.'
+                      : 'Spending alerts and money tips from Regent will show up here.'}
+                  </Text>
+                </View>
+              )}
+            </ScrollView>
           )}
         </View>
       </View>
@@ -2090,8 +2233,6 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
   );
 };
 
-// ----------------------------------------------------
-// Reusable Global Profile Modal
 // ----------------------------------------------------
 const ProfileModal = ({ visible, onClose }: { visible: boolean; onClose: () => void }) => {
   const { colors } = useTheme();
@@ -2305,17 +2446,17 @@ const TransactionRowItem = React.memo(({ tx, styles }: { tx: any; styles: any })
   const isCredit = tx.type === 'credit';
   const amountVal = Math.abs(parseFloat(tx.amount || 0));
   const formattedAmount = `${isCredit ? '+' : '-'}₹${amountVal.toLocaleString('en-IN')}`;
+  const catKey = isCredit ? 'money_received' : (tx.category || 'miscellaneous');
 
   return (
     <View style={styles.txItem}>
       <View style={styles.txLeft}>
-        <View style={styles.txIconBg}>
-          <Feather
-            name={tx.category === 'food' ? 'coffee' : tx.category === 'transport' ? 'navigation' : 'tag'}
-            size={16}
-            color="#2dba4e"
-          />
-        </View>
+        <CategoryIcon
+          category={catKey}
+          variant="soft"
+          size={36}
+          style={{ marginRight: 10 }}
+        />
         <View style={styles.txMeta}>
           <Text style={styles.merchantName} numberOfLines={1} ellipsizeMode="tail">
             {tx.merchant || 'Unknown Merchant'}
@@ -2343,25 +2484,22 @@ const TransactionRowItem = React.memo(({ tx, styles }: { tx: any; styles: any })
 });
 
 const DashboardScreen = () => {
-  const { colors, isDark } = useTheme();
-  const styles = getStyles(colors);
-  const navStyles = getNavStyles(colors);
+  const { isDark } = useTheme();
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
   const { sync } = useSyncDb();
 
   const user = useAuthStore((state) => state.user);
-  const [refreshing, setRefreshing] = useState(false);
-
   const unreadCount = useNotificationStore((state) => state.unreadCount);
-  const notifications = useNotificationStore((state) => state.notifications);
-
-  // Bank profile state management
   const bankProfiles = useBankStore((state) => state.bankProfiles);
+  const transactions = useTransactionStore((state) => state.transactions);
+  const snapshots = useAnalyticsStore((state) => state.snapshots);
+  const incomeCurrentMonth = useAnalyticsStore((state) => state.incomeCurrentMonth);
+
+  const [refreshing, setRefreshing] = useState(false);
   const [addBankModalVisible, setAddBankModalVisible] = useState(false);
   const [netWorthModalVisible, setNetWorthModalVisible] = useState(false);
-  const [reviewModalVisible, setReviewModalVisible] = useState(false);
-  const [isPrivacyMasked, setIsPrivacyMasked] = useState(false);
+  const [notificationsVisible, setNotificationsVisible] = useState(false);
   const [isSmsPermissionActive, setIsSmsPermissionActive] = useState(true);
 
   useEffect(() => {
@@ -2370,28 +2508,12 @@ const DashboardScreen = () => {
     }
   }, []);
 
-  // Slide Animation for Onboarding notification banner
-  const bannerY = useSharedValue(-100);
-  const bannerOpacity = useSharedValue(0);
-
-  useEffect(() => {
-    if (bankProfiles.length === 0) {
-      bannerY.value = withTiming(0, { duration: 500 });
-      bannerOpacity.value = withTiming(1, { duration: 500 });
-    } else {
-      bannerY.value = withTiming(-100, { duration: 300 });
-      bannerOpacity.value = withTiming(0, { duration: 300 });
-    }
-  }, [bankProfiles.length]);
-
-  const bannerAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: bannerY.value }],
-    opacity: bannerOpacity.value,
-  }));
-
-  const handleOpenAddBank = () => {
-    setAddBankModalVisible(true);
-  };
+  useFocusEffect(
+    useCallback(() => {
+      sync();
+      syncService.fetchAnalytics();
+    }, [sync])
+  );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -2405,330 +2527,123 @@ const DashboardScreen = () => {
     }
   }, [sync]);
 
-  const transactions = useTransactionStore((state) => state.transactions);
-  const isLoading = useTransactionStore((state) => state.isLoading);
-  const filterCategory = useTransactionStore((state) => state.filterCategory);
-  const setFilterCategory = useTransactionStore((state) => state.setFilterCategory);
+  const monthStart = useMemo(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  }, []);
 
-  const snapshots = useAnalyticsStore((state) => state.snapshots);
-  const incomeCurrentMonth = useAnalyticsStore((state) => state.incomeCurrentMonth);
-
-  const pendingReviewCount = useMemo(() => {
-    return (transactions || []).filter(
-      (tx) => !tx.bankProfileId || tx.status === 'pending_review'
-    ).length;
-  }, [transactions]);
-
-  // Fetch data on screen focus with cached SWR
-  useFocusEffect(
-    useCallback(() => {
-      sync();
-      syncService.fetchAnalytics();
-    }, [sync])
-  );
-
-  // Dynamic calculations for cards
   const liveNetWorth = useMemo(() => {
     if (bankProfiles.length > 0) {
-      return bankProfiles.reduce((sum, bank) => sum + bank.currentBalance, 0);
+      return bankProfiles.reduce((sum, bank) => sum + (Number(bank.currentBalance) || 0), 0);
     }
     if (snapshots.length > 0) {
       return snapshots[snapshots.length - 1].netWorth;
     }
-    return 184320; // fallback
+    return 0;
   }, [bankProfiles, snapshots]);
 
+  // Month-end snapshot from before this month, for the "since last month" pill
+  const previousSnapshot = useMemo(() => {
+    const past = snapshots.filter((s: any) => s.timestamp < monthStart);
+    return past.length > 0 ? past[past.length - 1] : null;
+  }, [snapshots, monthStart]);
+
+  const netWorthHistory = useMemo(
+    () => [...snapshots.map((s: any) => Number(s.netWorth) || 0), liveNetWorth],
+    [snapshots, liveNetWorth]
+  );
+
   const currentMonthExpenses = useMemo(() => {
-    const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
     return transactions
-      .filter((tx) => tx.timestamp >= startOfMonth && tx.type !== 'credit' && !isExcludedFromBudget(tx))
-      .reduce((sum, tx) => sum + (parseFloat(tx.amount) || 0), 0);
-  }, [transactions]);
+      .filter((tx) => tx.timestamp >= monthStart && tx.type !== 'credit' && !isExcludedFromBudget(tx))
+      .reduce((sum, tx) => sum + Math.abs(parseFloat(tx.amount) || 0), 0);
+  }, [transactions, monthStart]);
 
-  // Donut chart category grouping (with double-drilldown into merchants when category is selected)
-  // Strictly excludes self-transfers and non-spending transfers
-  const donutData = useMemo(() => {
-    const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-    const filteredTxs = transactions.filter(
-      (tx) =>
-        tx.timestamp >= startOfMonth &&
-        tx.type !== 'credit' &&
-        !isExcludedFromBudget(tx) &&
-        (filterCategory === null || tx.category === filterCategory)
-    );
-
-    const map: { [key: string]: number } = {};
-    filteredTxs.forEach((tx) => {
-      const key = (filterCategory === null ? tx.category : tx.merchant) || 'Other';
-      map[key] = (map[key] || 0) + Math.abs(tx.amount || 0);
+  // Top 4 categories this month, the rest grouped as "Others"
+  const categories: DashboardCategory[] = useMemo(() => {
+    const map: Record<string, number> = {};
+    transactions.forEach((tx) => {
+      if (tx.timestamp < monthStart || tx.type === 'credit' || isExcludedFromBudget(tx)) return;
+      const key = (tx.category || 'other').toLowerCase().trim();
+      map[key] = (map[key] || 0) + Math.abs(parseFloat(tx.amount) || 0);
     });
 
-    const entries = Object.entries(map).filter(([_, val]) => val > 0);
-    entries.sort((a, b) => b[1] - a[1]);
+    const entries = Object.entries(map)
+      .filter(([, v]) => v > 0)
+      .sort((a, b) => b[1] - a[1]);
 
-    // Cap to exactly 5 items: if > 5 categories, show top 4 and bundle remaining as 5th 'Others' option
-    if (entries.length <= 5) {
-      return entries.map(([key, value], index) => {
-        const cleanKey = key.toLowerCase().trim();
-        const formattedLabel = cleanKey === 'miscellaneous'
-          ? 'Misc'
-          : key
-            .replace(/_/g, ' ')
-            .replace(/\b\w/g, (c) => c.toUpperCase());
-        const color = getSpendingCategoryColor(cleanKey, isDark, index);
+    const toLabel = (key: string) =>
+      key === 'miscellaneous'
+        ? 'Misc'
+        : key.replace(/_/g, ' ').replace(/w/g, (c) => c.toUpperCase());
 
-        return {
-          label: formattedLabel,
-          value,
-          color,
-        };
+    const top = entries.slice(0, 4).map(([key, value], index) => ({
+      key,
+      label: toLabel(key),
+      value,
+      color: getSpendingCategoryColor(key, isDark, index),
+    }));
+
+    const rest = entries.slice(4);
+    if (rest.length > 0) {
+      top.push({
+        key: 'others',
+        label: 'Others',
+        value: rest.reduce((s, [, v]) => s + v, 0),
+        color: getSpendingCategoryColor('other', isDark, 4),
       });
     }
+    return top;
+  }, [transactions, monthStart, isDark]);
 
-    const top4 = entries.slice(0, 4);
-    const remaining = entries.slice(4);
-
-    const result = top4.map(([key, value], index) => {
-      const cleanKey = key.toLowerCase().trim();
-      const formattedLabel = cleanKey === 'miscellaneous'
-        ? 'Misc'
-        : key
-          .replace(/_/g, ' ')
-          .replace(/\b\w/g, (c) => c.toUpperCase());
-      const color = getSpendingCategoryColor(cleanKey, isDark, index);
-
-      return {
-        label: formattedLabel,
-        value,
-        color,
-      };
-    });
-
-    const othersTotal = remaining.reduce((sum, [_, val]) => sum + val, 0);
-    result.push({
-      label: 'Others',
-      value: othersTotal,
-      color: getSpendingCategoryColor('other', isDark, 4),
-    });
-
-    return result;
-  }, [transactions, filterCategory, isDark]);
-
-  const recentTransactions = useMemo(() => {
-    return transactions
-      .filter((tx) => filterCategory === null || tx.category === filterCategory)
-      .slice(0, 5);
-  }, [transactions, filterCategory]);
-
-  const categories = ['food', 'transport', 'shopping', 'utilities', 'entertainment'];
+  const handleAddExpense = () => {
+    if (bankProfiles.length > 0) {
+      navigation.navigate('ManualTransaction', { bank: bankProfiles[0], initialType: 'debit' });
+    } else {
+      setAddBankModalVisible(true);
+    }
+  };
 
   return (
-    <View style={styles.container}>
-      <AppTopBar onOpenAddBank={handleOpenAddBank} />
-      <ScrollView
-        style={styles.container}
-        contentContainerStyle={[styles.contentContainer, { paddingTop: 12, paddingBottom: insets.bottom + 100 }]}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#2dba4e" colors={["#2dba4e"]} />
+    <View style={{ flex: 1, paddingTop: insets.top }}>
+      <HomeDashboard
+        userName={user?.name}
+        unreadCount={unreadCount}
+        netWorth={liveNetWorth}
+        netWorthHistory={netWorthHistory}
+        previousNetWorth={previousSnapshot ? Number(previousSnapshot.netWorth) : null}
+        previousMonthLabel={
+          previousSnapshot
+            ? new Date(previousSnapshot.timestamp).toLocaleDateString('en-IN', { month: 'long' })
+            : undefined
         }
-      >
+        income={incomeCurrentMonth}
+        spent={currentMonthExpenses}
+        transactions={transactions}
+        categories={categories}
+        hasBanks={bankProfiles.length > 0}
+        smsTrackingOn={isSmsPermissionActive}
+        refreshing={refreshing}
+        bottomInset={insets.bottom}
+        onRefresh={onRefresh}
+        onOpenMenu={() => useSidebarStore.getState().openSidebar()}
+        onOpenNotifications={() => setNotificationsVisible(true)}
+        onOpenNetWorth={() => setNetWorthModalVisible(true)}
+        onAddBank={() => setAddBankModalVisible(true)}
+        onAddExpense={handleAddExpense}
+        onOpenCalendar={() => navigation.navigate('FinancialCalendar', { userCreatedAt: user?.createdAt })}
+        onOpenBudgets={() => navigation.navigate('Budgets')}
+        onOpenGoals={() => navigation.navigate('Goals')}
+        onOpenRegent={() => navigation.navigate('Regent')}
+        onSetupTracking={() => navigation.navigate('AutoTrackingSetup')}
+        onOpenTransaction={(tx) => navigation.navigate('TransactionDetail', { transaction: tx })}
+      />
 
-        {/* Onboarding Bank Connection Banner */}
-        {bankProfiles.length === 0 && (
-          <Animated.View
-            entering={FadeIn.delay(300).duration(800)}
-            style={styles.bankNotificationBanner}
-          >
-            <Feather name="info" size={18} color="#FFD700" style={{ marginRight: 10 }} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.bannerText}>Connect a bank account to enable sync and transactions.</Text>
-            </View>
-            <TouchableOpacity
-              style={styles.bannerActionBtn}
-              onPress={handleOpenAddBank}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.bannerActionText}>Add Bank</Text>
-            </TouchableOpacity>
-          </Animated.View>
-        )}
+      <NotificationsModal
+        visible={notificationsVisible}
+        onClose={() => setNotificationsVisible(false)}
+      />
 
-        {/* Soft Recovery Banner for Skipped SMS Auto-Tracking */}
-        {Platform.OS === 'android' && !isSmsPermissionActive && (
-          <Animated.View
-            entering={FadeIn.delay(200).duration(600)}
-            style={styles.autoTrackingSoftBanner}
-          >
-            <View style={styles.autoTrackingIconWrap}>
-              <MaterialCommunityIcons name="message-processing-outline" size={20} color="#2dba4e" />
-            </View>
-            <View style={{ flex: 1, paddingHorizontal: 10 }}>
-              <Text style={styles.autoTrackingBannerTitle}>Turn on auto-tracking</Text>
-              <Text style={styles.autoTrackingBannerDesc}>
-                Automatically log expenses from your bank SMS.
-              </Text>
-            </View>
-            <TouchableOpacity
-              style={styles.autoTrackingActionBtn}
-              onPress={() => navigation.navigate('AutoTrackingSetup')}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.autoTrackingActionText}>Set Up</Text>
-            </TouchableOpacity>
-          </Animated.View>
-        )}
-
-        {/* Net Worth Card (Neon shadow style) */}
-        <TouchableOpacity
-          style={[styles.card, styles.neonCard]}
-          onPress={() => setNetWorthModalVisible(true)}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.cardTitle}>Total Net Worth</Text>
-          <Text style={styles.cardBigNumber}>
-            {isPrivacyMasked ? '₹ •••••' : `₹${liveNetWorth.toLocaleString('en-IN')}`}
-          </Text>
-          <Text style={styles.cardFooter}>Active Wealth Compounder</Text>
-        </TouchableOpacity>
-
-        {/* Net Worth Area Chart */}
-        {snapshots.length > 1 && (
-          <View style={[styles.card, { height: 220 }]}>
-            <Text style={styles.chartTitle}>Net Worth History (6 Months)</Text>
-            <View style={{ flex: 1, marginTop: 10 }}>
-              {Platform.OS !== 'web' ? (
-                <CartesianChart
-                  data={snapshots}
-                  xKey="monthLabel"
-                  yKeys={["netWorth"]}
-                >
-                  {({ points, chartBounds }) => (
-                    <Area
-                      points={points.netWorth}
-                      y0={chartBounds.bottom}
-                      animate={{ type: "timing", duration: 350 }}
-                    >
-                      <LinearGradient
-                        start={vec(0, chartBounds.top)}
-                        end={vec(0, chartBounds.bottom)}
-                        colors={["#2dba4e", "rgba(45, 186, 78, 0)"]}
-                      />
-                    </Area>
-                  )}
-                </CartesianChart>
-              ) : (
-                <WebNetWorthChart data={snapshots} />
-              )}
-            </View>
-          </View>
-        )}
-
-        {/* Balance Row */}
-        <View style={styles.row}>
-          <View style={styles.cardHalf}>
-            <Text style={styles.cardTitle}>Spent (Current Month)</Text>
-            <Text style={styles.cardBigNumberSmall}>
-              {isPrivacyMasked ? '₹ •••••' : `₹${currentMonthExpenses.toLocaleString('en-IN')}`}
-            </Text>
-          </View>
-          <View style={styles.cardHalf}>
-            <Text style={styles.cardTitle}>Income (Current Month)</Text>
-            <Text style={[styles.cardBigNumberSmall, { color: colors.accent }]}>
-              {isPrivacyMasked ? '₹ •••••' : `₹${incomeCurrentMonth.toLocaleString('en-IN')}`}
-            </Text>
-          </View>
-        </View>
-
-        {/* Paytm-Style Quick Actions Horizontal Row */}
-        <QuickActionsRow
-          onOpenCalendar={() => {
-            try {
-              if (navigation && typeof navigation.navigate === 'function') {
-                navigation.navigate('FinancialCalendar', {
-                  userCreatedAt: user?.createdAt,
-                });
-              } else if (navigationRef?.isReady?.()) {
-                (navigationRef.navigate as any)('FinancialCalendar', {
-                  userCreatedAt: user?.createdAt,
-                });
-              }
-            } catch (err) {
-              console.warn('[Calendar Navigation Error]:', err);
-            }
-          }}
-        />
-
-        {/* Category Horizontal Filter Row */}
-        <View style={styles.filterWrapper}>
-          <Text style={styles.sectionHeader}>Transactions Filter</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
-            <TouchableOpacity
-              style={[styles.filterTab, filterCategory === null && styles.filterTabActive]}
-              onPress={() => setFilterCategory(null)}
-            >
-              <Text style={[styles.filterTabText, filterCategory === null && styles.filterTabTextActive]}>All</Text>
-            </TouchableOpacity>
-            {categories.map((cat) => (
-              <TouchableOpacity
-                key={cat}
-                style={[styles.filterTab, filterCategory === cat && styles.filterTabActive]}
-                onPress={() => setFilterCategory(cat)}
-              >
-                <Text style={[styles.filterTabText, filterCategory === cat && styles.filterTabTextActive]}>
-                  {cat.charAt(0).toUpperCase() + cat.slice(1)}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-
-        {/* Spending Breakdown Donut Chart */}
-        {donutData.length > 0 && (
-          <View style={[styles.card, styles.donutCardContainer]}>
-            <Text style={styles.chartTitle}>
-              {filterCategory === null ? 'Spending breakdown' : `${filterCategory.toUpperCase()} breakdown`}
-            </Text>
-            <View style={styles.donutRow}>
-              <View style={{ width: 140, height: 140, justifyContent: 'center', alignItems: 'center', flexShrink: 0 }}>
-                <SpendingDonutChart data={donutData} size={140} strokeWidth={13} />
-              </View>
-              <View style={styles.donutLegend}>
-                {donutData.map((item, index) => (
-                  <View key={index} style={styles.legendItem}>
-                    <View style={[styles.legendIndicator, { backgroundColor: item.color }]} />
-                    <View style={styles.legendTextWrapper}>
-                      <Text style={styles.legendCategoryText} numberOfLines={1} ellipsizeMode="tail">
-                        {item.label}:
-                      </Text>
-                      <Text style={styles.legendAmountText} numberOfLines={1}>
-                        ₹{item.value.toLocaleString('en-IN')}
-                      </Text>
-                    </View>
-                  </View>
-                ))}
-              </View>
-            </View>
-          </View>
-        )}
-
-        {/* Recent Transactions List */}
-        <View style={[styles.card, { marginBottom: 30 }]}>
-          <Text style={styles.chartTitle}>Recent Transactions</Text>
-          {isLoading && transactions.length === 0 ? (
-            <ActivityIndicator color="#2dba4e" style={{ marginTop: 20 }} />
-          ) : recentTransactions.length === 0 ? (
-            <Text style={styles.emptyText}>No transactions found for filter.</Text>
-          ) : (
-            recentTransactions.map((tx) => (
-              <TransactionRowItem key={tx.id} tx={tx} styles={styles} />
-            ))
-          )}
-        </View>
-      </ScrollView>
-
-      {/* Add Bank Modal Sheet */}
       <AddBankModal
         visible={addBankModalVisible}
         onClose={() => setAddBankModalVisible(false)}
@@ -2738,25 +2653,12 @@ const DashboardScreen = () => {
         }}
       />
 
-      {/* Net Worth Details Modal */}
       <NetWorthDetailsModal
         visible={netWorthModalVisible}
         onClose={() => setNetWorthModalVisible(false)}
         snapshots={snapshots}
         liveNetWorth={liveNetWorth}
         loading={false}
-      />
-
-      {/* Review Transactions Modal */}
-      <ReviewTransactionsModal
-        visible={reviewModalVisible}
-        onClose={() => setReviewModalVisible(false)}
-        bank={null}
-        rawTransactions={[]}
-        onConfirmSuccess={async () => {
-          setReviewModalVisible(false);
-          await sync();
-        }}
       />
     </View>
   );
@@ -3805,28 +3707,29 @@ const TAB_CONFIG: { [key: string]: TabItemConfig } = {
   },
 };
 
+const NAV_FOREST = '#0B3D2C';
+const NAV_LIME = '#B8F36B';
+
 const CustomTabButton = ({
   route,
   isFocused,
   onPress,
   onLongPress,
   isSmall,
-  isMedium,
   isDark,
-  colors,
+  activeWidth,
+  inactiveWidth,
 }: {
   route: any;
   isFocused: boolean;
   onPress: () => void;
   onLongPress: () => void;
   isSmall: boolean;
-  isMedium: boolean;
   isDark: boolean;
-  colors: any;
+  activeWidth: number;
+  inactiveWidth: number;
 }) => {
   const user = useAuthStore((state) => state.user);
-  const [isHovered, setIsHovered] = useState(false);
-  const scale = useSharedValue(1);
 
   const config = TAB_CONFIG[route.name] || {
     label: route.name,
@@ -3835,124 +3738,175 @@ const CustomTabButton = ({
     size: 20,
   };
 
-  const iconSize = isSmall ? 18 : (config.size || 20);
+  const iconSize = isSmall ? 18 : 20;
+  const activeBg = isDark ? NAV_LIME : NAV_FOREST;
+  const activeFg = isDark ? NAV_FOREST : NAV_LIME;
+  const inactiveFg = isDark ? 'rgba(234, 242, 238, 0.62)' : '#4F6159';
+  const showAvatar = route.name === 'Settings' && !!user?.avatarUrl;
 
-  const handlePressIn = () => {
-    scale.value = withSpring(0.92, { damping: 14, stiffness: 300 });
-  };
+  // Fluid transition progress: 0 (inactive) -> 1 (active)
+  const focusAnim = useSharedValue(isFocused ? 1 : 0);
+  const scale = useSharedValue(1);
 
-  const handlePressOut = () => {
-    scale.value = withSpring(1, { damping: 14, stiffness: 300 });
-  };
+  useEffect(() => {
+    focusAnim.value = withTiming(isFocused ? 1 : 0, {
+      duration: 220,
+      easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+    });
+  }, [isFocused]);
 
-  const animatedStyle = useAnimatedStyle(() => ({
+  // Synchronized slot expansion/contraction: gained width equals lost width at every frame
+  const slotStyle = useAnimatedStyle(() => {
+    const w = interpolate(focusAnim.value, [0, 1], [inactiveWidth, activeWidth]);
+    return {
+      width: w,
+      height: '100%',
+    };
+  });
+
+  const pressStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
   }));
 
-  const iconColor = isFocused
-    ? (isDark ? '#2dba4e' : '#16a34a')
-    : isHovered
-      ? (isDark ? '#fafbfc' : '#0f172a')
-      : (isDark ? 'rgba(250, 251, 252, 0.65)' : '#64748b');
+  // Background pill blooms and fades seamlessly
+  const pillBgStyle = useAnimatedStyle(() => ({
+    opacity: focusAnim.value,
+    transform: [{ scale: interpolate(focusAnim.value, [0, 1], [0.88, 1]) }],
+  }));
 
-  const textColor = isFocused
-    ? (isDark ? '#2dba4e' : '#16a34a')
-    : isHovered
-      ? (isDark ? '#e4e4e7' : '#1e293b')
-      : (isDark ? 'rgba(250, 251, 252, 0.65)' : '#475569');
+  // Label smoothly unrolls and fades in without harsh clipping
+  const labelStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(focusAnim.value, [0.35, 1], [0, 1]),
+    maxWidth: interpolate(focusAnim.value, [0, 1], [0, 76]),
+    transform: [{ translateX: interpolate(focusAnim.value, [0, 1], [4, 0]) }],
+  }));
+
+  // Smooth cross-fade between active (filled) and inactive (outline) icons
+  const activeIconStyle = useAnimatedStyle(() => ({
+    opacity: focusAnim.value,
+  }));
+
+  const inactiveIconStyle = useAnimatedStyle(() => ({
+    opacity: 1 - focusAnim.value,
+  }));
 
   return (
-    <Pressable
-      onPress={onPress}
-      onLongPress={onLongPress}
-      onPressIn={handlePressIn}
-      onPressOut={handlePressOut}
-      onHoverIn={() => setIsHovered(true)}
-      onHoverOut={() => setIsHovered(false)}
-      style={[
-        {
-          flex: 1,
-          height: '100%',
-          alignItems: 'center',
-          justifyContent: 'center',
-          paddingHorizontal: 2,
-        },
-        Platform.OS === 'web' && ({ cursor: 'pointer', outlineStyle: 'none' } as any),
-      ]}
-      accessibilityRole="button"
-      accessibilityState={isFocused ? { selected: true } : {}}
-      accessibilityLabel={config.label}
-    >
-      <Animated.View
+    <Animated.View style={[{ height: '100%' }, slotStyle]}>
+      <Pressable
+        onPress={onPress}
+        onLongPress={onLongPress}
+        onPressIn={() => {
+          scale.value = withSpring(0.92, { damping: 14, stiffness: 300 });
+        }}
+        onPressOut={() => {
+          scale.value = withSpring(1, { damping: 14, stiffness: 300 });
+        }}
         style={[
           {
-            flexDirection: 'column',
+            flex: 1,
             alignItems: 'center',
             justifyContent: 'center',
-            paddingHorizontal: isSmall ? 2 : (isMedium ? 6 : 10),
-            paddingVertical: 4,
-            maxWidth: '96%',
-            minWidth: isSmall ? 36 : 46,
+            height: '100%',
           },
-          animatedStyle,
+          Platform.OS === 'web' && ({ cursor: 'pointer', outlineStyle: 'none' } as any),
         ]}
+        accessibilityRole="button"
+        accessibilityState={isFocused ? { selected: true } : {}}
+        accessibilityLabel={config.label}
       >
-        {route.name === 'Settings' && !!user?.avatarUrl ? (
-          <View
-            style={{
-              width: iconSize + 4,
-              height: iconSize + 4,
-              borderRadius: (iconSize + 4) / 2,
-              borderWidth: 1.5,
-              borderColor: isFocused
-                ? (isDark ? '#2dba4e' : '#16a34a')
-                : (isDark ? 'rgba(255, 255, 255, 0.28)' : 'rgba(0, 0, 0, 0.22)'),
-              overflow: 'hidden',
+        <Animated.View
+          style={[
+            {
+              width: '100%',
+              height: isSmall ? 46 : 52,
+              borderRadius: 26,
+              flexDirection: 'row',
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: isDark ? '#161b22' : '#f1f5f9',
-            }}
-          >
-            <Image
-              source={{ uri: user.avatarUrl }}
-              style={{
-                width: iconSize + 4,
-                height: iconSize + 4,
-                borderRadius: (iconSize + 4) / 2,
-              }}
-              resizeMode="cover"
-            />
-          </View>
-        ) : (
-          <Ionicons
-            name={isFocused ? config.activeIcon : config.inactiveIcon}
-            size={iconSize}
-            color={iconColor}
-          />
-        )}
-        <Text
-          numberOfLines={1}
-          ellipsizeMode="tail"
-          style={{
-            color: textColor,
-            fontSize: isSmall ? 8.5 : 9.5,
-            fontWeight: isFocused ? '800' : '700',
-            marginTop: 2,
-            letterSpacing: isFocused ? 0.3 : 0.1,
-          }}
+              paddingHorizontal: 8,
+              position: 'relative',
+              overflow: 'hidden',
+            },
+            pressStyle,
+          ]}
         >
-          {config.label}
-        </Text>
-      </Animated.View>
-    </Pressable>
+          {/* Active pill background */}
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              {
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                left: 0,
+                right: 0,
+                borderRadius: 26,
+                backgroundColor: activeBg,
+              },
+              pillBgStyle,
+            ]}
+          />
+
+          {/* Icon with cross-fade */}
+          <View style={{ width: iconSize + 4, height: iconSize + 4, alignItems: 'center', justifyContent: 'center' }}>
+            {showAvatar ? (
+              <Image
+                source={{ uri: user?.avatarUrl || undefined }}
+                style={{
+                  width: iconSize + 4,
+                  height: iconSize + 4,
+                  borderRadius: (iconSize + 4) / 2,
+                  borderWidth: 1.5,
+                  borderColor: isFocused ? activeFg : 'transparent',
+                }}
+                resizeMode="cover"
+              />
+            ) : (
+              <>
+                <Animated.View style={[{ position: 'absolute' }, activeIconStyle]}>
+                  <Ionicons name={config.activeIcon} size={iconSize} color={activeFg} />
+                </Animated.View>
+                <Animated.View style={[{ position: 'absolute' }, inactiveIconStyle]}>
+                  <Ionicons name={config.inactiveIcon} size={iconSize} color={inactiveFg} />
+                </Animated.View>
+              </>
+            )}
+          </View>
+
+          {/* Label: smoothly unrolls & fades in */}
+          <Animated.View
+            style={[
+              {
+                overflow: 'hidden',
+                marginLeft: 4,
+                justifyContent: 'center',
+              },
+              labelStyle,
+            ]}
+          >
+            <Text
+              numberOfLines={1}
+              style={{
+                color: activeFg,
+                fontSize: isSmall ? 12 : 13,
+                fontWeight: '700',
+              }}
+            >
+              {config.label}
+            </Text>
+          </Animated.View>
+        </Animated.View>
+      </Pressable>
+    </Animated.View>
   );
 };
 
-const CustomBottomTabBar = ({ state, descriptors, navigation }: MaterialTopTabBarProps) => {
-  const { colors, isDark } = useTheme();
+const CustomBottomTabBar = ({ state, navigation }: MaterialTopTabBarProps) => {
+  const { isDark } = useTheme();
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const [measuredWidth, setMeasuredWidth] = useState(0);
 
   useEffect(() => {
     const showSub = Keyboard.addListener(
@@ -3970,20 +3924,30 @@ const CustomBottomTabBar = ({ state, descriptors, navigation }: MaterialTopTabBa
   }, []);
 
   const isSmall = windowWidth < 380;
-  const isMedium = windowWidth >= 380 && windowWidth < 600;
+  const barMarginHorizontal = isSmall ? 10 : 14;
+  const maxBarWidth = 460;
+  const availableWidth = measuredWidth > 0 ? measuredWidth : windowWidth;
+  const barWidth = Math.min(availableWidth - barMarginHorizontal * 2, maxBarWidth);
 
-  // Responsive margins ensuring perfect clearance on all devices
-  const barMarginHorizontal = isSmall ? 10 : 16;
-  const maxBarWidth = 560;
-  const barWidth = Math.min(windowWidth - barMarginHorizontal * 2, maxBarWidth);
+  const BAR_PADDING = 6;
+  const BORDER = 1;
+  const innerWidth = barWidth - BAR_PADDING * 2 - BORDER * 2;
+  const tabCount = state.routes.length;
+  const activeWidth = Math.min(isSmall ? 98 : 110, innerWidth * 0.34);
+  const inactiveWidth = (innerWidth - activeWidth) / Math.max(tabCount - 1, 1);
 
-  // Safe bottom offset considering home indicator and gesture navigation
   const bottomOffset = Platform.OS === 'web'
     ? 18
     : Math.max(insets.bottom + (Platform.OS === 'ios' ? 4 : 8), 16);
 
   return (
     <View
+      onLayout={(e) => {
+        const w = e.nativeEvent.layout.width;
+        if (w > 0 && Math.abs(w - measuredWidth) > 4) {
+          setMeasuredWidth(w);
+        }
+      }}
       style={{
         pointerEvents: isKeyboardVisible ? 'none' : (Platform.OS === 'web' ? 'auto' : 'box-none'),
         position: 'absolute',
@@ -4001,19 +3965,17 @@ const CustomBottomTabBar = ({ state, descriptors, navigation }: MaterialTopTabBa
           width: barWidth,
           height: isSmall ? 58 : 64,
           borderRadius: 32,
-          backgroundColor: isDark ? 'rgba(22, 27, 34, 0.97)' : colors.card,
+          backgroundColor: isDark ? '#0F1E18' : '#FFFFFF',
+          borderWidth: BORDER,
+          borderColor: isDark ? '#1E3329' : '#DCE5E0',
           flexDirection: 'row',
           alignItems: 'center',
-          justifyContent: 'space-between',
-          paddingHorizontal: isSmall ? 6 : 10,
-          paddingVertical: 4,
-          borderWidth: 1,
-          borderColor: colors.border,
-          shadowColor: isDark ? '#000000' : colors.shadowColor,
-          shadowOffset: { width: 0, height: isDark ? 6 : 3 },
-          shadowOpacity: isDark ? 0.45 : 0.08,
-          shadowRadius: isDark ? 16 : 10,
-          elevation: isDark ? 10 : 3,
+          padding: BAR_PADDING,
+          shadowColor: '#0B1F17',
+          shadowOffset: { width: 0, height: 6 },
+          shadowOpacity: isDark ? 0.4 : 0.1,
+          shadowRadius: 20,
+          elevation: 8,
         }}
       >
         {state.routes.map((route, index) => {
@@ -4038,10 +4000,7 @@ const CustomBottomTabBar = ({ state, descriptors, navigation }: MaterialTopTabBa
           };
 
           const onLongPress = () => {
-            navigation.emit({
-              type: 'tabLongPress',
-              target: route.key,
-            });
+            navigation.emit({ type: 'tabLongPress', target: route.key });
           };
 
           return (
@@ -4052,9 +4011,9 @@ const CustomBottomTabBar = ({ state, descriptors, navigation }: MaterialTopTabBa
               onPress={onPress}
               onLongPress={onLongPress}
               isSmall={isSmall}
-              isMedium={isMedium}
               isDark={isDark}
-              colors={colors}
+              activeWidth={activeWidth}
+              inactiveWidth={inactiveWidth}
             />
           );
         })}
@@ -4070,7 +4029,7 @@ function TabNavigator() {
       backBehavior="history"
       tabBar={(props) => <CustomBottomTabBar {...props} />}
       screenOptions={{
-        swipeEnabled: true,
+        swipeEnabled: false,
         lazy: true,
         lazyPreloadDistance: 1,
         animationEnabled: false,
@@ -4080,7 +4039,7 @@ function TabNavigator() {
       <Tab.Screen name="Budgets" component={BudgetTabScreen} />
       <Tab.Screen name="Goals" component={GoalsTabScreen} />
       <Tab.Screen name="Banks" component={BanksScreen} />
-      <Tab.Screen name="Regent" component={ChatScreen} />
+      <Tab.Screen name="Regent" component={RegentChatScreen} />
       <Tab.Screen name="Settings" component={TabProfileScreen} />
     </Tab.Navigator>
   );
@@ -4130,184 +4089,239 @@ class ErrorBoundary extends React.Component<
 // ----------------------------------------------------
 // Global Custom Yes/No Confirmation Dialog Component
 // ----------------------------------------------------
+const CONFIRM_FOREST = '#0B3D2C';
+const CONFIRM_LIME = '#B8F36B';
+const CONFIRM_RED = '#E03131';
+
+// Picks a sensible icon when the caller didn't pass one
+const inferConfirmIcon = (options: any): keyof typeof Feather.glyphMap => {
+  const text = `${options?.confirmText || ''} ${options?.title || ''}`.toLowerCase();
+  if (text.includes('log out') || text.includes('logout') || text.includes('sign out')) return 'log-out';
+  if (options?.icon) return options.icon;
+  if (text.includes('delete') || text.includes('remove') || text.includes('clear')) return 'trash-2';
+  return options?.isDestructive ? 'alert-triangle' : 'info';
+};
+
 const GlobalConfirmModal = () => {
   const { colors, isDark } = useTheme();
+  const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
+
   const visible = useConfirmStore((state) => state.visible);
   const options = useConfirmStore((state) => state.options);
   const loading = useConfirmStore((state) => state.loading);
   const hideConfirm = useConfirmStore((state) => state.hideConfirm);
   const setLoading = useConfirmStore((state) => state.setLoading);
 
-  if (!visible || !options) {
-    return null;
-  }
+  const [mounted, setMounted] = useState(false);
+  const progress = useSharedValue(0);
+  const afterCloseRef = useRef<(() => void) | null>(null);
+  const closingRef = useRef(false);
+
+  const isWide = width >= 600;
+
+  useEffect(() => {
+    if (visible && options) {
+      closingRef.current = false;
+      setMounted(true);
+      progress.value = 0;
+      progress.value = withTiming(1, { duration: 280, easing: Easing.out(Easing.cubic) });
+    } else if (!visible && mounted && !closingRef.current) {
+      setMounted(false);
+    }
+  }, [visible, options]);
+
+  const finishClose = () => {
+    setMounted(false);
+    hideConfirm();
+    const after = afterCloseRef.current;
+    afterCloseRef.current = null;
+    after?.();
+  };
+
+  const animateClose = (after?: () => void) => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    afterCloseRef.current = after || null;
+    progress.value = withTiming(0, { duration: 200, easing: Easing.in(Easing.cubic) }, (finished) => {
+      if (finished) runOnJS(finishClose)();
+    });
+  };
+
+  const backdropStyle = useAnimatedStyle(() => ({ opacity: progress.value }));
+  const sheetStyle = useAnimatedStyle(() =>
+    isWide
+      ? { opacity: progress.value, transform: [{ scale: 0.96 + progress.value * 0.04 }] }
+      : { transform: [{ translateY: (1 - progress.value) * 420 }] }
+  );
+
+  if (!mounted || !options) return null;
 
   const isDestructive = !!options.isDestructive;
-  const title = options.title;
-  const message = options.message;
-  const confirmText = options.confirmText;
-  const cancelText = options.cancelText;
+  const hasCancel = !!options.cancelText;
+  const icon = inferConfirmIcon(options);
+  const display = Font.isLoaded('BricolageGrotesque_800ExtraBold') ? 'BricolageGrotesque_800ExtraBold' : undefined;
+
+  const tileBg = isDestructive
+    ? isDark ? 'rgba(224, 49, 49, 0.2)' : '#FFE3E3'
+    : isDark ? 'rgba(184, 243, 107, 0.14)' : '#E3F2E8';
+  const tileFg = isDestructive ? (isDark ? '#FFA8A8' : '#C92A2A') : isDark ? CONFIRM_LIME : CONFIRM_FOREST;
+
+  const primaryBg = isDestructive ? CONFIRM_RED : isDark ? CONFIRM_LIME : CONFIRM_FOREST;
+  const primaryFg = isDestructive ? '#FFFFFF' : isDark ? CONFIRM_FOREST : CONFIRM_LIME;
 
   const handleCancel = () => {
-    if (options.onCancel) {
-      options.onCancel();
-    }
-    hideConfirm();
+    if (loading) return;
+    animateClose(options.onCancel);
   };
 
   const handleConfirm = async () => {
-    if (!options.onConfirm) return;
+    if (loading) return;
+    if (!options.onConfirm) {
+      animateClose();
+      return;
+    }
     setLoading(true);
     try {
       await options.onConfirm();
     } catch (e: any) {
       console.warn('[Confirm] Error executing action:', e?.message || e);
     } finally {
-      hideConfirm();
+      animateClose();
     }
   };
 
   return (
     <Modal
-      visible={true}
+      visible
       transparent
-      animationType={Platform.OS === 'web' ? 'none' : 'fade'}
-      onRequestClose={loading ? undefined : handleCancel}
+      animationType="none"
+      statusBarTranslucent
+      navigationBarTranslucent
+      onRequestClose={handleCancel}
     >
-      <View style={{
-        flex: 1,
-        backgroundColor: 'rgba(0, 0, 0, 0.65)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        padding: 24,
-      }}>
-        <Pressable
-          style={StyleSheet.absoluteFill}
-          onPress={loading ? undefined : handleCancel}
-        />
-        <View style={{
-          width: '84%',
-          maxWidth: 310,
-          backgroundColor: colors.card,
-          borderRadius: 18,
-          paddingTop: 18,
-          paddingBottom: 16,
-          paddingHorizontal: 18,
-          alignItems: 'center',
-          borderWidth: 1,
-          borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
-          shadowColor: '#000000',
-          shadowOffset: { width: 0, height: 8 },
-          shadowOpacity: isDark ? 0.4 : 0.12,
-          shadowRadius: 16,
-          elevation: 10,
-        }}>
-          {/* Top Icon Badge */}
-          <View style={{
-            width: 40,
-            height: 40,
-            borderRadius: 20,
-            backgroundColor: isDestructive
-              ? (isDark ? 'rgba(239, 68, 68, 0.12)' : '#FEE2E2')
-              : (isDark ? 'rgba(16, 185, 129, 0.12)' : '#D1FAE5'),
-            borderWidth: 1,
-            borderColor: isDestructive
-              ? (isDark ? 'rgba(239, 68, 68, 0.25)' : '#FCA5A5')
-              : (isDark ? 'rgba(16, 185, 129, 0.25)' : '#A7F3D0'),
-            justifyContent: 'center',
-            alignItems: 'center',
-            marginBottom: 10,
-          }}>
-            <Feather
-              name={(options?.icon as any) || (isDestructive ? 'trash-2' : 'alert-circle')}
-              size={18}
-              color={isDestructive ? '#EF4444' : colors.accent}
+      <View style={{ flex: 1, justifyContent: isWide ? 'center' : 'flex-end', alignItems: 'center' }}>
+        <Animated.View
+          style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(7, 17, 13, 0.55)' }, backdropStyle]}
+        >
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={handleCancel}
+            accessibilityLabel={options.cancelText || 'Close'}
+          />
+        </Animated.View>
+
+        <Animated.View
+          accessibilityViewIsModal
+          style={[
+            {
+              width: isWide ? '90%' : '100%',
+              maxWidth: isWide ? 420 : 640,
+              backgroundColor: colors.card,
+              paddingHorizontal: 24,
+              paddingTop: isWide ? 24 : 10,
+              paddingBottom: isWide ? 24 : Math.max(insets.bottom, 16) + 14,
+              borderTopLeftRadius: 28,
+              borderTopRightRadius: 28,
+              borderBottomLeftRadius: isWide ? 28 : 0,
+              borderBottomRightRadius: isWide ? 28 : 0,
+            },
+            sheetStyle,
+          ]}
+        >
+          {!isWide && (
+            <View
+              style={{
+                width: 40,
+                height: 5,
+                borderRadius: 3,
+                alignSelf: 'center',
+                backgroundColor: isDark ? 'rgba(255, 255, 255, 0.18)' : '#D5DED9',
+                marginBottom: 22,
+              }}
             />
+          )}
+
+          <View
+            style={{
+              width: 52,
+              height: 52,
+              borderRadius: 17,
+              backgroundColor: tileBg,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Feather name={icon} size={23} color={tileFg} />
           </View>
 
-          {/* Title */}
-          {!!title && (
-            <Text style={{
-              fontSize: 15,
-              fontWeight: '700',
-              color: colors.text,
-              textAlign: 'center',
-              marginBottom: 5,
-              letterSpacing: -0.2,
-            }}>
-              {title}
+          {!!options.title && (
+            <Text
+              accessibilityRole="header"
+              style={{
+                fontSize: 24,
+                color: colors.text,
+                marginTop: 18,
+                letterSpacing: -0.5,
+                fontFamily: display,
+                fontWeight: display ? undefined : '800',
+              }}
+            >
+              {options.title}
             </Text>
           )}
 
-          {/* Message */}
-          <Text style={{
-            fontSize: 12.5,
-            lineHeight: 18,
-            color: colors.textSecondary,
-            textAlign: 'center',
-            marginBottom: 16,
-            paddingHorizontal: 2,
-          }}>
-            {message}
-          </Text>
+          {!!options.message && (
+            <Text style={{ fontSize: 15, lineHeight: 22, color: colors.textSecondary, marginTop: 8 }}>
+              {options.message}
+            </Text>
+          )}
 
-          {/* Action Buttons */}
-          <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
-            {/* Cancel Button - only rendered when cancelText is specified */}
-            {!!cancelText && (
-              <TouchableOpacity
-                style={{
-                  flex: 1,
-                  height: 38,
-                  borderRadius: 10,
-                  backgroundColor: colors.buttonSecondaryBackground,
-                  borderWidth: 1,
-                  borderColor: colors.border,
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                }}
-                onPress={handleCancel}
-                activeOpacity={0.75}
-                disabled={loading}
-              >
-                <Text style={{
-                  fontSize: 12.5,
-                  fontWeight: '600',
-                  color: colors.text,
-                }}>
-                  {cancelText}
-                </Text>
-              </TouchableOpacity>
-            )}
-
-            {/* Confirm Button */}
+          <View style={{ gap: 10, marginTop: 26 }}>
             <TouchableOpacity
-              style={{
-                flex: 1,
-                height: 38,
-                borderRadius: 10,
-                backgroundColor: isDestructive ? '#EF4444' : colors.accent,
-                justifyContent: 'center',
-                alignItems: 'center',
-              }}
               onPress={handleConfirm}
-              activeOpacity={0.8}
+              activeOpacity={0.85}
               disabled={loading}
+              accessibilityRole="button"
+              style={{
+                height: 54,
+                borderRadius: 27,
+                backgroundColor: primaryBg,
+                alignItems: 'center',
+                justifyContent: 'center',
+                opacity: loading ? 0.85 : 1,
+              }}
             >
               {loading ? (
-                <ActivityIndicator size="small" color="#ffffff" />
+                <ActivityIndicator size="small" color={primaryFg} />
               ) : (
-                <Text style={{
-                  fontSize: 12.5,
-                  fontWeight: '600',
-                  color: '#ffffff',
-                }}>
-                  {confirmText || 'OK'}
+                <Text style={{ color: primaryFg, fontSize: 15, fontWeight: '700' }}>
+                  {options.confirmText || 'OK'}
                 </Text>
               )}
             </TouchableOpacity>
+
+            {hasCancel && (
+              <TouchableOpacity
+                onPress={handleCancel}
+                activeOpacity={0.75}
+                disabled={loading}
+                accessibilityRole="button"
+                style={{
+                  height: 54,
+                  borderRadius: 27,
+                  borderWidth: 1,
+                  borderColor: isDark ? colors.border : '#DCE5E0',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  opacity: loading ? 0.5 : 1,
+                }}
+              >
+                <Text style={{ color: colors.text, fontSize: 15, fontWeight: '600' }}>{options.cancelText}</Text>
+              </TouchableOpacity>
+            )}
           </View>
-        </View>
+        </Animated.View>
       </View>
     </Modal>
   );

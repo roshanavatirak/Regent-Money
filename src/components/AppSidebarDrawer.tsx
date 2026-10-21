@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { Ionicons, Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useTheme, useAuthStore, useSidebarStore, useAppUpdateStore, useTermsModalStore, usePrivacyModalStore, showGlobalConfirm } from '../store';
+import { useTheme, useAuthStore, useSidebarStore, useAppUpdateStore, useTermsModalStore, showGlobalConfirm } from '../store';
 import { getAppCurrentVersion } from '../services/updateService';
 import { authService } from '../services/authService';
 import { navigationRef } from '../navigation/navigationRef';
@@ -351,23 +351,6 @@ export const AppSidebarDrawer: React.FC = () => {
                     <Ionicons name="document-text-outline" size={15} color={colors.text} />
                   </View>
                   <Text style={[styles.menuTitle, { color: colors.text }]}>Terms & Conditions</Text>
-                </TouchableOpacity>
-
-                {/* Privacy Policy */}
-                <TouchableOpacity
-                  style={styles.menuItem}
-                  onPress={() => {
-                    closeSidebar();
-                    setTimeout(() => {
-                      usePrivacyModalStore.getState().openPrivacyModal();
-                    }, 150);
-                  }}
-                  activeOpacity={0.65}
-                >
-                  <View style={[styles.menuIconBox, { backgroundColor: isDark ? 'rgba(16, 185, 129, 0.12)' : 'rgba(16, 185, 129, 0.08)' }]}>
-                    <Ionicons name="shield-checkmark-outline" size={15} color="#10B981" />
-                  </View>
-                  <Text style={[styles.menuTitle, { color: colors.text }]}>Privacy Policy</Text>
                 </TouchableOpacity>
               </View>
 

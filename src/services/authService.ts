@@ -99,7 +99,7 @@ export const authService = {
       mmkvStorage.getObject<UserProfile>('user_profile');
     const token = tokenStore.getAccessToken();
 
-    if (!cachedProfile) {
+    if (!cachedProfile || !token) {
       useAuthStore.getState().setUser(null);
       useAuthStore.getState().setLoading(false);
       return null;
@@ -219,6 +219,13 @@ export const authService = {
     mmkvStorage.setBoolean('auth_remember_me', rememberMe);
     useAuthStore.getState().setUser(profile);
     syncNativeAuthCredentials(data.accessToken, profile?.id);
+
+    if (data.accountRestored) {
+      showGlobalAlert(
+        'Account Restored! 🎉',
+        'Welcome back! Your scheduled account deletion has been cancelled and your data has been fully restored. (Note: A 7-day cooldown is now active before deletion can be requested again).'
+      );
+    }
 
     // Initial database pull (downloads user transactions, budgets, goals)
     triggerSync();
@@ -352,6 +359,13 @@ export const authService = {
       // Auto-accept terms if not yet accepted (user agreed via Google button notice)
       if (!profile.termsAccepted) {
         this.acceptTerms().catch(() => {});
+      }
+
+      if (data.accountRestored) {
+        showGlobalAlert(
+          'Account Restored! 🎉',
+          'Welcome back! Your scheduled account deletion has been cancelled and your data has been fully restored. (Note: A 7-day cooldown is now active before deletion can be requested again).'
+        );
       }
 
       // Initial database sync
@@ -572,6 +586,7 @@ export const authService = {
     try {
       mmkvStorage.delete(SESSION_KEY);
       mmkvStorage.delete(USER_PROFILE_KEY);
+      mmkvStorage.delete('user_profile');
       tokenStore.clearAccessToken();
       mmkvStorage.delete('auth_remember_me');
       mmkvStorage.delete('cache_income_records');
@@ -582,5 +597,40 @@ export const authService = {
     syncNativeAuthCredentials(null);
 
     useAuthStore.getState().setUser(null);
+  },
+
+  /**
+   * Schedules account deletion with 7-day grace period, survey reason, and optional password confirmation.
+   */
+  async requestAccountDeletion(
+    reasonCode: string,
+    customFeedback?: string,
+    password?: string,
+  ): Promise<{ success: boolean; message: string; deletionDeadline: number }> {
+    const token = tokenStore.getAccessToken();
+    if (!token) {
+      throw new Error('You must be logged in to delete your account.');
+    }
+
+    const response = await fetch(`${BACKEND_URL}/auth/account/request-deletion`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        reasonCode,
+        customFeedback,
+        password,
+      }),
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(data.message || 'Failed to schedule account deletion.');
+    }
+
+    return data;
   },
 };

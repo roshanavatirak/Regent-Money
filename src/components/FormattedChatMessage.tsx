@@ -74,7 +74,24 @@ export const FormattedChatMessage: React.FC<FormattedChatMessageProps> = ({
   colors,
   isDark,
 }) => {
-  if (!content) return null;
+  const rawContent = content as any;
+  const textContent = typeof rawContent === 'string'
+    ? rawContent
+    : Array.isArray(rawContent)
+      ? rawContent.join('\n')
+      : rawContent != null
+        ? (typeof rawContent === 'object' && 'answer' in rawContent && typeof rawContent.answer === 'string'
+            ? rawContent.answer
+            : typeof rawContent === 'object' && 'message' in rawContent && typeof rawContent.message === 'string'
+              ? rawContent.message
+              : typeof rawContent === 'object' && 'text' in rawContent && typeof rawContent.text === 'string'
+                ? rawContent.text
+                : typeof rawContent === 'object'
+                  ? JSON.stringify(rawContent)
+                  : String(rawContent))
+        : '';
+
+  if (!textContent || !textContent.trim()) return null;
 
   const userTextColor = colors.isDark ? '#ECFDF5' : '#064E3B';
   const botTextColor = colors.isDark ? '#F3F4F6' : '#1F2937';
@@ -83,13 +100,13 @@ export const FormattedChatMessage: React.FC<FormattedChatMessageProps> = ({
   if (isUser) {
     return (
       <Text style={[styles.userText, { color: userTextColor }]} selectable>
-        {renderInlineFormattedText(content, { color: userTextColor }, colors, true)}
+        {renderInlineFormattedText(textContent, { color: userTextColor }, colors, true)}
       </Text>
     );
   }
 
   // Parse lines into structured blocks (tables, headings, bullets, paragraphs)
-  const lines = content.split('\n');
+  const lines = textContent.split('\n');
   const blocks: ContentBlock[] = [];
   let currentTableLines: string[] = [];
 

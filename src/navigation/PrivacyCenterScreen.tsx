@@ -10,7 +10,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
-import { useTheme, showGlobalConfirm } from '../store';
+import { useTheme, showGlobalConfirm, usePrivacyModalStore } from '../store';
 
 export const PrivacyCenterScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
@@ -162,6 +162,28 @@ export const PrivacyCenterScreen: React.FC = () => {
             <View style={{ flex: 1, marginRight: 8 }}>
               <Text style={styles.actionTitle}>Purge Parsing Cache</Text>
               <Text style={styles.actionDesc}>Clear temporary local synchronization caches without losing transactions.</Text>
+            </View>
+            <Feather name="chevron-right" size={15} color={colors.textSecondary} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Legal Disclosures */}
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>LEGAL & COMPLIANCE</Text>
+        </View>
+
+        <View style={styles.card}>
+          <TouchableOpacity
+            style={styles.actionRow}
+            onPress={() => usePrivacyModalStore.getState().openPrivacyModal()}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.actionIconBox, { backgroundColor: isDark ? 'rgba(16, 185, 129, 0.12)' : 'rgba(16, 185, 129, 0.08)' }]}>
+              <Ionicons name="shield-checkmark-outline" size={16} color={colors.accent} />
+            </View>
+            <View style={{ flex: 1, marginRight: 8 }}>
+              <Text style={styles.actionTitle}>Official Privacy Policy</Text>
+              <Text style={styles.actionDesc}>Read full legal disclosures, RBI compliance standards & data terms.</Text>
             </View>
             <Feather name="chevron-right" size={15} color={colors.textSecondary} />
           </TouchableOpacity>

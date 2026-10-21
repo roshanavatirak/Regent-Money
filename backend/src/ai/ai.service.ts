@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { IsNotEmpty, IsString, IsOptional, IsArray, IsObject } from 'class-validator';
 
 export interface ChatMessageDto {
   role: 'user' | 'assistant' | 'system';
@@ -39,8 +40,16 @@ export interface ChatContextDto {
 }
 
 export class ChatRequestDto {
+  @IsString()
+  @IsNotEmpty()
   question: string;
+
+  @IsOptional()
+  @IsArray()
   history?: ChatMessageDto[];
+
+  @IsOptional()
+  @IsObject()
   context?: ChatContextDto;
 }
 
@@ -163,10 +172,28 @@ ${txsSummary}
     const systemPrompt = this.buildSystemPrompt(dto.context);
     const history = dto.history || [];
 
+    const cleanContent = (c: any): string => {
+      if (typeof c === 'string') return c;
+      if (Array.isArray(c)) return c.join('\n');
+      if (c && typeof c === 'object') {
+        return c.content || c.message || c.text || JSON.stringify(c);
+      }
+      return String(c || '');
+    };
+
+    const validHistory = history
+      .map((m) => ({
+        role: m.role === 'assistant' ? 'assistant' : m.role === 'system' ? 'system' : 'user',
+        content: cleanContent(m.content).trim(),
+      }))
+      .filter((m) => m.content.length > 0);
+
+    const questionText = cleanContent(dto.question).trim();
+
     const standardMessages = [
       { role: 'system', content: systemPrompt },
-      ...history.map((m) => ({ role: m.role, content: m.content })),
-      { role: 'user', content: dto.question },
+      ...validHistory,
+      { role: 'user', content: questionText },
     ];
 
     // ==========================================
@@ -266,11 +293,11 @@ ${txsSummary}
     if (geminiKey) {
       try {
         const contents = [
-          ...history.map((m) => ({
+          ...validHistory.map((m) => ({
             role: m.role === 'assistant' ? 'model' : 'user',
             parts: [{ text: m.content }],
           })),
-          { role: 'user', parts: [{ text: dto.question }] },
+          { role: 'user', parts: [{ text: questionText }] },
         ];
 
         const response = await fetch(

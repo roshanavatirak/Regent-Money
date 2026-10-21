@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, BadRequestException, ConflictException, HttpException, HttpStatus, OnModuleInit } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException, ConflictException, ForbiddenException, NotFoundException, HttpException, HttpStatus, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
@@ -77,6 +77,30 @@ export class AuthService implements OnModuleInit {
         CREATE INDEX IF NOT EXISTS idx_users_search_trgm ON core.users USING gin (
           (COALESCE(name, '') || ' ' || COALESCE(email, '') || ' ' || COALESCE(phone, '')) gin_trgm_ops
         );
+      `);
+
+      // Account Deletion & 7-Day Recovery Migration
+      await this.userRepository.query(`
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS is_scheduled_for_deletion BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS deletion_requested_at BIGINT;
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS deletion_deadline BIGINT;
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS deletion_reason TEXT;
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS deletion_feedback TEXT;
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS restored_at BIGINT;
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS deletion_cooldown_until BIGINT;
+        CREATE INDEX IF NOT EXISTS idx_users_deletion_deadline ON core.users(deletion_deadline) WHERE is_scheduled_for_deletion = TRUE;
+      `);
+
+      await this.userRepository.query(`
+        CREATE TABLE IF NOT EXISTS core.account_deletion_reasons (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          user_id_hmac TEXT NOT NULL,
+          reason_code TEXT NOT NULL,
+          reason_label TEXT NOT NULL,
+          custom_feedback TEXT,
+          created_at BIGINT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_del_reasons_created ON core.account_deletion_reasons(created_at);
       `);
 
       // Create immutable audit log table
@@ -285,11 +309,20 @@ export class AuthService implements OnModuleInit {
     const normalizedIdentifier = isEmail ? input.toLowerCase() : input;
 
     // 1. Look up user by email or phone so lockout is universally bound to the exact account
-    const user = await this.userRepository.findOne({
+    let user = await this.userRepository.findOne({
       where: isEmail
         ? { email: normalizedIdentifier, isDeleted: false }
         : { phone: normalizedIdentifier, isDeleted: false },
     });
+
+    if (!user) {
+      // Check if user is in 7-day scheduled deletion grace period
+      user = await this.userRepository.findOne({
+        where: isEmail
+          ? { email: normalizedIdentifier, isScheduledForDeletion: true }
+          : { phone: normalizedIdentifier, isScheduledForDeletion: true },
+      });
+    }
 
     // Determine the universal Redis lock key (keyed by user.id if user exists, else anonymous identifier)
     const lockKey = user ? this.getLockKeyForUser(user.id) : this.getLockKeyForAnon(normalizedIdentifier);
@@ -395,8 +428,30 @@ export class AuthService implements OnModuleInit {
       }
     }
 
-    // 3.5 Check if user is deleted or banned
-    if (user.isDeleted) {
+    // 3.5 Check if user is deleted or scheduled for deletion
+    let accountRestored = false;
+    let cooldownUntil: number | null = null;
+
+    if (user.isScheduledForDeletion) {
+      const now = Date.now();
+      if (user.deletionDeadline && now <= user.deletionDeadline) {
+        // Within 7 days grace period -> Cancel deletion and restore user!
+        user.isScheduledForDeletion = false;
+        user.isDeleted = false;
+        user.deletionRequestedAt = null;
+        user.deletionDeadline = null;
+        user.restoredAt = now;
+        user.deletionCooldownUntil = now + 7 * 24 * 60 * 60 * 1000; // 7 days cooldown
+        user.updatedAt = now;
+        await this.userRepository.save(user);
+
+        accountRestored = true;
+        cooldownUntil = user.deletionCooldownUntil;
+        console.log(`[AuthService] Account restored successfully for user ${user.id} (${user.email}). 7-day cooldown active.`);
+      } else {
+        throw new UnauthorizedException('This account has been permanently deleted.');
+      }
+    } else if (user.isDeleted) {
       throw new UnauthorizedException('This account no longer exists.');
     }
     if (user.isBanned) {
@@ -430,11 +485,15 @@ export class AuthService implements OnModuleInit {
       isBanned: user.isBanned ?? false,
       termsAccepted: user.termsAccepted ?? false,
       termsAcceptedAt: user.termsAcceptedAt ?? null,
+      isScheduledForDeletion: user.isScheduledForDeletion ?? false,
+      deletionCooldownUntil: user.deletionCooldownUntil ?? null,
     };
 
     return {
       profile,
       accessToken,
+      accountRestored,
+      cooldownUntil,
     };
   }
 
@@ -553,13 +612,37 @@ export class AuthService implements OnModuleInit {
     const avatarUrl = payload.picture || '';
     const now = Date.now();
 
-    // 2. Check if a user with this email already exists (e.g. registered with password)
+    // 2. Check if a user with this email already exists (e.g. active or scheduled for deletion)
     let user = await this.userRepository.findOne({
-      where: { email, isDeleted: false },
+      where: { email },
     });
 
+    let accountRestored = false;
+    let cooldownUntil: number | null = null;
+
     if (user) {
-      // ✅ Same person, same account: Link existing account!
+      if (user.isScheduledForDeletion) {
+        if (user.deletionDeadline && now <= user.deletionDeadline) {
+          user.isScheduledForDeletion = false;
+          user.isDeleted = false;
+          user.deletionRequestedAt = null;
+          user.deletionDeadline = null;
+          user.restoredAt = now;
+          user.deletionCooldownUntil = now + 7 * 24 * 60 * 60 * 1000;
+          accountRestored = true;
+          cooldownUntil = user.deletionCooldownUntil;
+          console.log(`[AuthService] Google user account restored: ${user.id} (${user.email}). 7-day cooldown active.`);
+        } else {
+          throw new UnauthorizedException('This account has been permanently deleted.');
+        }
+      } else if (user.isDeleted) {
+        throw new UnauthorizedException('This account no longer exists.');
+      }
+
+      if (user.isBanned) {
+        throw new UnauthorizedException('Your account has been suspended by an administrator.');
+      }
+
       user.isVerified = true; // Auto-verify email via Google
       if (!user.name && name) user.name = name;
       if (!user.avatarUrl && avatarUrl) user.avatarUrl = avatarUrl;
@@ -585,14 +668,6 @@ export class AuthService implements OnModuleInit {
       user = (await this.userRepository.save(user)) as User;
     }
 
-    // 2.5 Check if account is deleted or banned
-    if (user.isDeleted) {
-      throw new UnauthorizedException('This account no longer exists.');
-    }
-    if (user.isBanned) {
-      throw new UnauthorizedException('Your account has been suspended by an administrator.');
-    }
-
     // 3. Issue the standard Regent Money JWT token
     const tokenPayload = { sub: user.id, email: user.email, role: user.role || 'user' };
     const accessToken = this.jwtService.sign(tokenPayload);
@@ -610,12 +685,16 @@ export class AuthService implements OnModuleInit {
       isBanned: user.isBanned ?? false,
       termsAccepted: user.termsAccepted ?? false,
       termsAcceptedAt: user.termsAcceptedAt ?? null,
+      isScheduledForDeletion: user.isScheduledForDeletion ?? false,
+      deletionCooldownUntil: user.deletionCooldownUntil ?? null,
     };
 
     return {
       accessToken,
       user: userProfile,
       profile: userProfile,
+      accountRestored,
+      cooldownUntil,
     };
   }
 
@@ -734,6 +813,9 @@ export class AuthService implements OnModuleInit {
       autoLockTimeout: user.autoLockTimeout ?? 1,
       termsAccepted: user.termsAccepted ?? false,
       termsAcceptedAt: user.termsAcceptedAt ?? null,
+      isScheduledForDeletion: user.isScheduledForDeletion ?? false,
+      deletionCooldownUntil: user.deletionCooldownUntil ?? null,
+      deletionDeadline: user.deletionDeadline ?? null,
     };
   }
 
@@ -847,5 +929,102 @@ export class AuthService implements OnModuleInit {
       }
       throw err;
     }
+  }
+
+  async requestAccountDeletion(
+    userId: string,
+    dto: { password?: string; reasonCode: string; customFeedback?: string },
+  ) {
+    const user = await this.userRepository.findOne({
+      where: { id: userId, isDeleted: false },
+    });
+    if (!user) {
+      throw new NotFoundException('User account not found.');
+    }
+
+    const now = Date.now();
+
+    // 1. Check if user is in an active cooldown period (7 days after restoration)
+    if (user.deletionCooldownUntil && now < user.deletionCooldownUntil) {
+      const remainingDays = Math.max(1, Math.ceil((user.deletionCooldownUntil - now) / (86400 * 1000)));
+      throw new ForbiddenException(
+        `Account deletion is locked during the 7-day cooldown period following recent account restoration. Please try again in ${remainingDays} day(s).`,
+      );
+    }
+
+    // 2. If user has a password (registered via email/password), verify it
+    if (user.passwordHash) {
+      if (!dto.password) {
+        throw new BadRequestException('Password confirmation is required to delete this account.');
+      }
+      const isPasswordValid = await bcrypt.compare(dto.password, user.passwordHash);
+      if (!isPasswordValid) {
+        throw new BadRequestException('Incorrect password. Account deletion aborted.');
+      }
+    }
+
+    // 3. Compute 7-day grace period
+    const deletionRequestedAt = now;
+    const deletionDeadline = now + 7 * 24 * 60 * 60 * 1000; // 7 days (604,800,000 ms)
+
+    user.isScheduledForDeletion = true;
+    user.isDeleted = true; // Soft delete
+    user.deletionRequestedAt = deletionRequestedAt;
+    user.deletionDeadline = deletionDeadline;
+    user.deletionReason = dto.reasonCode;
+    user.deletionFeedback = dto.customFeedback?.trim() || null;
+    user.updatedAt = now;
+    await this.userRepository.save(user);
+
+    // 4. Save survey reason in core.account_deletion_reasons
+    try {
+      const hmac = user.email
+        ? crypto
+            .createHmac('sha256', this.configService.get<string>('JWT_SECRET') || 'regent-secret')
+            .update(user.email.toLowerCase().trim())
+            .digest('hex')
+        : user.id;
+
+      const reasonLabels: Record<string, string> = {
+        SWITCHING_ALTERNATIVE: 'Found an alternative / Another app',
+        PRIVACY_SECURITY: 'Concerns about data privacy & security',
+        BANK_SYNC_ISSUES: 'Difficulty connecting or syncing bank accounts',
+        COMPLEX_UI: 'Too complicated or difficult to use',
+        GOALS_ACHIEVED: 'Financial tracking goals achieved / Starting fresh',
+        TOO_MANY_NOTIFS: 'Too many notifications / alerts',
+        BUGS_CRASHES: 'Experiencing technical bugs or app crashes',
+        OTHER: 'Other reason',
+      };
+
+      await this.userRepository.query(
+        `INSERT INTO core.account_deletion_reasons (user_id_hmac, reason_code, reason_label, custom_feedback, created_at)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          hmac,
+          dto.reasonCode,
+          reasonLabels[dto.reasonCode] || dto.reasonCode,
+          dto.customFeedback?.trim() || null,
+          now,
+        ],
+      );
+    } catch (surveyErr) {
+      console.warn('[AuthService] Could not log deletion survey reason:', surveyErr);
+    }
+
+    // 5. Invalidate active Redis tokens and sessions
+    try {
+      await Promise.allSettled([
+        this.redisService.del(this.getLockKeyForUser(user.id)),
+        this.redisService.del(`auth:session:${user.id}`),
+        this.redisService.del(`auth:refresh:${user.id}`),
+        this.redisService.del(`user:role:${user.id}`),
+      ]);
+    } catch {}
+
+    return {
+      success: true,
+      message: 'Account scheduled for deletion. You have 7 days to change your mind by logging back in.',
+      deletionDeadline,
+    };
   }
 }

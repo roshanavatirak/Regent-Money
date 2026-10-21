@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -6,27 +6,119 @@ import {
   ScrollView,
   TouchableOpacity,
   TextInput,
-  Switch,
   ActivityIndicator,
   Image,
   Modal,
   Platform,
   Pressable,
-  useWindowDimensions,
 } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Feather, Ionicons } from '@expo/vector-icons';
+import { Feather } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
-import { useTheme, useAuthStore, useThemeStore, useSecurityStore, showGlobalConfirm, UserProfile } from '../store';
+import Animated, { FadeInDown } from 'react-native-reanimated';
+import Constants from 'expo-constants';
+import * as Font from 'expo-font';
+import { useTheme, useAuthStore, showGlobalConfirm } from '../store';
 import { authService } from '../services/authService';
-import { biometricService } from '../services/biometricService';
-import { notificationService } from '../services/notificationService';
 import { pickImageFromDevice, LUXURY_PRESET_AVATARS } from '../services/imageService';
 
 export interface ProfileScreenProps {
   AppTopBarComponent?: React.ComponentType;
 }
+
+const FOREST = '#0B3D2C';
+const FOREST_RAISED = '#124B37';
+const LIME = '#B8F36B';
+const MIST = '#B5CEC1';
+
+/* ------------------------------------------------------------------ */
+/* Helpers                                                             */
+/* ------------------------------------------------------------------ */
+
+/** Accepts DD/MM/YYYY, DD-MM-YYYY or an ISO date string. */
+const parseDob = (dob?: string | null): Date | null => {
+  if (!dob) return null;
+  const m = dob.trim().match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
+  if (m) {
+    const d = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+    return isNaN(d.getTime()) ? null : d;
+  }
+  const d = new Date(dob);
+  return isNaN(d.getTime()) ? null : d;
+};
+
+const ageFrom = (d: Date | null) => {
+  if (!d) return null;
+  const now = new Date();
+  let age = now.getFullYear() - d.getFullYear();
+  const beforeBirthday =
+    now.getMonth() < d.getMonth() || (now.getMonth() === d.getMonth() && now.getDate() < d.getDate());
+  if (beforeBirthday) age -= 1;
+  return age >= 0 && age < 130 ? age : null;
+};
+
+const titleCase = (s?: string | null) =>
+  (s || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
+const providerLabel = (p?: string | null) => {
+  if (!p || p === 'local' || p === 'email') return 'email';
+  return titleCase(p);
+};
+
+/* ------------------------------------------------------------------ */
+/* Row                                                                 */
+/* ------------------------------------------------------------------ */
+
+type RowProps = {
+  icon: keyof typeof Feather.glyphMap;
+  title: string;
+  subtitle?: string;
+  value?: string;
+  onPress?: () => void;
+  isLast?: boolean;
+  danger?: boolean;
+  styles: ReturnType<typeof getStyles>;
+  isDark: boolean;
+  colors: any;
+};
+
+const Row: React.FC<RowProps> = ({ icon, title, subtitle, value, onPress, isLast, danger, styles, isDark, colors }) => {
+  const tileBg = danger
+    ? isDark ? 'rgba(224, 49, 49, 0.2)' : '#FFE3E3'
+    : isDark ? 'rgba(184, 243, 107, 0.14)' : '#E3F2E8';
+  const tileFg = danger ? (isDark ? '#FFA8A8' : '#C92A2A') : isDark ? LIME : FOREST;
+
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      disabled={!onPress}
+      activeOpacity={0.6}
+      style={styles.row}
+      accessibilityRole={onPress ? 'button' : undefined}
+    >
+      <View style={[styles.rowIcon, { backgroundColor: tileBg }]}>
+        <Feather name={icon} size={17} color={tileFg} />
+      </View>
+      <View style={[styles.rowBody, !isLast && styles.rowDivider]}>
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.rowTitle, danger && { color: tileFg }]} numberOfLines={1}>
+            {title}
+          </Text>
+          {subtitle ? <Text style={styles.rowSubtitle} numberOfLines={1}>{subtitle}</Text> : null}
+        </View>
+        {value ? <Text style={styles.rowValue} numberOfLines={1}>{value}</Text> : null}
+        {onPress && !danger ? (
+          <Feather name="chevron-right" size={16} color={isDark ? '#5E7A6C' : '#9DB2A7'} />
+        ) : null}
+      </View>
+    </TouchableOpacity>
+  );
+};
+
+/* ------------------------------------------------------------------ */
+/* Screen                                                              */
+/* ------------------------------------------------------------------ */
 
 export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent }) => {
   const insets = useSafeAreaInsets();
@@ -37,22 +129,47 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
   const [avatarModalVisible, setAvatarModalVisible] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [customAvatarUrl, setCustomAvatarUrl] = useState('');
+  const [avatarError, setAvatarError] = useState('');
 
   useEffect(() => {
-    // Sync latest profile on mount
     authService.fetchProfile();
   }, []);
 
+  const display = Font.isLoaded('BricolageGrotesque_800ExtraBold') ? 'BricolageGrotesque_800ExtraBold' : undefined;
+  const styles = useMemo(() => getStyles(colors, isDark, display), [colors, isDark, display]);
+
+  const dobDate = parseDob(user?.dob);
+  const age = ageFrom(dobDate);
+  const dobLabel = dobDate
+    ? dobDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+    : 'Add';
+  const income = user?.currentIncome ? Number(user.currentIncome) : null;
+  const sources = user?.incomeSourcesCount || (income ? 1 : 0);
+  const memberSince = user?.createdAt
+    ? new Date(user.createdAt).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })
+    : null;
+  const appVersion = Constants.expoConfig?.version;
+  const isAdmin = !!user?.role && ['admin', 'superadmin'].includes(user.role);
+
+  /* ---------------- Avatar actions ---------------- */
+
+  const closeAvatarSheet = () => {
+    setAvatarModalVisible(false);
+    setAvatarError('');
+    setCustomAvatarUrl('');
+  };
+
   const handlePickFromGallery = async () => {
     setAvatarUploading(true);
+    setAvatarError('');
     try {
       const fileData = await pickImageFromDevice();
       if (fileData) {
         await authService.uploadAvatar(fileData);
-        setAvatarModalVisible(false);
+        closeAvatarSheet();
       }
     } catch (err: any) {
-      alert('Upload failed: ' + (err?.message || err));
+      setAvatarError(`Upload failed. ${err?.message || 'Try a different photo.'}`);
     } finally {
       setAvatarUploading(false);
     }
@@ -60,334 +177,280 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
 
   const handleSelectPresetAvatar = async (url: string) => {
     setAvatarUploading(true);
+    setAvatarError('');
     try {
       await authService.updateProfile({ avatarUrl: url });
-      setAvatarModalVisible(false);
+      closeAvatarSheet();
+    } catch (err: any) {
+      setAvatarError('Could not update your photo. Try again.');
     } finally {
       setAvatarUploading(false);
     }
   };
 
   const handleSaveCustomUrl = async () => {
-    if (!customAvatarUrl.trim()) return;
+    const url = customAvatarUrl.trim();
+    if (!url) return;
+    if (!/^https?:\/\//i.test(url)) {
+      setAvatarError('Use a link that starts with https://');
+      return;
+    }
     setAvatarUploading(true);
+    setAvatarError('');
     try {
-      await authService.updateProfile({ avatarUrl: customAvatarUrl.trim() });
-      setCustomAvatarUrl('');
-      setAvatarModalVisible(false);
+      await authService.updateProfile({ avatarUrl: url });
+      closeAvatarSheet();
+    } catch {
+      setAvatarError('Could not use that link. Check it and try again.');
     } finally {
       setAvatarUploading(false);
     }
   };
 
-
-
   const handleLogoutConfirm = () => {
     showGlobalConfirm({
-      title: 'Log Out Session',
-      message: 'Are you sure you want to end your session? Your offline records remain securely saved on this device.',
-      confirmText: 'Log Out',
+      title: 'Log out of Regent Money?',
+      message: 'Your transactions stay saved on this phone. Sign in again any time to pick up where you left off.',
+      confirmText: 'Log out',
       cancelText: 'Cancel',
       isDestructive: true,
+      icon: 'log-out',
       onConfirm: async () => {
         await authService.logOut();
       },
     });
   };
 
-  const styles = getStyles(colors, isDark);
+  const rowProps = { styles, isDark, colors };
 
   return (
     <View style={styles.container}>
       {AppTopBarComponent ? <AppTopBarComponent /> : null}
+
       <ScrollView
         style={styles.container}
-        contentContainerStyle={[styles.contentContainer, { paddingTop: 12, paddingBottom: insets.bottom + 110 }]}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 120 }}
         showsVerticalScrollIndicator={false}
       >
-        {/* Header Label */}
-        <View style={{ marginBottom: 14 }}>
-          {/* <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 2 }}>
-            <Ionicons name="sparkles" size={13} color={colors.accent} style={{ marginRight: 5 }} />
-            <Text style={styles.kicker}>PRIVATE WEALTH IDENTITY</Text>
-          </View> */}
-          <Text style={styles.headerTitle}>My Profile</Text>
-          <Text style={styles.subtitle}>Personal standing, financial profile & privacy controls</Text>
-        </View>
-
-        {/* User Hero / Membership Card */}
-        <View style={styles.card}>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            {/* Avatar with Floating Edit Pencil Badge */}
-            <View style={{ position: 'relative', marginRight: 14 }}>
-              <TouchableOpacity
-                onPress={() => setAvatarModalVisible(true)}
-                activeOpacity={0.85}
-                style={styles.avatarWrap}
-              >
-                {user?.avatarUrl ? (
-                  <Image source={{ uri: user.avatarUrl }} style={styles.avatarImg} />
-                ) : (
-                  <View style={styles.avatarFallback}>
-                    <Text style={styles.avatarFallbackText}>
-                      {user?.name?.charAt(0).toUpperCase() || 'U'}
-                    </Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-
-              {/* Pencil Edit Badge */}
-              <TouchableOpacity
-                onPress={() => setAvatarModalVisible(true)}
-                style={styles.pencilBadge}
-                activeOpacity={0.8}
-              >
-                <Feather name="edit-2" size={11} color="#ffffff" />
-              </TouchableOpacity>
-            </View>
-
-            {/* User Meta */}
-            <View style={{ flex: 1 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                <Text style={styles.userName} numberOfLines={1}>{user?.name || 'Verified User'}</Text>
-                {/* <View style={styles.proPill}>
-                  <Feather name="award" size={10} color={colors.accent} style={{ marginRight: 3 }} />
-                  <Text style={styles.proPillText}>PRO</Text>
-                </View> */}
-              </View>
-              <Text style={styles.userEmail} numberOfLines={1}>
-                {user?.email || user?.phone || 'Offline Account'}
-              </Text>
-              {/* <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 5 }}>
-                <View style={[styles.statusDot, { backgroundColor: colors.accent }]} />
-                <Text style={styles.statusText}>Active Wealth Tier</Text>
-              </View> */}
-            </View>
-          </View>
-        </View>
-
-        {/* Financial & Personal Details Card */}
-        <View style={styles.card}>
-          <View style={styles.cardHeaderRow}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Feather name="user-check" size={14} color={colors.accent} style={{ marginRight: 6 }} />
-              <Text style={styles.cardKicker}>Personal Information</Text>
-            </View>
-            <TouchableOpacity onPress={() => navigation.navigate('EditProfile')} style={styles.editActionBtn} activeOpacity={0.7}>
-              <Feather name="edit-3" size={11} color={colors.accent} style={{ marginRight: 4 }} />
-              <Text style={styles.editActionBtnText}>Edit Details</Text>
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.detailsGrid}>
-            {/* Date of Birth */}
-            <View style={styles.detailItem}>
-              <View style={styles.detailIconBox}>
-                <Feather name="calendar" size={13} color={colors.accent} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.detailLabel}>Date of Birth</Text>
-                <Text style={styles.detailValue}>{user?.dob || 'Not set'}</Text>
-              </View>
-            </View>
-
-            {/* Gender */}
-            <View style={styles.detailItem}>
-              <View style={styles.detailIconBox}>
-                <Feather name="user" size={13} color={colors.accent} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.detailLabel}>Gender</Text>
-                <Text style={styles.detailValue}>{user?.gender || 'Not specified'}</Text>
-              </View>
-            </View>
-
-            {/* Occupation */}
-            <View style={styles.detailItem}>
-              <View style={styles.detailIconBox}>
-                <Feather name="briefcase" size={13} color={colors.accent} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.detailLabel}>Occupation</Text>
-                <Text style={styles.detailValue}>{user?.occupation || 'Salaried'}</Text>
-              </View>
-            </View>
-
-            {/* Current Income */}
-            <View style={styles.detailItem}>
-              <View style={styles.detailIconBox}>
-                <Feather name="trending-up" size={13} color={colors.accent} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.detailLabel}>Current Monthly Income</Text>
-                <Text style={[styles.detailValue, { color: colors.accent, fontWeight: '800' }]}>
-                  {user?.currentIncome
-                    ? `₹${Number(user.currentIncome).toLocaleString('en-IN')} / mo`
-                    : '₹75,000 / mo'}
-                </Text>
-              </View>
-            </View>
-
-            {/* Income Streams */}
-            <View style={styles.detailItem}>
-              <View style={styles.detailIconBox}>
-                <Feather name="layers" size={13} color={colors.accent} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.detailLabel}>Income Sources</Text>
-                <Text style={styles.detailValue}>
-                  {user?.incomeSourcesCount || 1} Active Stream{(user?.incomeSourcesCount || 1) > 1 ? 's' : ''}
-                </Text>
-              </View>
-            </View>
-          </View>
-        </View>
-
-
-        {/* Admin Portal Tile (Visible only for admin or superadmin) */}
-        {user?.role && ['admin', 'superadmin'].includes(user.role) && (
-          <TouchableOpacity
-            style={[
-              styles.card,
-              {
-                borderColor: '#EAB308',
-                backgroundColor: isDark ? 'rgba(234, 179, 8, 0.08)' : '#FEFCE8',
-                marginBottom: 12,
-              },
-            ]}
-            onPress={() => navigation.navigate('AdminDashboard')}
-            activeOpacity={0.8}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
-                <View
-                  style={{
-                    width: 36,
-                    height: 36,
-                    borderRadius: 10,
-                    backgroundColor: 'rgba(234, 179, 8, 0.16)',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  <Feather name="shield" size={18} color="#CA8A04" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                    <Text style={{ fontSize: 14, fontWeight: '700', color: colors.text }}>Admin Portal</Text>
-                    <View style={{ backgroundColor: '#EAB308', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4 }}>
-                      <Text style={{ fontSize: 9, fontWeight: '800', color: '#000' }}>ADMIN</Text>
-                    </View>
-                  </View>
-                  <Text style={{ fontSize: 11, color: colors.textSecondary, marginTop: 2 }}>
-                    Manage users, moderation & permanent account deletes
-                  </Text>
-                </View>
-              </View>
-              <Feather name="chevron-right" size={18} color={colors.textTertiary} />
-            </View>
-          </TouchableOpacity>
-        )}
-
-        {/* Account Actions / Log Out */}
-        <View style={[styles.card, { borderStyle: 'dashed' }]}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-            <View style={{ flex: 1, paddingRight: 10 }}>
-              <Text style={{ fontSize: 13, fontWeight: '700', color: colors.text }}>Current Session</Text>
-              <Text style={{ fontSize: 11, color: colors.textSecondary, marginTop: 2 }}>
-                Signed in with {user?.authProvider?.toUpperCase() || 'OFFLINE AUTH'}
-              </Text>
-            </View>
-            <TouchableOpacity
-              style={styles.logoutBtn}
-              onPress={handleLogoutConfirm}
-              activeOpacity={0.75}
+        {/* Identity */}
+        <Animated.View entering={FadeInDown.duration(400)} style={styles.hero}>
+          <View>
+            <Pressable
+              onPress={() => setAvatarModalVisible(true)}
+              style={styles.avatarRing}
+              accessibilityRole="button"
+              accessibilityLabel="Change profile photo"
             >
-              <Feather name="log-out" size={13} color="#FF5252" style={{ marginRight: 6 }} />
-              <Text style={styles.logoutBtnText}>Log Out</Text>
+              {user?.avatarUrl ? (
+                <Image source={{ uri: user.avatarUrl }} style={styles.avatarImg} />
+              ) : (
+                <View style={styles.avatarFallback}>
+                  <Text style={styles.avatarInitial}>{user?.name?.charAt(0).toUpperCase() || 'U'}</Text>
+                </View>
+              )}
+            </Pressable>
+            <Pressable
+              onPress={() => setAvatarModalVisible(true)}
+              style={styles.cameraBadge}
+              accessibilityRole="button"
+              accessibilityLabel="Change profile photo"
+            >
+              <Feather name="camera" size={14} color={isDark ? FOREST : LIME} />
+            </Pressable>
+          </View>
+
+          <Text style={styles.name} numberOfLines={1}>
+            {user?.name || 'Your name'}
+          </Text>
+          <Text style={styles.email} numberOfLines={1}>
+            {user?.email || user?.phone || 'Not signed in'}
+          </Text>
+
+          <View style={styles.metaRow}>
+            {memberSince ? (
+              <View style={styles.metaChip}>
+                <Text style={styles.metaText}>Member since {memberSince}</Text>
+              </View>
+            ) : null}
+            <View style={styles.metaChip}>
+              <Text style={styles.metaText}>Signed in with {providerLabel(user?.authProvider)}</Text>
+            </View>
+          </View>
+        </Animated.View>
+
+        {/* Money profile */}
+        <Animated.View entering={FadeInDown.delay(90).duration(400)}>
+          <View style={styles.moneyCard}>
+            <View style={[styles.ring, { width: 200, height: 200, borderRadius: 100, right: -70, top: -90 }]} />
+            <View
+              style={[
+                styles.ring,
+                { width: 120, height: 120, borderRadius: 60, right: -30, top: -50, borderColor: 'rgba(184, 243, 107, 0.24)' },
+              ]}
+            />
+            <View style={styles.moneyTop}>
+              <Text style={styles.moneyLabel}>Monthly income</Text>
+              <TouchableOpacity
+                onPress={() => navigation.navigate('EditProfile')}
+                style={styles.moneyEdit}
+                activeOpacity={0.7}
+                accessibilityLabel="Edit income and work details"
+              >
+                <Feather name="edit-2" size={15} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
+            {income ? (
+              <Text style={styles.moneyValue}>₹{income.toLocaleString('en-IN')}</Text>
+            ) : (
+              <TouchableOpacity onPress={() => navigation.navigate('EditProfile')} activeOpacity={0.7}>
+                <Text style={[styles.moneyValue, { fontSize: 22, color: LIME }]}>Add your income</Text>
+              </TouchableOpacity>
+            )}
+            <View style={styles.statGrid}>
+              <View style={styles.stat}>
+                <Text style={styles.statLabel}>Sources</Text>
+                <Text style={styles.statValue}>{sources || '–'}</Text>
+              </View>
+              <View style={styles.stat}>
+                <Text style={styles.statLabel}>Work</Text>
+                <Text style={styles.statValue} numberOfLines={1}>
+                  {user?.occupation ? titleCase(user.occupation) : '–'}
+                </Text>
+              </View>
+              <View style={styles.stat}>
+                <Text style={styles.statLabel}>Age</Text>
+                <Text style={styles.statValue}>{age ?? '–'}</Text>
+              </View>
+            </View>
+          </View>
+        </Animated.View>
+
+        {/* Personal details */}
+        <Animated.View entering={FadeInDown.delay(160).duration(400)}>
+          <View style={styles.sectionHead}>
+            <Text style={styles.sectionTitle}>Personal details</Text>
+            <TouchableOpacity onPress={() => navigation.navigate('EditProfile')} hitSlop={10}>
+              <Text style={styles.sectionLink}>Edit</Text>
             </TouchableOpacity>
           </View>
-        </View>
+          <View style={styles.group}>
+            <Row {...rowProps} icon="calendar" title="Date of birth" value={dobLabel} onPress={() => navigation.navigate('EditProfile')} />
+            <Row {...rowProps} icon="user" title="Gender" value={user?.gender ? titleCase(user.gender) : 'Add'} onPress={() => navigation.navigate('EditProfile')} />
+            <Row
+              {...rowProps}
+              icon="briefcase"
+              title="Occupation"
+              value={user?.occupation ? titleCase(user.occupation) : 'Add'}
+              onPress={() => navigation.navigate('EditProfile')}
+              isLast
+            />
+          </View>
+        </Animated.View>
+
+        {/* App */}
+        <Animated.View entering={FadeInDown.delay(230).duration(400)}>
+          <Text style={[styles.sectionTitle, styles.sectionTitleSolo]}>App</Text>
+          <View style={styles.group}>
+            {isAdmin && (
+              <Row {...rowProps} icon="shield" title="Admin portal" subtitle="Users, moderation and deletions" onPress={() => navigation.navigate('AdminDashboard')} />
+            )}
+            <Row {...rowProps} icon="settings" title="Settings" subtitle="Appearance, app lock, notifications" onPress={() => navigation.navigate('AppSettings')} />
+            <Row {...rowProps} icon="lock" title="Privacy center" onPress={() => navigation.navigate('PrivacyCenter')} />
+            <Row {...rowProps} icon="zap" title="Suggest a feature" onPress={() => navigation.navigate('SuggestFeature')} />
+            <Row {...rowProps} icon="alert-circle" title="Report a problem" onPress={() => navigation.navigate('ReportBug')} isLast />
+          </View>
+
+          <View style={[styles.group, { marginTop: 16 }]}>
+            <Row {...rowProps} icon="log-out" title="Log out" onPress={handleLogoutConfirm} danger isLast />
+          </View>
+
+          {appVersion ? <Text style={styles.version}>Regent Money {appVersion}</Text> : null}
+        </Animated.View>
       </ScrollView>
 
-      {/* ============================================================ */}
-      {/* 1. Avatar Selection Modal */}
-      {/* ============================================================ */}
-      <Modal visible={avatarModalVisible} transparent animationType="fade" statusBarTranslucent navigationBarTranslucent onRequestClose={() => setAvatarModalVisible(false)}>
-        <View style={styles.modalBackdrop}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setAvatarModalVisible(false)} />
-          <KeyboardAvoidingView
-            behavior="padding"
-            style={styles.keyboardAvoidingWrap}
-          >
-            <View style={styles.modalCard}>
-              <View style={styles.modalHeaderRow}>
-                <View>
-                  <Text style={styles.modalTitle}>Update Profile Photo</Text>
-                  <Text style={styles.modalSubtitle}>Upload PNG / JPG or pick a luxury preset</Text>
-                </View>
-                <TouchableOpacity onPress={() => setAvatarModalVisible(false)} style={styles.modalCloseBtn}>
-                  <Feather name="x" size={18} color={colors.textSecondary} />
+      {/* Change photo sheet */}
+      <Modal
+        visible={avatarModalVisible}
+        transparent
+        animationType="slide"
+        statusBarTranslucent
+        navigationBarTranslucent
+        onRequestClose={closeAvatarSheet}
+      >
+        <View style={styles.backdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={closeAvatarSheet} accessibilityLabel="Close" />
+          <KeyboardAvoidingView behavior="padding" style={{ width: '100%' }}>
+            <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 16) + 12 }]}>
+              <View style={styles.grabber} />
+              <View style={styles.sheetHeader}>
+                <Text style={styles.sheetTitle}>Change profile photo</Text>
+                <TouchableOpacity onPress={closeAvatarSheet} style={styles.closeBtn} accessibilityLabel="Close">
+                  <Feather name="x" size={18} color={colors.text} />
                 </TouchableOpacity>
               </View>
 
-              {/* Action 1: Upload from Device */}
               <TouchableOpacity
-                style={styles.uploadOptionBtn}
+                style={styles.galleryBtn}
                 onPress={handlePickFromGallery}
                 disabled={avatarUploading}
-                activeOpacity={0.8}
+                activeOpacity={0.85}
               >
-                <View style={[styles.optionIconBox, { backgroundColor: 'rgba(45, 186, 78, 0.12)' }]}>
-                  {avatarUploading ? (
-                    <ActivityIndicator size="small" color={colors.accent} />
-                  ) : (
-                    <Feather name="image" size={18} color={colors.accent} />
-                  )}
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.optionTitle}>Choose PNG or JPG from Gallery</Text>
-                  <Text style={styles.optionSubtitle}>Uploads securely to Cloudinary CDN</Text>
-                </View>
-                <Feather name="chevron-right" size={16} color={colors.textTertiary} />
+                {avatarUploading ? (
+                  <ActivityIndicator size="small" color={isDark ? FOREST : LIME} />
+                ) : (
+                  <Feather name="image" size={18} color={isDark ? FOREST : LIME} />
+                )}
+                <Text style={styles.galleryText}>{avatarUploading ? 'Uploading…' : 'Choose from gallery'}</Text>
               </TouchableOpacity>
 
-              {/* Action 2: Curated Luxury 3D Avatars */}
-              <Text style={[styles.sectionTitleSmall, { marginTop: 16, marginBottom: 10 }]}>OR CHOOSE A LUXURY PRESET</Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'space-between' }}>
-                {LUXURY_PRESET_AVATARS.map((preset) => (
-                  <TouchableOpacity
-                    key={preset.id}
-                    style={styles.presetAvatarBtn}
-                    onPress={() => handleSelectPresetAvatar(preset.url)}
-                    disabled={avatarUploading}
-                    activeOpacity={0.8}
-                  >
-                    <Image source={{ uri: preset.url }} style={styles.presetAvatarImg} />
-                    <Text style={styles.presetAvatarName}>{preset.name}</Text>
-                  </TouchableOpacity>
-                ))}
+              <Text style={styles.sheetLabel}>Or pick an avatar</Text>
+              <View style={styles.presetGrid}>
+                {LUXURY_PRESET_AVATARS.map((preset) => {
+                  const active = user?.avatarUrl === preset.url;
+                  return (
+                    <TouchableOpacity
+                      key={preset.id}
+                      style={styles.presetItem}
+                      onPress={() => handleSelectPresetAvatar(preset.url)}
+                      disabled={avatarUploading}
+                      activeOpacity={0.8}
+                      accessibilityLabel={`Use ${preset.name} avatar`}
+                    >
+                      <View style={[styles.presetRing, active && { borderColor: isDark ? LIME : FOREST }]}>
+                        <Image source={{ uri: preset.url }} style={styles.presetImg} />
+                      </View>
+                      <Text style={styles.presetName} numberOfLines={1}>{preset.name}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
 
-              {/* Action 3: Custom URL */}
-              <Text style={[styles.sectionTitleSmall, { marginTop: 16, marginBottom: 8 }]}>OR PASTE PHOTO URL</Text>
-              <View style={styles.urlInputRow}>
+              <Text style={styles.sheetLabel}>Or use a link</Text>
+              <View style={styles.urlRow}>
                 <TextInput
                   style={styles.urlInput}
-                  placeholder="https://images.unsplash.com/..."
-                  placeholderTextColor={colors.textTertiary}
+                  placeholder="https://"
+                  placeholderTextColor={colors.textSecondary}
                   value={customAvatarUrl}
-                  onChangeText={setCustomAvatarUrl}
+                  onChangeText={(t) => {
+                    setCustomAvatarUrl(t);
+                    if (avatarError) setAvatarError('');
+                  }}
                   autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="url"
+                  accessibilityLabel="Photo link"
                 />
                 <TouchableOpacity
-                  style={styles.urlSaveBtn}
+                  style={[styles.urlBtn, (!customAvatarUrl.trim() || avatarUploading) && { opacity: 0.5 }]}
                   onPress={handleSaveCustomUrl}
                   disabled={!customAvatarUrl.trim() || avatarUploading}
                 >
-                  <Text style={styles.urlSaveBtnText}>Apply</Text>
+                  <Text style={styles.urlBtnText}>Use</Text>
                 </TouchableOpacity>
               </View>
+
+              {avatarError ? <Text style={styles.errorText}>{avatarError}</Text> : null}
             </View>
           </KeyboardAvoidingView>
         </View>
@@ -396,480 +459,199 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
   );
 };
 
-const getStyles = (colors: any, isDark: boolean) =>
-  StyleSheet.create({
-    container: {
-      flex: 1,
-      backgroundColor: colors.background,
-    },
-    contentContainer: {
-      paddingHorizontal: 16,
-    },
-    kicker: {
-      fontSize: 10,
-      fontWeight: '800',
-      letterSpacing: 1.5,
-      color: colors.accent,
-    },
-    headerTitle: {
-      fontSize: 24,
-      fontWeight: '900',
-      color: colors.text,
-      letterSpacing: -0.5,
-      marginTop: 2,
-    },
-    subtitle: {
-      fontSize: 12,
-      color: colors.textSecondary,
-      marginTop: 2,
-      fontWeight: '500',
-    },
-    card: {
-      backgroundColor: colors.card,
-      borderRadius: 16,
-      padding: 14,
-      marginBottom: 12,
-      borderWidth: 1,
-      borderColor: colors.border,
-      shadowColor: isDark ? '#000000' : colors.shadowColor,
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: isDark ? 0.25 : 0.04,
-      shadowRadius: 6,
-      elevation: 2,
-    },
-    avatarWrap: {
-      width: 60,
-      height: 60,
-      borderRadius: 30,
+/* ------------------------------------------------------------------ */
+/* Styles                                                              */
+/* ------------------------------------------------------------------ */
+
+const getStyles = (colors: any, isDark: boolean, display?: string) => {
+  const bg = isDark ? colors.background : '#F3F6F4';
+  const line = isDark ? colors.border : '#E1E9E4';
+  const displayFont = { fontFamily: display, fontWeight: display ? undefined : ('800' as const) };
+
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: bg },
+
+    // Identity
+    hero: { alignItems: 'center', paddingTop: 28, paddingHorizontal: 20 },
+    avatarRing: {
+      width: 96,
+      height: 96,
+      borderRadius: 48,
       borderWidth: 2,
-      borderColor: colors.accent,
-      overflow: 'hidden',
-      backgroundColor: colors.background,
+      borderColor: isDark ? LIME : FOREST,
+      padding: 3,
     },
-    avatarImg: {
-      width: '100%',
-      height: '100%',
-    },
+    avatarImg: { width: '100%', height: '100%', borderRadius: 45 },
     avatarFallback: {
       flex: 1,
+      borderRadius: 45,
+      backgroundColor: isDark ? 'rgba(184, 243, 107, 0.14)' : '#E3F2E8',
       alignItems: 'center',
       justifyContent: 'center',
-      backgroundColor: isDark ? 'rgba(45, 186, 78, 0.12)' : '#e6f7ec',
     },
-    avatarFallbackText: {
-      fontSize: 24,
-      fontWeight: '900',
-      color: colors.accent,
-    },
-    pencilBadge: {
+    avatarInitial: { fontSize: 34, color: isDark ? LIME : FOREST, ...displayFont },
+    cameraBadge: {
       position: 'absolute',
-      bottom: -2,
       right: -2,
-      width: 22,
-      height: 22,
-      borderRadius: 11,
-      backgroundColor: colors.accent,
+      bottom: 0,
+      width: 34,
+      height: 34,
+      borderRadius: 17,
+      backgroundColor: isDark ? LIME : FOREST,
+      borderWidth: 3,
+      borderColor: bg,
       alignItems: 'center',
       justifyContent: 'center',
-      borderWidth: 2,
-      borderColor: colors.card,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 1 },
-      shadowOpacity: 0.25,
-      shadowRadius: 2,
-      elevation: 3,
     },
-    userName: {
-      fontSize: 15,
-      fontWeight: '800',
-      color: colors.text,
-    },
-    userEmail: {
-      fontSize: 11.5,
-      color: colors.textSecondary,
-      marginTop: 1,
-    },
-    proPill: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingHorizontal: 6,
-      paddingVertical: 2,
-      borderRadius: 6,
-      backgroundColor: isDark ? 'rgba(45, 186, 78, 0.15)' : '#e6f7ec',
+    name: { fontSize: 26, letterSpacing: -0.6, color: colors.text, marginTop: 14, ...displayFont },
+    email: { fontSize: 14, color: colors.textSecondary, marginTop: 4 },
+    metaRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 6, marginTop: 12 },
+    metaChip: {
       borderWidth: 1,
-      borderColor: isDark ? 'rgba(45, 186, 78, 0.3)' : 'rgba(22, 163, 74, 0.25)',
-    },
-    proPillText: {
-      fontSize: 9.5,
-      fontWeight: '800',
-      color: colors.accent,
-      letterSpacing: 0.5,
-    },
-    statusDot: {
-      width: 6,
-      height: 6,
-      borderRadius: 3,
-      marginRight: 5,
-    },
-    statusText: {
-      fontSize: 10.5,
-      fontWeight: '600',
-      color: colors.textSecondary,
-    },
-    cardHeaderRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      marginBottom: 12,
-    },
-    cardKicker: {
-      fontSize: 10,
-      fontWeight: '800',
-      letterSpacing: 1.2,
-      color: colors.textSecondary,
-    },
-    cardSubtitle: {
-      fontSize: 11.5,
-      color: colors.textSecondary,
-      marginTop: 2,
-      lineHeight: 16,
-    },
-    editActionBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingHorizontal: 8,
-      paddingVertical: 3,
-      borderRadius: 6,
-      backgroundColor: isDark ? 'rgba(45, 186, 78, 0.12)' : 'rgba(22, 163, 74, 0.08)',
-      borderWidth: 1,
-      borderColor: isDark ? 'rgba(45, 186, 78, 0.25)' : 'rgba(22, 163, 74, 0.18)',
-    },
-    editActionBtnText: {
-      fontSize: 11,
-      fontWeight: '700',
-      color: colors.accent,
-    },
-    detailsGrid: {
-      gap: 9,
-    },
-    detailItem: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.03)' : 'rgba(0, 0, 0, 0.02)',
-      paddingHorizontal: 10,
-      paddingVertical: 8,
-      borderRadius: 10,
-      borderWidth: 1,
-      borderColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)',
-    },
-    detailIconBox: {
-      width: 28,
-      height: 28,
-      borderRadius: 8,
-      backgroundColor: isDark ? 'rgba(45, 186, 78, 0.12)' : 'rgba(22, 163, 74, 0.10)',
-      alignItems: 'center',
-      justifyContent: 'center',
-      marginRight: 10,
-    },
-    detailLabel: {
-      fontSize: 10,
-      color: colors.textSecondary,
-      fontWeight: '600',
-    },
-    detailValue: {
-      fontSize: 12.5,
-      color: colors.text,
-      fontWeight: '700',
-      marginTop: 1,
-    },
-    themePill: {
-      flex: 1,
-      paddingVertical: 8,
-      borderRadius: 8,
-      backgroundColor: colors.buttonSecondaryBackground,
-      alignItems: 'center',
-      justifyContent: 'center',
-      borderWidth: 1,
-      borderColor: colors.border,
-    },
-    themePillText: {
-      color: colors.text,
-      fontSize: 12,
-      fontWeight: '600',
-      textTransform: 'capitalize',
-    },
-    securityRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      marginTop: 10,
-      paddingTop: 10,
-      borderTopWidth: 1,
-      borderTopColor: colors.border,
-    },
-    securityTitle: {
-      fontSize: 13,
-      fontWeight: '700',
-      color: colors.text,
-    },
-    securityDesc: {
-      fontSize: 11,
-      color: colors.textSecondary,
-      marginTop: 2,
-    },
-    autoLockSection: {
-      marginTop: 12,
-      paddingTop: 12,
-      borderTopWidth: 1,
-      borderTopColor: colors.border,
-    },
-    autoLockLabel: {
-      fontSize: 11.5,
-      fontWeight: '700',
-      color: colors.text,
-    },
-    autoLockDesc: {
-      fontSize: 11,
-      color: colors.textSecondary,
-      marginTop: 1,
-    },
-    timeoutPill: {
-      flex: 1,
-      paddingVertical: 8,
-      borderRadius: 8,
-      backgroundColor: colors.buttonSecondaryBackground,
-      alignItems: 'center',
-      justifyContent: 'center',
-      borderWidth: 1,
-      borderColor: colors.border,
-    },
-    timeoutPillText: {
-      color: colors.text,
-      fontSize: 12,
-      fontWeight: '600',
-    },
-    logoutBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: 'rgba(239, 68, 68, 0.08)',
-      paddingHorizontal: 12,
-      paddingVertical: 7,
-      borderRadius: 8,
-      borderWidth: 1,
-      borderColor: 'rgba(239, 68, 68, 0.25)',
-    },
-    logoutBtnText: {
-      color: '#FF5252',
-      fontSize: 12,
-      fontWeight: '700',
-    },
-    modalBackdrop: {
-      flex: 1,
-      backgroundColor: 'rgba(0, 0, 0, 0.75)',
-      justifyContent: 'flex-end',
-      ...(Platform.OS === 'web' ? { height: '100dvh' as any, width: '100vw' as any, position: 'fixed' as any, top: 0, left: 0, right: 0, bottom: 0 } : {}),
-    },
-    keyboardAvoidingWrap: {
-      width: '100%',
-      justifyContent: 'flex-end',
-    },
-    modalCard: {
+      borderColor: line,
       backgroundColor: colors.card,
-      borderTopLeftRadius: 20,
-      borderTopRightRadius: 20,
-      padding: 18,
-      borderTopWidth: 1,
-      borderColor: colors.border,
+      borderRadius: 999,
+      paddingHorizontal: 11,
+      paddingVertical: 6,
+    },
+    metaText: { fontSize: 12, color: colors.textSecondary },
+
+    // Money card
+    moneyCard: {
+      marginHorizontal: 16,
+      marginTop: 24,
+      backgroundColor: FOREST,
+      borderRadius: 26,
+      padding: 20,
       overflow: 'hidden',
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: -4 },
-      shadowOpacity: 0.3,
-      shadowRadius: 12,
-      elevation: 20,
     },
-    modalHeaderRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      marginBottom: 14,
-    },
-    modalTitle: {
-      fontSize: 16,
-      fontWeight: '800',
-      color: colors.text,
-    },
-    modalSubtitle: {
-      fontSize: 11,
-      color: colors.textSecondary,
-      marginTop: 2,
-    },
-    modalCloseBtn: {
-      width: 30,
-      height: 30,
-      borderRadius: 15,
-      backgroundColor: colors.buttonSecondaryBackground,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    uploadOptionBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: colors.buttonSecondaryBackground,
-      padding: 12,
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: colors.border,
-      marginTop: 4,
-    },
-    optionIconBox: {
+    ring: { position: 'absolute', borderWidth: 1, borderColor: 'rgba(184, 243, 107, 0.18)' },
+    moneyTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    moneyLabel: { fontSize: 13, color: MIST, fontWeight: '600' },
+    moneyEdit: {
       width: 36,
       height: 36,
-      borderRadius: 10,
+      borderRadius: 18,
+      borderWidth: 1,
+      borderColor: 'rgba(255, 255, 255, 0.18)',
       alignItems: 'center',
       justifyContent: 'center',
-      marginRight: 12,
     },
-    optionTitle: {
-      fontSize: 13,
-      fontWeight: '700',
-      color: colors.text,
-    },
-    optionSubtitle: {
-      fontSize: 11,
-      color: colors.textSecondary,
-      marginTop: 1,
-    },
-    sectionTitleSmall: {
-      fontSize: 10,
-      fontWeight: '800',
-      letterSpacing: 1.2,
-      color: colors.textSecondary,
-    },
-    presetAvatarBtn: {
-      width: '31%',
+    moneyValue: { fontSize: 36, letterSpacing: -1, color: '#FFFFFF', marginTop: 2, ...displayFont },
+    statGrid: { flexDirection: 'row', gap: 8, marginTop: 16 },
+    stat: { flex: 1, backgroundColor: FOREST_RAISED, borderRadius: 16, paddingHorizontal: 12, paddingVertical: 10 },
+    statLabel: { fontSize: 11, color: MIST },
+    statValue: { fontSize: 16, fontWeight: '700', color: '#FFFFFF', marginTop: 2 },
+
+    // Sections
+    sectionHead: {
+      flexDirection: 'row',
       alignItems: 'center',
-      paddingVertical: 8,
-      borderRadius: 10,
-      backgroundColor: colors.buttonSecondaryBackground,
-      borderWidth: 1,
-      borderColor: colors.border,
+      justifyContent: 'space-between',
+      paddingHorizontal: 22,
+      paddingTop: 26,
+      paddingBottom: 8,
     },
-    presetAvatarImg: {
+    sectionTitle: { fontSize: 13, fontWeight: '700', color: colors.textSecondary },
+    sectionTitleSolo: { paddingHorizontal: 22, paddingTop: 24, paddingBottom: 8 },
+    sectionLink: { fontSize: 13, fontWeight: '600', color: isDark ? LIME : '#0B6B3A' },
+    group: {
+      marginHorizontal: 16,
+      backgroundColor: colors.card,
+      borderWidth: 1,
+      borderColor: line,
+      borderRadius: 20,
+      overflow: 'hidden',
+    },
+
+    // Rows
+    row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingLeft: 14, minHeight: 56 },
+    rowIcon: { width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+    rowBody: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingVertical: 12,
+      paddingRight: 14,
+      alignSelf: 'stretch',
+    },
+    rowDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line },
+    rowTitle: { fontSize: 15, fontWeight: '600', color: colors.text },
+    rowSubtitle: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+    rowValue: { fontSize: 14, color: colors.textSecondary, maxWidth: 160 },
+    version: { textAlign: 'center', fontSize: 12, color: colors.textSecondary, marginTop: 14 },
+
+    // Photo sheet
+    backdrop: { flex: 1, backgroundColor: 'rgba(7, 17, 13, 0.55)', justifyContent: 'flex-end' },
+    sheet: {
+      backgroundColor: colors.card,
+      borderTopLeftRadius: 28,
+      borderTopRightRadius: 28,
+      paddingHorizontal: 20,
+      paddingTop: 10,
+      width: '100%',
+      maxWidth: 640,
+      alignSelf: 'center',
+    },
+    grabber: {
+      width: 40,
+      height: 5,
+      borderRadius: 3,
+      alignSelf: 'center',
+      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.18)' : '#D5DED9',
+    },
+    sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 14 },
+    sheetTitle: { fontSize: 22, letterSpacing: -0.4, color: colors.text, ...displayFont },
+    closeBtn: {
       width: 44,
       height: 44,
       borderRadius: 22,
-      marginBottom: 4,
+      borderWidth: 1,
+      borderColor: line,
+      alignItems: 'center',
+      justifyContent: 'center',
     },
-    presetAvatarName: {
-      fontSize: 10,
-      fontWeight: '600',
-      color: colors.text,
-    },
-    urlInputRow: {
+    galleryBtn: {
       flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
       gap: 8,
+      height: 54,
+      borderRadius: 27,
+      backgroundColor: isDark ? LIME : FOREST,
+      marginTop: 18,
     },
+    galleryText: { fontSize: 15, fontWeight: '700', color: isDark ? FOREST : LIME },
+    sheetLabel: { fontSize: 13, fontWeight: '700', color: colors.textSecondary, marginTop: 22, marginBottom: 12 },
+    presetGrid: { flexDirection: 'row', flexWrap: 'wrap', rowGap: 14 },
+    presetItem: { width: '25%', alignItems: 'center', gap: 6 },
+    presetRing: { width: 60, height: 60, borderRadius: 30, borderWidth: 2, borderColor: 'transparent', padding: 2 },
+    presetImg: { width: '100%', height: '100%', borderRadius: 28 },
+    presetName: { fontSize: 12, color: colors.text, maxWidth: 72 },
+    urlRow: { flexDirection: 'row', gap: 8 },
     urlInput: {
       flex: 1,
-      backgroundColor: colors.buttonSecondaryBackground,
+      height: 48,
+      borderRadius: 14,
       borderWidth: 1,
-      borderColor: colors.border,
-      borderRadius: 8,
-      paddingHorizontal: 10,
-      paddingVertical: 7,
-      fontSize: 12,
-      color: colors.text,
-    },
-    urlSaveBtn: {
-      backgroundColor: colors.accent,
+      borderColor: line,
+      backgroundColor: bg,
       paddingHorizontal: 14,
-      justifyContent: 'center',
-      borderRadius: 8,
-    },
-    urlSaveBtnText: {
-      color: '#ffffff',
-      fontSize: 12,
-      fontWeight: '700',
-    },
-    formFieldLabel: {
-      fontSize: 10,
-      fontWeight: '800',
-      letterSpacing: 1,
-      color: colors.textSecondary,
-      marginTop: 12,
-      marginBottom: 6,
-    },
-    formInput: {
-      backgroundColor: colors.buttonSecondaryBackground,
-      borderWidth: 1,
-      borderColor: colors.border,
-      borderRadius: 10,
-      paddingHorizontal: 12,
-      paddingVertical: 9,
-      fontSize: 13,
+      fontSize: 14,
       color: colors.text,
-      fontWeight: '600',
+      ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : {}),
     },
-    smallPill: {
-      paddingHorizontal: 10,
-      paddingVertical: 6,
-      borderRadius: 8,
-      backgroundColor: colors.buttonSecondaryBackground,
+    urlBtn: {
+      height: 48,
+      paddingHorizontal: 20,
+      borderRadius: 14,
       borderWidth: 1,
-      borderColor: colors.border,
-    },
-    smallPillActive: {
-      backgroundColor: colors.accent,
-      borderColor: colors.accent,
-    },
-    smallPillText: {
-      fontSize: 11,
-      fontWeight: '600',
-      color: colors.text,
-    },
-    smallPillTextActive: {
-      color: '#ffffff',
-      fontWeight: '700',
-    },
-    streamPill: {
-      flex: 1,
-      paddingVertical: 8,
-      borderRadius: 8,
-      backgroundColor: colors.buttonSecondaryBackground,
+      borderColor: line,
       alignItems: 'center',
       justifyContent: 'center',
-      borderWidth: 1,
-      borderColor: colors.border,
     },
-    streamPillActive: {
-      backgroundColor: colors.accent,
-      borderColor: colors.accent,
-    },
-    streamPillText: {
-      fontSize: 11,
-      fontWeight: '600',
-      color: colors.text,
-    },
-    streamPillTextActive: {
-      color: '#ffffff',
-      fontWeight: '700',
-    },
-    saveProfileBtn: {
-      backgroundColor: colors.accent,
-      borderRadius: 12,
-      paddingVertical: 12,
-      alignItems: 'center',
-      justifyContent: 'center',
-      marginTop: 18,
-      shadowColor: colors.accent,
-      shadowOffset: { width: 0, height: 3 },
-      shadowOpacity: 0.3,
-      shadowRadius: 6,
-      elevation: 3,
-    },
-    saveProfileBtnText: {
-      color: '#ffffff',
-      fontSize: 13.5,
-      fontWeight: '800',
-    },
+    urlBtnText: { fontSize: 14, fontWeight: '700', color: colors.text },
+    errorText: { color: isDark ? '#FFA8A8' : '#C92A2A', fontSize: 13, marginTop: 10 },
   });
+};

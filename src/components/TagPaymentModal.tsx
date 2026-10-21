@@ -1,22 +1,27 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Modal,
   View,
   Text,
   TouchableOpacity,
+  Pressable,
   ScrollView,
   TextInput,
   StyleSheet,
-  Dimensions,
+  Switch,
   Platform,
 } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
-import { Feather, Ionicons } from '@expo/vector-icons';
+import { Feather } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  PAYTM_TRANSACTION_TAGS,
-  TransactionTagDef,
-  getTagDef,
-} from '../constants/transactionTags';
+  CATEGORIES,
+  CATEGORY_GROUPS,
+  CategoryDef,
+  getCategory,
+  searchCategories,
+} from '../constants/categories';
+import { CategoryIcon } from './CategoryIcon';
 import { tagLearningService } from '../services/tagLearningService';
 
 interface TagPaymentModalProps {
@@ -29,8 +34,8 @@ interface TagPaymentModalProps {
   colors: any;
 }
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const ITEM_WIDTH = (SCREEN_WIDTH - 64) / 4;
+const FOREST = '#0B3D2C';
+const LIME = '#B8F36B';
 
 export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
   visible,
@@ -41,118 +46,99 @@ export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
   isDark,
   colors,
 }) => {
-  const [currentSelected, setCurrentSelected] = useState(selectedTag || 'miscellaneous');
-  const [customTags, setCustomTags] = useState<string[]>(() =>
-    tagLearningService.getCustomTags()
-  );
-  const [isCreatingNew, setIsCreatingNew] = useState(false);
-  const [newTagInput, setNewTagInput] = useState('');
-  const [errorText, setErrorText] = useState('');
-  const selectedTagDef = getTagDef(currentSelected);
+  const insets = useSafeAreaInsets();
 
-  // Update selection if prop changes
-  React.useEffect(() => {
+  const [current, setCurrent] = useState(selectedTag || 'miscellaneous');
+  const [customTags, setCustomTags] = useState<string[]>(() => tagLearningService.getCustomTags());
+  const [query, setQuery] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
+  const [newTag, setNewTag] = useState('');
+  const [errorText, setErrorText] = useState('');
+  const [rememberForPayee, setRememberForPayee] = useState(false);
+
+  useEffect(() => {
     if (visible) {
-      setCurrentSelected(selectedTag || 'miscellaneous');
-      setIsCreatingNew(false);
-      setNewTagInput('');
-      setErrorText('');
+      setCurrent(selectedTag || 'miscellaneous');
       setCustomTags(tagLearningService.getCustomTags());
+      setQuery('');
+      setIsCreating(false);
+      setNewTag('');
+      setErrorText('');
+      setRememberForPayee(false);
     }
   }, [visible, selectedTag]);
 
-  const handleCreateCustomTag = () => {
-    const clean = newTagInput.trim();
+  const sheetBg = isDark ? colors.background : '#F3F6F4';
+  const cardBg = colors.card;
+  const line = isDark ? colors.border : '#DCE5E0';
+  const ink = colors.text;
+  const muted = colors.textSecondary;
+
+  const currentCat = getCategory(current);
+  const isSelected = (value: string) => getCategory(value).id === currentCat.id;
+
+  const searchResults = useMemo(() => {
+    if (!query.trim()) return null;
+    const q = query.trim().toLowerCase();
+    return {
+      builtIn: searchCategories(query),
+      custom: customTags.filter((t) => t.toLowerCase().includes(q)),
+    };
+  }, [query, customTags]);
+
+  const handleCreate = (name: string = newTag) => {
+    const clean = name.trim();
     if (!clean) {
-      setErrorText('Please enter a tag name');
+      setErrorText('Enter a name for your tag.');
       return;
     }
     if (clean.length < 2) {
-      setErrorText('Tag name is too short');
+      setErrorText('Use at least 2 characters.');
       return;
     }
-
     const updated = tagLearningService.addCustomTag(clean);
     setCustomTags(updated);
-    setCurrentSelected(clean.toLowerCase());
-    setIsCreatingNew(false);
-    setNewTagInput('');
+    setCurrent(clean.toLowerCase());
+    setQuery('');
+    setIsCreating(false);
+    setNewTag('');
     setErrorText('');
   };
 
   const handleConfirm = () => {
-    onSelectTag(currentSelected);
+    onSelectTag(current, merchantName ? rememberForPayee : undefined);
     onClose();
   };
 
-  const renderTagItem = (item: TransactionTagDef, isCustom = false) => {
-    const isSelected =
-      currentSelected.toLowerCase() === item.id.toLowerCase() ||
-      currentSelected.toLowerCase() === item.label.toLowerCase();
-
+  const renderTile = (value: string, label: string) => {
+    const selected = isSelected(value);
     return (
-      <TouchableOpacity
-        key={item.id}
-        style={styles.gridItem}
-        onPress={() => setCurrentSelected(item.id)}
-        activeOpacity={0.7}
+      <Pressable
+        key={value}
+        onPress={() => setCurrent(value)}
+        style={styles.tile}
+        accessibilityRole="radio"
+        accessibilityState={{ selected }}
+        accessibilityLabel={label}
       >
-        <View
-          style={[
-            styles.iconCard,
-            {
-              backgroundColor: isDark ? item.bgColorDark : item.bgColorLight,
-              borderColor: isSelected
-                ? '#002E6E'
-                : isDark
-                ? 'transparent'
-                : 'rgba(0,0,0,0.04)',
-              borderWidth: isSelected ? 2 : 1,
-            },
-          ]}
-        >
-          {item.iconType === 'ionicons' ? (
-            <Ionicons
-              name={item.iconName as any}
-              size={26}
-              color={item.iconColor}
-            />
-          ) : (
-            <Feather
-              name={item.iconName as any}
-              size={24}
-              color={item.iconColor}
-            />
-          )}
-
-          {isSelected && (
-            <View style={styles.selectedBadge}>
-              <Ionicons name="checkmark" size={11} color="#FFFFFF" />
-            </View>
-          )}
-        </View>
-
+        <CategoryIcon category={value} size={56} selected={selected} backgroundColor={sheetBg} />
         <Text
-          numberOfLines={2}
+          numberOfLines={1}
           style={[
-            styles.tagLabel,
-            {
-              color: isSelected
-                ? isDark
-                  ? '#60A5FA'
-                  : '#002E6E'
-                : isDark
-                ? '#D1D5DB'
-                : '#4B5563',
-              fontWeight: isSelected ? '800' : '500',
-            },
+            styles.tileLabel,
+            { color: selected ? ink : isDark ? 'rgba(234, 242, 238, 0.82)' : '#26332D' },
+            selected && { fontWeight: '700' },
           ]}
         >
-          {item.label}
+          {label}
         </Text>
-      </TouchableOpacity>
+      </Pressable>
     );
   };
+
+  const renderBuiltIn = (cats: CategoryDef[]) => (
+    <View style={styles.grid}>{cats.map((c) => renderTile(c.id, c.label))}</View>
+  );
 
   return (
     <Modal
@@ -163,218 +149,188 @@ export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
       navigationBarTranslucent
       onRequestClose={onClose}
     >
-      <KeyboardAvoidingView
-        behavior="padding"
-        style={styles.overlay}
-      >
-        <TouchableOpacity
-          style={styles.backdrop}
-          activeOpacity={1}
-          onPress={onClose}
-        />
+      <KeyboardAvoidingView behavior="padding" style={styles.overlay}>
+        <Pressable style={styles.backdrop} onPress={onClose} accessibilityLabel="Close" />
 
-        <View
-          style={[
-            styles.sheetContainer,
-            {
-              backgroundColor: isDark ? '#14141E' : '#FFFFFF',
-              borderColor: isDark ? '#2D2D3D' : '#E5E7EB',
-            },
-          ]}
-        >
-          {/* Top Grabber */}
-          <View style={styles.grabberWrap}>
-            <View
-              style={[
-                styles.grabber,
-                { backgroundColor: isDark ? '#3D3D52' : '#E2E8F0' },
-              ]}
-            />
-          </View>
+        <View style={[styles.sheet, { backgroundColor: sheetBg }]}>
+          <View style={[styles.grabber, { backgroundColor: isDark ? 'rgba(255,255,255,0.18)' : '#C9D4CE' }]} />
 
           {/* Header */}
           <View style={styles.headerRow}>
             <View style={{ flex: 1 }}>
-              <Text
-                style={[
-                  styles.title,
-                  { color: isDark ? '#FFFFFF' : '#111827' },
-                ]}
-              >
-                Tag your payment
-              </Text>
-              <Text style={styles.subtitle}>
-                Tags help you categorise payments for better spending insights
-              </Text>
+              <Text style={[styles.title, { color: ink }]}>Tag this payment</Text>
+              {merchantName ? (
+                <View style={styles.payeeRow}>
+                  <View style={[styles.payeeAvatar, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#E9EFEB' }]}>
+                    <Text style={{ color: isDark ? LIME : FOREST, fontSize: 12, fontWeight: '700' }}>
+                      {merchantName.trim().charAt(0).toUpperCase()}
+                    </Text>
+                  </View>
+                  <Text style={{ color: muted, fontSize: 14 }} numberOfLines={1}>
+                    Paid to <Text style={{ color: ink, fontWeight: '700' }}>{merchantName}</Text>
+                  </Text>
+                </View>
+              ) : null}
             </View>
             <TouchableOpacity
               onPress={onClose}
-              style={[
-                styles.closeBtn,
-                { backgroundColor: isDark ? '#232332' : '#F3F4F6' },
-              ]}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              style={[styles.closeBtn, { backgroundColor: cardBg, borderColor: line }]}
+              accessibilityLabel="Close"
             >
-              <Feather
-                name="x"
-                size={16}
-                color={isDark ? '#9CA3AF' : '#6B7280'}
-              />
+              <Feather name="x" size={18} color={ink} />
             </TouchableOpacity>
           </View>
 
-          {/* Section: Recommended Tags */}
-          <Text
-            style={[
-              styles.sectionTitle,
-              { color: isDark ? '#9CA3AF' : '#1F2937' },
-            ]}
-          >
-            Recommended Tags
-          </Text>
+          {/* Search */}
+          <View style={[styles.search, { backgroundColor: cardBg, borderColor: line }]}>
+            <Feather name="search" size={17} color={muted} />
+            <TextInput
+              value={query}
+              onChangeText={setQuery}
+              placeholder="Search tags"
+              placeholderTextColor={muted}
+              style={[styles.searchInput, { color: ink }]}
+              autoCorrect={false}
+              accessibilityLabel="Search tags"
+            />
+            {query ? (
+              <Pressable onPress={() => setQuery('')} hitSlop={10} accessibilityLabel="Clear search">
+                <Feather name="x-circle" size={16} color={muted} />
+              </Pressable>
+            ) : null}
+          </View>
 
-          {/* Grid Scroll Area */}
           <ScrollView
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.scrollContent}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ paddingBottom: 16 }}
           >
-            {/* Custom User Tags (if any) */}
-            {customTags.length > 0 && (
-              <View style={styles.customTagsSection}>
-                <Text
-                  style={[
-                    styles.customSectionLabel,
-                    { color: isDark ? '#818CF8' : '#4F46E5' },
-                  ]}
-                >
-                  YOUR CUSTOM TAGS
-                </Text>
+            {searchResults ? (
+              <>
+                {searchResults.builtIn.length + searchResults.custom.length === 0 ? (
+                  <Text style={[styles.emptyText, { color: muted }]}>
+                    No tag called "{query.trim()}". Create it below.
+                  </Text>
+                ) : (
+                  <>
+                    <Text style={[styles.groupTitle, { color: muted }]}>Results</Text>
+                    <View style={styles.grid}>
+                      {searchResults.builtIn.map((c) => renderTile(c.id, c.label))}
+                      {searchResults.custom.map((t) => renderTile(t.toLowerCase(), getCategory(t).label))}
+                    </View>
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                {CATEGORY_GROUPS.map((g) => (
+                  <View key={g.id}>
+                    <Text style={[styles.groupTitle, { color: muted }]}>{g.label}</Text>
+                    {renderBuiltIn(CATEGORIES.filter((c) => c.group === g.id))}
+                  </View>
+                ))}
+
+                <Text style={[styles.groupTitle, { color: muted }]}>Your tags</Text>
                 <View style={styles.grid}>
-                  {customTags.map((tagName) =>
-                    renderTagItem(getTagDef(tagName), true)
-                  )}
+                  {customTags.map((t) => renderTile(t.toLowerCase(), getCategory(t).label))}
+                  {renderTile('miscellaneous', 'Misc')}
+                  <Pressable
+                    onPress={() => {
+                      setIsCreating((v) => !v);
+                      setErrorText('');
+                    }}
+                    style={styles.tile}
+                    accessibilityRole="button"
+                    accessibilityLabel="Create a new tag"
+                  >
+                    <View
+                      style={[
+                        styles.newTile,
+                        { borderColor: isDark ? 'rgba(255,255,255,0.3)' : '#9DB2A7' },
+                        isCreating && { backgroundColor: isDark ? 'rgba(184,243,107,0.12)' : '#E3F2E8' },
+                      ]}
+                    >
+                      <Feather name={isCreating ? 'minus' : 'plus'} size={22} color={isDark ? LIME : FOREST} />
+                    </View>
+                    <Text style={[styles.tileLabel, { color: isDark ? 'rgba(234, 242, 238, 0.82)' : '#26332D' }]}>
+                      New tag
+                    </Text>
+                  </Pressable>
                 </View>
+              </>
+            )}
+
+            {/* Create a tag */}
+            {(isCreating || (searchResults && searchResults.builtIn.length + searchResults.custom.length === 0)) && (
+              <View style={{ paddingHorizontal: 16, marginTop: 8 }}>
+                <View
+                  style={[
+                    styles.createBox,
+                    { backgroundColor: cardBg, borderColor: errorText ? '#E03131' : line },
+                  ]}
+                >
+                  <TextInput
+                    value={newTag}
+                    onChangeText={(t) => {
+                      setErrorText('');
+                      setNewTag(t);
+                    }}
+                    placeholder={searchResults ? `Create "${query.trim()}"` : 'Name your tag, like Pet care'}
+                    placeholderTextColor={muted}
+                    style={[styles.createInput, { color: ink }]}
+                    autoFocus={isCreating}
+                    returnKeyType="done"
+                    onSubmitEditing={() => handleCreate(newTag.trim() || query.trim())}
+                    accessibilityLabel="New tag name"
+                  />
+                  <TouchableOpacity
+                    onPress={() => handleCreate(newTag.trim() || query.trim())}
+                    style={[styles.createBtn, { backgroundColor: isDark ? LIME : FOREST }]}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={{ color: isDark ? FOREST : '#FFFFFF', fontSize: 13, fontWeight: '700' }}>Create</Text>
+                  </TouchableOpacity>
+                </View>
+                {errorText ? <Text style={styles.errorText}>{errorText}</Text> : null}
               </View>
             )}
 
-            {/* Standard Paytm Tags Grid */}
-            <View style={styles.grid}>
-              {PAYTM_TRANSACTION_TAGS.map((tag) => renderTagItem(tag))}
-            </View>
-
-            {/* Didn't find right tag banner */}
-            <View
-              style={[
-                styles.createBanner,
-                {
-                  backgroundColor: isDark ? '#1C1C29' : '#F9FAFB',
-                  borderColor: isDark ? '#2D2D3D' : '#E5E7EB',
-                },
-              ]}
-            >
-              <View style={{ flex: 1, marginRight: 10 }}>
-                <Text
-                  style={[
-                    styles.createBannerTitle,
-                    { color: isDark ? '#FFFFFF' : '#111827' },
-                  ]}
-                >
-                  Didn’t find the right tag?
-                </Text>
+            {/* Remember for this payee */}
+            {merchantName ? (
+              <View style={[styles.rememberCard, { backgroundColor: cardBg, borderColor: line }]}>
+                <View style={{ flex: 1, marginRight: 12 }}>
+                  <Text style={{ color: ink, fontSize: 14, fontWeight: '700' }} numberOfLines={2}>
+                    Always tag {merchantName} as {currentCat.label}
+                  </Text>
+                  <Text style={{ color: muted, fontSize: 12, marginTop: 2, lineHeight: 17 }}>
+                    Future payments to {merchantName} get this tag automatically
+                  </Text>
+                </View>
+                <Switch
+                  value={rememberForPayee}
+                  onValueChange={setRememberForPayee}
+                  trackColor={{ false: isDark ? '#3A3A3C' : '#D1D5DB', true: '#16A34A' }}
+                  thumbColor="#FFFFFF"
+                  ios_backgroundColor={isDark ? '#3A3A3C' : '#D1D5DB'}
+                />
               </View>
-              <TouchableOpacity
-                style={[
-                  styles.createBtn,
-                  { borderColor: isDark ? '#6366F1' : '#002E6E' },
-                ]}
-                onPress={() => setIsCreatingNew(!isCreatingNew)}
-                activeOpacity={0.8}
-              >
-                <Feather
-                  name={isCreatingNew ? 'minus' : 'plus'}
-                  size={14}
-                  color={isDark ? '#818CF8' : '#002E6E'}
-                  style={{ marginRight: 4 }}
-                />
-                <Text
-                  style={[
-                    styles.createBtnText,
-                    { color: isDark ? '#818CF8' : '#002E6E' },
-                  ]}
-                >
-                  {isCreatingNew ? 'Cancel' : 'Create New'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Inline Custom Tag Input */}
-            {isCreatingNew && (
-              <View
-                style={[
-                  styles.inlineInputBox,
-                  {
-                    backgroundColor: isDark ? '#232333' : '#F3F4F6',
-                    borderColor: errorText
-                      ? '#EF4444'
-                      : isDark
-                      ? '#3D3D52'
-                      : '#D1D5DB',
-                  },
-                ]}
-              >
-                <Feather
-                  name="tag"
-                  size={16}
-                  color={isDark ? '#9CA3AF' : '#6B7280'}
-                  style={{ marginRight: 8 }}
-                />
-                <TextInput
-                  style={[
-                    styles.inlineTextInput,
-                    { color: isDark ? '#FFFFFF' : '#111827' },
-                  ]}
-                  placeholder="Enter tag name (e.g. Pet Care, Gaming)..."
-                  placeholderTextColor={isDark ? '#6B7280' : '#9CA3AF'}
-                  value={newTagInput}
-                  onChangeText={(txt) => {
-                    setErrorText('');
-                    setNewTagInput(txt);
-                  }}
-                  autoFocus
-                  returnKeyType="done"
-                  onSubmitEditing={handleCreateCustomTag}
-                />
-                <TouchableOpacity
-                  style={[
-                    styles.inlineSaveBtn,
-                    { backgroundColor: isDark ? '#6366F1' : '#002E6E' },
-                  ]}
-                  onPress={handleCreateCustomTag}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.inlineSaveBtnText}>Add</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {errorText ? (
-              <Text style={styles.errorText}>{errorText}</Text>
             ) : null}
-
           </ScrollView>
 
-          {/* Bottom Primary CTA Button */}
-          <View style={styles.footerWrap}>
+          {/* Confirm */}
+          <View
+            style={[
+              styles.footer,
+              { borderTopColor: line, paddingBottom: Math.max(insets.bottom, 12) + 4 },
+            ]}
+          >
             <TouchableOpacity
-              style={[
-                styles.primaryBtn,
-                { backgroundColor: isDark ? '#2563EB' : '#0070F3' },
-              ]}
+              style={[styles.primaryBtn, { backgroundColor: isDark ? LIME : FOREST }]}
               onPress={handleConfirm}
               activeOpacity={0.85}
             >
-              <Text style={styles.primaryBtnText}>
-                Select {selectedTagDef?.label || 'Category'}
+              <Text style={[styles.primaryBtnText, { color: isDark ? FOREST : LIME }]}>
+                Tag as {currentCat.label}
               </Text>
             </TouchableOpacity>
           </View>
@@ -395,261 +351,164 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    backgroundColor: 'rgba(7, 17, 13, 0.55)',
   },
-  sheetContainer: {
+  sheet: {
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    borderWidth: 1,
-    borderBottomWidth: 0,
-    maxHeight: '88%',
-    paddingBottom: Platform.OS === 'ios' ? 24 : 16,
-  },
-  grabberWrap: {
-    alignItems: 'center',
-    paddingVertical: 10,
+    maxHeight: '90%',
+    width: '100%',
+    maxWidth: 640,
+    alignSelf: 'center',
   },
   grabber: {
-    width: 38,
-    height: 4,
-    borderRadius: 2,
+    width: 40,
+    height: 5,
+    borderRadius: 3,
+    alignSelf: 'center',
+    marginTop: 10,
   },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     paddingHorizontal: 20,
-    paddingBottom: 14,
+    paddingTop: 14,
   },
   title: {
-    fontSize: 20,
+    fontSize: 24,
     fontWeight: '800',
-    letterSpacing: -0.2,
-    marginBottom: 4,
+    letterSpacing: -0.5,
   },
-  subtitle: {
-    fontSize: 12,
-    color: '#8E8E9F',
-    lineHeight: 16,
+  payeeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 8,
+  },
+  payeeAvatar: {
+    width: 24,
+    height: 24,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   closeBtn: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
     marginLeft: 12,
   },
-  sectionTitle: {
-    fontSize: 14,
-    fontWeight: '800',
-    paddingHorizontal: 20,
-    marginBottom: 10,
-    letterSpacing: -0.2,
+  search: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    height: 46,
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    marginHorizontal: 20,
+    marginTop: 16,
   },
-  scrollContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 16,
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    paddingVertical: 0,
+    ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : {}),
+  },
+  groupTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    paddingHorizontal: 22,
+    paddingTop: 22,
+    paddingBottom: 12,
   },
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
+    paddingHorizontal: 12,
+    rowGap: 16,
   },
-  gridItem: {
-    width: ITEM_WIDTH,
+  tile: {
+    width: '25%',
     alignItems: 'center',
-    marginBottom: 16,
+    gap: 8,
+    paddingTop: 6,
+  },
+  tileLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
     paddingHorizontal: 2,
   },
-  iconCard: {
-    width: 58,
-    height: 58,
+  newTile: {
+    width: 56,
+    height: 56,
     borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 3,
-    elevation: 1,
-  },
-  selectedBadge: {
-    position: 'absolute',
-    top: -4,
-    right: -4,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: '#002E6E',
-    alignItems: 'center',
-    justifyContent: 'center',
     borderWidth: 1.5,
-    borderColor: '#FFFFFF',
+    borderStyle: 'dashed',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  tagLabel: {
-    fontSize: 11,
+  emptyText: {
+    fontSize: 14,
     textAlign: 'center',
-    marginTop: 6,
-    lineHeight: 14,
+    paddingHorizontal: 24,
+    paddingTop: 28,
   },
-  customTagsSection: {
-    marginBottom: 10,
-  },
-  customSectionLabel: {
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-    marginBottom: 8,
-    paddingHorizontal: 4,
-  },
-  createBanner: {
+  createBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
     borderRadius: 14,
     borderWidth: 1,
-    marginTop: 8,
+    paddingLeft: 14,
+    paddingRight: 6,
+    height: 52,
   },
-  createBannerTitle: {
-    fontSize: 13,
-    fontWeight: '700',
+  createInput: {
+    flex: 1,
+    fontSize: 14,
+    paddingVertical: 0,
+    ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : {}),
   },
   createBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 7,
-    paddingHorizontal: 14,
+    height: 40,
+    paddingHorizontal: 16,
     borderRadius: 20,
-    borderWidth: 1.5,
-  },
-  createBtnText: {
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  inlineInputBox: {
-    flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 12,
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginTop: 10,
-  },
-  inlineTextInput: {
-    flex: 1,
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  inlineSaveBtn: {
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-    borderRadius: 8,
-    marginLeft: 8,
-  },
-  inlineSaveBtnText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '800',
+    justifyContent: 'center',
   },
   errorText: {
-    color: '#EF4444',
-    fontSize: 11,
-    marginTop: 4,
+    color: '#E03131',
+    fontSize: 12,
+    marginTop: 6,
     paddingHorizontal: 4,
     fontWeight: '600',
   },
-  memoryHintWrap: {
+  rememberCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 14,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    backgroundColor: 'rgba(16, 185, 129, 0.08)',
-  },
-  memoryHintText: {
-    color: '#10B981',
-    fontSize: 11,
-    fontWeight: '600',
-    flex: 1,
-  },
-  scopeCard: {
-    marginTop: 16,
-    padding: 12,
-    borderRadius: 14,
+    marginHorizontal: 16,
+    marginTop: 22,
+    padding: 14,
+    borderRadius: 18,
     borderWidth: 1,
   },
-  scopeHeaderRow: {
-    marginBottom: 8,
-  },
-  scopePayeeLabel: {
-    fontSize: 10.5,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
-  scopeSelectorRow: {
-    flexDirection: 'row',
-    borderRadius: 10,
-    padding: 3,
-    gap: 4,
-  },
-  scopeTabBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 9,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: 'transparent',
-  },
-  scopeTabBtnActive: {
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.15,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  scopeTabText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#94A3B8',
-  },
-  scopeTabTextActive: {
-    fontWeight: '800',
-  },
-  scopeHintRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginTop: 8,
-    paddingHorizontal: 2,
-  },
-  scopeHintText: {
-    flex: 1,
-    fontSize: 11.5,
-    lineHeight: 16,
-  },
-  footerWrap: {
-    paddingHorizontal: 20,
-    paddingTop: 10,
+  footer: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
   primaryBtn: {
-    height: 48,
-    borderRadius: 24,
+    height: 54,
+    borderRadius: 27,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#002E6E',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 3,
   },
   primaryBtnText: {
-    color: '#FFFFFF',
     fontSize: 15,
-    fontWeight: '800',
-    letterSpacing: 0.3,
+    fontWeight: '700',
   },
 });

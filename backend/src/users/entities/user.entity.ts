@@ -94,4 +94,37 @@ export class User {
 
   @Column({ name: 'ban_reason', type: 'text', nullable: true })
   banReason?: string | null;
+
+  @Column({ name: 'is_scheduled_for_deletion', type: 'boolean', default: false })
+  isScheduledForDeletion?: boolean;
+
+  @Column({ name: 'deletion_requested_at', type: 'bigint', nullable: true, transformer: {
+    to: (value: number) => value ? String(value) : null,
+    from: (value: string) => value ? Number(value) : null
+  }})
+  deletionRequestedAt?: number | null;
+
+  @Column({ name: 'deletion_deadline', type: 'bigint', nullable: true, transformer: {
+    to: (value: number) => value ? String(value) : null,
+    from: (value: string) => value ? Number(value) : null
+  }})
+  deletionDeadline?: number | null;
+
+  @Column({ name: 'deletion_reason', type: 'text', nullable: true })
+  deletionReason?: string | null;
+
+  @Column({ name: 'deletion_feedback', type: 'text', nullable: true })
+  deletionFeedback?: string | null;
+
+  @Column({ name: 'restored_at', type: 'bigint', nullable: true, transformer: {
+    to: (value: number) => value ? String(value) : null,
+    from: (value: string) => value ? Number(value) : null
+  }})
+  restoredAt?: number | null;
+
+  @Column({ name: 'deletion_cooldown_until', type: 'bigint', nullable: true, transformer: {
+    to: (value: number) => value ? String(value) : null,
+    from: (value: string) => value ? Number(value) : null
+  }})
+  deletionCooldownUntil?: number | null;
 }

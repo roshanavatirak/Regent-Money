@@ -19,6 +19,8 @@ import { useTheme, showGlobalConfirm, useBankStore, useTransactionStore, useInco
 import { authService } from '../services/authService';
 import { getBackendUrl } from '../config/api';
 import { TagPaymentModal } from '../components/TagPaymentModal';
+import { CategoryIcon } from '../components/CategoryIcon';
+import { getCategory } from '../constants/categories';
 import { getTagDef } from '../constants/transactionTags';
 import { tagLearningService } from '../services/tagLearningService';
 import { KeyboardScreen } from '../components/KeyboardScreen';
@@ -458,28 +460,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
                     onPress={() => setTagModalVisible(true)}
                     activeOpacity={0.7}
                   >
-                    <View
-                      style={[
-                        styles.selectedTagIconWrap,
-                        {
-                          backgroundColor: isDark ? currentTagDef.bgColorDark : currentTagDef.bgColorLight,
-                        },
-                      ]}
-                    >
-                      {currentTagDef.iconType === 'ionicons' ? (
-                        <Ionicons
-                          name={currentTagDef.iconName as any}
-                          size={22}
-                          color={currentTagDef.iconColor}
-                        />
-                      ) : (
-                        <Feather
-                          name={currentTagDef.iconName as any}
-                          size={20}
-                          color={currentTagDef.iconColor}
-                        />
-                      )}
-                    </View>
+                    <CategoryIcon category={selectedCategory} size={42} />
 
                     <View style={{ flex: 1, marginLeft: 12 }}>
                       <Text
@@ -488,7 +469,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
                           { color: isDark ? '#FFFFFF' : '#111827' },
                         ]}
                       >
-                        {currentTagDef.label}
+                        {getCategory(selectedCategory).label}
                       </Text>
                       <Text style={styles.selectedTagSub}>
                         Tap to change category

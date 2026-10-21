@@ -106,14 +106,20 @@ export const askChatbot = async (
     clearTimeout(timeoutId);
 
     if (res.ok) {
-      const data = await res.json();
-      if (data && data.answer) {
+      const data = await res.json().catch(() => ({}));
+      if (data && typeof data.answer === 'string') {
         return data.answer;
+      } else if (data && typeof data.answer === 'object') {
+        return JSON.stringify(data.answer);
+      } else if (data && data.answer) {
+        return String(data.answer);
       }
     }
 
     const errJson = await res.json().catch(() => ({}));
-    return errJson.message || "I'm Regent Money AI. Connecting to our backend intelligence service... If this persists, please ensure you are logged in.";
+    const rawMsg = errJson.message || errJson.error;
+    const errMsg = Array.isArray(rawMsg) ? rawMsg.join('\n') : (typeof rawMsg === 'string' ? rawMsg : undefined);
+    return errMsg || "I'm Regent Money AI. Connecting to our backend intelligence service... If this persists, please ensure you are logged in.";
   } catch (backendErr: any) {
     console.error('[AI Service] Backend AI Chat error:', backendErr);
     return "I couldn't reach the financial intelligence service right now. Please check your network connection and try again.";

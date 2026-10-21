@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -8,9 +8,11 @@ import {
   Switch,
   ActivityIndicator,
   Platform,
+  Modal,
+  Pressable,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Feather, Ionicons } from '@expo/vector-icons';
+import { Feather } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme, useThemeStore, useSecurityStore, showGlobalConfirm } from '../store';
 import { biometricService } from '../services/biometricService';
@@ -18,22 +20,221 @@ import { authService } from '../services/authService';
 import { smsPermissionService } from '../services/smsPermissionService';
 import { notificationService } from '../services/notificationService';
 import { smsCatchupService } from '../services/smsCatchupService';
+import { DeleteAccountModal } from '../components/DeleteAccountModal';
 
-const SYNC_RANGES = [
-  { label: '1 Hr', hours: 1 },
-  { label: '4 Hrs', hours: 4 },
-  { label: '12 Hrs', hours: 12 },
-  { label: '24 Hrs', hours: 24 },
-  { label: '7 Days', hours: 168 },
+type ThemeMode = 'light' | 'dark' | 'system';
+type FeatherName = keyof typeof Feather.glyphMap;
+
+const THEME_OPTIONS: { value: ThemeMode; label: string; description?: string }[] = [
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+  { value: 'system', label: 'System default', description: 'Match your device setting' },
 ];
+
+const SYNC_RANGES: { value: number; label: string }[] = [
+  { value: 1, label: 'Last hour' },
+  { value: 4, label: 'Last 4 hours' },
+  { value: 12, label: 'Last 12 hours' },
+  { value: 24, label: 'Last 24 hours' },
+  { value: 168, label: 'Last 7 days' },
+];
+
+/* ------------------------------------------------------------------ */
+/* Shared styles hook                                                  */
+/* ------------------------------------------------------------------ */
+
+const useSettingsStyles = () => {
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => getStyles(colors, isDark), [colors, isDark]);
+  return { styles, colors, isDark };
+};
+
+/* ------------------------------------------------------------------ */
+/* Building blocks                                                     */
+/* ------------------------------------------------------------------ */
+
+const Section: React.FC<{ title?: string; footer?: React.ReactNode; children: React.ReactNode }> = ({
+  title,
+  footer,
+  children,
+}) => {
+  const { styles } = useSettingsStyles();
+  return (
+    <View style={styles.section}>
+      {title ? <Text style={styles.sectionTitle}>{title}</Text> : null}
+      <View style={styles.group}>{children}</View>
+      {footer ? <View style={styles.sectionFooter}>{footer}</View> : null}
+    </View>
+  );
+};
+
+type RowProps = {
+  icon: FeatherName;
+  title: string;
+  subtitle?: string;
+  value?: string;
+  right?: React.ReactNode;
+  onPress?: () => void;
+  showChevron?: boolean;
+  destructive?: boolean;
+  disabled?: boolean;
+  isLast?: boolean;
+};
+
+const Row: React.FC<RowProps> = ({
+  icon,
+  title,
+  subtitle,
+  value,
+  right,
+  onPress,
+  showChevron,
+  destructive,
+  disabled,
+  isLast,
+}) => {
+  const { styles, colors } = useSettingsStyles();
+  const tint = destructive ? colors.danger : colors.text;
+
+  const content = (
+    <>
+      <View style={styles.rowIcon}>
+        <Feather name={icon} size={17} color={destructive ? colors.danger : colors.textSecondary} />
+      </View>
+      <View style={[styles.rowBody, !isLast && styles.rowDivider]}>
+        <View style={styles.rowText}>
+          <Text style={[styles.rowTitle, { color: tint }]} numberOfLines={1}>
+            {title}
+          </Text>
+          {subtitle ? (
+            <Text style={styles.rowSubtitle} numberOfLines={2}>
+              {subtitle}
+            </Text>
+          ) : null}
+        </View>
+        {value ? (
+          <Text style={styles.rowValue} numberOfLines={1}>
+            {value}
+          </Text>
+        ) : null}
+        {right}
+        {showChevron ? (
+          <Feather name="chevron-right" size={16} color={colors.textTertiary} style={styles.chevron} />
+        ) : null}
+      </View>
+    </>
+  );
+
+  if (!onPress) {
+    return <View style={[styles.row, disabled && styles.rowDisabled]}>{content}</View>;
+  }
+
+  return (
+    <TouchableOpacity
+      style={[styles.row, disabled && styles.rowDisabled]}
+      onPress={onPress}
+      disabled={disabled}
+      activeOpacity={0.6}
+      accessibilityRole="button"
+    >
+      {content}
+    </TouchableOpacity>
+  );
+};
+
+const SettingSwitch: React.FC<{ value: boolean; onValueChange: (v: boolean) => void; loading?: boolean }> = ({
+  value,
+  onValueChange,
+  loading,
+}) => {
+  const { colors, isDark } = useSettingsStyles();
+  if (loading) return <ActivityIndicator size="small" color={colors.textSecondary} />;
+  const offTrack = isDark ? 'rgba(250, 251, 252, 0.16)' : colors.border;
+  return (
+    <Switch
+      value={value}
+      onValueChange={onValueChange}
+      trackColor={{ false: offTrack, true: colors.accent }}
+      thumbColor={Platform.OS === 'android' ? (value ? '#ffffff' : '#f8fafc') : '#ffffff'}
+      ios_backgroundColor={offTrack}
+      style={Platform.select({
+        web: { transform: [{ scale: 0.85 }] } as any,
+        ios: { transform: [{ scaleX: 0.82 }, { scaleY: 0.82 }] },
+        android: { transform: [{ scaleX: 0.88 }, { scaleY: 0.88 }] },
+      })}
+    />
+  );
+};
+
+type SheetOption<T> = { value: T; label: string; description?: string };
+
+function OptionSheet<T extends string | number>({
+  visible,
+  title,
+  options,
+  selected,
+  onSelect,
+  onClose,
+}: {
+  visible: boolean;
+  title: string;
+  options: SheetOption<T>[];
+  selected: T;
+  onSelect: (value: T) => void;
+  onClose: () => void;
+}) {
+  const { styles, colors } = useSettingsStyles();
+  const insets = useSafeAreaInsets();
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent>
+      <Pressable style={styles.backdrop} onPress={onClose} accessibilityLabel="Close" />
+      <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+        <View style={styles.sheetHandle} />
+        <Text style={styles.sheetTitle}>{title}</Text>
+        {options.map((option, index) => {
+          const isSelected = option.value === selected;
+          return (
+            <TouchableOpacity
+              key={String(option.value)}
+              style={[styles.sheetOption, index < options.length - 1 && styles.rowDivider]}
+              onPress={() => {
+                onSelect(option.value);
+                onClose();
+              }}
+              activeOpacity={0.6}
+              accessibilityRole="radio"
+              accessibilityState={{ selected: isSelected }}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.sheetOptionLabel}>{option.label}</Text>
+                {option.description ? (
+                  <Text style={styles.rowSubtitle}>{option.description}</Text>
+                ) : null}
+              </View>
+              <View style={[styles.radio, isSelected && { borderColor: colors.accent }]}>
+                {isSelected ? <View style={[styles.radioDot, { backgroundColor: colors.accent }]} /> : null}
+              </View>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </Modal>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Screen                                                              */
+/* ------------------------------------------------------------------ */
 
 export const SettingsScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
-  const { colors, isDark, theme } = useTheme();
+  const { theme } = useTheme();
+  const { styles, colors } = useSettingsStyles();
   const setTheme = useThemeStore((state) => state.setTheme);
 
-  // Biometrics
+  // Security
   const biometricsEnabled = useSecurityStore((state) => state.biometricsEnabled);
   const setBiometricsEnabled = useSecurityStore((state) => state.setBiometricsEnabled);
   const autoLockTimeout = useSecurityStore((state) => state.autoLockTimeout);
@@ -45,59 +246,57 @@ export const SettingsScreen: React.FC = () => {
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [notificationLoading, setNotificationLoading] = useState(false);
 
-  // Manual SMS Sync
+  // SMS sync
   const [selectedLookback, setSelectedLookback] = useState(24);
   const [manualSyncing, setManualSyncing] = useState(false);
   const [syncFeedback, setSyncFeedback] = useState<{ message: string; isSuccess: boolean } | null>(null);
 
-  const handleManualSync = async () => {
-    if (Platform.OS !== 'android') return;
-    setManualSyncing(true);
-    setSyncFeedback(null);
-    try {
-      const res = await smsCatchupService.reconcile(true, selectedLookback);
-      if (res) {
-        if (res.syncedCount > 0) {
-          setSyncFeedback({
-            message: `Successfully backfilled ${res.syncedCount} new transaction${res.syncedCount > 1 ? 's' : ''}!`,
-            isSuccess: true,
-          });
-        } else {
-          setSyncFeedback({
-            message: 'All bank records are up to date. No new SMS detected.',
-            isSuccess: true,
-          });
-        }
-      } else {
-        setSyncFeedback({
-          message: 'Sync completed. Up to date.',
-          isSuccess: true,
-        });
-      }
-    } catch (e: any) {
-      setSyncFeedback({
-        message: e?.message || 'Error occurred during sync.',
-        isSuccess: false,
-      });
-    } finally {
-      setManualSyncing(false);
-    }
-  };
+  // Sheets and modals
+  const [themeSheetVisible, setThemeSheetVisible] = useState(false);
+  const [rangeSheetVisible, setRangeSheetVisible] = useState(false);
+  const [deleteModalVisible, setDeleteModalVisible] = useState(false);
+
+  const isAndroid = Platform.OS === 'android';
+  const themeLabel = THEME_OPTIONS.find((o) => o.value === theme)?.label ?? 'System default';
+  const rangeLabel = SYNC_RANGES.find((r) => r.value === selectedLookback)?.label ?? 'Last 24 hours';
 
   useEffect(() => {
     checkPermissions();
   }, []);
 
   const checkPermissions = async () => {
-    if (Platform.OS === 'android') {
+    if (isAndroid) {
       const granted = await smsPermissionService.isPermissionGranted();
       setSmsGranted(granted);
     } else {
       setSmsGranted(true);
     }
-
     const notifGranted = await notificationService.isPermissionGranted();
     setNotificationsEnabled(notifGranted);
+  };
+
+  const handleManualSync = async () => {
+    if (!isAndroid) return;
+    setManualSyncing(true);
+    setSyncFeedback(null);
+    try {
+      const res = await smsCatchupService.reconcile(true, selectedLookback);
+      const count = res?.syncedCount ?? 0;
+      setSyncFeedback({
+        message:
+          count > 0
+            ? `${count} new transaction${count > 1 ? 's' : ''} added.`
+            : 'You’re up to date. No new transactions found.',
+        isSuccess: true,
+      });
+    } catch (e: any) {
+      setSyncFeedback({
+        message: e?.message || 'Sync failed. Check SMS access and try again.',
+        isSuccess: false,
+      });
+    } finally {
+      setManualSyncing(false);
+    }
   };
 
   const handleToggleBiometrics = async (enable: boolean) => {
@@ -112,8 +311,8 @@ export const SettingsScreen: React.FC = () => {
       const check = await biometricService.checkBiometrics();
       if (!check.available) {
         showGlobalConfirm({
-          title: 'Biometrics Unavailable',
-          message: check.errorMessage || 'Biometric hardware is not available on this device.',
+          title: 'App lock unavailable',
+          message: check.errorMessage || 'Set up a fingerprint or face unlock on this device first.',
           confirmText: 'OK',
           icon: 'alert-triangle',
           onConfirm: () => {},
@@ -121,7 +320,7 @@ export const SettingsScreen: React.FC = () => {
         return;
       }
 
-      const auth = await biometricService.authenticate('Scan fingerprint or face to activate Regent App Lock');
+      const auth = await biometricService.authenticate('Confirm it’s you to turn on app lock');
       if (auth.success) {
         setBiometricsEnabled(true);
         authService.updateSecuritySettings({ biometricsEnabled: true, autoLockTimeout });
@@ -133,8 +332,8 @@ export const SettingsScreen: React.FC = () => {
     }
   };
 
-  const handleToggleSmsPermission = async () => {
-    if (Platform.OS !== 'android') return;
+  const handleRequestSms = async () => {
+    if (!isAndroid) return;
     setSmsChecking(true);
     try {
       const granted = await smsPermissionService.requestSmsPermissions();
@@ -151,13 +350,11 @@ export const SettingsScreen: React.FC = () => {
     try {
       if (enable) {
         const token = await notificationService.registerForPushNotifications();
-        if (token) {
-          setNotificationsEnabled(true);
-        } else {
-          setNotificationsEnabled(false);
+        setNotificationsEnabled(!!token);
+        if (!token) {
           showGlobalConfirm({
-            title: 'Permission Notice',
-            message: 'Please enable notifications in your phone device settings to receive digest alerts.',
+            title: 'Notifications are off',
+            message: 'Turn on notifications for this app in your device settings.',
             confirmText: 'OK',
             icon: 'alert-triangle',
             onConfirm: () => {},
@@ -174,472 +371,367 @@ export const SettingsScreen: React.FC = () => {
     }
   };
 
-  const styles = getStyles(colors, isDark);
-
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Top Header */}
-      <View style={[styles.header, { paddingTop: Math.max(insets.top, 16) }]}>
+      {/* Header */}
+      <View style={[styles.header, { paddingTop: Math.max(insets.top, 12) }]}>
         <TouchableOpacity
           onPress={() => navigation.goBack()}
           style={styles.backBtn}
-          activeOpacity={0.7}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
         >
-          <Feather name="arrow-left" size={20} color={colors.text} />
+          <Feather name="arrow-left" size={17} color={colors.text} />
         </TouchableOpacity>
-        <View style={{ flex: 1, marginLeft: 12 }}>
-          <Text style={styles.headerTitle}>Settings & Preferences</Text>
-          <Text style={styles.headerSubtitle}>Appearance, security, and system permissions</Text>
-        </View>
+        <Text style={styles.headerTitle}>Settings</Text>
       </View>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 40 }]}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 24 }]}
       >
-        {/* 1. Interface Theme */}
-        <View style={styles.card}>
-          <View style={styles.cardHeader}>
-            <Feather name="moon" size={14} color={colors.accent} style={{ marginRight: 6 }} />
-            <Text style={styles.cardKicker}>INTERFACE THEME</Text>
-          </View>
-          <Text style={styles.cardDescription}>
-            Customize your visual interface appearance.
-          </Text>
-          <View style={styles.themePillRow}>
-            {(['light', 'dark', 'system'] as const).map((mode) => {
-              const isSelected = theme === mode;
-              return (
-                <TouchableOpacity
-                  key={mode}
-                  onPress={() => setTheme(mode)}
-                  style={[styles.themePill, isSelected && styles.themePillActive]}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[styles.themePillText, isSelected && styles.themePillTextActive]}>
-                    {mode.charAt(0).toUpperCase() + mode.slice(1)}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
+        {/* Display */}
+        <Section title="Display">
+          <Row
+            icon="sun"
+            title="Appearance"
+            value={themeLabel}
+            onPress={() => setThemeSheetVisible(true)}
+            showChevron
+            isLast
+          />
+        </Section>
 
-        {/* 2. Biometric Security */}
-        <View style={styles.card}>
-          <View style={styles.cardHeader}>
-            <Ionicons name="shield-checkmark-outline" size={15} color={colors.accent} style={{ marginRight: 6 }} />
-            <Text style={styles.cardKicker}>BIOMETRIC SECURITY</Text>
-          </View>
-          <Text style={styles.cardDescription}>
-            Protect your financial portfolio with fingerprint or facial recognition upon app resume.
-          </Text>
-          <View style={styles.toggleRow}>
-            <View style={{ flex: 1, marginRight: 12 }}>
-              <Text style={styles.toggleTitle}>Biometric App Lock</Text>
-              <Text style={styles.toggleSubtitle}>
-                {biometricsEnabled
-                  ? 'Enabled • Device authentication required on resume'
-                  : 'Disabled • Open without lock'}
-              </Text>
-            </View>
-            {biometricLoading ? (
-              <ActivityIndicator size="small" color={colors.accent} />
-            ) : (
-              <Switch
+        {/* Privacy & security */}
+        <Section title="Privacy and security">
+          <Row
+            icon="lock"
+            title="App lock"
+            subtitle="Require biometric unlock to open the app"
+            right={
+              <SettingSwitch
                 value={biometricsEnabled}
                 onValueChange={handleToggleBiometrics}
-                thumbColor={biometricsEnabled ? colors.accent : colors.text}
-                trackColor={{ false: colors.buttonSecondaryBackground, true: colors.accentMuted }}
+                loading={biometricLoading}
               />
-            )}
-          </View>
-        </View>
+            }
+            isLast
+          />
+        </Section>
 
-        {/* 3. Permissions Management */}
-        <View style={styles.card}>
-          <View style={styles.cardHeader}>
-            <Feather name="key" size={14} color={colors.accent} style={{ marginRight: 6 }} />
-            <Text style={styles.cardKicker}>APP PERMISSIONS</Text>
-          </View>
-          <Text style={styles.cardDescription}>
-            Manage capabilities required for automated bank ledger synchronization.
-          </Text>
-
-          {/* SMS Permission */}
-          {Platform.OS === 'android' && (
-            <View style={styles.permissionItem}>
-              <View style={styles.permissionMeta}>
-                <Text style={styles.permissionTitle}>Financial SMS Sync</Text>
-                <Text style={styles.permissionDesc}>
-                  {smsGranted
-                    ? 'Granted • Automatic bank transaction detection'
-                    : 'Not Granted • Required to read bank credit & debit alerts'}
-                </Text>
-              </View>
-              {smsChecking ? (
-                <ActivityIndicator size="small" color={colors.accent} />
-              ) : !smsGranted ? (
-                <TouchableOpacity
-                  style={styles.actionBtn}
-                  onPress={handleToggleSmsPermission}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.actionBtnText}>Allow</Text>
-                </TouchableOpacity>
-              ) : (
-                <View style={styles.badgeGranted}>
-                  <Feather name="check" size={11} color={colors.accent} style={{ marginRight: 3 }} />
-                  <Text style={styles.badgeGrantedText}>Active</Text>
-                </View>
-              )}
-            </View>
-          )}
-
-          {/* Push Notifications */}
-          <View style={[styles.permissionItem, { borderBottomWidth: 0, paddingBottom: 0 }]}>
-            <View style={styles.permissionMeta}>
-              <Text style={styles.permissionTitle}>Push Notifications</Text>
-              <Text style={styles.permissionDesc}>
-                {notificationsEnabled
-                  ? 'Active • Daily morning & evening wealth digests'
-                  : 'Disabled • Toggle to receive notifications'}
-              </Text>
-            </View>
-            {notificationLoading ? (
-              <ActivityIndicator size="small" color={colors.accent} />
-            ) : (
-              <Switch
+        {/* Notifications & permissions */}
+        <Section title="Notifications and permissions">
+          <Row
+            icon="bell"
+            title="Notifications"
+            subtitle="Morning and evening spending summaries"
+            right={
+              <SettingSwitch
                 value={notificationsEnabled}
                 onValueChange={handleToggleNotifications}
-                thumbColor={notificationsEnabled ? colors.accent : colors.text}
-                trackColor={{ false: colors.buttonSecondaryBackground, true: colors.accentMuted }}
+                loading={notificationLoading}
               />
-            )}
-          </View>
-        </View>
-
-        {/* 4. SMS Catchup Synchronization */}
-        {Platform.OS === 'android' && (
-          <View style={styles.card}>
-            <View style={styles.cardHeader}>
-              <Feather name="refresh-cw" size={14} color={colors.accent} style={{ marginRight: 6 }} />
-              <Text style={styles.cardKicker}>SMS SYNCHRONIZATION</Text>
-            </View>
-            <Text style={styles.cardDescription}>
-              Scan Android SMS inbox to discover and backfill transactions missed while offline, in battery saver, or in airplane mode.
-            </Text>
-
-            <View style={{ marginTop: 8 }}>
-              <Text style={[styles.toggleSubtitle, { marginBottom: 8, fontWeight: '700' }]}>
-                SCAN TIMEFRAME:
-              </Text>
-              <View style={styles.syncPillRow}>
-                {SYNC_RANGES.map((range) => {
-                  const isSelected = selectedLookback === range.hours;
-                  return (
-                    <TouchableOpacity
-                      key={range.hours}
-                      onPress={() => setSelectedLookback(range.hours)}
-                      disabled={manualSyncing}
-                      style={[styles.syncPill, isSelected && styles.syncPillActive]}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={[styles.syncPillText, isSelected && styles.syncPillTextActive]}>
-                        {range.label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </View>
-
-            <View style={{ marginTop: 14 }}>
-              <TouchableOpacity
-                style={[
-                  styles.syncNowBtn,
-                  manualSyncing && { opacity: 0.7 },
-                  { backgroundColor: colors.accent },
-                ]}
-                onPress={handleManualSync}
-                disabled={manualSyncing}
-                activeOpacity={0.85}
-              >
-                {manualSyncing ? (
-                  <ActivityIndicator size="small" color="#ffffff" style={{ marginRight: 8 }} />
+            }
+            isLast={!isAndroid}
+          />
+          {isAndroid && (
+            <Row
+              icon="message-square"
+              title="SMS access"
+              subtitle="Detect transactions from bank messages"
+              onPress={smsGranted ? undefined : handleRequestSms}
+              right={
+                smsChecking ? (
+                  <ActivityIndicator size="small" color={colors.textSecondary} />
+                ) : smsGranted ? (
+                  <Text style={styles.statusText}>Allowed</Text>
                 ) : (
-                  <Feather name="refresh-cw" size={14} color="#ffffff" style={{ marginRight: 8 }} />
-                )}
-                <Text style={styles.syncNowBtnText}>
-                  {manualSyncing ? 'Scanning Inbox...' : 'Sync Now'}
-                </Text>
-              </TouchableOpacity>
+                  <Text style={[styles.linkText, { color: colors.accent }]}>Allow</Text>
+                )
+              }
+              isLast
+            />
+          )}
+        </Section>
 
-              {syncFeedback ? (
-                <View style={styles.feedbackRow}>
-                  <Feather
-                    name={syncFeedback.isSuccess ? 'check-circle' : 'alert-circle'}
-                    size={13}
-                    color={syncFeedback.isSuccess ? '#10B981' : '#EF4444'}
-                    style={{ marginRight: 6 }}
-                  />
-                  <Text
-                    style={[
-                      styles.feedbackText,
-                      { color: syncFeedback.isSuccess ? '#10B981' : '#EF4444' },
-                    ]}
-                  >
-                    {syncFeedback.message}
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-          </View>
+        {/* Transactions (Android only) */}
+        {isAndroid && (
+          <Section
+            title="Transactions"
+            footer={
+              syncFeedback ? (
+                <Text
+                  style={[
+                    styles.footerText,
+                    !syncFeedback.isSuccess && { color: colors.danger },
+                  ]}
+                >
+                  {syncFeedback.message}
+                </Text>
+              ) : (
+                <Text style={styles.footerText}>
+                  Check your inbox for bank messages missed while your phone was offline or in battery saver.
+                </Text>
+              )
+            }
+          >
+            <Row
+              icon="clock"
+              title="Scan period"
+              value={rangeLabel}
+              onPress={() => setRangeSheetVisible(true)}
+              disabled={manualSyncing}
+              showChevron
+            />
+            <Row
+              icon="refresh-cw"
+              title={manualSyncing ? 'Checking messages…' : 'Sync now'}
+              onPress={handleManualSync}
+              disabled={manualSyncing || !smsGranted}
+              right={manualSyncing ? <ActivityIndicator size="small" color={colors.textSecondary} /> : null}
+              isLast
+            />
+          </Section>
         )}
 
-        {/* 5. Financial Preferences */}
-        <View style={styles.card}>
-          <View style={styles.cardHeader}>
-            <Feather name="globe" size={14} color={colors.accent} style={{ marginRight: 6 }} />
-            <Text style={styles.cardKicker}>REGIONAL & CURRENCY</Text>
-          </View>
-          <View style={styles.prefRow}>
-            <Text style={styles.prefLabel}>Base Currency</Text>
-            <View style={styles.prefValueBadge}>
-              <Text style={styles.prefValueText}>INR (₹)</Text>
-            </View>
-          </View>
-          <View style={[styles.prefRow, { borderBottomWidth: 0, paddingBottom: 0 }]}>
-            <Text style={styles.prefLabel}>Number Formatting</Text>
-            <View style={styles.prefValueBadge}>
-              <Text style={styles.prefValueText}>Indian (Lakhs & Crores)</Text>
-            </View>
-          </View>
-        </View>
+        {/* Region */}
+        <Section title="Region">
+          <Row icon="credit-card" title="Currency" value="INR (₹)" />
+          <Row icon="hash" title="Number format" value="Lakhs and crores" isLast />
+        </Section>
+
+        {/* Account */}
+        <Section
+          title="Account"
+          footer={
+            <Text style={styles.footerText}>
+              Your account and transaction history are deleted after 7 days. Sign in during that time to restore it.
+            </Text>
+          }
+        >
+          <Row
+            icon="trash-2"
+            title="Delete account"
+            onPress={() => setDeleteModalVisible(true)}
+            destructive
+            isLast
+          />
+        </Section>
       </ScrollView>
+
+      <OptionSheet<ThemeMode>
+        visible={themeSheetVisible}
+        title="Appearance"
+        options={THEME_OPTIONS}
+        selected={theme as ThemeMode}
+        onSelect={setTheme}
+        onClose={() => setThemeSheetVisible(false)}
+      />
+
+      <OptionSheet<number>
+        visible={rangeSheetVisible}
+        title="Scan period"
+        options={SYNC_RANGES}
+        selected={selectedLookback}
+        onSelect={(v) => {
+          setSelectedLookback(v);
+          setSyncFeedback(null);
+        }}
+        onClose={() => setRangeSheetVisible(false)}
+      />
+
+      <DeleteAccountModal visible={deleteModalVisible} onClose={() => setDeleteModalVisible(false)} />
     </View>
   );
 };
+
+/* ------------------------------------------------------------------ */
+/* Styles                                                              */
+/* ------------------------------------------------------------------ */
 
 const getStyles = (colors: any, isDark: boolean) =>
   StyleSheet.create({
     container: {
       flex: 1,
     },
+
+    // Header
     header: {
       flexDirection: 'row',
       alignItems: 'center',
       paddingHorizontal: 16,
-      paddingBottom: 14,
+      paddingBottom: 10,
+      backgroundColor: colors.card,
       borderBottomWidth: 1,
       borderBottomColor: colors.border,
-      backgroundColor: colors.card,
     },
     backBtn: {
-      width: 36,
-      height: 36,
-      borderRadius: 18,
+      width: 32,
+      height: 32,
+      borderRadius: 16,
       backgroundColor: colors.buttonSecondaryBackground,
       alignItems: 'center',
       justifyContent: 'center',
+      marginRight: 12,
     },
     headerTitle: {
       fontSize: 17,
-      fontWeight: '800',
+      fontWeight: '700',
       color: colors.text,
+      letterSpacing: -0.3,
     },
-    headerSubtitle: {
-      fontSize: 11,
-      color: colors.textSecondary,
-      marginTop: 2,
-    },
+
     scrollContent: {
-      paddingHorizontal: 16,
-      paddingTop: 16,
-      gap: 14,
-    },
-    card: {
-      backgroundColor: colors.card,
-      borderRadius: 16,
-      borderWidth: 1,
-      borderColor: colors.border,
-      padding: 16,
-    },
-    cardHeader: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      marginBottom: 4,
-    },
-    cardKicker: {
-      fontSize: 10.5,
-      fontWeight: '800',
-      letterSpacing: 0.8,
-      color: colors.accent,
-    },
-    cardDescription: {
-      fontSize: 12,
-      color: colors.textSecondary,
-      marginBottom: 14,
-      lineHeight: 17,
-    },
-    themePillRow: {
-      flexDirection: 'row',
-      gap: 8,
-    },
-    themePill: {
-      flex: 1,
-      paddingVertical: 10,
-      borderRadius: 10,
-      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : '#f8fafc',
-      borderWidth: 1,
-      borderColor: colors.border,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    themePillActive: {
-      backgroundColor: colors.accent,
-      borderColor: colors.accent,
-    },
-    themePillText: {
-      fontSize: 12.5,
-      fontWeight: '700',
-      color: colors.text,
-    },
-    themePillTextActive: {
-      color: '#ffffff',
-    },
-    toggleRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-    },
-    toggleTitle: {
-      fontSize: 13.5,
-      fontWeight: '700',
-      color: colors.text,
-    },
-    toggleSubtitle: {
-      fontSize: 11.5,
-      color: colors.textSecondary,
-      marginTop: 2,
-    },
-    permissionItem: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingVertical: 11,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.border,
-    },
-    permissionMeta: {
-      flex: 1,
-      marginRight: 12,
-    },
-    permissionTitle: {
-      fontSize: 13,
-      fontWeight: '700',
-      color: colors.text,
-    },
-    permissionDesc: {
-      fontSize: 11,
-      color: colors.textSecondary,
-      marginTop: 2,
-      lineHeight: 15,
-    },
-    actionBtn: {
-      backgroundColor: colors.accent,
       paddingHorizontal: 14,
-      paddingVertical: 7,
-      borderRadius: 8,
+      paddingTop: 6,
     },
-    actionBtnText: {
-      color: '#ffffff',
-      fontSize: 11.5,
-      fontWeight: '700',
+
+    // Sections
+    section: {
+      marginTop: 10,
     },
-    badgeGranted: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: isDark ? 'rgba(45, 186, 78, 0.15)' : 'rgba(45, 186, 78, 0.08)',
-      paddingHorizontal: 8,
-      paddingVertical: 4,
-      borderRadius: 6,
-    },
-    badgeGrantedText: {
+    sectionTitle: {
       fontSize: 11,
       fontWeight: '700',
-      color: colors.accent,
+      letterSpacing: 0.6,
+      textTransform: 'uppercase',
+      color: colors.textTertiary,
+      marginBottom: 4,
+      marginLeft: 4,
     },
-    prefRow: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      paddingVertical: 10,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.border,
-    },
-    prefLabel: {
-      fontSize: 13,
-      fontWeight: '600',
-      color: colors.text,
-    },
-    prefValueBadge: {
-      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)',
-      paddingHorizontal: 10,
-      paddingVertical: 4,
-      borderRadius: 6,
-    },
-    prefValueText: {
-      fontSize: 11.5,
-      fontWeight: '700',
-      color: colors.textSecondary,
-    },
-    syncPillRow: {
-      flexDirection: 'row',
-      gap: 6,
-    },
-    syncPill: {
-      flex: 1,
-      paddingVertical: 8,
-      borderRadius: 8,
-      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : '#f8fafc',
+    group: {
+      backgroundColor: colors.card,
+      borderRadius: 12,
       borderWidth: 1,
       borderColor: colors.border,
-      alignItems: 'center',
-      justifyContent: 'center',
+      overflow: 'hidden',
     },
-    syncPillActive: {
-      backgroundColor: colors.accent,
-      borderColor: colors.accent,
-    },
-    syncPillText: {
-      fontSize: 11.5,
-      fontWeight: '700',
-      color: colors.text,
-    },
-    syncPillTextActive: {
-      color: '#ffffff',
-    },
-    syncNowBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      paddingVertical: 11,
-      borderRadius: 10,
-    },
-    syncNowBtnText: {
-      color: '#ffffff',
-      fontSize: 13,
-      fontWeight: '700',
-    },
-    feedbackRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      marginTop: 10,
+    sectionFooter: {
+      marginTop: 4,
       paddingHorizontal: 4,
     },
-    feedbackText: {
-      fontSize: 12,
+    footerText: {
+      fontSize: 11.5,
+      lineHeight: 15,
+      color: colors.textTertiary,
+    },
+
+    // Rows
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingLeft: 12,
+      minHeight: 42,
+    },
+    rowDisabled: {
+      opacity: 0.5,
+    },
+    rowIcon: {
+      width: 20,
+      alignItems: 'center',
+      marginRight: 10,
+    },
+    rowBody: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 9,
+      paddingRight: 12,
+    },
+    rowDivider: {
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    rowText: {
+      flex: 1,
+      marginRight: 8,
+    },
+    rowTitle: {
+      fontSize: 14,
+      fontWeight: '500',
+    },
+    rowSubtitle: {
+      fontSize: 11.5,
+      lineHeight: 15,
+      color: colors.textSecondary,
+      marginTop: 1,
+    },
+    rowValue: {
+      fontSize: 13,
+      color: colors.textSecondary,
+      maxWidth: 160,
+    },
+    chevron: {
+      marginLeft: 4,
+    },
+    statusText: {
+      fontSize: 13,
+      fontWeight: '500',
+      color: colors.textSecondary,
+    },
+    linkText: {
+      fontSize: 13,
       fontWeight: '600',
+    },
+
+    // Option sheet
+    backdrop: {
+      ...StyleSheet.absoluteFill as any,
+      backgroundColor: isDark ? 'rgba(0, 0, 0, 0.65)' : 'rgba(15, 23, 42, 0.4)',
+    },
+    sheet: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: colors.card,
+      borderTopLeftRadius: 16,
+      borderTopRightRadius: 16,
+      borderTopWidth: 1,
+      borderLeftWidth: 1,
+      borderRightWidth: 1,
+      borderColor: colors.border,
+      paddingHorizontal: 18,
+      paddingTop: 8,
+    },
+    sheetHandle: {
+      alignSelf: 'center',
+      width: 32,
+      height: 3.5,
+      borderRadius: 2,
+      backgroundColor: colors.border,
+      marginBottom: 10,
+    },
+    sheetTitle: {
+      fontSize: 15,
+      fontWeight: '700',
+      color: colors.text,
+      marginBottom: 2,
+    },
+    sheetOption: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 10,
+    },
+    sheetOptionLabel: {
+      fontSize: 14,
+      fontWeight: '500',
+      color: colors.text,
+    },
+    radio: {
+      width: 18,
+      height: 18,
+      borderRadius: 9,
+      borderWidth: 1.5,
+      borderColor: colors.border,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginLeft: 12,
+    },
+    radioDot: {
+      width: 8,
+      height: 8,
+      borderRadius: 4,
     },
   });
