@@ -7,7 +7,8 @@ function walk(dir, callback) {
       let filepath = path.join(dir, file);
       let stat = fs.statSync(filepath);
       if (stat.isDirectory()) {
-        if (file !== '.bin' && file !== '.cache') {
+        const ignoredDirs = ['.bin', '.cache', '.git', '.cxx', 'build', 'ios', 'docs', 'node_modules'];
+        if (!ignoredDirs.includes(file)) {
           walk(filepath, callback);
         }
       } else if (file === 'CMakeLists.txt') {
