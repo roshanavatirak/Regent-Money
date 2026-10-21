@@ -50,12 +50,7 @@ jobs:
           mkdir -p android
           cat << EOF > android/local.properties
           sdk.dir=$ANDROID_HOME
-          ndk.dir=$ANDROID_HOME/ndk/27.1.12297006
           EOF
-
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.1.12297006" >> $GITHUB_ENV
-          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.1.12297006" >> $GITHUB_ENV
-          echo "NDK_PATH=$ANDROID_HOME/ndk/27.1.12297006" >> $GITHUB_ENV
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -100,8 +95,6 @@ jobs:
         env:
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
           ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
-          ANDROID_NDK_ROOT: ${{ env.ANDROID_NDK_ROOT }}
           EXPO_PUBLIC_BACKEND_URL: ${{ secrets.EXPO_PUBLIC_BACKEND_URL || 'https://regent-money.onrender.com' }}
           EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: ${{ secrets.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '55231273460-epfomp35a43c6d15bhilb92i6btl6jt9.apps.googleusercontent.com' }}
           EXPO_PUBLIC_TURNSTILE_SITE_KEY: ${{ secrets.EXPO_PUBLIC_TURNSTILE_SITE_KEY || '0x4AAAAAAFS21ZDrV2b2WG7k' }}
