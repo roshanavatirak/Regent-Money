@@ -38,7 +38,7 @@ jobs:
       - name: Set up Android SDK, NDK & CMake
         uses: android-actions/setup-android@v3
         with:
-          packages: 'platform-tools ndk;27.1.12297006 cmake;3.22.1 build-tools;35.0.0 platforms;android-35'
+          packages: 'platform-tools ndk;27.1.12297006 cmake;3.22.1 build-tools;36.0.0 platforms;android-36'
 
       - name: Verify Android NDK & Configure Environment
         run: |
