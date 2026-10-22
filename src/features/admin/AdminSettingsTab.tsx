@@ -221,7 +221,7 @@ export const AdminSettingsTab: React.FC = () => {
         >
           <View style={styles.diagnosticRow}>
             <Text style={[styles.diagLabel, { color: colors.textSecondary }]}>Console Version</Text>
-            <Text style={[styles.diagValue, { color: colors.text }]}>v1.0.42 (Build 125)</Text>
+            <Text style={[styles.diagValue, { color: colors.text }]}>v1.0.43 (Build 126)</Text>
           </View>
           <View style={[styles.diagnosticRow, { borderTopWidth: 1, borderTopColor: colors.border }]}>
             <Text style={[styles.diagLabel, { color: colors.textSecondary }]}>API Endpoint</Text>

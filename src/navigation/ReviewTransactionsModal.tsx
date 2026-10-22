@@ -309,7 +309,9 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
 
       const resJson = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(resJson.message || 'Failed to save transactions.');
+        const raw = resJson.message || resJson.error;
+        const msg = Array.isArray(raw) ? raw.join('\n') : (typeof raw === 'string' ? raw : 'Failed to save transactions.');
+        throw new Error(msg);
       }
 
       await syncService.sync();
