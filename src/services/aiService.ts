@@ -117,9 +117,17 @@ export const askChatbot = async (
     }
 
     const errJson = await res.json().catch(() => ({}));
-    const rawMsg = errJson.message || errJson.error;
-    const errMsg = Array.isArray(rawMsg) ? rawMsg.join('\n') : (typeof rawMsg === 'string' ? rawMsg : undefined);
-    return errMsg || "I'm Regent Money AI. Connecting to our backend intelligence service... If this persists, please ensure you are logged in.";
+    console.warn('[AI Service] Backend AI Chat returned non-OK status:', res.status, errJson);
+
+    if (res.status === 401 || res.status === 403) {
+      return "Your session may have expired. Please sign in again to chat with Regent AI.";
+    }
+
+    if (res.status === 429) {
+      return "Regent AI is currently receiving a high volume of requests. Please wait a moment and try again.";
+    }
+
+    return "I'm temporarily having trouble connecting to my financial intelligence service. Please check your connection and try again in a moment.";
   } catch (backendErr: any) {
     console.error('[AI Service] Backend AI Chat error:', backendErr);
     return "I couldn't reach the financial intelligence service right now. Please check your network connection and try again.";
