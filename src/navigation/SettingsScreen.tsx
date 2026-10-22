@@ -300,12 +300,46 @@ export const SettingsScreen: React.FC = () => {
   };
 
   const handleToggleBiometrics = async (enable: boolean) => {
+    // 1. Turning OFF: User must verify biometric before App Lock is turned off.
+    // If verification fails or is cancelled, App Lock remains ON.
     if (!enable) {
-      setBiometricsEnabled(false);
-      authService.updateSecuritySettings({ biometricsEnabled: false, autoLockTimeout });
+      setBiometricLoading(true);
+      try {
+        const auth = await biometricService.authenticate(
+          'Confirm your fingerprint or face to turn off App lock'
+        );
+
+        if (auth.success) {
+          setBiometricsEnabled(false);
+          authService.updateSecuritySettings({ biometricsEnabled: false, autoLockTimeout });
+        } else {
+          showGlobalConfirm({
+            title: 'Verification Required',
+            message:
+              auth.error && auth.error !== 'user_cancel'
+                ? auth.error
+                : 'App lock remains on because biometric verification was not completed.',
+            confirmText: 'OK',
+            icon: 'alert-triangle',
+            onConfirm: () => {},
+          });
+        }
+      } catch (e: any) {
+        console.warn('[SettingsScreen] Failed to verify biometric to disable lock:', e);
+        showGlobalConfirm({
+          title: 'Verification Error',
+          message: 'Unable to verify biometric identity. App lock remains on.',
+          confirmText: 'OK',
+          icon: 'alert-triangle',
+          onConfirm: () => {},
+        });
+      } finally {
+        setBiometricLoading(false);
+      }
       return;
     }
 
+    // 2. Turning ON: Verify hardware availability and confirm biometric
     setBiometricLoading(true);
     try {
       const check = await biometricService.checkBiometrics();

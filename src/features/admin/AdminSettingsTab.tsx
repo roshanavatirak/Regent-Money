@@ -13,6 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useTheme, useAuthStore, useSecurityStore, useThemeStore, showGlobalConfirm } from '../../store';
 import { authService } from '../../services/authService';
+import { biometricService } from '../../services/biometricService';
 import { getBackendUrl } from '../../config/api';
 
 export const AdminSettingsTab: React.FC = () => {
@@ -27,6 +28,48 @@ export const AdminSettingsTab: React.FC = () => {
     autoLockTimeout,
     setAutoLockTimeout,
   } = useSecurityStore();
+
+  const handleToggleBiometrics = async (enable: boolean) => {
+    if (!enable) {
+      const auth = await biometricService.authenticate(
+        'Confirm your fingerprint or face to turn off biometric lock'
+      );
+      if (auth.success) {
+        setBiometricsEnabled(false);
+        authService.updateSecuritySettings({ biometricsEnabled: false, autoLockTimeout });
+      } else {
+        showGlobalConfirm({
+          title: 'Verification Required',
+          message:
+            auth.error && auth.error !== 'user_cancel'
+              ? auth.error
+              : 'Biometric lock remains on because verification was not completed.',
+          confirmText: 'OK',
+          icon: 'alert-triangle',
+          onConfirm: () => {},
+        });
+      }
+      return;
+    }
+
+    const check = await biometricService.checkBiometrics();
+    if (!check.available) {
+      showGlobalConfirm({
+        title: 'Biometric Lock Unavailable',
+        message: check.errorMessage || 'Please configure biometric security on this device first.',
+        confirmText: 'OK',
+        icon: 'alert-triangle',
+        onConfirm: () => {},
+      });
+      return;
+    }
+
+    const auth = await biometricService.authenticate('Confirm biometric to enable biometric lock');
+    if (auth.success) {
+      setBiometricsEnabled(true);
+      authService.updateSecuritySettings({ biometricsEnabled: true, autoLockTimeout });
+    }
+  };
 
   const handleLogout = () => {
     showGlobalConfirm({
@@ -163,7 +206,7 @@ export const AdminSettingsTab: React.FC = () => {
             </View>
             <Switch
               value={biometricsEnabled}
-              onValueChange={setBiometricsEnabled}
+              onValueChange={handleToggleBiometrics}
               trackColor={{ false: '#767577', true: '#2dba4e' }}
               thumbColor="#FFFFFF"
             />
@@ -221,7 +264,7 @@ export const AdminSettingsTab: React.FC = () => {
         >
           <View style={styles.diagnosticRow}>
             <Text style={[styles.diagLabel, { color: colors.textSecondary }]}>Console Version</Text>
-            <Text style={[styles.diagValue, { color: colors.text }]}>v1.0.43 (Build 126)</Text>
+            <Text style={[styles.diagValue, { color: colors.text }]}>v1.0.44 (Build 127)</Text>
           </View>
           <View style={[styles.diagnosticRow, { borderTopWidth: 1, borderTopColor: colors.border }]}>
             <Text style={[styles.diagLabel, { color: colors.textSecondary }]}>API Endpoint</Text>

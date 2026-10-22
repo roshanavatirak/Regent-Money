@@ -116,11 +116,7 @@ async function bootstrap() {
   });
 
   const port = process.env.PORT || 3000;
-  if (process.env.NODE_ENV === 'production') {
-    await app.listen(port, '0.0.0.0');
-  } else {
-    await app.listen(port);
-  }
+  await app.listen(port, '0.0.0.0');
   logger.log(`NestJS server started successfully. Listening on port: ${port}`);
 }
 bootstrap();

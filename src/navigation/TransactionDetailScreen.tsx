@@ -1,31 +1,49 @@
+// src/navigation/TransactionDetailScreen.tsx
+//
+// One transaction at a glance: who, how much, when, which account.
+// Edit the amount, category or note in place. Fits on one screen, no scrolling.
+
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   View,
   Text,
-  TouchableOpacity,
   TextInput,
-  ScrollView,
+  Pressable,
   ActivityIndicator,
-  Alert,
   StyleSheet,
   Platform,
   Switch,
   BackHandler,
 } from 'react-native';
-import { Feather, Ionicons } from '@expo/vector-icons';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withRepeat,
+  withSequence,
+  withTiming,
+  FadeIn,
+  FadeInDown,
+  ZoomIn,
+} from 'react-native-reanimated';
+import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
+import * as Font from 'expo-font';
+import { format } from 'date-fns';
 import { useTheme, showGlobalConfirm, useBankStore, useTransactionStore, useIncomeStore } from '../store';
 import { authService } from '../services/authService';
 import { getBackendUrl } from '../config/api';
 import { TagPaymentModal } from '../components/TagPaymentModal';
 import { CategoryIcon } from '../components/CategoryIcon';
+import { BankIcon } from '../components/BankIcon';
 import { getCategory } from '../constants/categories';
-import { getTagDef } from '../constants/transactionTags';
 import { tagLearningService } from '../services/tagLearningService';
-import { KeyboardScreen } from '../components/KeyboardScreen';
+import bankNamesJson from './banknames.json';
 
 const BACKEND_URL = getBackendUrl();
+const FOREST = '#0B3D2C';
+const LIME = '#B8F36B';
 
 export interface TransactionItem {
   id: string;
@@ -37,31 +55,6 @@ export interface TransactionItem {
   bankProfileId?: string;
 }
 
-interface CategoryOption {
-  id: string;
-  label: string;
-  iconName: any;
-}
-
-const CREDIT_CATEGORIES: CategoryOption[] = [
-  { id: 'salary', label: 'Salary', iconName: 'briefcase' },
-  { id: 'friend', label: 'From Friend', iconName: 'users' },
-  { id: 'freelance', label: 'Freelance', iconName: 'monitor' },
-  { id: 'investment', label: 'Investment', iconName: 'trending-up' },
-  { id: 'cashback', label: 'Refund/Cashback', iconName: 'refresh-cw' },
-  { id: 'other_income', label: 'Other Earning', iconName: 'gift' },
-];
-
-const DEBIT_CATEGORIES: CategoryOption[] = [
-  { id: 'food', label: 'Food & Dining', iconName: 'coffee' },
-  { id: 'utilities', label: 'Rent & Bills', iconName: 'home' },
-  { id: 'transport', label: 'Travel & Cab', iconName: 'map-pin' },
-  { id: 'shopping', label: 'Shopping', iconName: 'shopping-bag' },
-  { id: 'entertainment', label: 'Entertainment', iconName: 'film' },
-  { id: 'health', label: 'Health & Med', iconName: 'activity' },
-  { id: 'other_expense', label: 'Other Expense', iconName: 'tag' },
-];
-
 export interface TransactionDetailScreenProps {
   transaction?: TransactionItem;
   bankName?: string;
@@ -70,46 +63,111 @@ export interface TransactionDetailScreenProps {
   onSuccess?: (action: 'updated' | 'deleted', data?: any) => void;
 }
 
+/* ------------------------------------------------------------------ */
+/* Helpers                                                             */
+/* ------------------------------------------------------------------ */
+
+/** "UTTARAYAN PURE VEG R" → "Uttarayan Pure Veg R"; leaves mixed-case names alone. */
+const niceName = (s?: string) => {
+  const t = (s || '').trim();
+  if (!t) return '';
+  if (t !== t.toUpperCase()) return t;
+  return t.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+};
+
+const firstWord = (s: string) => s.split(/\s+/)[0] || s;
+
+const formatWhen = (ts?: number) => {
+  if (!ts) return null;
+  const d = new Date(ts);
+  const dateOnly = d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0;
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  if (dateOnly) return format(d, sameYear ? 'd MMM' : 'd MMM yyyy');
+  return format(d, sameYear ? 'd MMM, HH:mm' : 'd MMM yyyy, HH:mm');
+};
+
+const getBankCode = (bankName?: string) => {
+  if (!bankName) return '';
+  const entry = Object.entries(bankNamesJson as Record<string, string>).find(
+    ([, name]) => name.toLowerCase() === bankName.toLowerCase()
+  );
+  return entry ? entry[0] : '';
+};
+
+const sanitizeAmount = (text: string) => {
+  let t = text.replace(/[^0-9.]/g, '');
+  const dot = t.indexOf('.');
+  if (dot !== -1) {
+    t = t.slice(0, dot + 1) + t.slice(dot + 1).replace(/\./g, '');
+    const [i, d] = t.split('.');
+    t = `${i.slice(0, 10)}.${d.slice(0, 2)}`;
+  } else {
+    t = t.slice(0, 10);
+  }
+  return t.replace(/^0+(?=\d)/, '');
+};
+
+const formatAmount = (raw: string) => {
+  if (!raw) return '0';
+  const [i, d] = raw.split('.');
+  const grouped = Number(i || 0).toLocaleString('en-IN');
+  return d !== undefined ? `${grouped}.${d}` : grouped;
+};
+
+const inr = (n: number) =>
+  `₹${Math.abs(n).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+
+/* ------------------------------------------------------------------ */
+/* Screen                                                              */
+/* ------------------------------------------------------------------ */
+
 export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (props) => {
   const insets = useSafeAreaInsets();
   let navigation: any = null;
-  try {
-    navigation = useNavigation<any>();
-  } catch (e) {}
   let route: any = null;
   try {
+    navigation = useNavigation<any>();
+  } catch {}
+  try {
     route = useRoute<any>();
-  } catch (e) {}
+  } catch {}
   const { colors, isDark } = useTheme();
 
   const transaction: TransactionItem = props.transaction || route?.params?.transaction;
-  const bankProfiles = useBankStore((state) => state.bankProfiles);
+  const bankProfiles = useBankStore((s) => s.bankProfiles);
+
   const matchedBank = useMemo(() => {
-    if (transaction?.bankProfileId) {
-      return bankProfiles.find((b) => b.id === transaction.bankProfileId);
-    }
-    const bName = (props.bankName || route?.params?.bankName || '').toLowerCase();
-    if (bName) {
-      return bankProfiles.find((b) => b.bankName.toLowerCase() === bName);
-    }
-    return null;
+    if (transaction?.bankProfileId) return bankProfiles.find((b) => b.id === transaction.bankProfileId);
+    const name = (props.bankName || route?.params?.bankName || '').toLowerCase();
+    return name ? bankProfiles.find((b) => b.bankName.toLowerCase() === name) : null;
   }, [bankProfiles, transaction?.bankProfileId, props.bankName, route?.params?.bankName]);
 
-  const displayBankName = props.bankName || route?.params?.bankName || matchedBank?.bankName;
-  const accountSuffix =
-    props.accountNumberSuffix ||
-    route?.params?.accountNumberSuffix ||
-    matchedBank?.accountNumberSuffix;
+  const bankName: string | undefined = props.bankName || route?.params?.bankName || matchedBank?.bankName;
+  const accountSuffix: string | undefined =
+    props.accountNumberSuffix || route?.params?.accountNumberSuffix || matchedBank?.accountNumberSuffix;
 
-  const [amountStr, setAmountStr] = useState(transaction?.amount ? String(transaction.amount) : '');
-  const [selectedCategory, setSelectedCategory] = useState<string>(
-    (transaction?.category || (transaction?.type === 'credit' ? 'salary' : 'food')).toLowerCase()
-  );
-  const [note, setNote] = useState(transaction?.merchant || '');
+  const originalAmount = Number(transaction?.amount || 0);
+  const originalCategory = (transaction?.category || (transaction?.type === 'credit' ? 'money_received' : 'miscellaneous')).toLowerCase();
+  const originalNote = transaction?.merchant || '';
+
+  const [amountStr, setAmountStr] = useState(originalAmount ? String(originalAmount) : '');
+  const [category, setCategory] = useState(originalCategory);
+  const [note, setNote] = useState(originalNote);
+  const [rememberRule, setRememberRule] = useState(false);
+  const [editingAmount, setEditingAmount] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [tagModalVisible, setTagModalVisible] = useState(false);
-  const [updatePayeeRule, setUpdatePayeeRule] = useState(false);
+  const [tagSheet, setTagSheet] = useState(false);
+  const [errorText, setErrorText] = useState('');
+  const [saved, setSaved] = useState(false);
+
+  const amountRef = useRef<TextInput>(null);
+  const display = Font.isLoaded('BricolageGrotesque_800ExtraBold') ? 'BricolageGrotesque_800ExtraBold' : undefined;
+
+  const caret = useSharedValue(1);
+  useEffect(() => {
+    caret.value = withRepeat(withSequence(withTiming(1, { duration: 450 }), withTiming(0, { duration: 450 })), -1);
+  }, []);
+  const caretStyle = useAnimatedStyle(() => ({ opacity: caret.value }));
 
   const handleGoBack = () => {
     if (props.onBack) {
@@ -117,18 +175,15 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
       return;
     }
     const returnToBankId = route?.params?.returnToBankId || transaction?.bankProfileId;
-    if (returnToBankId) {
-      useBankStore.getState().setActiveBankModalId(returnToBankId);
-    }
+    if (returnToBankId) useBankStore.getState().setActiveBankModalId(returnToBankId);
     navigation?.goBack?.();
   };
 
   useEffect(() => {
-    const onBackPress = () => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       handleGoBack();
       return true;
-    };
-    const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    });
     return () => sub.remove();
   }, [props.onBack, route?.params?.returnToBankId, transaction?.bankProfileId]);
 
@@ -137,458 +192,351 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
     return null;
   }
 
+  /* ---------------- Derived ---------------- */
+
   const isCredit = transaction.type === 'credit';
-  const categories = isCredit ? CREDIT_CATEGORIES : DEBIT_CATEGORIES;
   const parsedAmount = parseFloat(amountStr) || 0;
-  const originalAmount = Number(transaction.amount || 0);
-  const amountDiff = parsedAmount - originalAmount;
+  const diff = parsedAmount - originalAmount;
+  const dirty =
+    Math.abs(diff) > 0.001 ||
+    getCategory(category).id !== getCategory(originalCategory).id ||
+    note.trim() !== originalNote.trim() ||
+    rememberRule;
 
-  const handleSave = async () => {
+  const payee = niceName(note.trim() || transaction.merchant) || (isCredit ? 'Money received' : 'Payment');
+  const catLabel = getCategory(category).label;
+  const when = formatWhen(transaction.timestamp);
+
+  // Balance effect of an edited amount
+  const balanceEffect = isCredit ? diff : -diff;
+
+  const ink = colors.text;
+  const muted = colors.textSecondary;
+  const pageBg = isDark ? colors.background : '#F3F6F4';
+  const band = isCredit ? (isDark ? '#0F2A1E' : '#E4F4EA') : isDark ? '#2A1512' : '#FFEFEA';
+  const accentText = isCredit ? (isDark ? LIME : '#0B6B3A') : isDark ? '#FFA8A8' : '#B42318';
+  const chip = isDark ? 'rgba(255,255,255,0.08)' : '#FFFFFF';
+  const line = isDark ? colors.border : '#E1E9E4';
+  const red = isDark ? '#FFA8A8' : '#C92A2A';
+
+  /* ---------------- Actions ---------------- */
+
+  const save = async () => {
+    if (!dirty || saving) return;
     if (parsedAmount <= 0) {
-      Alert.alert('Invalid Amount', 'Please enter a valid positive amount.');
+      setErrorText('Enter an amount above ₹0.');
       return;
     }
-
-    if (!selectedCategory) {
-      Alert.alert('Category Required', 'Please select a category.');
-      return;
-    }
-
     setSaving(true);
+    setErrorText('');
     try {
       const token = authService.getAccessToken();
-      if (!token) throw new Error('Not authenticated.');
+      if (!token) throw new Error('Sign in again to edit transactions.');
 
       const response = await fetch(`${BACKEND_URL}/sync/transaction-entry`, {
         method: 'PATCH',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           id: transaction.id,
           type: transaction.type,
           amount: parsedAmount,
-          category: selectedCategory,
+          category,
           note: note.trim() || undefined,
-          updateMerchantRule: updatePayeeRule,
+          updateMerchantRule: rememberRule,
         }),
       });
-
       if (!response.ok) {
         const err = await response.json().catch(() => ({}));
-        throw new Error(err.message || 'Failed to update transaction.');
+        throw new Error(err.message || 'Could not save your changes. Try again.');
       }
-
       const res = await response.json();
 
-      // If bank profile balance was updated, update bank store
       if (transaction.bankProfileId && res.updatedBalance !== undefined) {
         useBankStore.getState().updateBankBalance(transaction.bankProfileId, res.updatedBalance);
       }
 
-      // Update appropriate store based on transaction type
-      if (transaction.type === 'credit') {
+      const label = note.trim() || category;
+      if (isCredit) {
         useIncomeStore.getState().updateIncomeRecordState(transaction.id, {
           amount: parsedAmount,
-          category: selectedCategory,
-          merchant: note.trim() || selectedCategory,
-          source: note.trim() || selectedCategory,
+          category,
+          merchant: label,
+          source: label,
         });
       } else {
         useTransactionStore.getState().updateTransactionState(transaction.id, {
           amount: parsedAmount,
-          category: selectedCategory,
-          merchant: note.trim() || selectedCategory,
+          category,
+          merchant: label,
         });
       }
 
-      // Save user learning rule for this merchant ONLY if user opted to update default!
-      const targetMerchant = note.trim() || transaction.merchant;
-      if (targetMerchant && updatePayeeRule) {
-        await tagLearningService.saveLearnedTag(targetMerchant, selectedCategory).catch(() => {});
+      const merchant = note.trim() || transaction.merchant;
+      if (merchant && rememberRule) {
+        await tagLearningService.saveLearnedTag(merchant, category).catch(() => {});
       }
 
-      if (typeof props.onSuccess === 'function') {
-        props.onSuccess('updated', {
-          ...res,
-          id: transaction.id,
-          type: transaction.type,
-          newAmount: parsedAmount,
-          category: selectedCategory,
-          merchant: note.trim() || selectedCategory,
-        });
-      } else if (typeof route?.params?.onSuccess === 'function') {
-        route.params.onSuccess('updated', {
-          ...res,
-          id: transaction.id,
-          type: transaction.type,
-          newAmount: parsedAmount,
-          category: selectedCategory,
-          merchant: note.trim() || selectedCategory,
-        });
-      }
+      const payload = {
+        ...res,
+        id: transaction.id,
+        type: transaction.type,
+        newAmount: parsedAmount,
+        category,
+        merchant: label,
+      };
+      if (typeof props.onSuccess === 'function') props.onSuccess('updated', payload);
+      else if (typeof route?.params?.onSuccess === 'function') route.params.onSuccess('updated', payload);
 
-      handleGoBack();
+      setSaved(true);
+      setTimeout(handleGoBack, 800);
     } catch (e: any) {
-      Alert.alert('Error', e.message || 'Unable to update transaction.');
+      setErrorText(e?.message || 'Could not save your changes. Try again.');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleDelete = () => {
+  const remove = () => {
     showGlobalConfirm({
-      title: `Delete ${isCredit ? 'Income' : 'Spending'} Record`,
-      message: `Are you sure you want to delete this ₹${originalAmount.toLocaleString('en-IN')} ${isCredit ? 'credit' : 'debit'} record? Your bank balance will be automatically ${isCredit ? 'reduced' : 'restored'}.`,
-      confirmText: 'Yes, Delete',
-      cancelText: 'Cancel',
+      title: `Delete this ${inr(originalAmount)} ${isCredit ? 'income' : 'expense'}?`,
+      message: isCredit
+        ? `It will be removed and ${bankName || 'your account'} balance goes down by ${inr(originalAmount)}.`
+        : `It will be removed and ${inr(originalAmount)} goes back to ${bankName || 'your account'} balance.`,
+      confirmText: 'Delete',
+      cancelText: 'Keep it',
       isDestructive: true,
+      icon: 'trash-2',
       onConfirm: async () => {
-        setDeleting(true);
-        try {
-          const token = authService.getAccessToken();
-          if (!token) throw new Error('Not authenticated.');
-
-          const response = await fetch(
-            `${BACKEND_URL}/sync/transaction-entry/${transaction.id}?type=${transaction.type}`,
-            {
-              method: 'DELETE',
-              headers: {
-                Authorization: `Bearer ${token}`,
-                'Content-Type': 'application/json',
-              },
-            }
-          );
-
-          if (!response.ok) {
-            const err = await response.json().catch(() => ({}));
-            throw new Error(err.message || 'Failed to delete transaction.');
-          }
-
-          const res = await response.json();
-
-          // Update bank store if updatedBalance returned
-          if (transaction.bankProfileId && res.updatedBalance !== undefined) {
-            useBankStore.getState().updateBankBalance(transaction.bankProfileId, res.updatedBalance);
-          }
-
-          // Remove from appropriate store based on transaction type
-          if (transaction.type === 'credit') {
-            useIncomeStore.getState().removeIncomeRecordState(transaction.id);
-          } else {
-            useTransactionStore.getState().removeTransactionState(transaction.id);
-          }
-
-          if (typeof props.onSuccess === 'function') {
-            props.onSuccess('deleted', {
-              id: transaction.id,
-              type: transaction.type,
-              amount: originalAmount,
-              updatedBalance: res.updatedBalance,
-            });
-          } else if (typeof route?.params?.onSuccess === 'function') {
-            route.params.onSuccess('deleted', {
-              id: transaction.id,
-              type: transaction.type,
-              amount: originalAmount,
-              updatedBalance: res.updatedBalance,
-            });
-          }
-
-          handleGoBack();
-        } catch (e: any) {
-          Alert.alert('Delete Failed', e.message || 'Unable to delete transaction.');
-        } finally {
-          setDeleting(false);
+        const token = authService.getAccessToken();
+        if (!token) throw new Error('Sign in again to delete transactions.');
+        const response = await fetch(
+          `${BACKEND_URL}/sync/transaction-entry/${transaction.id}?type=${transaction.type}`,
+          { method: 'DELETE', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
+        );
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({}));
+          setErrorText(err.message || 'Could not delete this transaction. Try again.');
+          return;
         }
+        const res = await response.json();
+        if (transaction.bankProfileId && res.updatedBalance !== undefined) {
+          useBankStore.getState().updateBankBalance(transaction.bankProfileId, res.updatedBalance);
+        }
+        if (isCredit) useIncomeStore.getState().removeIncomeRecordState(transaction.id);
+        else useTransactionStore.getState().removeTransactionState(transaction.id);
+
+        const payload = { id: transaction.id, type: transaction.type, amount: originalAmount, updatedBalance: res.updatedBalance };
+        if (typeof props.onSuccess === 'function') props.onSuccess('deleted', payload);
+        else if (typeof route?.params?.onSuccess === 'function') route.params.onSuccess('deleted', payload);
+
+        handleGoBack();
       },
     });
   };
 
-  const styles = getStyles(colors, isDark);
+  /* ---------------- Render ---------------- */
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Top Header */}
-      <View style={[styles.header, { paddingTop: Math.max(insets.top, 16) }]}>
-        <TouchableOpacity
-          onPress={handleGoBack}
-          style={styles.backBtn}
-          activeOpacity={0.7}
+    <View style={{ flex: 1, backgroundColor: pageBg }}>
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
+        {/* Hero */}
+        <Animated.View
+          entering={FadeIn.duration(300)}
+          style={[styles.band, { backgroundColor: band, paddingTop: Math.max(insets.top, 12) + 4 }]}
         >
-          <Feather name="arrow-left" size={20} color={colors.text} />
-        </TouchableOpacity>
-        <View style={{ flex: 1, marginLeft: 12 }}>
-          <Text style={styles.headerTitle}>Transaction Details</Text>
-          <Text style={styles.headerSubtitle} numberOfLines={2}>
-            {transaction.timestamp
-              ? (() => {
-                  const d = new Date(transaction.timestamp);
-                  const isUtcMidnight =
-                    d.getUTCHours() === 0 &&
-                    d.getUTCMinutes() === 0 &&
-                    d.getUTCSeconds() === 0 &&
-                    d.getUTCMilliseconds() === 0;
-                  if (isUtcMidnight) {
-                    return d.toLocaleDateString('en-IN', {
-                      day: 'numeric',
-                      month: 'short',
-                      year: 'numeric',
-                    });
-                  }
-                  return d.toLocaleDateString('en-IN', {
-                    day: 'numeric',
-                    month: 'short',
-                    year: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  });
-                })()
-              : 'Transaction Record'}
-            {displayBankName
-              ? ` • ${displayBankName}${accountSuffix ? ` •••• ${accountSuffix}` : ''}`
-              : accountSuffix
-              ? ` • •••• ${accountSuffix}`
-              : ''}
-          </Text>
-        </View>
-        <View
-          style={[
-            styles.headerBadge,
-            {
-              backgroundColor: isCredit ? 'rgba(45, 186, 78, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-              borderColor: isCredit ? 'rgba(45, 186, 78, 0.35)' : 'rgba(239, 68, 68, 0.35)',
-            },
-          ]}
-        >
-          <Feather
-            name={isCredit ? 'arrow-up-left' : 'arrow-down-right'}
-            size={14}
-            color={isCredit ? '#2dba4e' : '#ef4444'}
-          />
-        </View>
-      </View>
-
-      <KeyboardScreen
-        showsVerticalScrollIndicator={false}
-        keyboardDismissMode="on-drag"
-        contentContainerStyle={styles.scrollContent}
-      >
-        {/* Type Indicator Banner */}
-          <View
-            style={[
-              styles.typeBanner,
-              {
-                backgroundColor: isCredit ? 'rgba(45, 186, 78, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-                borderColor: isCredit ? 'rgba(45, 186, 78, 0.25)' : 'rgba(239, 68, 68, 0.25)',
-              },
-            ]}
-          >
-            <Text
-              style={[
-                styles.typeBannerText,
-                { color: isCredit ? '#2dba4e' : '#ef4444' },
-              ]}
-            >
-              {isCredit ? '+ CREDIT (INCOME)' : '- DEBIT (SPENDING)'}
-            </Text>
+          <View style={styles.headerRow}>
+            <Pressable onPress={handleGoBack} style={[styles.roundBtn, { backgroundColor: chip }]} accessibilityLabel="Back">
+              <Feather name="arrow-left" size={20} color={ink} />
+            </Pressable>
+            <View style={styles.typeTag}>
+              <Feather name={isCredit ? 'arrow-down-left' : 'arrow-up-right'} size={14} color={accentText} />
+              <Text style={[styles.typeText, { color: accentText }]}>{isCredit ? 'Money in' : 'Money out'}</Text>
+            </View>
+            <Pressable onPress={remove} style={[styles.roundBtn, { backgroundColor: chip }]} accessibilityLabel="Delete transaction">
+              <Feather name="trash-2" size={18} color={red} />
+            </Pressable>
           </View>
 
-          {/* Editable Amount */}
-          <View style={styles.inputSection}>
-            <View style={styles.labelRow}>
-              <Text style={styles.inputLabel}>AMOUNT</Text>
-              {amountDiff !== 0 && (
-                <Text
-                  style={{
-                    fontSize: 11,
-                    fontWeight: '700',
-                    color: isCredit
-                      ? amountDiff > 0 ? '#2dba4e' : '#ef4444'
-                      : amountDiff > 0 ? '#ef4444' : '#2dba4e',
-                  }}
-                >
-                  Balance impact: {isCredit
-                    ? (amountDiff > 0 ? `+₹${amountDiff}` : `-₹${Math.abs(amountDiff)}`)
-                    : (amountDiff > 0 ? `-₹${amountDiff}` : `+₹${Math.abs(amountDiff)}`)}
-                </Text>
+          <Animated.View entering={ZoomIn.springify().damping(14)} style={{ marginTop: 12 }}>
+            <CategoryIcon category={isCredit && category === 'money_received' ? 'money_received' : category} size={60} />
+          </Animated.View>
+
+          <Text style={[styles.payee, { color: ink }]} numberOfLines={1}>
+            {payee}
+          </Text>
+
+          {/* Amount, tap to edit */}
+          <Pressable
+            onPress={() => {
+              setEditingAmount(true);
+              setTimeout(() => amountRef.current?.focus(), 30);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel={`Amount ${inr(parsedAmount)}. Tap to edit`}
+          >
+            <View style={styles.amountRow}>
+              <Text style={[styles.amountSign, { color: accentText, fontFamily: display }]}>{isCredit ? '+₹' : '−₹'}</Text>
+              <Text
+                style={[styles.amount, { color: accentText, fontFamily: display, fontWeight: display ? undefined : '800' }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+              >
+                {formatAmount(amountStr)}
+              </Text>
+              {editingAmount ? (
+                <Animated.View style={[styles.caret, { backgroundColor: accentText }, caretStyle]} />
+              ) : (
+                <View style={[styles.editDot, { backgroundColor: chip }]}>
+                  <Feather name="edit-2" size={12} color={ink} />
+                </View>
               )}
             </View>
+            <TextInput
+              ref={amountRef}
+              value={amountStr}
+              onChangeText={(t) => {
+                setAmountStr(sanitizeAmount(t));
+                if (errorText) setErrorText('');
+              }}
+              onBlur={() => setEditingAmount(false)}
+              keyboardType="decimal-pad"
+              caretHidden
+              style={styles.hiddenInput}
+              accessibilityLabel="Amount in rupees"
+            />
+          </Pressable>
 
-            <View style={styles.amountInputRow}>
-              <Text
-                style={[
-                  styles.currencySymbol,
-                  { color: isCredit ? '#2dba4e' : '#ef4444' },
-                ]}
-              >
-                ₹
-              </Text>
-              <TextInput
-                style={[
-                  styles.amountInput,
-                  { color: isCredit ? '#2dba4e' : '#ef4444' },
-                ]}
-                placeholder="0"
-                placeholderTextColor={colors.textTertiary}
-                keyboardType="numeric"
-                value={amountStr}
-                onChangeText={(t) => setAmountStr(t.replace(/[^0-9.]/g, ''))}
-              />
+          {Math.abs(diff) > 0.001 ? (
+            <Animated.Text entering={FadeIn.duration(200)} style={[styles.impact, { color: muted }]}>
+              Balance will go {balanceEffect >= 0 ? 'up' : 'down'} by {inr(balanceEffect)}
+            </Animated.Text>
+          ) : null}
+
+          <View style={styles.metaRow}>
+            {when ? (
+              <View style={[styles.metaChip, { backgroundColor: chip }]}>
+                <Feather name="calendar" size={13} color={ink} />
+                <Text style={[styles.metaText, { color: ink }]}>{when}</Text>
+              </View>
+            ) : null}
+            {bankName ? (
+              <View style={[styles.metaChip, { backgroundColor: chip, paddingLeft: 4 }]}>
+                <BankIcon code={getBankCode(bankName)} name={bankName} size={26} />
+                <Text style={[styles.metaText, { color: ink }]} numberOfLines={1}>
+                  {firstWord(bankName)}
+                  {accountSuffix ? ` •• ${accountSuffix}` : ''}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        </Animated.View>
+
+        {/* Details */}
+        <Animated.View
+          entering={FadeInDown.delay(120).duration(380)}
+          style={[styles.group, { backgroundColor: colors.card, borderColor: line }]}
+        >
+          <Pressable
+            onPress={() => setTagSheet(true)}
+            style={({ pressed }) => [styles.row, { borderBottomColor: line, borderBottomWidth: StyleSheet.hairlineWidth }, pressed && { opacity: 0.7 }]}
+            accessibilityRole="button"
+            accessibilityLabel={`Category ${catLabel}. Change`}
+          >
+            <CategoryIcon category={category} size={38} />
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.rowLabel, { color: muted }]}>Category</Text>
+              <Text style={[styles.rowValue, { color: ink }]} numberOfLines={1}>{catLabel}</Text>
             </View>
-          </View>
+            <Text style={[styles.rowAction, { color: muted }]}>Change</Text>
+            <Feather name="chevron-right" size={16} color={muted} />
+          </Pressable>
 
-          {/* Category Section */}
-          <View style={styles.inputSection}>
-            <Text style={styles.inputLabel}>CATEGORY</Text>
-
-            {(() => {
-              const currentTagDef = getTagDef(selectedCategory);
-              const targetName = note.trim() || transaction.merchant;
-
-              return (
-                <>
-                  <TouchableOpacity
-                    style={[
-                      styles.selectedTagCard,
-                      {
-                        backgroundColor: isDark ? '#1C1C26' : '#F9FAFB',
-                        borderColor: isDark ? '#2D2D3D' : '#E5E7EB',
-                      },
-                    ]}
-                    onPress={() => setTagModalVisible(true)}
-                    activeOpacity={0.7}
-                  >
-                    <CategoryIcon category={selectedCategory} size={42} />
-
-                    <View style={{ flex: 1, marginLeft: 12 }}>
-                      <Text
-                        style={[
-                          styles.selectedTagName,
-                          { color: isDark ? '#FFFFFF' : '#111827' },
-                        ]}
-                      >
-                        {getCategory(selectedCategory).label}
-                      </Text>
-                      <Text style={styles.selectedTagSub}>
-                        Tap to change category
-                      </Text>
-                    </View>
-
-                    <Feather
-                      name="chevron-right"
-                      size={20}
-                      color={isDark ? '#6B7280' : '#9CA3AF'}
-                      style={{ marginRight: 6 }}
-                    />
-                  </TouchableOpacity>
-
-                  {/* Clear & Simple Payee Default Switch */}
-                  {targetName ? (
-                    <View
-                      style={[
-                        styles.ruleToggleCard,
-                        {
-                          backgroundColor: isDark ? '#1C1F2B' : '#F8FAFC',
-                          borderColor: isDark ? '#2D3446' : '#E2E8F0',
-                        },
-                      ]}
-                    >
-                      <Text
-                        numberOfLines={1}
-                        ellipsizeMode="tail"
-                        style={[
-                          styles.ruleToggleTitle,
-                          { color: isDark ? '#F1F5F9' : '#0F172A', flex: 1, marginRight: 12 },
-                        ]}
-                      >
-                        Always use {currentTagDef.label} for {targetName}
-                      </Text>
-
-                      <Switch
-                        value={updatePayeeRule}
-                        onValueChange={setUpdatePayeeRule}
-                        trackColor={{
-                          false: isDark ? '#2D3446' : '#D1D5DB',
-                          true: '#0070F3',
-                        }}
-                        thumbColor="#FFFFFF"
-                      />
-                    </View>
-                  ) : null}
-                </>
-              );
-            })()}
-          </View>
-
-          {/* Editable Note / Merchant */}
-          <View style={styles.inputSection}>
-            <Text style={styles.inputLabel}>NOTE / SOURCE / MERCHANT</Text>
-            <View style={styles.textInputWrap}>
-              <Feather name="edit-3" size={14} color={colors.textSecondary} style={{ marginRight: 8 }} />
+          <View style={[styles.row, { borderBottomColor: line, borderBottomWidth: StyleSheet.hairlineWidth }]}>
+            <View style={[styles.noteIcon, { backgroundColor: pageBg }]}>
+              <Feather name="edit-3" size={16} color={muted} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.rowLabel, { color: muted }]}>Note</Text>
               <TextInput
-                style={styles.textInputField}
-                placeholder="Description or merchant name"
-                placeholderTextColor={colors.textTertiary}
                 value={note}
                 onChangeText={setNote}
+                placeholder={isCredit ? 'Who sent it' : 'Where you paid'}
+                placeholderTextColor={muted}
                 maxLength={50}
+                style={[styles.noteInput, { color: ink }]}
+                accessibilityLabel="Note"
               />
             </View>
           </View>
 
-          {/* Action Buttons: Delete & Save */}
-          <View style={styles.actionRow}>
-            <TouchableOpacity
-              style={styles.deleteBtn}
-              onPress={handleDelete}
-              disabled={deleting || saving}
-              activeOpacity={0.8}
-            >
-              {deleting ? (
-                <ActivityIndicator size="small" color="#FF5252" />
-              ) : (
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <Feather name="trash-2" size={15} color="#FF5252" style={{ marginRight: 6 }} />
-                  <Text style={styles.deleteBtnText}>Delete</Text>
-                </View>
-              )}
-            </TouchableOpacity>
+          {note.trim() || transaction.merchant ? (
+            <View style={styles.row}>
+              <Text style={[styles.ruleText, { color: ink }]} numberOfLines={2}>
+                Always tag {firstWord(niceName(note.trim() || transaction.merchant))} as {catLabel}
+              </Text>
+              <Switch
+                value={rememberRule}
+                onValueChange={setRememberRule}
+                trackColor={{ false: isDark ? '#3A3A3C' : '#D1D5DB', true: '#16A34A' }}
+                thumbColor="#FFFFFF"
+                ios_backgroundColor={isDark ? '#3A3A3C' : '#D1D5DB'}
+              />
+            </View>
+          ) : null}
+        </Animated.View>
 
-            <TouchableOpacity
-              style={[
-                styles.saveBtn,
-                { opacity: saving || deleting || parsedAmount <= 0 ? 0.6 : 1 },
-              ]}
-              onPress={handleSave}
-              disabled={saving || deleting || parsedAmount <= 0}
-              activeOpacity={0.8}
-            >
-              {saving ? (
-                <ActivityIndicator size="small" color="#ffffff" />
-              ) : (
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <Feather name="check" size={15} color="#ffffff" style={{ marginRight: 6 }} />
-                  <Text style={styles.saveBtnText}>Save Changes</Text>
-                </View>
-              )}
-            </TouchableOpacity>
-          </View>
-      </KeyboardScreen>
+        {errorText ? (
+          <Animated.View entering={FadeIn.duration(200)} style={styles.errorRow}>
+            <Feather name="alert-circle" size={14} color={red} />
+            <Text style={[styles.errorText, { color: red }]}>{errorText}</Text>
+          </Animated.View>
+        ) : null}
 
-      {/* Paytm-Style Tag Payment Modal */}
+        <View style={{ flex: 1 }} />
+
+        {/* Save */}
+        <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 12) + 8 }]}>
+          <Pressable
+            onPress={save}
+            disabled={!dirty || saving}
+            style={({ pressed }) => [
+              styles.cta,
+              { backgroundColor: isDark ? LIME : FOREST, opacity: dirty ? 1 : 0.5 },
+              pressed && dirty && { transform: [{ scale: 0.98 }] },
+            ]}
+            accessibilityRole="button"
+          >
+            {saving ? (
+              <ActivityIndicator color={isDark ? FOREST : LIME} />
+            ) : (
+              <Text style={[styles.ctaText, { color: isDark ? FOREST : LIME }]}>
+                {dirty ? 'Save changes' : 'No changes yet'}
+              </Text>
+            )}
+          </Pressable>
+        </View>
+      </KeyboardAvoidingView>
+
+      {saved && (
+        <Animated.View entering={FadeIn.duration(150)} style={[StyleSheet.absoluteFill, styles.savedWrap, { backgroundColor: pageBg }]}>
+          <Animated.View entering={ZoomIn.springify().damping(12)} style={[styles.savedCircle, { backgroundColor: FOREST }]}>
+            <Feather name="check" size={40} color={LIME} />
+          </Animated.View>
+          <Text style={[styles.savedText, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}>
+            Saved
+          </Text>
+        </Animated.View>
+      )}
+
       <TagPaymentModal
-        visible={tagModalVisible}
-        onClose={() => setTagModalVisible(false)}
-        selectedTag={selectedCategory}
+        visible={tagSheet}
+        onClose={() => setTagSheet(false)}
+        selectedTag={category}
         onSelectTag={(tag, updateRule) => {
-          setSelectedCategory(tag);
-          if (updateRule !== undefined) {
-            setUpdatePayeeRule(Boolean(updateRule));
-          }
+          setCategory(tag);
+          if (updateRule !== undefined) setRememberRule(Boolean(updateRule));
         }}
-        merchantName={note.trim() || transaction.merchant}
+        merchantName={niceName(note.trim() || transaction.merchant) || undefined}
         isDark={isDark}
         colors={colors}
       />
@@ -596,240 +544,43 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
   );
 };
 
-const getStyles = (colors: any, isDark: boolean) =>
-  StyleSheet.create({
-    container: {
-      flex: 1,
-    },
-    header: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingHorizontal: 16,
-      paddingBottom: 14,
-      borderBottomWidth: 1,
-      borderBottomColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
-    },
-    backBtn: {
-      width: 40,
-      height: 40,
-      borderRadius: 12,
-      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)',
-      justifyContent: 'center',
-      alignItems: 'center',
-    },
-    headerTitle: {
-      fontSize: 16,
-      fontWeight: '700',
-      color: colors.text,
-    },
-    headerSubtitle: {
-      fontSize: 12,
-      color: colors.textSecondary,
-      marginTop: 2,
-    },
-    headerBadge: {
-      width: 32,
-      height: 32,
-      borderRadius: 10,
-      borderWidth: 1,
-      justifyContent: 'center',
-      alignItems: 'center',
-    },
-    scrollContent: {
-      paddingHorizontal: 16,
-      paddingTop: 16,
-    },
-    typeBanner: {
-      paddingVertical: 10,
-      paddingHorizontal: 14,
-      borderRadius: 12,
-      borderWidth: 1,
-      alignItems: 'center',
-      marginBottom: 18,
-    },
-    typeBannerText: {
-      fontSize: 12,
-      fontWeight: '800',
-      letterSpacing: 0.8,
-    },
-    inputSection: {
-      marginBottom: 18,
-    },
-    labelRow: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      marginBottom: 8,
-    },
-    inputLabel: {
-      fontSize: 11,
-      fontWeight: '700',
-      color: colors.textSecondary,
-      letterSpacing: 0.5,
-    },
-    amountInputRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      borderWidth: 1,
-      borderColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.12)',
-      borderRadius: 14,
-      paddingHorizontal: 14,
-      paddingVertical: 6,
-      backgroundColor: isDark ? '#12141a' : '#f8f9fa',
-    },
-    currencySymbol: {
-      fontSize: 26,
-      fontWeight: '700',
-      marginRight: 6,
-    },
-    amountInput: {
-      flex: 1,
-      fontSize: 26,
-      fontWeight: '700',
-      paddingVertical: 4,
-    },
-    categoryWrap: {
-      flexDirection: 'row',
-      flexWrap: 'wrap',
-      gap: 8,
-      marginTop: 8,
-    },
-    categoryChip: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingHorizontal: 12,
-      paddingVertical: 8,
-      borderRadius: 10,
-      borderWidth: 1,
-      borderColor: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.08)',
-      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.03)' : 'rgba(0, 0, 0, 0.02)',
-    },
-    categoryChipText: {
-      fontSize: 12,
-      color: colors.textSecondary,
-      fontWeight: '500',
-    },
-    textInputWrap: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      borderWidth: 1,
-      borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.1)',
-      borderRadius: 12,
-      paddingHorizontal: 12,
-      paddingVertical: 10,
-      backgroundColor: isDark ? '#12141a' : '#f8f9fa',
-      marginTop: 8,
-    },
-    textInputField: {
-      flex: 1,
-      fontSize: 13,
-      color: colors.text,
-      padding: 0,
-    },
-    actionRow: {
-      flexDirection: 'row',
-      gap: 12,
-      marginTop: 12,
-    },
-    deleteBtn: {
-      flex: 1,
-      borderWidth: 1,
-      borderColor: 'rgba(255, 82, 82, 0.3)',
-      backgroundColor: 'rgba(255, 82, 82, 0.08)',
-      borderRadius: 14,
-      paddingVertical: 14,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    deleteBtnText: {
-      color: '#FF5252',
-      fontSize: 14,
-      fontWeight: '700',
-    },
-    saveBtn: {
-      flex: 2,
-      backgroundColor: '#0070F3',
-      borderRadius: 14,
-      paddingVertical: 14,
-      alignItems: 'center',
-      justifyContent: 'center',
-      shadowColor: '#0070F3',
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.3,
-      shadowRadius: 6,
-      elevation: 4,
-    },
-    saveBtnText: {
-      color: '#ffffff',
-      fontSize: 14,
-      fontWeight: '700',
-    },
-    selectedTagCard: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      padding: 12,
-      borderRadius: 16,
-      borderWidth: 1,
-      marginTop: 8,
-    },
-    selectedTagIconWrap: {
-      width: 44,
-      height: 44,
-      borderRadius: 14,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    selectedTagName: {
-      fontSize: 15,
-      fontWeight: '800',
-      marginBottom: 2,
-    },
-    selectedTagSub: {
-      fontSize: 11,
-      color: '#8E8E9F',
-    },
-    changeTagBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingVertical: 5,
-      paddingHorizontal: 10,
-      borderRadius: 12,
-      borderWidth: 1,
-    },
-    changeTagBtnText: {
-      fontSize: 12,
-      fontWeight: '700',
-      marginRight: 2,
-    },
-    quickTagRow: {
-      flexDirection: 'row',
-      flexWrap: 'wrap',
-      gap: 6,
-      marginTop: 10,
-    },
-    quickTagChip: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingVertical: 6,
-      paddingHorizontal: 11,
-      borderRadius: 10,
-      borderWidth: 1,
-    },
-    quickTagChipText: {
-      fontSize: 11,
-    },
-    ruleToggleCard: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      marginTop: 14,
-      paddingHorizontal: 14,
-      paddingVertical: 12,
-      borderRadius: 14,
-      borderWidth: 1,
-    },
-    ruleToggleTitle: {
-      fontSize: 13,
-      fontWeight: '700',
-    },
-  });
+const styles = StyleSheet.create({
+  band: { borderBottomLeftRadius: 32, borderBottomRightRadius: 32, paddingHorizontal: 16, paddingBottom: 24, alignItems: 'center' },
+  headerRow: { width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  roundBtn: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
+  typeTag: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  typeText: { fontSize: 13, fontWeight: '700' },
+
+  payee: { fontSize: 17, fontWeight: '600', marginTop: 12, maxWidth: '90%' },
+  amountRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'center', marginTop: 8 },
+  amountSign: { fontSize: 28, fontWeight: '700', marginTop: 8, marginRight: 2 },
+  amount: { fontSize: 60, letterSpacing: -2.4, lineHeight: 66, maxWidth: 260 },
+  caret: { width: 3, height: 50, borderRadius: 2, marginTop: 8, marginLeft: 4 },
+  editDot: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginTop: 12, marginLeft: 8 },
+  hiddenInput: { position: 'absolute', width: 1, height: 1, opacity: 0 },
+  impact: { fontSize: 12, fontWeight: '600', marginTop: 4 },
+
+  metaRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8, marginTop: 14 },
+  metaChip: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 34, paddingHorizontal: 12, borderRadius: 17, maxWidth: 220 },
+  metaText: { fontSize: 13, fontWeight: '600', flexShrink: 1 },
+
+  group: { marginHorizontal: 16, marginTop: 18, borderWidth: 1, borderRadius: 22, overflow: 'hidden' },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 12, minHeight: 60 },
+  rowLabel: { fontSize: 12 },
+  rowValue: { fontSize: 15, fontWeight: '700', marginTop: 1 },
+  rowAction: { fontSize: 13, fontWeight: '600' },
+  noteIcon: { width: 38, height: 38, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
+  noteInput: { fontSize: 15, fontWeight: '600', paddingVertical: 0, marginTop: 1, ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : {}) },
+  ruleText: { flex: 1, fontSize: 14, fontWeight: '600' },
+
+  errorRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 20, marginTop: 12 },
+  errorText: { fontSize: 13, fontWeight: '600', flex: 1 },
+
+  footer: { paddingHorizontal: 16, paddingTop: 10 },
+  cta: { height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center' },
+  ctaText: { fontSize: 16, fontWeight: '700' },
+
+  savedWrap: { alignItems: 'center', justifyContent: 'center' },
+  savedCircle: { width: 88, height: 88, borderRadius: 44, alignItems: 'center', justifyContent: 'center' },
+  savedText: { fontSize: 24, marginTop: 18 },
+});

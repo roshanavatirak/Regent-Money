@@ -1,31 +1,39 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { 
-  Modal, 
-  View, 
-  Text, 
-  TouchableOpacity, 
-  ScrollView, 
-  TextInput, 
-  ActivityIndicator, 
-  Alert, 
-  StyleSheet, 
-  FlatList,
+// src/navigation/BankDetailsModal.tsx
+//
+// Account details: brand card with balance, quick money in/out, imports,
+// and the account's transactions grouped by month.
+
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  Modal,
+  View,
+  Text,
+  Pressable,
+  TextInput,
+  ActivityIndicator,
+  Alert,
+  StyleSheet,
   SectionList,
   Switch,
   Platform,
   PermissionsAndroid,
   Linking,
-  NativeModules
+  NativeModules,
 } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
-import { Feather, Ionicons } from '@expo/vector-icons';
-import { BankIcon } from '../components/BankIcon';
+import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
+import { Feather } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
-import { useNavigation } from '@react-navigation/native';
+import * as Font from 'expo-font';
+import { format } from 'date-fns';
+import { BankIcon } from '../components/BankIcon';
+import { CategoryIcon } from '../components/CategoryIcon';
+import { getCategory } from '../constants/categories';
+import { bankBrandColor, getBankCode, niceName } from '../constants/bankBrand';
 import { useTheme, useBankStore, useTransactionStore, useIncomeStore } from '../store';
 import { authService } from '../services/authService';
-import { parseStatementTextWithAI } from '../services/aiService';
 import { syncService } from '../services/syncService';
 import { getBackendUrl } from '../config/api';
 import { ReviewTransactionsModal } from './ReviewTransactionsModal';
@@ -37,6 +45,10 @@ import { smsPermissionService } from '../services/smsPermissionService';
 import { uploadFile, UploadError, isPasswordRequired } from '../services/uploadFile';
 
 const BACKEND_URL = getBackendUrl();
+const FOREST = '#0B3D2C';
+const LIME = '#B8F36B';
+
+type Tab = 'all' | 'debits' | 'credits';
 
 interface BankDetailsModalProps {
   visible: boolean;
@@ -44,188 +56,99 @@ interface BankDetailsModalProps {
   bank: any | null;
 }
 
-export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalProps) => {
-  const navigation = useNavigation<any>();
-  const { colors, isDark } = useTheme();
-  const styles = getStyles(colors);
+const inr = (n: number, dp = 0) =>
+  `₹${Math.abs(n).toLocaleString('en-IN', { minimumFractionDigits: dp, maximumFractionDigits: dp || 2 })}`;
 
-  const transactions = useTransactionStore((state) => state.transactions);
-  const allIncomeRecords = useIncomeStore((state) => state.incomeRecords);
+/* ------------------------------------------------------------------ */
+/* Bottom sheet used for options, password, consent and errors          */
+/* ------------------------------------------------------------------ */
+
+const Sheet: React.FC<{
+  visible: boolean;
+  onClose: () => void;
+  children: React.ReactNode;
+  bg: string;
+  dark: boolean;
+}> = ({ visible, onClose, children, bg, dark }) => {
+  const insets = useSafeAreaInsets();
+  return (
+    <Modal visible={visible} transparent animationType="slide" statusBarTranslucent onRequestClose={onClose}>
+      <View style={sheet.backdrop}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close" />
+        <KeyboardAvoidingView behavior="padding" style={{ width: '100%' }}>
+          <View style={[sheet.card, { backgroundColor: bg, paddingBottom: Math.max(insets.bottom, 16) + 12 }]}>
+            <View style={[sheet.grabber, { backgroundColor: dark ? 'rgba(255,255,255,0.18)' : '#D5DED9' }]} />
+            {children}
+          </View>
+        </KeyboardAvoidingView>
+      </View>
+    </Modal>
+  );
+};
+
+const sheet = StyleSheet.create({
+  backdrop: { flex: 1, backgroundColor: 'rgba(7, 17, 13, 0.55)', justifyContent: 'flex-end' },
+  card: { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 10, width: '100%', maxWidth: 640, alignSelf: 'center' },
+  grabber: { width: 40, height: 5, borderRadius: 3, alignSelf: 'center', marginBottom: 18 },
+});
+
+/* ------------------------------------------------------------------ */
+/* Screen                                                              */
+/* ------------------------------------------------------------------ */
+
+export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalProps) => {
+  const insets = useSafeAreaInsets();
+  const { colors, isDark } = useTheme();
+  const display = Font.isLoaded('BricolageGrotesque_800ExtraBold') ? 'BricolageGrotesque_800ExtraBold' : undefined;
+
+  const transactions = useTransactionStore((s) => s.transactions);
+  const allIncomeRecords = useIncomeStore((s) => s.incomeRecords);
 
   const [localBank, setLocalBank] = useState<any>(bank);
-
-  useEffect(() => {
-    setLocalBank(bank);
-  }, [bank]);
-
+  useEffect(() => setLocalBank(bank), [bank]);
   const activeBank = localBank || bank;
-  
-  const [activeTab, setActiveTab] = useState<'all' | 'debits' | 'credits'>('all');
+
+  const [activeTab, setActiveTab] = useState<Tab>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [isRevalidatingIncome, setIsRevalidatingIncome] = useState(false);
-  const [processingOcr, setProcessingOcr] = useState(false);
-  const [ocrStatusText, setOcrStatusText] = useState('');
+  const [processing, setProcessing] = useState(false);
+  const [statusText, setStatusText] = useState('');
 
-  // Password protected PDF flow states
-  const [passwordModalVisible, setPasswordModalVisible] = useState(false);
+  const [passwordSheet, setPasswordSheet] = useState(false);
   const [pdfPassword, setPdfPassword] = useState('');
   const [passwordError, setPasswordError] = useState<string | null>(null);
-  const [pendingPdf, setPendingPdf] = useState<{ uri: string; name: string; type: string } | null>(null);
-  const [uploadErrorModal, setUploadErrorModal] = useState<{ title: string; message: string } | null>(null);
-  const [reviewModalVisible, setReviewModalVisible] = useState(false);
-  const [extractedTransactions, setExtractedTransactions] = useState<any[]>([]);
+  const [pendingPdf, setPendingPdf] = useState<any | null>(null);
+  const [errorSheet, setErrorSheet] = useState<{ title: string; message: string } | null>(null);
+  const [reviewVisible, setReviewVisible] = useState(false);
+  const [extracted, setExtracted] = useState<any[]>([]);
   const [detectedFinalBalance, setDetectedFinalBalance] = useState<number | null>(null);
-  const [selectedTransactionForDetail, setSelectedTransactionForDetail] = useState<any | null>(null);
+  const [selectedTx, setSelectedTx] = useState<any | null>(null);
   const [isEditingBank, setIsEditingBank] = useState(false);
   const [manualTxType, setManualTxType] = useState<'credit' | 'debit' | null>(null);
+
+  const [smsConsent, setSmsConsent] = useState(activeBank?.smsConsent || false);
+  const [consentSheet, setConsentSheet] = useState(false);
+  const [optionsSheet, setOptionsSheet] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [isSyncingSms, setIsSyncingSms] = useState(false);
 
   useEffect(() => {
     if (!visible) {
       setIsEditingBank(false);
       setManualTxType(null);
-      setSelectedTransactionForDetail(null);
+      setSelectedTx(null);
+      setSearchQuery('');
+      setActiveTab('all');
     }
   }, [visible]);
 
-  // SMS Consent toggle states
-  const [smsConsent, setSmsConsent] = useState(activeBank?.smsConsent || false);
-  const [consentModalVisible, setConsentModalVisible] = useState(false);
-  const [optionsMenuVisible, setOptionsMenuVisible] = useState(false);
-
   useEffect(() => {
-    if (activeBank) {
-      setSmsConsent(activeBank.smsConsent || false);
-    }
+    if (activeBank) setSmsConsent(activeBank.smsConsent || false);
   }, [activeBank]);
 
-  const saveSmsConsent = async (val: boolean) => {
-    if (!activeBank) return;
-    setSmsConsent(val);
-    try {
-      const token = authService.getAccessToken();
-      if (!token) return;
+  /* ---------------- Data ---------------- */
 
-      const response = await fetch(`${BACKEND_URL}/sync/bank-profile/${activeBank.id}/consent`, {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ smsConsent: val }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to update SMS sync consent on server.');
-      }
-      
-      await syncService.sync();
-    } catch (e: any) {
-      setSmsConsent(!val);
-      Alert.alert('Consent Error', e.message || 'Unable to update background sync permission.');
-    }
-  };
-
-  const handleToggleSmsConsent = async (val: boolean) => {
-    if (!activeBank) return;
-
-    if (val) {
-      setConsentModalVisible(true);
-    } else {
-      await saveSmsConsent(false);
-    }
-  };
-
-  const [confirmUnlinkVisible, setConfirmUnlinkVisible] = useState(false);
-  const [unlinking, setUnlinking] = useState(false);
-
-  const executeUnlinkBank = async () => {
-    if (!activeBank) return;
-    setUnlinking(true);
-    try {
-      const token = authService.getAccessToken();
-      if (token) {
-        await fetch(`${BACKEND_URL}/sync/bank-profile/${activeBank.id}`, {
-          method: 'DELETE',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-        });
-      }
-      useBankStore.getState().removeBankProfileState(activeBank.id);
-      await syncService.sync().catch(() => {});
-      setConfirmUnlinkVisible(false);
-      setOptionsMenuVisible(false);
-      onClose();
-    } catch (err: any) {
-      console.warn('[BankDetailsModal] Failed to unlink bank:', err?.message || err);
-      // Fallback local removal even if offline
-      useBankStore.getState().removeBankProfileState(activeBank.id);
-      setConfirmUnlinkVisible(false);
-      setOptionsMenuVisible(false);
-      onClose();
-    } finally {
-      setUnlinking(false);
-    }
-  };
-
-  const [isSyncingSms, setIsSyncingSms] = useState(false);
-
-  const handleSyncLast48HoursSms = async () => {
-    if (!activeBank) return;
-    setOptionsMenuVisible(false);
-
-    if (Platform.OS !== 'android') {
-      Alert.alert(
-        'Android Device Only',
-        'Automatic SMS inbox scanning is only available on Android devices.'
-      );
-      return;
-    }
-
-    setIsSyncingSms(true);
-    try {
-      const granted = await smsPermissionService.requestSmsPermissions();
-      if (!granted) {
-        Alert.alert(
-          'SMS Permission Denied',
-          'SMS read permission is required to scan your inbox for bank alerts. Please allow SMS permission in Android Settings.'
-        );
-        return;
-      }
-
-      const Sms = NativeModules.Sms;
-      if (!Sms || typeof Sms.list !== 'function') {
-        Alert.alert(
-          'Module Unavailable',
-          'Native SMS reader is not compiled into your currently installed build.'
-        );
-        return;
-      }
-
-      const res = await smsCatchupService.reconcile(true, 48, activeBank.id);
-      await fetchIncomeRecords();
-      await syncService.sync(true).catch(() => {});
-
-      if (res && res.syncedCount > 0) {
-        Alert.alert(
-          'Sync Complete',
-          `Successfully recovered and added ${res.syncedCount} missed transaction(s) for ${activeBank.bankName || 'Bank'}! Balance updated.`
-        );
-      } else {
-        Alert.alert(
-          'Inbox Up to Date',
-          `Scanned SMS inbox for the last 48 hours for •••• ${activeBank.accountNumberSuffix}. No new missed transactions found. Duplicate entries avoided.`
-        );
-      }
-    } catch (err: any) {
-      Alert.alert('Scan Failed', err?.message || 'Error scanning SMS inbox.');
-    } finally {
-      setIsSyncingSms(false);
-    }
-  };
-
-  // Fetch Income Records in background for SWR cache refresh
   const fetchIncomeRecords = async () => {
     const currentId = activeBank?.id || bank?.id;
     if (!currentId) return;
@@ -233,19 +156,13 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
     try {
       const token = authService.getAccessToken();
       if (!token) return;
-
       const response = await fetch(`${BACKEND_URL}/sync/income-records`, {
         method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       });
-
       if (!response.ok) throw new Error('Failed to fetch income records');
       const data = await response.json();
-      
-      const mappedIncome = (data || []).map((inc: any) => ({
+      const mapped = (data || []).map((inc: any) => ({
         id: inc.id,
         amount: parseFloat(inc.amount || 0),
         category: inc.category || 'income',
@@ -256,7 +173,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
         updatedAt: inc.updatedAt ? Number(inc.updatedAt) : undefined,
         type: 'credit' as const,
       }));
-      useIncomeStore.getState().setIncomeRecords(mappedIncome);
+      useIncomeStore.getState().setIncomeRecords(mapped);
     } catch (e) {
       console.warn('Error fetching income records in background:', e);
     } finally {
@@ -265,24 +182,17 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
   };
 
   useEffect(() => {
-    if (visible && (bank || activeBank)) {
-      fetchIncomeRecords();
-    }
+    if (visible && (bank || activeBank)) fetchIncomeRecords();
   }, [visible, bank?.id, activeBank?.id]);
 
-  // Filter transactions and income reactively from offline MMKV-backed stores
   const currentBankId = activeBank?.id || bank?.id;
 
-  const bankDebits = useMemo(() => {
+  const merged = useMemo(() => {
     if (!currentBankId) return [];
-    return transactions
+    const debits = transactions
       .filter((tx) => tx.bankProfileId === currentBankId)
       .map((tx) => ({ ...tx, type: 'debit' as const }));
-  }, [transactions, currentBankId]);
-
-  const bankCredits = useMemo(() => {
-    if (!currentBankId) return [];
-    return allIncomeRecords
+    const credits = allIncomeRecords
       .filter((inc) => (inc.bankProfileId ?? (inc as any).bank_profile_id) === currentBankId)
       .map((inc) => ({
         ...inc,
@@ -290,663 +200,511 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
         source: inc.source || inc.merchant || 'Income',
         type: 'credit' as const,
       }));
-  }, [allIncomeRecords, currentBankId]);
-
-  const rawMergedList = useMemo(() => {
-    return [...bankDebits, ...bankCredits].sort((a, b) => {
+    const sorted = [...debits, ...credits].sort((a, b) => {
       const diff = (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0);
       if (diff !== 0) return diff;
-      return (Number((b as any).updatedAt || 0)) - (Number((a as any).updatedAt || 0));
+      return Number((b as any).updatedAt || 0) - Number((a as any).updatedAt || 0);
     });
-  }, [bankDebits, bankCredits]);
 
-  // Deduplicate transactions strictly by unique database ID or verified reference ID
-  const mergedList = useMemo(() => {
+    // De-duplicate by id or verified reference id
     const seenIds = new Set<string>();
     const seenRefs = new Set<string>();
-    const result: any[] = [];
-    for (const item of rawMergedList) {
+    const out: any[] = [];
+    for (const item of sorted as any[]) {
       if (!item) continue;
       if (item.id) {
         if (seenIds.has(item.id)) continue;
         seenIds.add(item.id);
       }
-
-      const refId = item.referenceId || (item.smsId && item.smsId.startsWith('ref_') ? item.smsId : null);
-      if (refId) {
-        if (seenRefs.has(refId)) continue;
-        seenRefs.add(refId);
+      const ref = item.referenceId || (item.smsId && item.smsId.startsWith('ref_') ? item.smsId : null);
+      if (ref) {
+        if (seenRefs.has(ref)) continue;
+        seenRefs.add(ref);
       }
-
-      result.push(item);
+      out.push(item);
     }
-    return result;
-  }, [rawMergedList]);
+    return out;
+  }, [transactions, allIncomeRecords, currentBankId]);
 
-  const filteredData = mergedList.filter((item) => {
-    if (activeTab === 'debits' && item.type !== 'debit') return false;
-    if (activeTab === 'credits' && item.type !== 'credit') return false;
-
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      const matchMerchant = item.merchant?.toLowerCase().includes(query);
-      const matchCategory = item.category?.toLowerCase().includes(query);
-      return matchMerchant || matchCategory;
-    }
-    return true;
-  });
-
-  // Group filtered transactions by Month & Year with totals for Paytm-style sticky headers
   const sections = useMemo(() => {
-    const groups: { [key: string]: { title: string; totalSpent: number; totalIncome: number; data: any[] } } = {};
-    const order: string[] = [];
-
-    for (const item of filteredData) {
-      const parsedTime = typeof item.timestamp === 'number' ? item.timestamp : new Date(item.timestamp).getTime();
-      const date = isNaN(parsedTime) ? new Date() : new Date(parsedTime);
-      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-
-      if (!groups[key]) {
-        const title = date.toLocaleDateString('en-IN', {
-          month: 'long',
-          year: 'numeric',
-        });
-        groups[key] = {
-          title,
-          totalSpent: 0,
-          totalIncome: 0,
-          data: [],
-        };
-        order.push(key);
-      }
-
-      groups[key].data.push(item);
-      const amt = Number(item.amount) || 0;
-      if (item.type === 'debit') {
-        groups[key].totalSpent += amt;
-      } else {
-        groups[key].totalIncome += amt;
-      }
-    }
-
-    return order.map((key) => groups[key]);
-  }, [filteredData]);
-
-  // Local regex matcher for common SMS transaction formats
-  const parseTextLocally = (text: string) => {
-    const lines = text.split('\n');
-    const parsed: any[] = [];
-    const debitRegexes = [
-      /(?:Rs\.?|INR)\s*([\d,]+(?:\.\d{2})?)\s*(?:debited|spent|paid|withdrawn|sent)/i,
-      /(?:debited|spent|paid|withdrawn|sent)\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d{2})?)/i,
-    ];
-    const creditRegexes = [
-      /(?:Rs\.?|INR)\s*([\d,]+(?:\.\d{2})?)\s*(?:credited|received|deposited|added)/i,
-      /(?:credited|received|deposited|added)\s*(?:Rs\.?|INR)?\s*([\d,]+(?:\.\d{2})?)/i,
-    ];
-    const dateRegex = /(\d{2}[-/.]\d{2}[-/.]\d{2,4}|\d{4}[-/.]\d{2}[-/.]\d{2})/;
-    const timeRegex = /(?:at\s+)?(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM|am|pm)?)/i;
-    const merchantRegex = /(?:to|at|from|by|at)\s+([A-Za-z0-9\s]{3,15})/i;
-
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      let amount = 0;
-      let type: 'debit' | 'credit' | null = null;
-      let date = new Date().toISOString().split('T')[0];
-      let time: string | null = null;
-      let merchant = '';
-
-      for (const rx of debitRegexes) {
-        const match = line.match(rx);
-        if (match) {
-          amount = parseFloat(match[1].replace(/,/g, ''));
-          type = 'debit';
-          break;
-        }
-      }
-      if (!type) {
-        for (const rx of creditRegexes) {
-          const match = line.match(rx);
-          if (match) {
-            amount = parseFloat(match[1].replace(/,/g, ''));
-            type = 'credit';
-            break;
-          }
-        }
-      }
-
-      if (type && amount > 0) {
-        const dateMatch = line.match(dateRegex);
-        if (dateMatch) {
-          const rawDate = dateMatch[1];
-          const parts = rawDate.split(/[-/.]/);
-          if (parts.length === 3) {
-            if (parts[0].length === 4) {
-              date = `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
-            } else {
-              const year = parts[2].length === 2 ? `20${parts[2]}` : parts[2];
-              date = `${year}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
-            }
-          }
-        }
-
-        const timeMatch = line.match(timeRegex);
-        if (timeMatch) {
-          const rawTime = timeMatch[1].trim();
-          const ampmMatch = rawTime.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?$/i);
-          if (ampmMatch) {
-            let h = parseInt(ampmMatch[1], 10);
-            const m = parseInt(ampmMatch[2], 10);
-            const ampm = ampmMatch[4]?.toLowerCase();
-            if (ampm === 'pm' && h < 12) h += 12;
-            if (ampm === 'am' && h === 12) h = 0;
-            if (!isNaN(h) && !isNaN(m)) {
-              time = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-            }
-          }
-        }
-
-        const merchMatch = line.match(merchantRegex);
-        if (merchMatch) {
-          merchant = merchMatch[1].trim();
-        } else {
-          merchant = type === 'debit' ? 'Spends' : 'Credits';
-        }
-        parsed.push({ amount, type, date, time, merchant });
-      }
-    }
-    return parsed;
-  };
-
-  const syncExtractedTransactions = async (parsedTxs: any[]) => {
-    if (!parsedTxs || parsedTxs.length === 0) {
-      throw new Error('No transactions could be extracted from this document.');
-    }
-
-    setOcrStatusText('Syncing with database...');
-    const token = authService.getAccessToken();
-    if (!token) throw new Error('Session authentication missing.');
-
-    const response = await fetch(`${BACKEND_URL}/sync/ocr-sync`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        bankProfileId: (activeBank || bank)?.id,
-        transactions: parsedTxs,
-      }),
+    const q = searchQuery.trim().toLowerCase();
+    const filtered = merged.filter((item) => {
+      if (activeTab === 'debits' && item.type !== 'debit') return false;
+      if (activeTab === 'credits' && item.type !== 'credit') return false;
+      if (!q) return true;
+      return (
+        item.merchant?.toLowerCase().includes(q) ||
+        item.category?.toLowerCase().includes(q) ||
+        getCategory(item.category).label.toLowerCase().includes(q)
+      );
     });
 
-    if (!response.ok) {
-      const errJson = await response.json().catch(() => ({}));
-      throw new Error(errJson.message || 'Sync failed.');
-    }
-
-    const syncResult = await response.json();
-    await syncService.sync();
-    await fetchIncomeRecords();
-
-    Alert.alert(
-      'Import Successful',
-      `Import summary:\n• Debits imported: ${syncResult.addedTransactionsCount}\n• Credits imported: ${syncResult.addedIncomeCount}\n\nNew Bank Balance: ₹${syncResult.updatedBalance.toLocaleString('en-IN')}`
-    );
-  };
-
-  const processExtractedText = async (text: string) => {
-    try {
-      setOcrStatusText('Running local parser...');
-      let parsedTxs = parseTextLocally(text);
-
-      if (parsedTxs.length === 0) {
-        setOcrStatusText('Structuring with server AI...');
-        parsedTxs = await parseStatementTextWithAI(text);
+    const groups: Record<string, { title: string; spent: number; received: number; data: any[] }> = {};
+    const order: string[] = [];
+    for (const item of filtered) {
+      const t = typeof item.timestamp === 'number' ? item.timestamp : new Date(item.timestamp).getTime();
+      const d = isNaN(t) ? new Date() : new Date(t);
+      const key = `${d.getFullYear()}-${d.getMonth()}`;
+      if (!groups[key]) {
+        groups[key] = { title: format(d, 'MMMM yyyy'), spent: 0, received: 0, data: [] };
+        order.push(key);
       }
-
-      await syncExtractedTransactions(parsedTxs);
-    } catch (err: any) {
-      Alert.alert('Import Failed', err.message || 'Unable to complete statement ingestion.');
-    } finally {
-      setProcessingOcr(false);
-      setOcrStatusText('');
+      groups[key].data.push(item);
+      const amt = Number(item.amount) || 0;
+      if (item.type === 'debit') groups[key].spent += amt;
+      else groups[key].received += amt;
     }
-  };
+    return order.map((k) => groups[k]);
+  }, [merged, activeTab, searchQuery]);
 
-  // Upload and parse statement file (PDF or image) directly on backend
-  const uploadStatementFile = async (fileAsset: any, password?: string) => {
-    setProcessingOcr(true);
-    setOcrStatusText(password ? 'Decrypting & parsing statement on server...' : 'Processing statement on server...');
+  /* ---------------- SMS consent ---------------- */
 
+  const saveSmsConsent = async (val: boolean) => {
+    if (!activeBank) return;
+    setSmsConsent(val);
     try {
       const token = authService.getAccessToken();
-      if (!token) throw new UploadError('Session credentials missing.', 401);
+      if (!token) return;
+      const response = await fetch(`${BACKEND_URL}/sync/bank-profile/${activeBank.id}/consent`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ smsConsent: val }),
+      });
+      if (!response.ok) throw new Error('Could not update auto-tracking. Try again.');
+      await syncService.sync();
+    } catch (e: any) {
+      setSmsConsent(!val);
+      setErrorSheet({ title: 'Auto-tracking not changed', message: e.message || 'Try again in a moment.' });
+    }
+  };
 
-      const responseJson = await uploadFile({
+  const toggleSmsConsent = async (val: boolean) => {
+    setOptionsSheet(false);
+    if (val) setConsentSheet(true);
+    else await saveSmsConsent(false);
+  };
+
+  const agreeToConsent = async () => {
+    setConsentSheet(false);
+    if (Platform.OS === 'android') {
+      try {
+        const granted = await PermissionsAndroid.requestMultiple([
+          PermissionsAndroid.PERMISSIONS.RECEIVE_SMS,
+          PermissionsAndroid.PERMISSIONS.READ_SMS,
+        ]);
+        const ok =
+          granted['android.permission.RECEIVE_SMS'] === PermissionsAndroid.RESULTS.GRANTED &&
+          granted['android.permission.READ_SMS'] === PermissionsAndroid.RESULTS.GRANTED;
+        if (!ok) {
+          setSmsConsent(false);
+          Alert.alert('SMS access needed', 'Allow SMS access in Settings to turn on auto-tracking.', [
+            { text: 'Not now', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() },
+          ]);
+          return;
+        }
+      } catch {
+        setSmsConsent(false);
+        return;
+      }
+    }
+    await saveSmsConsent(true);
+  };
+
+  /* ---------------- Remove account ---------------- */
+
+  const removeAccount = async () => {
+    if (!activeBank) return;
+    setRemoving(true);
+    try {
+      const token = authService.getAccessToken();
+      if (token) {
+        await fetch(`${BACKEND_URL}/sync/bank-profile/${activeBank.id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        });
+      }
+    } catch (err: any) {
+      console.warn('[BankDetails] Remove failed, removing locally:', err?.message);
+    } finally {
+      useBankStore.getState().removeBankProfileState(activeBank.id);
+      await syncService.sync().catch(() => {});
+      setRemoving(false);
+      setConfirmRemove(false);
+      setOptionsSheet(false);
+      onClose();
+    }
+  };
+
+  /* ---------------- SMS catch-up ---------------- */
+
+  const scanLast48h = async () => {
+    if (!activeBank) return;
+    setOptionsSheet(false);
+    if (Platform.OS !== 'android') {
+      setErrorSheet({ title: 'Android only', message: 'Checking bank messages works on Android phones.' });
+      return;
+    }
+    setIsSyncingSms(true);
+    setProcessing(true);
+    setStatusText('Checking the last 48 hours of bank messages');
+    try {
+      const granted = await smsPermissionService.requestSmsPermissions();
+      if (!granted) {
+        setErrorSheet({ title: 'SMS access needed', message: 'Allow SMS access in Settings so Regent can read bank alerts.' });
+        return;
+      }
+      const Sms = NativeModules.Sms;
+      if (!Sms || typeof Sms.list !== 'function') {
+        setErrorSheet({ title: 'Not available in this build', message: 'This version of the app can’t read SMS. Update to the latest version.' });
+        return;
+      }
+      const res = await smsCatchupService.reconcile(true, 48, activeBank.id);
+      await fetchIncomeRecords();
+      await syncService.sync(true).catch(() => {});
+      Alert.alert(
+        res && res.syncedCount > 0 ? `${res.syncedCount} transaction${res.syncedCount > 1 ? 's' : ''} added` : 'You’re up to date',
+        res && res.syncedCount > 0
+          ? `Missed transactions for •• ${activeBank.accountNumberSuffix} were added and the balance updated.`
+          : `No missed transactions for •• ${activeBank.accountNumberSuffix} in the last 48 hours.`
+      );
+    } catch (err: any) {
+      setErrorSheet({ title: 'Check failed', message: err?.message || 'Could not read bank messages. Try again.' });
+    } finally {
+      setIsSyncingSms(false);
+      setProcessing(false);
+      setStatusText('');
+    }
+  };
+
+  /* ---------------- Imports ---------------- */
+
+  const uploadStatementFile = async (fileAsset: any, password?: string) => {
+    setProcessing(true);
+    setStatusText(password ? 'Unlocking and reading your statement' : 'Reading your statement');
+    try {
+      const token = authService.getAccessToken();
+      if (!token) throw new UploadError('Sign in again to import statements.', 401);
+      const json = await uploadFile({
         url: `${BACKEND_URL}/sync/upload-statement`,
         fileUri: fileAsset.uri,
         fileName: fileAsset.name || 'statement.pdf',
         webFile: fileAsset.file,
-        fields: {
-          bankProfileId: (activeBank || bank)?.id,
-          password: password || undefined,
-        },
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        fields: { bankProfileId: activeBank?.id, password: password || undefined },
+        headers: { Authorization: `Bearer ${token}` },
         maxBytes: 25 * 1024 * 1024,
         timeoutMs: 120_000,
       });
-
-      const txs = responseJson.transactions || [];
-      if (txs.length === 0) {
-        throw new UploadError('No transactions could be extracted from this statement.', 422);
-      }
-
-      setExtractedTransactions(txs);
-      setDetectedFinalBalance(responseJson.detectedFinalBalance ?? null);
+      const txs = json.transactions || [];
+      if (txs.length === 0) throw new UploadError('No transactions were found in this statement.', 422);
+      setExtracted(txs);
+      setDetectedFinalBalance(json.detectedFinalBalance ?? null);
       setPasswordError(null);
-      setReviewModalVisible(true);
+      setReviewVisible(true);
     } catch (e: any) {
       if (e instanceof UploadError && isPasswordRequired(e.body)) {
-        setPasswordError(password ? 'Incorrect password for this PDF statement. Please try again.' : null);
+        setPasswordError(password ? 'That password didn’t work. Try again.' : null);
         setPendingPdf(fileAsset);
-        setPasswordModalVisible(true);
+        setPasswordSheet(true);
         return;
       }
-
-      const msg = e?.message || 'Unable to process statement.';
       const isValidation = e instanceof UploadError && e.status != null && e.status >= 400 && e.status < 500;
-      const title = isValidation ? 'Statement Import Issue' : 'Upload Failed';
-
-      setUploadErrorModal({
-        title,
-        message: msg,
+      setErrorSheet({
+        title: isValidation ? 'Couldn’t read this statement' : 'Upload failed',
+        message: e?.message || 'Try again with a different file.',
       });
-      Alert.alert(title, msg);
     } finally {
-      setProcessingOcr(false);
-      setOcrStatusText('');
+      setProcessing(false);
+      setStatusText('');
     }
   };
 
-  const handlePasswordSubmit = () => {
+  const submitPassword = () => {
     if (!pdfPassword.trim()) {
-      Alert.alert('Error', 'Please enter a valid password.');
+      setPasswordError('Enter the PDF password.');
       return;
     }
     if (!pendingPdf) return;
-
-    setPasswordModalVisible(false);
+    setPasswordSheet(false);
     uploadStatementFile(pendingPdf, pdfPassword);
     setPdfPassword('');
   };
 
-  // Image Upload / Ingestion using Backend AI Vision
-  const handleUploadScreenshot = async () => {
+  const importScreenshot = async () => {
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsEditing: false,
-        quality: 1,
-      });
-
+      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: false, quality: 1 });
       if (result.canceled || !result.assets?.[0]?.uri) return;
-
-      setProcessingOcr(true);
-      setOcrStatusText('Processing screenshot on server...');
-
+      setProcessing(true);
+      setStatusText('Reading your screenshot');
       const token = authService.getAccessToken();
-      if (!token) throw new UploadError('Session authentication missing.', 401);
-
+      if (!token) throw new UploadError('Sign in again to import screenshots.', 401);
       const asset = result.assets[0];
-      const responseJson = await uploadFile({
+      const json = await uploadFile({
         url: `${BACKEND_URL}/sync/upload-screenshot`,
         fileUri: asset.uri,
         fileName: asset.fileName || 'screenshot.jpg',
         webFile: (asset as any).file,
-        fields: {
-          bankProfileId: (activeBank || bank)?.id,
-        },
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        fields: { bankProfileId: activeBank?.id },
+        headers: { Authorization: `Bearer ${token}` },
         maxBytes: 15 * 1024 * 1024,
         timeoutMs: 60_000,
       });
-
-      const txs = responseJson.transactions || [];
-      if (txs.length === 0) {
-        throw new UploadError('No transactions could be detected in this screenshot.', 422);
-      }
-
-      setExtractedTransactions(txs);
-      setDetectedFinalBalance(responseJson.detectedFinalBalance ?? null);
-      setReviewModalVisible(true);
+      const txs = json.transactions || [];
+      if (txs.length === 0) throw new UploadError('No transactions were found in this screenshot.', 422);
+      setExtracted(txs);
+      setDetectedFinalBalance(json.detectedFinalBalance ?? null);
+      setReviewVisible(true);
     } catch (e: any) {
-      const msg = e.message || 'Failed to process screenshot.';
-      let title = 'Invalid Screenshot';
+      const msg = e?.message || 'Try a clearer screenshot of your bank app.';
       const lower = msg.toLowerCase();
-      if (lower.includes('selfie') || lower.includes('personal photo')) {
-        title = 'Selfie / Personal Photo Detected';
-      } else if (lower.includes('blurry') || lower.includes('low quality') || lower.includes('unreadable')) {
-        title = 'Image Too Blurry';
-      } else if (lower.includes('not contain') || lower.includes('unrelated') || lower.includes('does not contain')) {
-        title = 'Non-Financial Image';
-      } else if (lower.includes('no transaction') || lower.includes('no transactions')) {
-        title = 'No Transactions Found';
-      }
-
-      setUploadErrorModal({
-        title,
-        message: msg,
-      });
-      Alert.alert(title, msg);
+      let title = 'Couldn’t read this screenshot';
+      if (lower.includes('selfie') || lower.includes('personal photo')) title = 'This looks like a personal photo';
+      else if (lower.includes('blurry') || lower.includes('low quality') || lower.includes('unreadable')) title = 'Screenshot is too blurry';
+      else if (lower.includes('not contain') || lower.includes('unrelated')) title = 'No bank details found';
+      setErrorSheet({ title, message: msg });
     } finally {
-      setProcessingOcr(false);
-      setOcrStatusText('');
+      setProcessing(false);
+      setStatusText('');
     }
   };
 
-  // Document Statement Upload (Delegates to backend for PDF or image statement)
-  const handleUploadStatement = async () => {
+  const importStatement = async () => {
     try {
-      const doc = await DocumentPicker.getDocumentAsync({
-        type: ['application/pdf', 'image/*'],
-        copyToCacheDirectory: true,
-      });
-
+      const doc = await DocumentPicker.getDocumentAsync({ type: ['application/pdf', 'image/*'], copyToCacheDirectory: true });
       if (doc.canceled || !doc.assets?.[0]?.uri) return;
-
       setPasswordError(null);
       await uploadStatementFile(doc.assets[0]);
     } catch (e: any) {
-      setProcessingOcr(false);
-      Alert.alert('Upload Error', e.message || 'Failed to select document.');
+      setProcessing(false);
+      setErrorSheet({ title: 'Couldn’t open the file', message: e?.message || 'Pick a PDF or an image of your statement.' });
     }
   };
 
-  if (!visible || !activeBank) {
-    return null;
-  }
+  if (!visible || !activeBank) return null;
+
+  /* ---------------- Render ---------------- */
+
+  const ink = colors.text;
+  const muted = colors.textSecondary;
+  const pageBg = isDark ? colors.background : '#F3F6F4';
+  const surface = colors.card;
+  const line = isDark ? colors.border : '#E1E9E4';
+  const brand = bankBrandColor(activeBank.bankName);
+  const balance = Number(activeBank.currentBalance) || 0;
+  const red = isDark ? '#FFA8A8' : '#C92A2A';
+  const syncedAt = activeBank.lastSyncTimestamp ? format(new Date(activeBank.lastSyncTimestamp), 'HH:mm') : null;
+
+  const renderHeader = () => (
+    <View>
+      {/* Brand card */}
+      <Animated.View entering={FadeInDown.duration(380)} style={[s.brandCard, { backgroundColor: brand }]}>
+        <View pointerEvents="none" style={[s.ring, { width: 220, height: 220, borderRadius: 110, right: -80, top: -100 }]} />
+        <View pointerEvents="none" style={[s.ring, { width: 140, height: 140, borderRadius: 70, right: -40, top: -60, borderColor: 'rgba(255,255,255,0.2)' }]} />
+        <View style={s.brandTop}>
+          <BankIcon code={getBankCode(activeBank.bankName)} name={activeBank.bankName} size={40} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={s.brandName} numberOfLines={1}>{activeBank.bankName}</Text>
+            <Text style={s.brandSub}>{activeBank.accountType || 'Savings'} •• {activeBank.accountNumberSuffix}</Text>
+          </View>
+          <Pressable onPress={() => setOptionsSheet(true)} style={s.ghostBtn} accessibilityLabel="Account options">
+            <Feather name="more-horizontal" size={18} color="#FFFFFF" />
+          </Pressable>
+        </View>
+        <View style={s.brandBottom}>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={s.brandLabel}>{syncedAt ? `Balance, synced ${syncedAt}` : 'Balance'}</Text>
+            <Text style={[s.brandBalance, { fontFamily: display, fontWeight: display ? undefined : '800' }]} numberOfLines={1} adjustsFontSizeToFit>
+              {balance < 0 ? '−' : ''}{inr(balance, 2)}
+            </Text>
+          </View>
+          <Pressable onPress={() => setManualTxType('credit')} style={s.ghostBtnLg} accessibilityLabel="Add money in">
+            <Feather name="arrow-down-left" size={18} color="#FFFFFF" />
+          </Pressable>
+          <Pressable onPress={() => setManualTxType('debit')} style={s.solidBtnLg} accessibilityLabel="Add money out">
+            <Feather name="arrow-up-right" size={18} color={brand} />
+          </Pressable>
+        </View>
+      </Animated.View>
+
+      {/* Imports */}
+      <Animated.View entering={FadeInDown.delay(80).duration(380)} style={s.importRow}>
+        <Pressable onPress={importScreenshot} style={({ pressed }) => [s.importBtn, { backgroundColor: surface, borderColor: line }, pressed && { opacity: 0.7 }]}>
+          <Feather name="image" size={16} color={ink} />
+          <Text style={[s.importText, { color: ink }]}>Import screenshot</Text>
+        </Pressable>
+        <Pressable onPress={importStatement} style={({ pressed }) => [s.importBtn, { backgroundColor: surface, borderColor: line }, pressed && { opacity: 0.7 }]}>
+          <Feather name="file-text" size={16} color={ink} />
+          <Text style={[s.importText, { color: ink }]}>Import statement</Text>
+        </Pressable>
+      </Animated.View>
+
+      {/* Search + filter */}
+      <Animated.View entering={FadeInDown.delay(140).duration(380)} style={s.filterRow}>
+        <View style={[s.search, { backgroundColor: surface, borderColor: line }]}>
+          <Feather name="search" size={16} color={muted} />
+          <TextInput
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholder="Search"
+            placeholderTextColor={muted}
+            style={[s.searchInput, { color: ink }]}
+            accessibilityLabel="Search transactions"
+          />
+          {searchQuery ? (
+            <Pressable onPress={() => setSearchQuery('')} hitSlop={10} accessibilityLabel="Clear search">
+              <Feather name="x-circle" size={15} color={muted} />
+            </Pressable>
+          ) : null}
+        </View>
+        <View style={[s.segment, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#E9EFEB' }]}>
+          {(['all', 'debits', 'credits'] as Tab[]).map((t) => {
+            const on = activeTab === t;
+            return (
+              <Pressable
+                key={t}
+                onPress={() => setActiveTab(t)}
+                style={[s.segBtn, on && { backgroundColor: isDark ? '#1E3329' : '#FFFFFF' }, on && !isDark && s.segShadow]}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: on }}
+              >
+                <Text style={[s.segText, { color: on ? ink : muted }, on && { fontWeight: '700' }]}>
+                  {t === 'all' ? 'All' : t === 'debits' ? 'Out' : 'In'}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </Animated.View>
+    </View>
+  );
 
   return (
     <>
-      <Modal
-        visible={visible}
-        transparent
-        animationType="none"
-        onRequestClose={onClose}
-      >
-        <View style={styles.overlay}>
-          <TouchableOpacity
-            style={StyleSheet.absoluteFill}
-            onPress={onClose}
-            activeOpacity={1}
-          />
-          <View style={styles.cardContainer}>
-            {/* Header */}
-            <View style={styles.modalHeader}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 12 }}>
-                <BankIcon
-                  code={activeBank.smsSenderId || activeBank.bankName}
-                  name={activeBank.bankName}
-                  size={42}
-                />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.title} numberOfLines={1}>{activeBank.bankName}</Text>
-                  <Text style={styles.subtitle}>{activeBank.accountType || 'Savings'} •••• {activeBank.accountNumberSuffix}</Text>
-                </View>
-              </View>
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <TouchableOpacity
-                  onPress={() => setOptionsMenuVisible(true)}
-                  style={styles.menuBtn}
-                  activeOpacity={0.7}
-                  accessibilityLabel="Account Options"
-                >
-                  <Feather name="more-vertical" size={18} color="#8E8E9F" />
-                </TouchableOpacity>
-              </View>
-            </View>
+      <Modal visible={visible} transparent animationType="slide" statusBarTranslucent onRequestClose={onClose}>
+        <View style={s.overlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close account" />
+          <View style={[s.container, { backgroundColor: pageBg }]}>
+            <View style={[s.grabber, { backgroundColor: isDark ? 'rgba(255,255,255,0.18)' : '#C9D4CE' }]} />
 
-            {/* Compact Balance Card with Inline Credit/Debit buttons */}
-            <View style={styles.balanceCard}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                <View>
-                  <Text style={styles.balanceLabel}>Current Balance</Text>
-                  <Text style={styles.balanceValue}>
-                    ₹{(Math.round((Number(activeBank.currentBalance) || 0) * 100) / 100).toLocaleString('en-IN', {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })}
-                  </Text>
-                  {activeBank.lastSyncTimestamp && (
-                    <Text style={styles.syncText}>
-                      Synced: {new Date(activeBank.lastSyncTimestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
-                    </Text>
-                  )}
-                </View>
-
-                {/* Compact Quick Actions */}
-                <View style={{ flexDirection: 'row', gap: 6 }}>
-                  <TouchableOpacity
-                    style={[styles.compactActionBtn, styles.compactCreditBtn]}
-                    onPress={() => {
-                      setManualTxType('credit');
-                    }}
-                    activeOpacity={0.8}
-                  >
-                    <Feather name="plus-circle" size={13} color="#2dba4e" style={{ marginRight: 4 }} />
-                    <Text style={styles.compactCreditText}>+ Credit</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[styles.compactActionBtn, styles.compactDebitBtn]}
-                    onPress={() => {
-                      setManualTxType('debit');
-                    }}
-                    activeOpacity={0.8}
-                  >
-                    <Feather name="minus-circle" size={13} color="#ef4444" style={{ marginRight: 4 }} />
-                    <Text style={styles.compactDebitText}>- Debit</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
-
-            {/* Ingestion Action Buttons */}
-            <View style={styles.ocrActionsRow}>
-              <TouchableOpacity 
-                style={styles.actionBtn} 
-                onPress={handleUploadScreenshot}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="image-outline" size={18} color="#2dba4e" style={{ marginRight: 6 }} />
-                <Text style={styles.actionBtnText}>Upload Screenshot</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity 
-                style={styles.actionBtn} 
-                onPress={handleUploadStatement}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="document-text-outline" size={18} color="#2dba4e" style={{ marginRight: 6 }} />
-                <Text style={styles.actionBtnText}>Upload Statement</Text>
-              </TouchableOpacity>
-            </View>
-
-
-            {/* Search bar */}
-            <View style={styles.searchContainer}>
-              <Feather name="search" size={16} color={colors.textSecondary} style={{ marginRight: 8 }} />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Search merchant or category..."
-                placeholderTextColor={colors.textTertiary}
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-              />
-              {searchQuery.length > 0 && (
-                <TouchableOpacity onPress={() => setSearchQuery('')}>
-                  <Feather name="x" size={16} color={colors.textSecondary} />
-                </TouchableOpacity>
-              )}
-            </View>
-
-            {/* Filters Tab */}
-            <View style={styles.tabContainer}>
-              {(['all', 'debits', 'credits'] as const).map((tab) => {
-                const active = activeTab === tab;
-                return (
-                  <TouchableOpacity
-                    key={tab}
-                    style={[styles.tabButton, active && styles.activeTabButton]}
-                    onPress={() => setActiveTab(tab)}
-                  >
-                    <Text style={[styles.tabText, active && styles.activeTabText]}>
-                      {tab === 'all' ? 'All' : tab === 'debits' ? 'Spendings' : 'Income'}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            {/* Transactions List with Paytm-style Sticky Month Headers */}
-            {sections.length === 0 && isRevalidatingIncome ? (
-              <ActivityIndicator size="small" color="#2dba4e" style={{ marginTop: 20 }} />
-            ) : sections.length === 0 ? (
-              <View style={styles.emptyContainer}>
-                <Feather name="archive" size={32} color="#8E8E9F" style={{ marginBottom: 8 }} />
-                <Text style={styles.emptyText}>No transactions found for this account.</Text>
-              </View>
-            ) : (
-              <SectionList
-                sections={sections}
-                keyExtractor={(item, index) => item.id || `tx-${index}`}
-                stickySectionHeadersEnabled={true}
-                showsVerticalScrollIndicator={false}
-                contentContainerStyle={{ paddingBottom: 24 }}
-                renderSectionHeader={({ section: { title, totalSpent, totalIncome } }) => (
-                  <View style={styles.stickySectionHeader}>
-                    <Text style={styles.stickySectionTitle}>{title}</Text>
-                    <View style={styles.stickySectionRight}>
-                      {activeTab === 'credits' ? (
-                        <>
-                          <Text style={styles.stickySectionLabel}>Total Received</Text>
-                          <Text style={[styles.stickySectionAmount, { color: '#2dba4e' }]}>
-                            +₹{Math.round(totalIncome).toLocaleString('en-IN')}
-                          </Text>
-                        </>
-                      ) : activeTab === 'debits' ? (
-                        <>
-                          <Text style={styles.stickySectionLabel}>Total Spent</Text>
-                          <Text style={styles.stickySectionAmount}>
-                            ₹{Math.round(totalSpent).toLocaleString('en-IN')}
-                          </Text>
-                        </>
-                      ) : (
-                        <>
-                          <Text style={styles.stickySectionLabel}>
-                            {totalSpent > 0 ? 'Total Spent' : 'Total Received'}
-                          </Text>
-                          <Text
-                            style={[
-                              styles.stickySectionAmount,
-                              totalSpent === 0 && totalIncome > 0 ? { color: '#2dba4e' } : {},
-                            ]}
-                          >
-                            {totalSpent > 0
-                              ? `₹${Math.round(totalSpent).toLocaleString('en-IN')}`
-                              : `+₹${Math.round(totalIncome).toLocaleString('en-IN')}`}
-                          </Text>
-                        </>
-                      )}
+            <SectionList
+              sections={sections}
+              keyExtractor={(item, i) => item.id || `tx-${i}`}
+              stickySectionHeadersEnabled
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: Math.max(insets.bottom, 16) + 24 }}
+              ListHeaderComponent={renderHeader}
+              ListEmptyComponent={
+                isRevalidatingIncome ? (
+                  <ActivityIndicator color={isDark ? LIME : FOREST} style={{ marginTop: 32 }} />
+                ) : (
+                  <View style={s.empty}>
+                    <View style={[s.emptyIcon, { backgroundColor: isDark ? 'rgba(184,243,107,0.12)' : '#E3F2E8' }]}>
+                      <Feather name="inbox" size={22} color={isDark ? LIME : FOREST} />
                     </View>
+                    <Text style={[s.emptyTitle, { color: ink }]}>{searchQuery ? 'Nothing matches' : 'No transactions yet'}</Text>
+                    <Text style={[s.emptyText, { color: muted }]}>
+                      {searchQuery ? 'Try a different name or category.' : 'Add one with the arrows above, or import a statement.'}
+                    </Text>
                   </View>
-                )}
-                renderItem={({ item }) => {
-                  const isDebit = item.type === 'debit';
-                  return (
-                    <TouchableOpacity
-                      style={styles.txRow}
-                      onPress={() => {
-                        setSelectedTransactionForDetail(item);
-                      }}
-                      activeOpacity={0.7}
-                    >
-                      <View style={styles.txLeft}>
-                        <View style={[
-                          styles.iconBadge, 
-                          { backgroundColor: isDebit ? 'rgba(207, 34, 46, 0.08)' : 'rgba(45, 186, 78, 0.08)' }
-                        ]}>
-                          <Feather 
-                            name={isDebit ? "arrow-down-right" : "arrow-up-left"} 
-                            size={14} 
-                            color={isDebit ? '#cf222e' : '#2dba4e'} 
-                          />
-                        </View>
-                        <View style={styles.txMeta}>
-                          <Text style={styles.txMerchant} numberOfLines={1} ellipsizeMode="tail">
-                            {item.merchant || 'Transaction'}
-                          </Text>
-                          <Text style={styles.txDate} numberOfLines={1}>
-                            {new Date(item.timestamp).toLocaleDateString('en-IN', {
-                              day: 'numeric',
-                              month: 'short',
-                              year: 'numeric'
-                            })}
-                          </Text>
-                        </View>
-                      </View>
-                      <View style={styles.txRight}>
-                        <Text style={[
-                          styles.txAmount,
-                          { color: isDebit ? colors.text : '#2dba4e' }
-                        ]} numberOfLines={1}>
-                          {isDebit ? '-' : '+'}₹{Math.abs(Number(item.amount || 0)).toLocaleString('en-IN')}
+                )
+              }
+              renderSectionHeader={({ section }) => (
+                <View style={[s.monthHeader, { backgroundColor: pageBg }]}>
+                  <Text style={[s.monthTitle, { color: ink }]}>{section.title}</Text>
+                  <Text style={[s.monthMeta, { color: muted }]}>
+                    {activeTab !== 'credits' && section.spent > 0 ? (
+                      <>
+                        <Text style={{ color: ink, fontWeight: '700' }}>{inr(section.spent)}</Text> out
+                      </>
+                    ) : null}
+                    {activeTab !== 'debits' && section.received > 0 ? (
+                      <>
+                        {'   '}
+                        <Text style={{ color: isDark ? LIME : '#0B6B3A', fontWeight: '700' }}>{inr(section.received)}</Text> in
+                      </>
+                    ) : null}
+                  </Text>
+                </View>
+              )}
+              renderItem={({ item, index, section }) => {
+                const isCredit = item.type === 'credit';
+                const catKey = isCredit && (!item.category || item.category === 'income') ? 'money_received' : item.category;
+                const first = index === 0;
+                const last = index === section.data.length - 1;
+                const ts = Number(item.timestamp);
+                return (
+                  <Pressable
+                    onPress={() => setSelectedTx(item)}
+                    style={({ pressed }) => [
+                      s.row,
+                      {
+                        backgroundColor: surface,
+                        borderColor: line,
+                        borderTopLeftRadius: first ? 20 : 0,
+                        borderTopRightRadius: first ? 20 : 0,
+                        borderBottomLeftRadius: last ? 20 : 0,
+                        borderBottomRightRadius: last ? 20 : 0,
+                        borderTopWidth: first ? 1 : 0,
+                        borderBottomWidth: last ? 1 : 0,
+                      },
+                      pressed && { opacity: 0.7 },
+                    ]}
+                    accessibilityRole="button"
+                  >
+                    <CategoryIcon category={catKey} variant="soft" size={40} />
+                    <View style={[s.rowBody, !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line }]}>
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={[s.rowName, { color: ink }]} numberOfLines={1}>
+                          {niceName(item.merchant) || (isCredit ? 'Money received' : 'Payment')}
                         </Text>
-                        <Text style={styles.txCategory} numberOfLines={1}>{item.category}</Text>
+                        <Text style={[s.rowSub, { color: muted }]}>{isNaN(ts) ? '' : format(new Date(ts), 'd MMM')}</Text>
                       </View>
-                    </TouchableOpacity>
-                  );
-                }}
-              />
-            )}
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Text style={[s.rowAmt, { color: isCredit ? (isDark ? LIME : '#0B6B3A') : ink }]}>
+                          {isCredit ? '+' : '−'}{inr(Number(item.amount) || 0)}
+                        </Text>
+                        <Text style={[s.rowSub, { color: muted }]} numberOfLines={1}>{getCategory(catKey).label}</Text>
+                      </View>
+                    </View>
+                  </Pressable>
+                );
+              }}
+            />
           </View>
         </View>
 
-        {/* OCR processing screen loader */}
-        {processingOcr && (
-          <View style={styles.ocrLoaderOverlay}>
-            <ActivityIndicator size="large" color="#2dba4e" />
-            <Text style={styles.ocrLoaderText}>{ocrStatusText}</Text>
-          </View>
+        {/* Working */}
+        {processing && (
+          <Animated.View entering={FadeIn.duration(200)} style={s.workingOverlay}>
+            <View style={[s.workingCard, { backgroundColor: surface }]}>
+              <ActivityIndicator size="large" color={isDark ? LIME : FOREST} />
+              <Text style={[s.workingText, { color: ink }]}>{statusText}</Text>
+            </View>
+          </Animated.View>
         )}
 
-        {/* In-place Transaction Detail overlay preserving exact bank transactions list state */}
-        {selectedTransactionForDetail && (
-          <View style={[StyleSheet.absoluteFill, { zIndex: 9999, backgroundColor: colors.background }]}>
+        {selectedTx && (
+          <View style={[StyleSheet.absoluteFill, { zIndex: 9999, backgroundColor: pageBg }]}>
             <TransactionDetailScreen
-              transaction={selectedTransactionForDetail}
+              transaction={selectedTx}
               bankName={activeBank.bankName}
               accountNumberSuffix={activeBank.accountNumberSuffix}
-              onBack={() => setSelectedTransactionForDetail(null)}
+              onBack={() => setSelectedTx(null)}
               onSuccess={() => {
-                setSelectedTransactionForDetail(null);
+                setSelectedTx(null);
                 fetchIncomeRecords();
               }}
             />
           </View>
         )}
 
-        {/* In-place Edit Bank Details overlay */}
         {isEditingBank && (
-          <View style={[StyleSheet.absoluteFill, { zIndex: 9999, backgroundColor: colors.background }]}>
+          <View style={[StyleSheet.absoluteFill, { zIndex: 9999, backgroundColor: pageBg }]}>
             <EditBankScreen
               bank={activeBank}
               onBack={() => setIsEditingBank(false)}
-              onSuccess={(updated) => {
+              onSuccess={(updated: any) => {
                 setIsEditingBank(false);
                 setLocalBank(updated);
               }}
@@ -954,9 +712,8 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
           </View>
         )}
 
-        {/* In-place Manual Transaction overlay */}
         {manualTxType && (
-          <View style={[StyleSheet.absoluteFill, { zIndex: 9999, backgroundColor: colors.background }]}>
+          <View style={[StyleSheet.absoluteFill, { zIndex: 9999, backgroundColor: pageBg }]}>
             <ManualTransactionScreen
               bank={activeBank}
               initialType={manualTxType}
@@ -970,451 +727,185 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
         )}
       </Modal>
 
-      {/* Password Prompt modal */}
-      <Modal
-        visible={passwordModalVisible}
-        transparent
-        animationType="fade"
-        statusBarTranslucent
-        navigationBarTranslucent
-        onRequestClose={() => {
-          setPasswordModalVisible(false);
+      {/* Account options */}
+      <Sheet
+        visible={optionsSheet && !isEditingBank && !manualTxType}
+        onClose={() => {
+          setOptionsSheet(false);
+          setConfirmRemove(false);
+        }}
+        bg={surface}
+        dark={isDark}
+      >
+        {confirmRemove ? (
+          <Animated.View entering={FadeIn.duration(200)}>
+            <View style={[s.sheetIcon, { backgroundColor: isDark ? 'rgba(224,49,49,0.2)' : '#FFE3E3' }]}>
+              <Feather name="trash-2" size={22} color={red} />
+            </View>
+            <Text style={[s.sheetTitle, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}>
+              Remove {activeBank.bankName} •• {activeBank.accountNumberSuffix}?
+            </Text>
+            <Text style={[s.sheetText, { color: muted }]}>
+              It stops syncing and leaves your totals. Past transactions stay in your history.
+            </Text>
+            <Pressable onPress={removeAccount} disabled={removing} style={[s.sheetPrimary, { backgroundColor: '#E03131' }]}>
+              {removing ? <ActivityIndicator color="#FFFFFF" /> : <Text style={[s.sheetPrimaryText, { color: '#FFFFFF' }]}>Remove account</Text>}
+            </Pressable>
+            <Pressable onPress={() => setConfirmRemove(false)} disabled={removing} style={[s.sheetSecondary, { borderColor: line }]}>
+              <Text style={[s.sheetSecondaryText, { color: ink }]}>Keep it</Text>
+            </Pressable>
+          </Animated.View>
+        ) : (
+          <View>
+            <View style={s.sheetHeadRow}>
+              <BankIcon code={getBankCode(activeBank.bankName)} name={activeBank.bankName} size={36} />
+              <View style={{ flex: 1 }}>
+                <Text style={[s.optTitle, { color: ink }]} numberOfLines={1}>{activeBank.bankName}</Text>
+                <Text style={[s.optSub, { color: muted }]}>{activeBank.accountType || 'Savings'} •• {activeBank.accountNumberSuffix}</Text>
+              </View>
+            </View>
+            <View style={[s.optGroup, { borderColor: line }]}>
+              <Pressable
+                onPress={() => {
+                  setOptionsSheet(false);
+                  setIsEditingBank(true);
+                }}
+                style={[s.optRow, { borderBottomColor: line }]}
+              >
+                <Feather name="edit-3" size={18} color={ink} />
+                <Text style={[s.optLabel, { color: ink }]}>Edit account details</Text>
+                <Feather name="chevron-right" size={16} color={muted} />
+              </Pressable>
+              <Pressable onPress={scanLast48h} disabled={isSyncingSms} style={[s.optRow, { borderBottomColor: line }]}>
+                {isSyncingSms ? <ActivityIndicator size="small" color={ink} /> : <Feather name="refresh-cw" size={18} color={ink} />}
+                <View style={{ flex: 1 }}>
+                  <Text style={[s.optLabel, { color: ink, flex: 0 }]}>Check missed transactions</Text>
+                  <Text style={[s.optSub, { color: muted }]}>Reads the last 48 hours of bank messages</Text>
+                </View>
+                <Feather name="chevron-right" size={16} color={muted} />
+              </Pressable>
+              <View style={[s.optRow, { borderBottomWidth: 0 }]}>
+                <Feather name="message-square" size={18} color={ink} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[s.optLabel, { color: ink, flex: 0 }]}>Auto-track from SMS</Text>
+                  <Text style={[s.optSub, { color: muted }]}>Updates balance from new bank alerts</Text>
+                </View>
+                <Switch
+                  value={smsConsent}
+                  onValueChange={toggleSmsConsent}
+                  trackColor={{ false: isDark ? '#3A3A3C' : '#D1D5DB', true: '#16A34A' }}
+                  thumbColor="#FFFFFF"
+                  ios_backgroundColor={isDark ? '#3A3A3C' : '#D1D5DB'}
+                />
+              </View>
+            </View>
+            <Pressable onPress={() => setConfirmRemove(true)} style={[s.removeRow, { borderColor: line }]}>
+              <Feather name="trash-2" size={18} color={red} />
+              <Text style={[s.optLabel, { color: red }]}>Remove account</Text>
+            </Pressable>
+          </View>
+        )}
+      </Sheet>
+
+      {/* PDF password */}
+      <Sheet
+        visible={passwordSheet}
+        onClose={() => {
+          setPasswordSheet(false);
           setPendingPdf(null);
           setPdfPassword('');
           setPasswordError(null);
         }}
+        bg={surface}
+        dark={isDark}
       >
-        <View style={styles.pwdOverlay}>
-          <KeyboardAvoidingView
-            behavior="padding"
-            style={{ width: '100%', alignItems: 'center' }}
-          >
-            <View style={styles.pwdCard}>
-              <View style={styles.pwdHeader}>
-                <Feather
-                  name={passwordError ? "alert-circle" : "lock"}
-                  size={24}
-                  color={passwordError ? "#ef4444" : "#FFD700"}
-                  style={{ marginBottom: 10 }}
-                />
-                <Text style={[styles.pwdTitle, passwordError ? { color: '#ef4444' } : null]}>
-                  {passwordError ? 'Incorrect Password' : 'Statement is Locked'}
-                </Text>
-                <Text style={[styles.pwdSubtitle, passwordError ? { color: '#ef4444' } : null]}>
-                  {passwordError || 'Please enter the PDF password to open and extract transaction records.'}
-                </Text>
-              </View>
-
-              <TextInput
-                style={[
-                  styles.pwdInput,
-                  passwordError ? { borderColor: '#ef4444', borderWidth: 1 } : null,
-                ]}
-                placeholder="Enter PDF password"
-                placeholderTextColor={colors.textTertiary}
-                secureTextEntry
-                value={pdfPassword}
-                onChangeText={(val) => {
-                  setPdfPassword(val);
-                  if (passwordError) setPasswordError(null);
-                }}
-                autoFocus
-              />
-
-              <View style={styles.pwdButtons}>
-                <TouchableOpacity 
-                  style={[styles.pwdBtn, styles.pwdCancelBtn]} 
-                  onPress={() => {
-                    setPasswordModalVisible(false);
-                    setPendingPdf(null);
-                    setPdfPassword('');
-                    setPasswordError(null);
-                  }}
-                >
-                  <Text style={styles.pwdCancelText}>Cancel</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity 
-                  style={[styles.pwdBtn, styles.pwdSubmitBtn]} 
-                  onPress={handlePasswordSubmit}
-                >
-                  <Text style={styles.pwdSubmitText}>Decrypt</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </KeyboardAvoidingView>
+        <View style={[s.sheetIcon, { backgroundColor: passwordError ? (isDark ? 'rgba(224,49,49,0.2)' : '#FFE3E3') : isDark ? 'rgba(184,243,107,0.14)' : '#E3F2E8' }]}>
+          <Feather name={passwordError ? 'alert-circle' : 'lock'} size={22} color={passwordError ? red : isDark ? LIME : FOREST} />
         </View>
-      </Modal>
+        <Text style={[s.sheetTitle, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}>
+          This statement is locked
+        </Text>
+        <Text style={[s.sheetText, { color: passwordError ? red : muted }]}>
+          {passwordError || 'Enter the PDF password from your bank to read it.'}
+        </Text>
+        <TextInput
+          value={pdfPassword}
+          onChangeText={(v) => {
+            setPdfPassword(v);
+            if (passwordError) setPasswordError(null);
+          }}
+          placeholder="PDF password"
+          placeholderTextColor={muted}
+          secureTextEntry
+          autoFocus
+          onSubmitEditing={submitPassword}
+          style={[s.pwdInput, { color: ink, borderColor: passwordError ? red : line, backgroundColor: pageBg }]}
+          accessibilityLabel="PDF password"
+        />
+        <Pressable onPress={submitPassword} style={[s.sheetPrimary, { backgroundColor: isDark ? LIME : FOREST }]}>
+          <Text style={[s.sheetPrimaryText, { color: isDark ? FOREST : LIME }]}>Unlock statement</Text>
+        </Pressable>
+      </Sheet>
 
-      {/* Custom SMS Consent Modal */}
-      <Modal
-        visible={consentModalVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => {
-          setConsentModalVisible(false);
+      {/* SMS consent */}
+      <Sheet
+        visible={consentSheet}
+        onClose={() => {
+          setConsentSheet(false);
           setSmsConsent(false);
         }}
+        bg={surface}
+        dark={isDark}
       >
-        <View style={styles.pwdOverlay}>
-          <View style={styles.pwdCard}>
-            <View style={styles.pwdHeader}>
-              <View style={[styles.iconBadge, { backgroundColor: 'rgba(45, 186, 78, 0.1)', width: 48, height: 48, borderRadius: 24, marginBottom: 12, marginRight: 0 }]}>
-                <Feather name="shield" size={24} color="#2dba4e" />
-              </View>
-              <Text style={styles.pwdTitle}>Enable SMS Sync</Text>
-              <Text style={styles.pwdSubtitle}>
-                Do you authorize Regent Money to read incoming transaction SMS alerts from this bank account to automatically sync your balance and transaction history in real-time?
-              </Text>
-            </View>
-
-            <View style={styles.pwdButtons}>
-              <TouchableOpacity 
-                style={[styles.pwdBtn, styles.pwdCancelBtn]} 
-                onPress={() => {
-                  setConsentModalVisible(false);
-                  setSmsConsent(false);
-                }}
-              >
-                <Text style={styles.pwdCancelText}>Disagree</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity 
-                style={[styles.pwdBtn, styles.pwdSubmitBtn]} 
-                onPress={async () => {
-                  setConsentModalVisible(false);
-                  if (Platform.OS === 'android') {
-                    try {
-                      const granted = await PermissionsAndroid.requestMultiple([
-                        PermissionsAndroid.PERMISSIONS.RECEIVE_SMS,
-                        PermissionsAndroid.PERMISSIONS.READ_SMS,
-                      ]);
-                      const receiveGranted = granted['android.permission.RECEIVE_SMS'] === PermissionsAndroid.RESULTS.GRANTED;
-                      const readGranted = granted['android.permission.READ_SMS'] === PermissionsAndroid.RESULTS.GRANTED;
-
-                      if (!receiveGranted || !readGranted) {
-                        Alert.alert(
-                          'SMS Permissions Required',
-                          'To enable background sync, please grant SMS permissions. You can do this in the app details settings.',
-                          [
-                            { text: 'Cancel', style: 'cancel', onPress: () => setSmsConsent(false) },
-                            { text: 'Open Settings', onPress: () => Linking.openSettings() }
-                          ]
-                        );
-                        setSmsConsent(false);
-                        return;
-                      }
-                    } catch (err) {
-                      console.warn('SMS Permissions request failed:', err);
-                      setSmsConsent(false);
-                      return;
-                    }
-                  }
-                  await saveSmsConsent(true);
-                }}
-              >
-                <Text style={styles.pwdSubmitText}>Agree</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
+        <View style={[s.sheetIcon, { backgroundColor: isDark ? 'rgba(184,243,107,0.14)' : '#E3F2E8' }]}>
+          <Feather name="shield" size={22} color={isDark ? LIME : FOREST} />
         </View>
-      </Modal>
+        <Text style={[s.sheetTitle, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}>
+          Track this account from SMS?
+        </Text>
+        <Text style={[s.sheetText, { color: muted }]}>
+          Regent reads only transaction alerts from {activeBank.bankName} to keep your balance and history up to date. Personal messages are never read.
+        </Text>
+        <Pressable onPress={agreeToConsent} style={[s.sheetPrimary, { backgroundColor: isDark ? LIME : FOREST }]}>
+          <Text style={[s.sheetPrimaryText, { color: isDark ? FOREST : LIME }]}>Turn on auto-tracking</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => {
+            setConsentSheet(false);
+            setSmsConsent(false);
+          }}
+          style={[s.sheetSecondary, { borderColor: line }]}
+        >
+          <Text style={[s.sheetSecondaryText, { color: ink }]}>Not now</Text>
+        </Pressable>
+      </Sheet>
 
-      {/* Three-Dot Options & Settings Menu Modal */}
-      <Modal
-        visible={optionsMenuVisible && !isEditingBank && !manualTxType}
-        transparent
-        animationType="none"
-        onRequestClose={() => setOptionsMenuVisible(false)}
-      >
-        <View style={styles.optionsMenuOverlay}>
-          <TouchableOpacity
-            style={StyleSheet.absoluteFill}
-            activeOpacity={1}
-            onPress={() => {
-              setOptionsMenuVisible(false);
-              setConfirmUnlinkVisible(false);
-            }}
-          />
-          <View style={styles.optionsMenuCard}>
-            <View style={styles.optionsMenuHeader}>
-              <View>
-                <Text style={styles.optionsMenuTitle}>
-                  {confirmUnlinkVisible ? 'Confirm Unlink' : 'Account Options'}
-                </Text>
-                <Text style={styles.optionsMenuSubtitle}>
-                  {activeBank.bankName} ({activeBank.accountType || 'Savings'} •••• {activeBank.accountNumberSuffix})
-                </Text>
-              </View>
-              <TouchableOpacity
-                onPress={() => {
-                  setOptionsMenuVisible(false);
-                  setConfirmUnlinkVisible(false);
-                }}
-                style={styles.closeBtn}
-                activeOpacity={0.7}
-              >
-                <Feather name="x" size={16} color="#8E8E9F" />
-              </TouchableOpacity>
-            </View>
-
-            {confirmUnlinkVisible ? (
-              <View style={{ alignItems: 'center', paddingVertical: 10 }}>
-                <View
-                  style={{
-                    width: 56,
-                    height: 56,
-                    borderRadius: 28,
-                    backgroundColor: isDark ? 'rgba(239, 68, 68, 0.15)' : '#fee2e2',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    marginBottom: 14,
-                  }}
-                >
-                  <Feather name="trash-2" size={26} color="#ef4444" />
-                </View>
-                <Text
-                  style={{
-                    fontSize: 18,
-                    fontWeight: '800',
-                    color: colors.text,
-                    textAlign: 'center',
-                    marginBottom: 6,
-                  }}
-                >
-                  Unlink Bank Account?
-                </Text>
-                <Text
-                  style={{
-                    fontSize: 12,
-                    color: colors.textSecondary,
-                    textAlign: 'center',
-                    lineHeight: 18,
-                    marginBottom: 20,
-                  }}
-                >
-                  Are you sure you want to remove{' '}
-                  <Text style={{ fontWeight: '700', color: colors.text }}>
-                    {activeBank.bankName} (•••• {activeBank.accountNumberSuffix})
-                  </Text>
-                  ? Your local transaction history will remain safely preserved.
-                </Text>
-
-                <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
-                  <TouchableOpacity
-                    style={{
-                      flex: 1,
-                      backgroundColor: colors.isDark ? '#1a1a24' : '#f0f2f5',
-                      paddingVertical: 13,
-                      borderRadius: 12,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      borderWidth: 1,
-                      borderColor: colors.border,
-                    }}
-                    onPress={() => setConfirmUnlinkVisible(false)}
-                    disabled={unlinking}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={{ color: colors.textSecondary, fontWeight: '700', fontSize: 13 }}>
-                      Cancel
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={{
-                      flex: 1,
-                      backgroundColor: '#ef4444',
-                      paddingVertical: 13,
-                      borderRadius: 12,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                    onPress={executeUnlinkBank}
-                    disabled={unlinking}
-                    activeOpacity={0.8}
-                  >
-                    {unlinking ? (
-                      <ActivityIndicator size="small" color="#ffffff" />
-                    ) : (
-                      <Text style={{ color: '#ffffff', fontWeight: '800', fontSize: 13 }}>
-                        Yes, Unlink
-                      </Text>
-                    )}
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ) : (
-              <>
-                {/* Edit Bank Details Row */}
-                <TouchableOpacity
-                  style={styles.menuItemTouchable}
-                  onPress={() => {
-                    setOptionsMenuVisible(false);
-                    setIsEditingBank(true);
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <View
-                    style={[
-                      styles.menuItemIconWrap,
-                      {
-                        backgroundColor: isDark
-                          ? 'rgba(3, 218, 198, 0.12)'
-                          : 'rgba(3, 218, 198, 0.15)',
-                      },
-                    ]}
-                  >
-                    <Feather name="edit-3" size={18} color={colors.accent || '#03DAC6'} />
-                  </View>
-                  <View style={{ flex: 1, marginRight: 10 }}>
-                    <Text style={styles.menuItemTitle}>Edit Bank Details</Text>
-                    <Text style={styles.menuItemDesc}>
-                      Update display name, account suffix, balance, SMS sender ID, UPI ID & keywords.
-                    </Text>
-                  </View>
-                  <Feather name="chevron-right" size={18} color={colors.textTertiary || '#8E8E9F'} />
-                </TouchableOpacity>
-
-                <View style={styles.menuItemDivider} />
-
-                {/* Manual Scan SMS Inbox Row */}
-                <TouchableOpacity
-                  style={styles.menuItemTouchable}
-                  onPress={handleSyncLast48HoursSms}
-                  disabled={isSyncingSms}
-                  activeOpacity={0.7}
-                >
-                  <View
-                    style={[
-                      styles.menuItemIconWrap,
-                      {
-                        backgroundColor: isDark
-                          ? 'rgba(45, 186, 78, 0.12)'
-                          : 'rgba(45, 186, 78, 0.15)',
-                      },
-                    ]}
-                  >
-                    {isSyncingSms ? (
-                      <ActivityIndicator size="small" color="#2dba4e" />
-                    ) : (
-                      <Feather name="refresh-cw" size={18} color="#2dba4e" />
-                    )}
-                  </View>
-                  <View style={{ flex: 1, marginRight: 10 }}>
-                    <Text style={styles.menuItemTitle}>
-                      {isSyncingSms ? 'Scanning SMS Inbox...' : 'Sync Last 48h Missed Alerts'}
-                    </Text>
-                    <Text style={styles.menuItemDesc}>
-                      Scan SMS inbox for •••• {activeBank.accountNumberSuffix} and add missed transactions without duplicates.
-                    </Text>
-                  </View>
-                  <Feather name="chevron-right" size={18} color={colors.textTertiary || '#8E8E9F'} />
-                </TouchableOpacity>
-
-                <View style={styles.menuItemDivider} />
-
-                {/* Background SMS Sync Row inside three dots */}
-                <View style={styles.menuItemRow}>
-                  <View style={styles.menuItemIconWrap}>
-                    <Feather name="message-square" size={18} color="#2dba4e" />
-                  </View>
-                  <View style={{ flex: 1, marginRight: 10 }}>
-                    <Text style={styles.menuItemTitle}>Background SMS Sync</Text>
-                    <Text style={styles.menuItemDesc}>
-                      Securely scan incoming bank transaction alerts to update balance & records automatically.
-                    </Text>
-                  </View>
-                  <Switch
-                    value={smsConsent}
-                    onValueChange={(val) => {
-                      setOptionsMenuVisible(false);
-                      handleToggleSmsConsent(val);
-                    }}
-                    trackColor={{ false: '#2c2c35', true: '#2dba4e' }}
-                    thumbColor={smsConsent ? '#ffffff' : '#8E8E9F'}
-                  />
-                </View>
-
-                <View style={styles.menuItemDivider} />
-
-                {/* Unlink Bank Account Row */}
-                <TouchableOpacity
-                  style={styles.menuItemTouchable}
-                  onPress={() => setConfirmUnlinkVisible(true)}
-                  activeOpacity={0.7}
-                >
-                  <View
-                    style={[
-                      styles.menuItemIconWrap,
-                      {
-                        backgroundColor: isDark
-                          ? 'rgba(239, 68, 68, 0.12)'
-                          : 'rgba(239, 68, 68, 0.15)',
-                      },
-                    ]}
-                  >
-                    <Feather name="trash-2" size={18} color="#ef4444" />
-                  </View>
-                  <View style={{ flex: 1, marginRight: 10 }}>
-                    <Text style={[styles.menuItemTitle, { color: '#ef4444' }]}>Unlink Bank Account</Text>
-                    <Text style={styles.menuItemDesc}>
-                      Remove this bank account mapping from your Regent Money profile.
-                    </Text>
-                  </View>
-                  <Feather name="chevron-right" size={18} color={colors.textTertiary || '#8E8E9F'} />
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
+      {/* Errors */}
+      <Sheet visible={errorSheet !== null} onClose={() => setErrorSheet(null)} bg={surface} dark={isDark}>
+        <View style={[s.sheetIcon, { backgroundColor: isDark ? 'rgba(224,49,49,0.2)' : '#FFE3E3' }]}>
+          <Feather name="alert-triangle" size={22} color={red} />
         </View>
-      </Modal>
+        <Text style={[s.sheetTitle, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}>
+          {errorSheet?.title}
+        </Text>
+        <Text style={[s.sheetText, { color: muted }]}>{errorSheet?.message}</Text>
+        <Pressable onPress={() => setErrorSheet(null)} style={[s.sheetPrimary, { backgroundColor: isDark ? LIME : FOREST }]}>
+          <Text style={[s.sheetPrimaryText, { color: isDark ? FOREST : LIME }]}>OK</Text>
+        </Pressable>
+      </Sheet>
 
-      {/* Structured Upload / Validation Error Modal */}
-      <Modal
-        visible={uploadErrorModal !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setUploadErrorModal(null)}
-      >
-        <View style={styles.pwdOverlay}>
-          <View style={styles.pwdCard}>
-            <View style={styles.pwdHeader}>
-              <View style={[styles.iconBadge, { backgroundColor: 'rgba(239, 68, 68, 0.12)', width: 52, height: 52, borderRadius: 26, marginBottom: 14, marginRight: 0 }]}>
-                <Feather name="alert-triangle" size={26} color="#ef4444" />
-              </View>
-              <Text style={styles.pwdTitle}>{uploadErrorModal?.title || 'Upload Error'}</Text>
-              <Text style={[styles.pwdSubtitle, { lineHeight: 22, marginTop: 8 }]}>
-                {uploadErrorModal?.message}
-              </Text>
-            </View>
-
-            <View style={styles.pwdButtons}>
-              <TouchableOpacity
-                style={[styles.pwdBtn, { backgroundColor: colors.accent || '#03DAC6', flex: 1 }]}
-                onPress={() => setUploadErrorModal(null)}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.pwdSubmitText}>Got It</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Extracted Transactions Review & Edit Modal */}
       <ReviewTransactionsModal
-        visible={reviewModalVisible}
-        onClose={() => setReviewModalVisible(false)}
+        visible={reviewVisible}
+        onClose={() => setReviewVisible(false)}
         bank={activeBank}
-        rawTransactions={extractedTransactions}
+        rawTransactions={extracted}
         detectedFinalBalance={detectedFinalBalance}
-        onConfirmSuccess={async (summary) => {
+        onConfirmSuccess={async (summary: any) => {
           await syncService.sync();
           await fetchIncomeRecords();
           Alert.alert(
-            'Import Successful',
-            `Imported:\n• Debits: ${summary.addedTransactionsCount}\n• Credits: ${summary.addedIncomeCount}\n\nBank Balance: ₹${summary.updatedBalance.toLocaleString('en-IN')}`
+            'Import complete',
+            `${summary.addedTransactionsCount} out and ${summary.addedIncomeCount} in added. Balance is now ${inr(summary.updatedBalance, 2)}.`
           );
         }}
       />
@@ -1422,486 +913,68 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
   );
 };
 
-const getStyles = (colors: any) => StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
-    justifyContent: 'flex-end',
-  },
-  cardContainer: {
-    backgroundColor: colors.isDark ? '#0b0b0f' : '#ffffff',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    height: '85%',
-    paddingHorizontal: 20,
-    paddingTop: 10,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  title: {
-    fontSize: 18,
-    fontWeight: '900',
-    color: colors.text,
-  },
-  subtitle: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    marginTop: 2,
-  },
-  closeBtn: {
-    padding: 6,
-    borderRadius: 20,
-    backgroundColor: colors.isDark ? '#1a1a24' : '#f0f2f5',
-  },
-  menuBtn: {
-    padding: 6,
-    borderRadius: 20,
-    backgroundColor: colors.isDark ? '#1a1a24' : '#f0f2f5',
-  },
-  optionsMenuOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.65)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  optionsMenuCard: {
-    width: '100%',
-    maxWidth: 400,
-    backgroundColor: colors.isDark ? '#1a1d24' : '#ffffff',
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: colors.isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.08)',
-    padding: 18,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 12,
-    elevation: 10,
-  },
-  optionsMenuHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingBottom: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
-    marginBottom: 14,
-  },
-  optionsMenuTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: colors.text,
-  },
-  optionsMenuSubtitle: {
-    fontSize: 11,
-    color: colors.textSecondary,
-    marginTop: 2,
-  },
-  menuItemRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 4,
-  },
-  menuItemTouchable: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 6,
-  },
-  menuItemDivider: {
-    height: 1,
-    backgroundColor: colors.isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
-    marginVertical: 10,
-  },
-  menuItemIconWrap: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    backgroundColor: 'rgba(45, 186, 78, 0.12)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  menuItemTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.text,
-  },
-  menuItemDesc: {
-    fontSize: 11,
-    color: colors.textSecondary,
-    marginTop: 2,
-    lineHeight: 15,
-  },
-  balanceCard: {
-    backgroundColor: colors.isDark ? '#14141e' : '#f7f9fa',
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 14,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    marginTop: 10,
-  },
-  balanceLabel: {
-    fontSize: 10,
-    color: colors.textSecondary,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  balanceValue: {
-    fontSize: 22,
-    fontWeight: '900',
-    color: colors.text,
-    marginTop: 2,
-  },
-  syncText: {
-    fontSize: 9,
-    color: colors.textTertiary,
-    marginTop: 2,
-  },
-  compactActionBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 10,
-    borderWidth: 1,
-  },
-  compactCreditBtn: {
-    backgroundColor: colors.isDark ? 'rgba(45, 186, 78, 0.12)' : 'rgba(45, 186, 78, 0.08)',
-    borderColor: 'rgba(45, 186, 78, 0.35)',
-  },
-  compactDebitBtn: {
-    backgroundColor: colors.isDark ? 'rgba(239, 68, 68, 0.12)' : 'rgba(239, 68, 68, 0.08)',
-    borderColor: 'rgba(239, 68, 68, 0.35)',
-  },
-  compactCreditText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#2dba4e',
-  },
-  compactDebitText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#ef4444',
-  },
-  ocrActionsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginVertical: 8,
-  },
-  actionBtn: {
-    flex: 0.48,
-    flexDirection: 'row',
-    height: 36,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.isDark ? '#12121a' : '#ffffff',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  actionBtnText: {
-    color: colors.text,
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  searchContainer: {
-    flexDirection: 'row',
-    height: 36,
-    backgroundColor: colors.isDark ? '#14141e' : '#f0f2f5',
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  searchInput: {
-    flex: 1,
-    color: colors.text,
-    fontSize: 12,
-  },
-  tabContainer: {
-    flexDirection: 'row',
-    backgroundColor: colors.isDark ? '#12121a' : '#f0f2f5',
-    borderRadius: 8,
-    padding: 2,
-    marginBottom: 8,
-  },
-  tabButton: {
-    flex: 1,
-    paddingVertical: 5,
-    alignItems: 'center',
-    borderRadius: 6,
-  },
-  activeTabButton: {
-    backgroundColor: colors.isDark ? '#2b2b3b' : '#ffffff',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  tabText: {
-    fontSize: 11,
-    color: colors.textSecondary,
-    fontWeight: '600',
-  },
-  activeTabText: {
-    color: '#2dba4e',
-    fontWeight: '800',
-  },
-  stickySectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 9,
-    paddingHorizontal: 12,
-    backgroundColor: colors.isDark ? '#14141e' : '#f4f6f8',
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: colors.border,
-    marginTop: 10,
-    marginBottom: 2,
-    borderRadius: 8,
-    ...(Platform.OS === 'web' ? { position: 'sticky' as any, top: 0, zIndex: 10 } : {}),
-  },
-  stickySectionTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: colors.text,
-    letterSpacing: 0.2,
-  },
-  stickySectionRight: {
-    alignItems: 'flex-end',
-  },
-  stickySectionLabel: {
-    fontSize: 9,
-    color: colors.textSecondary,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-    marginBottom: 1,
-  },
-  stickySectionAmount: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: colors.text,
-  },
-  txRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    alignItems: 'center',
-  },
-  txLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-    minWidth: 0,
-    marginRight: 12,
-  },
-  iconBadge: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 10,
-    flexShrink: 0,
-  },
-  txMeta: {
-    flex: 1,
-    minWidth: 0,
-    justifyContent: 'center',
-  },
-  txMerchant: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: colors.text,
-  },
-  txDate: {
-    fontSize: 10,
-    color: colors.textTertiary,
-    marginTop: 2,
-  },
-  txRight: {
-    alignItems: 'flex-end',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  txAmount: {
-    fontSize: 13,
-    fontWeight: '800',
-  },
-  txCategory: {
-    fontSize: 10,
-    color: colors.textTertiary,
-    marginTop: 2,
-    textTransform: 'capitalize',
-  },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingVertical: 40,
-  },
-  emptyText: {
-    color: colors.textSecondary,
-    fontSize: 12,
-  },
-  ocrLoaderOverlay: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.85)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  ocrLoaderText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '700',
-    marginTop: 14,
-  },
+const s = StyleSheet.create({
+  overlay: { flex: 1, backgroundColor: 'rgba(7, 17, 13, 0.55)', justifyContent: 'flex-end' },
+  container: { height: '92%', borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingTop: 10, overflow: 'hidden', width: '100%', maxWidth: 640, alignSelf: 'center' },
+  grabber: { width: 40, height: 5, borderRadius: 3, alignSelf: 'center', marginBottom: 12 },
 
-  // Password styles
-  pwdOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.75)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    ...(Platform.OS === 'web' ? { height: '100dvh' as any, width: '100vw' as any, position: 'fixed' as any, top: 0, left: 0, right: 0, bottom: 0 } : {}),
-  },
-  pwdCard: {
-    backgroundColor: colors.isDark ? '#0f0f16' : '#ffffff',
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 20,
-    padding: 24,
-    width: '100%',
-    maxWidth: 340,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
-    elevation: 10,
-  },
-  pwdHeader: {
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  pwdTitle: {
-    fontSize: 18,
-    fontWeight: '900',
-    color: colors.text,
-  },
-  pwdSubtitle: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    textAlign: 'center',
-    lineHeight: 18,
-    marginTop: 6,
-  },
-  pwdInput: {
-    width: '100%',
-    height: 48,
-    backgroundColor: colors.isDark ? '#141420' : '#f0f2f5',
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 12,
-    color: colors.text,
-    fontSize: 14,
-    paddingHorizontal: 16,
-    marginBottom: 20,
-    textAlign: 'center',
-  },
-  pwdButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    width: '100%',
-  },
-  pwdBtn: {
-    flex: 0.47,
-    height: 44,
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  pwdCancelBtn: {
-    backgroundColor: colors.isDark ? '#1a1a24' : '#f0f2f5',
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  pwdSubmitBtn: {
-    backgroundColor: colors.accent,
-  },
-  pwdCancelText: {
-    color: colors.textSecondary,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  pwdSubmitText: {
-    color: '#24292e',
-    fontSize: 13,
-    fontWeight: '800',
-  },
-  consentRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: colors.isDark ? '#14141e' : '#f7f9fa',
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 16,
-    padding: 16,
-    marginTop: 12,
-  },
-  consentTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: colors.text,
-  },
-  consentDesc: {
-    fontSize: 10,
-    color: colors.textSecondary,
-    marginTop: 2,
-    lineHeight: 14,
-  },
-  smsTagsBanner: {
-    marginHorizontal: 16,
-    marginBottom: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-  },
-  smsTagsTitle: {
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
-  smsTagPill: {
-    paddingVertical: 3,
-    paddingHorizontal: 8,
-    borderRadius: 6,
-    borderWidth: 1,
-  },
-  smsTagPillText: {
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
+  brandCard: { height: 176, borderRadius: 26, padding: 18, overflow: 'hidden' },
+  ring: { position: 'absolute', borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)' },
+  brandTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  brandName: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  brandSub: { color: 'rgba(255,255,255,0.78)', fontSize: 12, marginTop: 2 },
+  brandBottom: { flexDirection: 'row', alignItems: 'flex-end', marginTop: 'auto', gap: 8 },
+  brandLabel: { color: 'rgba(255,255,255,0.78)', fontSize: 12 },
+  brandBalance: { color: '#FFFFFF', fontSize: 32, letterSpacing: -0.8, fontVariant: ['tabular-nums'] },
+  ghostBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.16)', alignItems: 'center', justifyContent: 'center' },
+  ghostBtnLg: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.18)', alignItems: 'center', justifyContent: 'center' },
+  solidBtnLg: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
+
+  importRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  importBtn: { flex: 1, height: 44, borderRadius: 14, borderWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  importText: { fontSize: 13, fontWeight: '600' },
+
+  filterRow: { flexDirection: 'row', gap: 8, marginTop: 12, marginBottom: 6 },
+  search: { flex: 1, height: 42, borderRadius: 14, borderWidth: 1, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12 },
+  searchInput: { flex: 1, fontSize: 14, paddingVertical: 0, ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : {}) },
+  segment: { flexDirection: 'row', borderRadius: 14, padding: 3 },
+  segBtn: { height: 36, paddingHorizontal: 12, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  segShadow: { shadowColor: '#0B1F17', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.12, shadowRadius: 3, elevation: 1 },
+  segText: { fontSize: 13, fontWeight: '600' },
+
+  monthHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', paddingHorizontal: 4, paddingTop: 16, paddingBottom: 8 },
+  monthTitle: { fontSize: 15, fontWeight: '700' },
+  monthMeta: { fontSize: 12 },
+
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingLeft: 14, borderLeftWidth: 1, borderRightWidth: 1 },
+  rowBody: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, paddingRight: 14 },
+  rowName: { fontSize: 15, fontWeight: '600' },
+  rowSub: { fontSize: 12, marginTop: 2 },
+  rowAmt: { fontSize: 15, fontWeight: '700', fontVariant: ['tabular-nums'] },
+
+  empty: { alignItems: 'center', paddingTop: 40, paddingHorizontal: 24 },
+  emptyIcon: { width: 52, height: 52, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  emptyTitle: { fontSize: 16, fontWeight: '700', marginTop: 12 },
+  emptyText: { fontSize: 13, marginTop: 4, textAlign: 'center' },
+
+  workingOverlay: { ...(StyleSheet.absoluteFill as object), backgroundColor: 'rgba(7, 17, 13, 0.55)', alignItems: 'center', justifyContent: 'center', padding: 32 },
+  workingCard: { borderRadius: 24, paddingVertical: 28, paddingHorizontal: 24, alignItems: 'center', minWidth: 240 },
+  workingText: { fontSize: 15, fontWeight: '600', marginTop: 14, textAlign: 'center' },
+
+  sheetIcon: { width: 52, height: 52, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+  sheetTitle: { fontSize: 22, letterSpacing: -0.4, marginTop: 16 },
+  sheetText: { fontSize: 15, lineHeight: 22, marginTop: 6 },
+  sheetPrimary: { height: 54, borderRadius: 27, alignItems: 'center', justifyContent: 'center', marginTop: 22 },
+  sheetPrimaryText: { fontSize: 15, fontWeight: '700' },
+  sheetSecondary: { height: 54, borderRadius: 27, borderWidth: 1, alignItems: 'center', justifyContent: 'center', marginTop: 10 },
+  sheetSecondaryText: { fontSize: 15, fontWeight: '600' },
+  pwdInput: { height: 52, borderRadius: 16, borderWidth: 1, paddingHorizontal: 16, fontSize: 16, marginTop: 18, ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : {}) },
+
+  sheetHeadRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
+  optTitle: { fontSize: 16, fontWeight: '700' },
+  optSub: { fontSize: 12, marginTop: 2 },
+  optGroup: { borderWidth: 1, borderRadius: 20, overflow: 'hidden' },
+  optRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 16, paddingVertical: 14, minHeight: 56, borderBottomWidth: StyleSheet.hairlineWidth },
+  optLabel: { flex: 1, fontSize: 15, fontWeight: '600' },
+  removeRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 16, height: 56, borderRadius: 20, borderWidth: 1, marginTop: 12 },
 });

@@ -27,6 +27,7 @@ import {
 import { getAppCurrentVersion } from '../services/updateService';
 import { authService } from '../services/authService';
 import { navigationRef } from '../navigation/navigationRef';
+import { BrandWordmark } from './BrandWordmark';
 
 const FOREST = '#0B3D2C';
 const FOREST_RAISED = '#124B37';
@@ -254,9 +255,7 @@ export const AppSidebarDrawer: React.FC = () => {
               <View style={styles.logoTile}>
                 <Image source={require('../../assets/insideicon.png')} style={styles.logoImg} resizeMode="cover" />
               </View>
-              <Text style={[styles.brand, { fontFamily: display, fontWeight: display ? undefined : '800' }]}>
-                Regent <Text style={{ color: LIME }}>Money</Text>
-              </Text>
+              <BrandWordmark size={18} onDark />
             </View>
 
             <Pressable

@@ -232,7 +232,7 @@ const PressableScale: React.FC<{
       onPressOut={() => {
         scale.value = withSpring(1, { damping: 15, stiffness: 320 });
       }}
-      accessibilityRole={onPress ? 'button' : undefined}
+      accessibilityRole={Platform.OS === 'web' ? undefined : (onPress ? 'button' : undefined)}
       accessibilityLabel={accessibilityLabel}
       style={[style, animated]}
     >

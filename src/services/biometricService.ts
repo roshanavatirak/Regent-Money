@@ -21,11 +21,10 @@ class BiometricService {
   async checkBiometrics(): Promise<BiometricCheckResult> {
     if (Platform.OS === 'web') {
       return {
-        available: false,
-        hasHardware: false,
-        isEnrolled: false,
-        biometricType: 'none',
-        errorMessage: 'Biometric authentication is not supported in the web browser preview.',
+        available: true,
+        hasHardware: true,
+        isEnrolled: true,
+        biometricType: 'fingerprint',
       };
     }
 
@@ -87,7 +86,16 @@ class BiometricService {
    */
   async authenticate(promptMessage: string = 'Confirm fingerprint to unlock Regent Money'): Promise<AuthResult> {
     if (Platform.OS === 'web') {
-      // In web browser preview, simulate unlock so user can test UI flows
+      // In web browser preview, simulate unlock via confirm dialog so user can test success and failure
+      if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+        const approved = window.confirm(
+          `[Biometric Verification]\n\n${promptMessage}\n\n• Click OK to simulate SUCCESSFUL biometric scan\n• Click Cancel to simulate FAILED / CANCELLED scan`
+        );
+        return {
+          success: approved,
+          error: approved ? undefined : 'Biometric verification cancelled or unverified',
+        };
+      }
       return { success: true };
     }
 
