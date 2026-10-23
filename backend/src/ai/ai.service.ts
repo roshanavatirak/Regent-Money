@@ -453,10 +453,16 @@ Return ONLY a valid JSON object matching:
       throw new Error('GEMINI_API_KEY is not configured on the backend.');
     }
 
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const todayIso = now.toISOString().split('T')[0];
+
     const base64Data = imageBuffer.toString('base64');
     const systemInstruction = `
 You are an expert AI financial document validator and transaction extractor for Regent Money.
 Your first and most critical duty is to inspect and validate the uploaded image.
+
+Today's reference date is ${todayIso} (Current Year: ${currentYear}).
 
 Carefully evaluate the image and classify it into ONE of these categories:
 1. "selfie_or_portrait": The image contains a human face, selfie, person, portrait, or group photo.
@@ -484,7 +490,7 @@ Carefully evaluate the image and classify it into ONE of these categories:
    - rejectionReason: null
    - transactions: Extract all visible transactions into an array.
      Each transaction must have:
-     * date: string in 'YYYY-MM-DD' format (CRITICAL: extract the exact transaction date shown on the screen or receipt. Do NOT use today's date if a date is present. If year is missing, infer from context or assume current year).
+     * date: string in 'YYYY-MM-DD' format (CRITICAL: extract the exact transaction date shown on the screen or receipt. If the year is not explicitly printed on the screen or receipt, such as '18 Oct' or '17 Oct', you MUST use ${currentYear} as the year, e.g. '${currentYear}-10-18'. Never output past years like 2023 or 2024 for receipts lacking an explicit year).
      * time: string or null (CRITICAL: extract the exact transaction time/timestamp in 24-hour 'HH:mm' or 'HH:mm:ss' format, e.g. '14:32' for 2:32 PM, '09:15', '21:04:12'. Look for timestamps on UPI payment receipts like GPay/PhonePe/Paytm, bank SMS receipts, and app screens. If no time is shown, return null).
      * amount: number (positive value, no commas or currency symbols)
      * type: 'debit' or 'credit' (debit for withdrawal/spend/DR/Paid; credit for deposit/salary/CR/Received)
@@ -515,7 +521,7 @@ Return ONLY a valid JSON object matching this schema:
 }
 `;
 
-    const prompt = 'Validate this image and extract any financial transactions and balance details according to the instructions:';
+    const prompt = `Today is ${todayIso}. Validate this image and extract any financial transactions and balance details according to the instructions (assume year ${currentYear} if no year is written on screen):`;
 
     try {
       const response = await fetch(
@@ -562,8 +568,55 @@ Return ONLY a valid JSON object matching this schema:
         const category = parsed.category || (parsed.isValid ? 'transaction_screenshot' : 'unrelated_image');
         const transactions: OcrTransactionExtracted[] = Array.isArray(parsed.transactions) ? parsed.transactions : [];
 
+        // Safety Net: Sanitize dates so missing years or AI hallucinated past years (like 2023) are clamped to currentYear
+        const MONTH_MAP: Record<string, number> = {
+          jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+          jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12
+        };
+
+        const sanitizedTransactions: OcrTransactionExtracted[] = transactions.map((t) => {
+          let dateStr = (t.date || '').trim();
+          let fixedDate = dateStr;
+
+          const isoMatch = dateStr.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+          if (isoMatch) {
+            let yr = parseInt(isoMatch[1], 10);
+            const mo = parseInt(isoMatch[2], 10);
+            const da = parseInt(isoMatch[3], 10);
+            if (yr < currentYear - 1 || yr > currentYear + 1) {
+              yr = currentYear;
+            }
+            fixedDate = `${yr}-${String(mo).padStart(2, '0')}-${String(da).padStart(2, '0')}`;
+          } else {
+            const textMatch = dateStr.match(/^(\d{1,2})\s*[-/.\s]?\s*([a-zA-Z]+)(?:\s*[-/.\s]?\s*(\d{2,4}))?$/);
+            if (textMatch) {
+              const da = parseInt(textMatch[1], 10);
+              const mName = textMatch[2].toLowerCase().slice(0, 3);
+              const mo = MONTH_MAP[mName] || (now.getMonth() + 1);
+              let yr = textMatch[3] ? parseInt(textMatch[3], 10) : currentYear;
+              if (yr < 100) yr += 2000;
+              if (yr < currentYear - 1 || yr > currentYear + 1) yr = currentYear;
+              fixedDate = `${yr}-${String(mo).padStart(2, '0')}-${String(da).padStart(2, '0')}`;
+            } else {
+              const d = new Date(dateStr);
+              if (!isNaN(d.getTime())) {
+                let yr = d.getFullYear();
+                if (yr < currentYear - 1 || yr > currentYear + 1) yr = currentYear;
+                fixedDate = `${yr}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+              } else {
+                fixedDate = todayIso;
+              }
+            }
+          }
+
+          return {
+            ...t,
+            date: fixedDate,
+          };
+        });
+
         let rejectionReason = parsed.rejectionReason;
-        if (!parsed.isValid || transactions.length === 0) {
+        if (!parsed.isValid || sanitizedTransactions.length === 0) {
           if (!rejectionReason) {
             if (category === 'selfie_or_portrait') {
               rejectionReason = 'The uploaded image appears to be a personal photo or selfie. Please upload a clear screenshot of your bank transactions or UPI receipt.';
@@ -580,8 +633,8 @@ Return ONLY a valid JSON object matching this schema:
         let finalBal = parsed.finalDetectedBalance;
         if (finalBal === undefined || finalBal === null) {
           // If statement table has balanceAfter, find the latest row with a balance
-          for (let i = transactions.length - 1; i >= 0; i--) {
-            const b = transactions[i].balanceAfter;
+          for (let i = sanitizedTransactions.length - 1; i >= 0; i--) {
+            const b = sanitizedTransactions[i].balanceAfter;
             if (typeof b === 'number' && !isNaN(b)) {
               finalBal = b;
               break;
@@ -590,11 +643,11 @@ Return ONLY a valid JSON object matching this schema:
         }
 
         return {
-          isValid: !!parsed.isValid && transactions.length > 0,
+          isValid: !!parsed.isValid && sanitizedTransactions.length > 0,
           category,
-          rejectionReason: (parsed.isValid && transactions.length > 0) ? null : rejectionReason,
+          rejectionReason: (parsed.isValid && sanitizedTransactions.length > 0) ? null : rejectionReason,
           finalDetectedBalance: typeof finalBal === 'number' ? finalBal : null,
-          transactions,
+          transactions: sanitizedTransactions,
         };
       }
     } catch (err: any) {

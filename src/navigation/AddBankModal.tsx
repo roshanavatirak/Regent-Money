@@ -455,29 +455,29 @@ export const AddBankModal: React.FC<AddBankModalProps> = ({ visible, onClose, on
     <Modal visible={visible} transparent animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={back}>
       <View style={s.backdrop}>
         <Pressable style={StyleSheet.absoluteFill} onPress={close} accessibilityLabel="Close" />
-        <KeyboardAvoidingView behavior="padding" pointerEvents="box-none" style={{ width: '100%' }}>
-          <View style={[s.sheet, { backgroundColor: pageBg, height: height * 0.92 }]}>
-            <View style={[s.grabber, { backgroundColor: isDark ? 'rgba(255,255,255,0.18)' : '#C9D4CE' }]} />
+        <View style={[s.sheet, { backgroundColor: pageBg, height: height * 0.92 }]}>
+          <View style={[s.grabber, { backgroundColor: isDark ? 'rgba(255,255,255,0.18)' : '#C9D4CE' }]} />
+          <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
             {step === 1 ? step1 : step2}
+          </KeyboardAvoidingView>
 
-            {done && bank && (
-              <Animated.View entering={FadeIn.duration(150)} style={[StyleSheet.absoluteFill, s.doneWrap, { backgroundColor: pageBg }]}>
-                <Animated.View entering={ZoomIn.springify().damping(12)}>
-                  <View style={[s.doneLogo, { borderColor: accent }]}>
-                    <BankIcon code={bank.code} name={bank.name} size={72} />
-                  </View>
-                  <View style={[s.doneCheck, { backgroundColor: accent, borderColor: pageBg }]}>
-                    <Feather name="check" size={16} color={accentInk} />
-                  </View>
-                </Animated.View>
-                <Text style={[s.doneTitle, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}>
-                  Account linked
-                </Text>
-                <Text style={[s.doneSub, { color: muted }]}>{displayName} •• {suffix}</Text>
+          {done && bank && (
+            <Animated.View entering={FadeIn.duration(150)} style={[StyleSheet.absoluteFill, s.doneWrap, { backgroundColor: pageBg }]}>
+              <Animated.View entering={ZoomIn.springify().damping(12)}>
+                <View style={[s.doneLogo, { borderColor: accent }]}>
+                  <BankIcon code={bank.code} name={bank.name} size={72} />
+                </View>
+                <View style={[s.doneCheck, { backgroundColor: accent, borderColor: pageBg }]}>
+                  <Feather name="check" size={16} color={accentInk} />
+                </View>
               </Animated.View>
-            )}
-          </View>
-        </KeyboardAvoidingView>
+              <Text style={[s.doneTitle, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}>
+                Account linked
+              </Text>
+              <Text style={[s.doneSub, { color: muted }]}>{displayName} •• {suffix}</Text>
+            </Animated.View>
+          )}
+        </View>
       </View>
     </Modal>
   );

@@ -16,7 +16,7 @@ import {
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useTheme } from '../store';
+import { useTheme, useTransactionStore } from '../store';
 import { authService } from '../services/authService';
 import { syncService } from '../services/syncService';
 import { getBackendUrl } from '../config/api';
@@ -83,11 +83,30 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
   const { height: windowHeight } = useWindowDimensions();
   const styles = useMemo(() => getStyles(colors, isDark), [colors, isDark]);
 
+  const existingTransactions = useTransactionStore((s) => s.transactions);
   const [items, setItems] = useState<EditableTransactionItem[]>([]);
   const [updateAccountBalance, setUpdateAccountBalance] = useState<boolean>(true);
   const [useExactClosingBalance, setUseExactClosingBalance] = useState<boolean>(false);
   const [statementBalance, setStatementBalance] = useState<string>('');
   const [saving, setSaving] = useState<boolean>(false);
+
+  const checkIsPossibleDuplicate = (item: EditableTransactionItem): boolean => {
+    const amt = parseFloat(item.amount);
+    if (isNaN(amt) || amt <= 0) return false;
+    const normMerchant = (item.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!normMerchant) return false;
+
+    return existingTransactions.some((tx) => {
+      if (Math.abs(Number(tx.amount) - amt) >= 0.01) return false;
+      const txNorm = (tx.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (txNorm !== normMerchant) return false;
+
+      const txDate = new Date(Number(tx.timestamp));
+      if (isNaN(txDate.getTime())) return false;
+      const txDay = `${txDate.getFullYear()}-${String(txDate.getMonth() + 1).padStart(2, '0')}-${String(txDate.getDate()).padStart(2, '0')}`;
+      return item.date.includes(txDay) || txDay.includes(item.date.trim());
+    });
+  };
 
   useEffect(() => {
     if (visible && rawTransactions) {
@@ -253,41 +272,85 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
           let itemTimestamp: number | undefined = undefined;
           const trimmedDate = it.date.trim();
           const trimmedTime = it.time.trim();
+          let normalizedDate = trimmedDate;
+
           if (trimmedDate) {
-            const parts = trimmedDate.split(/[-/.]/).map((v) => parseInt(v, 10));
-            if (parts.length === 3) {
-              const y = parts[0] > 1000 ? parts[0] : parts[2];
-              const m = parts[0] > 1000 ? parts[1] : parts[1];
-              const d = parts[0] > 1000 ? parts[2] : parts[0];
-              if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
-                let h = 12;
-                let min = 0;
-                if (trimmedTime) {
-                  const ampmMatch = trimmedTime.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?$/i);
-                  if (ampmMatch) {
-                    let parsedH = parseInt(ampmMatch[1], 10);
-                    const parsedM = parseInt(ampmMatch[2], 10);
-                    const ampm = ampmMatch[3]?.toLowerCase();
-                    if (ampm === 'pm' && parsedH < 12) parsedH += 12;
-                    if (ampm === 'am' && parsedH === 12) parsedH = 0;
-                    if (!isNaN(parsedH) && !isNaN(parsedM)) {
-                      h = parsedH;
-                      min = parsedM;
-                    }
-                  }
-                }
-                const computed = new Date(y, m - 1, d, h, min, 0);
-                if (!isNaN(computed.getTime())) {
-                  itemTimestamp = computed.getTime();
+            const now = new Date();
+            const currentYear = now.getFullYear();
+            let y = currentYear;
+            let m = now.getMonth() + 1;
+            let d = now.getDate();
+
+            const isoMatch = trimmedDate.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+            const dmyMatch = trimmedDate.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/);
+            const textMatch = trimmedDate.match(/^(\d{1,2})\s*[-/.\s]?\s*([a-zA-Z]+)(?:\s*[-/.\s]?\s*(\d{2,4}))?$/);
+            const MONTH_MAP: Record<string, number> = {
+              jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+              jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
+            };
+
+            if (isoMatch) {
+              y = parseInt(isoMatch[1], 10);
+              m = parseInt(isoMatch[2], 10);
+              d = parseInt(isoMatch[3], 10);
+            } else if (dmyMatch) {
+              d = parseInt(dmyMatch[1], 10);
+              m = parseInt(dmyMatch[2], 10);
+              y = parseInt(dmyMatch[3], 10);
+              if (y < 100) y += 2000;
+            } else if (textMatch) {
+              d = parseInt(textMatch[1], 10);
+              const mStr = textMatch[2].toLowerCase().slice(0, 3);
+              m = MONTH_MAP[mStr] || (now.getMonth() + 1);
+              if (textMatch[3]) {
+                let yVal = parseInt(textMatch[3], 10);
+                if (yVal < 100) yVal += 2000;
+                y = yVal;
+              } else {
+                y = currentYear;
+              }
+            } else {
+              const dt = new Date(trimmedDate);
+              if (!isNaN(dt.getTime())) {
+                y = dt.getFullYear();
+                m = dt.getMonth() + 1;
+                d = dt.getDate();
+              }
+            }
+
+            // Safety clamp on year: default to current year if model drifted into distant past or future
+            if (y < currentYear - 1 || y > currentYear + 1) {
+              y = currentYear;
+            }
+
+            normalizedDate = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+
+            let h = 12;
+            let min = 0;
+            if (trimmedTime) {
+              const ampmMatch = trimmedTime.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?$/i);
+              if (ampmMatch) {
+                let parsedH = parseInt(ampmMatch[1], 10);
+                const parsedM = parseInt(ampmMatch[2], 10);
+                const ampm = ampmMatch[3]?.toLowerCase();
+                if (ampm === 'pm' && parsedH < 12) parsedH += 12;
+                if (ampm === 'am' && parsedH === 12) parsedH = 0;
+                if (!isNaN(parsedH) && !isNaN(parsedM)) {
+                  h = parsedH;
+                  min = parsedM;
                 }
               }
+            }
+            const computed = new Date(y, m - 1, d, h, min, 0);
+            if (!isNaN(computed.getTime())) {
+              itemTimestamp = computed.getTime();
             }
           }
 
           return {
             amount: parseFloat(it.amount),
             type: it.type,
-            date: trimmedDate,
+            date: normalizedDate,
             time: trimmedTime || null,
             timestamp: itemTimestamp,
             merchant: it.merchant.trim(),
@@ -544,8 +607,16 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
                 <View key={item.id} style={styles.itemCard}>
                   {/* Item Header & Delete */}
                   <View style={styles.itemHeader}>
-                    <View style={styles.indexBadge}>
-                      <Text style={styles.indexText}>#{idx + 1}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <View style={styles.indexBadge}>
+                        <Text style={styles.indexText}>#{idx + 1}</Text>
+                      </View>
+                      {checkIsPossibleDuplicate(item) && (
+                        <View style={styles.duplicateWarningBadge}>
+                          <Feather name="alert-triangle" size={11} color="#d97706" />
+                          <Text style={styles.duplicateWarningText}>Matches existing</Text>
+                        </View>
+                      )}
                     </View>
 
                     {/* Debit / Credit Switcher */}
@@ -1077,6 +1148,22 @@ const getStyles = (colors: any, isDark: boolean) =>
       fontSize: 11,
       fontWeight: '800',
       color: colors.textSecondary || '#8E8E9F',
+    },
+    duplicateWarningBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      backgroundColor: isDark ? 'rgba(245, 158, 11, 0.15)' : '#fef3c7',
+      paddingHorizontal: 7,
+      paddingVertical: 3,
+      borderRadius: 6,
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(245, 158, 11, 0.3)' : '#fde68a',
+    },
+    duplicateWarningText: {
+      fontSize: 10,
+      fontWeight: '700',
+      color: isDark ? '#fbbf24' : '#b45309',
     },
     typeSwitcher: {
       flexDirection: 'row',

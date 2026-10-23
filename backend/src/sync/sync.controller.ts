@@ -3,6 +3,7 @@ import { SyncService } from './sync.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { OcrSyncDto } from './dto/ocr-sync.dto';
 import { ManualTransactionDto } from './dto/manual-transaction.dto';
+import { ConfirmDuplicateDto } from './dto/confirm-duplicate.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 
 @Controller('sync')
@@ -118,6 +119,16 @@ export class SyncController {
   ) {
     const userId = req.user.id;
     return this.syncService.ingestDirectSms(userId, body);
+  }
+
+  @Post('confirm-duplicate')
+  @HttpCode(HttpStatus.OK)
+  async confirmDuplicate(
+    @Req() req: any,
+    @Body() body: ConfirmDuplicateDto,
+  ) {
+    const userId = req.user.id;
+    return this.syncService.confirmDuplicateTransaction(userId, body);
   }
 
   @Post('manual-transaction')

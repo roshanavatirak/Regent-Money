@@ -46,3 +46,6 @@ website/
 
 # zip archives
 *.zip
+
+# scratch
+scratch/

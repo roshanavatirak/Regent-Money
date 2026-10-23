@@ -155,7 +155,10 @@ export const syncService = {
         const txDate = new Date(Number(t.timestamp) || 0);
         const dayKey = `${txDate.getFullYear()}-${txDate.getMonth()}-${txDate.getDate()}`;
         const normMerchant = (t.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-        const sig = `sig:${t.bankProfileId ?? t.bank_profile_id}_${Math.round(parseFloat(t.amount || 0) * 100)}_${normMerchant}_${dayKey}`;
+        // If exact minute/hour is present, differentiate by minute so repeat payments at different times of day are preserved
+        const hasTime = txDate.getHours() !== 12 || txDate.getMinutes() !== 0 || txDate.getSeconds() !== 0;
+        const timeKey = hasTime ? `${txDate.getHours()}:${txDate.getMinutes()}` : 'default';
+        const sig = `sig:${t.bankProfileId ?? t.bank_profile_id}_${Math.round(parseFloat(t.amount || 0) * 100)}_${normMerchant}_${dayKey}_${timeKey}`;
 
         if (seenTx.has(sig)) continue;
         seenTx.add(sig);

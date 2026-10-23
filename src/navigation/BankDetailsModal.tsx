@@ -132,6 +132,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [isSyncingSms, setIsSyncingSms] = useState(false);
+  const [hasEntered, setHasEntered] = useState(false);
 
   useEffect(() => {
     if (!visible) {
@@ -140,6 +141,12 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
       setSelectedTx(null);
       setSearchQuery('');
       setActiveTab('all');
+      setHasEntered(false);
+    } else {
+      const timer = setTimeout(() => {
+        setHasEntered(true);
+      }, 550);
+      return () => clearTimeout(timer);
     }
   }, [visible]);
 
@@ -497,7 +504,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
   const renderHeader = () => (
     <View>
       {/* Brand card */}
-      <Animated.View entering={FadeInDown.duration(380)} style={[s.brandCard, { backgroundColor: brand }]}>
+      <Animated.View entering={hasEntered ? undefined : FadeInDown.duration(380)} style={[s.brandCard, { backgroundColor: brand }]}>
         <View pointerEvents="none" style={[s.ring, { width: 220, height: 220, borderRadius: 110, right: -80, top: -100 }]} />
         <View pointerEvents="none" style={[s.ring, { width: 140, height: 140, borderRadius: 70, right: -40, top: -60, borderColor: 'rgba(255,255,255,0.2)' }]} />
         <View style={s.brandTop}>
@@ -527,7 +534,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
       </Animated.View>
 
       {/* Imports */}
-      <Animated.View entering={FadeInDown.delay(80).duration(380)} style={s.importRow}>
+      <Animated.View entering={hasEntered ? undefined : FadeInDown.delay(80).duration(380)} style={s.importRow}>
         <Pressable onPress={importScreenshot} style={({ pressed }) => [s.importBtn, { backgroundColor: surface, borderColor: line }, pressed && { opacity: 0.7 }]}>
           <Feather name="image" size={16} color={ink} />
           <Text style={[s.importText, { color: ink }]}>Import screenshot</Text>
@@ -539,7 +546,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
       </Animated.View>
 
       {/* Search + filter */}
-      <Animated.View entering={FadeInDown.delay(140).duration(380)} style={s.filterRow}>
+      <Animated.View entering={hasEntered ? undefined : FadeInDown.delay(140).duration(380)} style={s.filterRow}>
         <View style={[s.search, { backgroundColor: surface, borderColor: line }]}>
           <Feather name="search" size={16} color={muted} />
           <TextInput
@@ -593,7 +600,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
               contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: Math.max(insets.bottom, 16) + 24 }}
-              ListHeaderComponent={renderHeader}
+              ListHeaderComponent={renderHeader()}
               ListEmptyComponent={
                 isRevalidatingIncome ? (
                   <ActivityIndicator color={isDark ? LIME : FOREST} style={{ marginTop: 32 }} />

@@ -13,10 +13,12 @@ import { BudgetTransactionExclusion } from './entities/budget-exclusion.entity';
 import { User } from '../users/entities/user.entity';
 import { OcrSyncDto } from './dto/ocr-sync.dto';
 import { ManualTransactionDto } from './dto/manual-transaction.dto';
+import { ConfirmDuplicateDto } from './dto/confirm-duplicate.dto';
 import { PDFExtract, PDFExtractOptions } from 'pdf.js-extract';
 import { AiService } from '../ai/ai.service';
 import { parseSMS, detectBankFromSender } from './sms-parser.util';
 import { RedisService } from '../redis/redis.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class SyncService implements OnModuleInit {
@@ -46,6 +48,7 @@ export class SyncService implements OnModuleInit {
     private readonly dataSource: DataSource,
     private readonly aiService: AiService,
     private readonly redisService: RedisService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   async onModuleInit() {
@@ -292,7 +295,10 @@ export class SyncService implements OnModuleInit {
 
     for (const tx of rawTransactions) {
       let isDuplicate = false;
-      if (tx.smsId && tx.smsId.startsWith('ref_')) {
+      if (tx.smsId && tx.smsId.startsWith('user_confirmed_')) {
+        // Explicitly user-confirmed repeat transaction: NEVER drop or purge
+        isDuplicate = false;
+      } else if (tx.smsId && tx.smsId.startsWith('ref_')) {
         const refKey = `ref_${tx.bankProfileId}_${tx.smsId}`;
         if (seenTx.has(refKey)) {
           isDuplicate = true;
@@ -773,27 +779,55 @@ export class SyncService implements OnModuleInit {
         }
         if (!dateStr) return Date.now();
 
-        let year: number, month: number, day: number;
-        const parts = dateStr.trim().split(/[-/.]/);
-        if (parts.length === 3) {
-          if (parts[0].length === 4) {
-            year = parseInt(parts[0], 10);
-            month = parseInt(parts[1], 10) - 1;
-            day = parseInt(parts[2], 10);
+        const now = new Date();
+        const currentYear = now.getFullYear();
+
+        let year = currentYear;
+        let month = now.getMonth();
+        let day = now.getDate();
+
+        const trimmed = dateStr.trim();
+        const isoMatch = trimmed.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+        const dmyMatch = trimmed.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/);
+        const textMatch = trimmed.match(/^(\d{1,2})\s*[-/.\s]?\s*([a-zA-Z]+)(?:\s*[-/.\s]?\s*(\d{2,4}))?$/);
+
+        const MONTH_MAP: Record<string, number> = {
+          jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+          jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+        };
+
+        if (isoMatch) {
+          year = parseInt(isoMatch[1], 10);
+          month = parseInt(isoMatch[2], 10) - 1;
+          day = parseInt(isoMatch[3], 10);
+        } else if (dmyMatch) {
+          day = parseInt(dmyMatch[1], 10);
+          month = parseInt(dmyMatch[2], 10) - 1;
+          year = parseInt(dmyMatch[3], 10);
+          if (year < 100) year += 2000;
+        } else if (textMatch) {
+          day = parseInt(textMatch[1], 10);
+          const mStr = textMatch[2].toLowerCase().slice(0, 3);
+          month = MONTH_MAP[mStr] !== undefined ? MONTH_MAP[mStr] : now.getMonth();
+          if (textMatch[3]) {
+            let yVal = parseInt(textMatch[3], 10);
+            if (yVal < 100) yVal += 2000;
+            year = yVal;
           } else {
-            year = parts[2].length === 2 ? 2000 + parseInt(parts[2], 10) : parseInt(parts[2], 10);
-            month = parseInt(parts[1], 10) - 1;
-            day = parseInt(parts[0], 10);
+            year = currentYear;
           }
         } else {
-          const d = new Date(dateStr);
+          const d = new Date(trimmed);
           if (!isNaN(d.getTime())) {
             year = d.getFullYear();
             month = d.getMonth();
             day = d.getDate();
-          } else {
-            return Date.now();
           }
+        }
+
+        // Safety clamp: if older than currentYear - 1 or in future, default to currentYear
+        if (year < currentYear - 1 || year > currentYear + 1) {
+          year = currentYear;
         }
 
         let hours = 12;
@@ -837,36 +871,36 @@ export class SyncService implements OnModuleInit {
         const itemSmsId = item.smsId || (itemRef ? `ref_${itemRef}` : undefined);
         const normItemMerchant = (item.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
+        const itemDate = new Date(exactTimestamp);
+        const hasExplicitItemTime = itemDate.getHours() !== 12 || itemDate.getMinutes() !== 0 || itemDate.getSeconds() !== 0;
+
         if (item.type === 'debit') {
-          const isDuplicate = existingTxs.some((tx) => {
+          const checkDebitDuplicate = (tx: Transaction): boolean => {
             if (itemRef && (tx.smsId === `ref_${itemRef}` || tx.smsId === itemRef)) return true;
             if (itemSmsId && tx.smsId && tx.smsId === itemSmsId) return true;
             if (itemRef && tx.smsId && tx.smsId.startsWith('ref_') && tx.smsId !== `ref_${itemRef}`) return false;
 
             const txTime = Number(tx.timestamp);
             const sameAmount = Math.abs(tx.amount - amount) < 0.01;
-            const isSameDay = (txTime >= startOfDay && txTime <= endOfDay) || Math.abs(txTime - parsedDate.getTime()) < 86400000;
+            // Strict calendar day check: different calendar days are NEVER duplicates
+            const isSameDay = txTime >= startOfDay && txTime <= endOfDay;
             if (!sameAmount || !isSameDay) return false;
 
             const normTxMerchant = (tx.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
             if (normTxMerchant && normItemMerchant && normTxMerchant !== normItemMerchant) return false;
 
-            return true;
-          }) || newTransactions.some((tx) => {
-            if (itemRef && (tx.smsId === `ref_${itemRef}` || tx.smsId === itemRef)) return true;
-            if (itemSmsId && tx.smsId && tx.smsId === itemSmsId) return true;
-            if (itemRef && tx.smsId && tx.smsId.startsWith('ref_') && tx.smsId !== `ref_${itemRef}`) return false;
-
-            const txTime = Number(tx.timestamp);
-            const sameAmount = Math.abs(tx.amount - amount) < 0.01;
-            const isSameDay = (txTime >= startOfDay && txTime <= endOfDay) || Math.abs(txTime - parsedDate.getTime()) < 86400000;
-            if (!sameAmount || !isSameDay) return false;
-
-            const normTxMerchant = (tx.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-            if (normTxMerchant && normItemMerchant && normTxMerchant !== normItemMerchant) return false;
+            // If both transactions have distinct times (to the minute) and differ by > 2 minutes, NOT a duplicate
+            const txDate = new Date(txTime);
+            const hasExplicitTxTime = txDate.getHours() !== 12 || txDate.getMinutes() !== 0 || txDate.getSeconds() !== 0;
+            if (hasExplicitTxTime && hasExplicitItemTime) {
+              const diffMinutes = Math.abs(txTime - exactTimestamp) / 60000;
+              if (diffMinutes > 2) return false;
+            }
 
             return true;
-          });
+          };
+
+          const isDuplicate = existingTxs.some(checkDebitDuplicate) || newTransactions.some(checkDebitDuplicate);
 
           if (!isDuplicate) {
             const txId = 'tx_ocr_' + Math.random().toString(36).substr(2, 9);
@@ -887,29 +921,50 @@ export class SyncService implements OnModuleInit {
             newTransactions.push(newTx);
             addedTransactionsCount++;
             netBalanceChange -= amount;
+          } else {
+            // Do NOT silently drop! Dispatch an interactive duplicate alert under 'To review'
+            const timeStr = new Date(exactTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            this.notificationsService.sendNotification(userId, {
+              title: `Potential Duplicate: ₹${amount}`,
+              body: `We noticed another ₹${amount} at ${item.merchant || 'Merchant'} around ${timeStr} in your uploaded statement. Add this transaction?`,
+              type: 'review',
+              payload: {
+                action: 'duplicate_transaction_review',
+                source: 'upload',
+                transactionData: {
+                  amount,
+                  type: 'debit',
+                  merchant: item.merchant || 'Merchant',
+                  category: item.category || 'miscellaneous',
+                  timestamp: exactTimestamp,
+                  bankProfileId: isUnassigned ? null : data.bankProfileId,
+                  smsId: itemSmsId || 'ocr_duplicate_review',
+                },
+              },
+            }).catch((err) => this.logger.warn(`Failed to dispatch duplicate alert: ${err.message}`));
           }
         } else if (item.type === 'credit') {
-          const isDuplicate = existingIncome.some((inc) => {
+          const checkCreditDuplicate = (inc: IncomeRecord): boolean => {
             const incTime = Number(inc.timestamp);
             const sameAmount = Math.abs(inc.amount - amount) < 0.01;
-            const isSameDay = (incTime >= startOfDay && incTime <= endOfDay) || Math.abs(incTime - parsedDate.getTime()) < 86400000;
+            // Strict calendar day check: different calendar days are NEVER duplicates
+            const isSameDay = incTime >= startOfDay && incTime <= endOfDay;
             if (!sameAmount || !isSameDay) return false;
 
             const normIncSource = (inc.source || '').toLowerCase().replace(/[^a-z0-9]/g, '');
             if (normIncSource && normItemMerchant && normIncSource !== normItemMerchant) return false;
 
-            return true;
-          }) || newIncomeRecords.some((inc) => {
-            const incTime = Number(inc.timestamp);
-            const sameAmount = Math.abs(inc.amount - amount) < 0.01;
-            const isSameDay = (incTime >= startOfDay && incTime <= endOfDay) || Math.abs(incTime - parsedDate.getTime()) < 86400000;
-            if (!sameAmount || !isSameDay) return false;
-
-            const normIncSource = (inc.source || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-            if (normIncSource && normItemMerchant && normIncSource !== normItemMerchant) return false;
+            const incDate = new Date(incTime);
+            const hasExplicitIncTime = incDate.getHours() !== 12 || incDate.getMinutes() !== 0 || incDate.getSeconds() !== 0;
+            if (hasExplicitIncTime && hasExplicitItemTime) {
+              const diffMinutes = Math.abs(incTime - exactTimestamp) / 60000;
+              if (diffMinutes > 2) return false;
+            }
 
             return true;
-          });
+          };
+
+          const isDuplicate = existingIncome.some(checkCreditDuplicate) || newIncomeRecords.some(checkCreditDuplicate);
 
           if (!isDuplicate) {
             const incId = 'income_ocr_' + Math.random().toString(36).substr(2, 9);
@@ -926,6 +981,25 @@ export class SyncService implements OnModuleInit {
             newIncomeRecords.push(newInc);
             addedIncomeCount++;
             netBalanceChange += amount;
+          } else {
+            const timeStr = new Date(exactTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            this.notificationsService.sendNotification(userId, {
+              title: `Potential Duplicate: ₹${amount}`,
+              body: `We noticed another credit of ₹${amount} from ${item.merchant || 'Direct Credit'} around ${timeStr}. Add this income?`,
+              type: 'review',
+              payload: {
+                action: 'duplicate_transaction_review',
+                source: 'upload',
+                transactionData: {
+                  amount,
+                  type: 'credit',
+                  merchant: item.merchant || 'Direct Credit',
+                  timestamp: exactTimestamp,
+                  bankProfileId: isUnassigned ? null : data.bankProfileId,
+                  smsId: itemSmsId || 'ocr_duplicate_review',
+                },
+              },
+            }).catch((err) => this.logger.warn(`Failed to dispatch duplicate alert: ${err.message}`));
           }
         }
       }
@@ -1509,6 +1583,8 @@ export class SyncService implements OnModuleInit {
         }
       }
 
+      await this.invalidateUserSyncCache(userId);
+
       return {
         success: true,
         type: 'debit',
@@ -1541,6 +1617,8 @@ export class SyncService implements OnModuleInit {
           updatedBalance = bank.currentBalance;
         }
       }
+
+      await this.invalidateUserSyncCache(userId);
 
       return {
         success: true,
@@ -2164,7 +2242,27 @@ export class SyncService implements OnModuleInit {
       });
 
       if (isDuplicate) {
-        return { success: true, duplicate: true, message: 'Transaction already recorded or intentionally deleted' };
+        // Dispatch interactive review notification rather than dropping silently
+        const timeStr = new Date(txTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        this.notificationsService.sendNotification(userId, {
+          title: `Potential Duplicate: ₹${parsed.amount}`,
+          body: `We detected another ₹${parsed.amount} payment to ${parsed.merchant || 'Merchant'} around ${timeStr}. Was this a second payment?`,
+          type: 'review',
+          payload: {
+            action: 'duplicate_transaction_review',
+            source: 'sms',
+            transactionData: {
+              amount: parsed.amount,
+              type: 'debit',
+              merchant: parsed.merchant || 'Merchant',
+              timestamp: txTime,
+              bankProfileId: matchedBank ? matchedBank.id : null,
+              smsId: directSmsId,
+            },
+          },
+        }).catch((err) => this.logger.warn(`Failed to dispatch duplicate alert: ${err.message}`));
+
+        return { success: true, duplicate: true, message: 'Potential duplicate queued for review' };
       }
 
       const txId = 'tx_direct_' + Math.random().toString(36).substr(2, 9);
@@ -2221,7 +2319,26 @@ export class SyncService implements OnModuleInit {
       });
 
       if (isDuplicate) {
-        return { success: true, duplicate: true, message: 'Income already recorded or intentionally deleted' };
+        const timeStr = new Date(txTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        this.notificationsService.sendNotification(userId, {
+          title: `Potential Duplicate: ₹${parsed.amount}`,
+          body: `We detected another ₹${parsed.amount} credit from ${parsed.merchant || 'Direct Credit'} around ${timeStr}. Add this income?`,
+          type: 'review',
+          payload: {
+            action: 'duplicate_transaction_review',
+            source: 'sms',
+            transactionData: {
+              amount: parsed.amount,
+              type: 'credit',
+              merchant: parsed.merchant || 'Direct Credit',
+              timestamp: txTime,
+              bankProfileId: matchedBank ? matchedBank.id : null,
+              smsId: directSmsId,
+            },
+          },
+        }).catch((err) => this.logger.warn(`Failed to dispatch duplicate alert: ${err.message}`));
+
+        return { success: true, duplicate: true, message: 'Potential duplicate queued for review' };
       }
 
       const incId = 'income_direct_' + Math.random().toString(36).substr(2, 9);
@@ -2342,5 +2459,90 @@ export class SyncService implements OnModuleInit {
     }
     await this.invalidateUserSyncCache(userId);
     return { success: true, restoredId: data.transactionId };
+  }
+
+  /**
+   * Interactively resolves a potential duplicate transaction flagged during SMS, OCR, or Statement processing.
+   */
+  async confirmDuplicateTransaction(userId: string, dto: ConfirmDuplicateDto) {
+    this.logger.log(`User ${userId} resolving duplicate notification ${dto.notificationId} with decision: ${dto.decision}`);
+
+    if (dto.decision === 'add') {
+      const txData = dto.transactionData;
+      if (!txData || !txData.amount || !txData.type) {
+        throw new BadRequestException('Transaction details are required to confirm adding this transaction.');
+      }
+
+      const amount = parseFloat(String(txData.amount));
+      const txTime = txData.timestamp && !isNaN(Number(txData.timestamp)) ? Number(txData.timestamp) : Date.now();
+      const uniqueConfirmedSmsId = `user_confirmed_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+
+      let bank: BankProfile | null = null;
+      if (txData.bankProfileId) {
+        bank = await this.bankProfileRepository.findOne({
+          where: { id: txData.bankProfileId, userId, isDeleted: false },
+        });
+      }
+
+      if (txData.type === 'debit') {
+        const category = txData.category || (txData.merchant ? await this.classifyCategory(txData.merchant, userId) : 'miscellaneous');
+        const txId = 'tx_confirmed_' + Math.random().toString(36).substr(2, 9);
+        const newTx = this.transactionRepository.create({
+          id: txId,
+          userId,
+          amount,
+          category,
+          merchant: txData.merchant || 'Merchant',
+          timestamp: txTime,
+          bankProfileId: bank ? bank.id : null,
+          smsId: uniqueConfirmedSmsId,
+          isAnomaly: amount > 5000,
+          status: 'cleared',
+          updatedAt: Date.now(),
+          isDeleted: false,
+        });
+        await this.transactionRepository.save(newTx);
+
+        if (bank) {
+          bank.currentBalance = Math.round((parseFloat(String(bank.currentBalance || 0)) - amount) * 100) / 100;
+          bank.lastSyncTimestamp = Date.now();
+          bank.updatedAt = Date.now();
+          await this.bankProfileRepository.save(bank);
+        }
+      } else {
+        const incId = 'income_confirmed_' + Math.random().toString(36).substr(2, 9);
+        const newInc = this.incomeRecordRepository.create({
+          id: incId,
+          userId,
+          amount,
+          source: txData.merchant || 'Direct Credit',
+          category: 'Other Income',
+          timestamp: txTime,
+          bankProfileId: bank ? bank.id : null,
+          updatedAt: Date.now(),
+          isDeleted: false,
+        });
+        await this.incomeRecordRepository.save(newInc);
+
+        if (bank) {
+          bank.currentBalance = Math.round((parseFloat(String(bank.currentBalance || 0)) + amount) * 100) / 100;
+          bank.lastSyncTimestamp = Date.now();
+          bank.updatedAt = Date.now();
+          await this.bankProfileRepository.save(bank);
+        }
+      }
+
+      await this.invalidateUserSyncCache(userId);
+    }
+
+    if (dto.notificationId) {
+      await this.notificationsService.markAsRead(userId, dto.notificationId).catch(() => {});
+    }
+
+    return {
+      success: true,
+      decision: dto.decision,
+      message: dto.decision === 'add' ? 'Transaction added successfully!' : 'Duplicate dismissed.',
+    };
   }
 }

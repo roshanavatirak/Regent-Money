@@ -43,6 +43,7 @@ import Animated, {
   withTiming,
   withDelay,
   withSpring,
+  cancelAnimation,
   FadeIn,
   Easing,
   interpolate,
@@ -1035,7 +1036,13 @@ const cleanTitle = (title?: string) => {
 };
 
 const getNotifKind = (n: any): NotifKind => {
-  if (n.payload?.action === 'category_correction') return 'review';
+  if (
+    n.payload?.action === 'category_correction' ||
+    n.payload?.action === 'duplicate_transaction_review' ||
+    n.type === 'review'
+  ) {
+    return 'review';
+  }
   if (n.type === 'anomaly') return 'alert';
   if (n.type === 'budget_alert') return 'budget';
   const text = `${n.type || ''} ${n.title || ''}`.toLowerCase();
@@ -1183,6 +1190,22 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
         });
         if (!response.ok) throw new Error('Could not update the category. Try again.');
         await syncService.sync();
+      } else if (payload.action === 'duplicate_transaction_review') {
+        const decision = actionName === 'approve' ? 'add' : 'ignore';
+        const response = await fetch(`${BACKEND_URL}/sync/confirm-duplicate`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            notificationId: notification.id,
+            decision,
+            transactionData: payload.transactionData,
+          }),
+        });
+        if (!response.ok) throw new Error('Could not process this duplicate review. Try again.');
+        await syncService.sync();
       }
 
       await notificationService.markAsRead(notification.id);
@@ -1276,7 +1299,7 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
             <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
               {busyId === item.id ? (
                 <ActivityIndicator size="small" color={colors.accent} />
-              ) : (
+              ) : item.raw.payload?.action === 'duplicate_transaction_review' ? (
                 <>
                   <TouchableOpacity
                     onPress={() => handleAction(item.raw, 'approve')}
@@ -1290,7 +1313,7 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
                     }}
                   >
                     <Text style={{ color: isDark ? FOREST : '#FFFFFF', fontSize: 12, fontWeight: '700' }}>
-                      Yes, {item.raw.payload.suggestedCategory}
+                      Yes, Add Payment
                     </Text>
                   </TouchableOpacity>
                   <TouchableOpacity
@@ -1307,7 +1330,42 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
                     }}
                   >
                     <Text style={{ color: ink, fontSize: 12, fontWeight: '600' }}>
-                      Keep {item.raw.payload.oldCategory}
+                      No, It's Duplicate
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <>
+                  <TouchableOpacity
+                    onPress={() => handleAction(item.raw, 'approve')}
+                    activeOpacity={0.8}
+                    style={{
+                      backgroundColor: isDark ? LIME : FOREST,
+                      borderRadius: 999,
+                      height: 36,
+                      paddingHorizontal: 14,
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Text style={{ color: isDark ? FOREST : '#FFFFFF', fontSize: 12, fontWeight: '700' }}>
+                      Yes, {item.raw.payload?.suggestedCategory || 'Update'}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => handleAction(item.raw, 'keep_old')}
+                    activeOpacity={0.8}
+                    style={{
+                      borderWidth: 1,
+                      borderColor: line,
+                      backgroundColor: cardBg,
+                      borderRadius: 999,
+                      height: 36,
+                      paddingHorizontal: 14,
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Text style={{ color: ink, fontSize: 12, fontWeight: '600' }}>
+                      Keep {item.raw.payload?.oldCategory || 'Current'}
                     </Text>
                   </TouchableOpacity>
                 </>
@@ -1318,7 +1376,9 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
           {resolved && item.kind === 'review' && (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 8 }}>
               <Feather name="check" size={13} color={colors.accent} />
-              <Text style={{ fontSize: 12, color: colors.accent, fontWeight: '600' }}>Category updated</Text>
+              <Text style={{ fontSize: 12, color: colors.accent, fontWeight: '600' }}>
+                {item.raw.payload?.action === 'duplicate_transaction_review' ? 'Resolved' : 'Category updated'}
+              </Text>
             </View>
           )}
         </View>
@@ -2640,10 +2700,21 @@ const CustomTabButton = ({
   const scale = useSharedValue(1);
 
   useEffect(() => {
-    focusAnim.value = withTiming(isFocused ? 1 : 0, {
-      duration: 220,
-      easing: Easing.bezier(0.25, 0.1, 0.25, 1),
-    });
+    cancelAnimation(focusAnim);
+    if (isFocused) {
+      focusAnim.value = withTiming(1, {
+        duration: 200,
+        easing: Easing.out(Easing.cubic),
+      });
+    } else {
+      focusAnim.value = withTiming(0, {
+        duration: 140,
+        easing: Easing.in(Easing.cubic),
+      });
+    }
+    return () => {
+      cancelAnimation(focusAnim);
+    };
   }, [isFocused]);
 
   // Synchronized slot expansion/contraction: gained width equals lost width at every frame
@@ -2652,34 +2723,41 @@ const CustomTabButton = ({
     return {
       width: w,
       height: '100%',
+      flexShrink: 1,
     };
-  });
+  }, [inactiveWidth, activeWidth]);
 
   const pressStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
   }));
 
-  // Background pill blooms and fades seamlessly
-  const pillBgStyle = useAnimatedStyle(() => ({
-    opacity: focusAnim.value,
-    transform: [{ scale: interpolate(focusAnim.value, [0, 1], [0.88, 1]) }],
-  }));
+  // Background pill blooms and fades seamlessly - ONLY the currently focused tab can ever show it
+  const pillBgStyle = useAnimatedStyle(() => {
+    const activeProgress = isFocused ? focusAnim.value : 0;
+    return {
+      opacity: activeProgress,
+      transform: [{ scale: interpolate(activeProgress, [0, 1], [0.88, 1]) }],
+    };
+  }, [isFocused]);
 
-  // Label smoothly unrolls and fades in without harsh clipping
-  const labelStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(focusAnim.value, [0.35, 1], [0, 1]),
-    maxWidth: interpolate(focusAnim.value, [0, 1], [0, 76]),
-    transform: [{ translateX: interpolate(focusAnim.value, [0, 1], [4, 0]) }],
-  }));
+  // Label smoothly unrolls and fades in without harsh clipping - strictly gated to focused tab
+  const labelStyle = useAnimatedStyle(() => {
+    const activeProgress = isFocused ? focusAnim.value : 0;
+    return {
+      opacity: interpolate(activeProgress, [0.3, 1], [0, 1]),
+      maxWidth: interpolate(activeProgress, [0, 1], [0, 76]),
+      transform: [{ translateX: interpolate(activeProgress, [0, 1], [4, 0]) }],
+    };
+  }, [isFocused]);
 
   // Smooth cross-fade between active (filled) and inactive (outline) icons
   const activeIconStyle = useAnimatedStyle(() => ({
-    opacity: focusAnim.value,
-  }));
+    opacity: isFocused ? focusAnim.value : 0,
+  }), [isFocused]);
 
   const inactiveIconStyle = useAnimatedStyle(() => ({
-    opacity: 1 - focusAnim.value,
-  }));
+    opacity: isFocused ? 1 - focusAnim.value : 1,
+  }), [isFocused]);
 
   return (
     <Animated.View style={[{ height: '100%' }, slotStyle]}>
@@ -2859,8 +2937,6 @@ const CustomBottomTabBar = ({ state, navigation }: MaterialTopTabBarProps) => {
           backgroundColor: isDark ? '#0F1E18' : '#FFFFFF',
           borderWidth: BORDER,
           borderColor: isDark ? '#1E3329' : '#DCE5E0',
-          flexDirection: 'row',
-          alignItems: 'center',
           padding: BAR_PADDING,
           shadowColor: '#0B1F17',
           shadowOffset: { width: 0, height: 6 },
@@ -2869,45 +2945,56 @@ const CustomBottomTabBar = ({ state, navigation }: MaterialTopTabBarProps) => {
           elevation: 8,
         }}
       >
-        {state.routes.map((route, index) => {
-          const isFocused = state.index === index;
+        <View
+          style={{
+            flex: 1,
+            height: '100%',
+            flexDirection: 'row',
+            alignItems: 'center',
+            overflow: 'hidden',
+            borderRadius: 26,
+          }}
+        >
+          {state.routes.map((route, index) => {
+            const isFocused = state.index === index;
 
-          const onPress = () => {
-            if (Platform.OS === 'web' && typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
-              try {
-                document.activeElement.blur();
-              } catch { }
-            }
+            const onPress = () => {
+              if (Platform.OS === 'web' && typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+                try {
+                  document.activeElement.blur();
+                } catch { }
+              }
 
-            const event = navigation.emit({
-              type: 'tabPress',
-              target: route.key,
-              canPreventDefault: true,
-            });
+              const event = navigation.emit({
+                type: 'tabPress',
+                target: route.key,
+                canPreventDefault: true,
+              });
 
-            if (!isFocused && !event.defaultPrevented) {
-              navigation.navigate(route.name, route.params);
-            }
-          };
+              if (!isFocused && !event.defaultPrevented) {
+                navigation.navigate(route.name, route.params);
+              }
+            };
 
-          const onLongPress = () => {
-            navigation.emit({ type: 'tabLongPress', target: route.key });
-          };
+            const onLongPress = () => {
+              navigation.emit({ type: 'tabLongPress', target: route.key });
+            };
 
-          return (
-            <CustomTabButton
-              key={route.key}
-              route={route}
-              isFocused={isFocused}
-              onPress={onPress}
-              onLongPress={onLongPress}
-              isSmall={isSmall}
-              isDark={isDark}
-              activeWidth={activeWidth}
-              inactiveWidth={inactiveWidth}
-            />
-          );
-        })}
+            return (
+              <CustomTabButton
+                key={route.key}
+                route={route}
+                isFocused={isFocused}
+                onPress={onPress}
+                onLongPress={onLongPress}
+                isSmall={isSmall}
+                isDark={isDark}
+                activeWidth={activeWidth}
+                inactiveWidth={inactiveWidth}
+              />
+            );
+          })}
+        </View>
       </View>
     </View>
   );

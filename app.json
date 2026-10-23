@@ -2,7 +2,7 @@
   "expo": {
     "name": "Regent Money",
     "slug": "regent-money",
-    "version": "1.0.44",
+    "version": "1.0.45",
     "orientation": "portrait",
     "icon": "./assets/appicon.png",
     "notification": {
@@ -11,8 +11,9 @@
     },
     "userInterfaceStyle": "light",
     "splash": {
+      "image": "./assets/splash-branded.png",
       "resizeMode": "contain",
-      "backgroundColor": "#0B0E14"
+      "backgroundColor": "#fafbfc"
     },
     "ios": {
       "supportsTablet": true
@@ -43,7 +44,7 @@
       ],
       "predictiveBackGestureEnabled": false,
       "package": "com.anonymous.regentmoney",
-      "versionCode": 127,
+      "versionCode": 128,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#04190F"
