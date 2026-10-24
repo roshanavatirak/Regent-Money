@@ -32,6 +32,7 @@ export interface EditableTransactionItem {
   merchant: string;
   category: string;
   balanceAfter: string;
+  referenceId?: string;
 }
 
 export interface ReviewTransactionsModalProps {
@@ -48,6 +49,7 @@ export interface ReviewTransactionsModalProps {
     merchant: string;
     category?: string;
     balanceAfter?: number | null;
+    referenceId?: string | null;
   }>;
   detectedFinalBalance?: number | null;
   onConfirmSuccess: (summary: {
@@ -133,6 +135,7 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
               tx.balanceAfter !== undefined && tx.balanceAfter !== null
                 ? String(tx.balanceAfter)
                 : '',
+            referenceId: tx.referenceId ? String(tx.referenceId) : '',
           };
         })
       );
@@ -356,6 +359,7 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
             merchant: it.merchant.trim(),
             category: it.category,
             balanceAfter: it.balanceAfter.trim() ? parseFloat(it.balanceAfter) : null,
+            referenceId: it.referenceId ? it.referenceId.trim() : undefined,
           };
         }),
         updatedBalance: updateAccountBalance ? finalEffectiveBalance : undefined,

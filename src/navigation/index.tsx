@@ -1036,9 +1036,12 @@ const cleanTitle = (title?: string) => {
 };
 
 const getNotifKind = (n: any): NotifKind => {
+  const payload = typeof n.payload === 'string'
+    ? (() => { try { return JSON.parse(n.payload); } catch { return null; } })()
+    : n.payload;
   if (
-    n.payload?.action === 'category_correction' ||
-    n.payload?.action === 'duplicate_transaction_review' ||
+    payload?.action === 'category_correction' ||
+    payload?.action === 'duplicate_transaction_review' ||
     n.type === 'review'
   ) {
     return 'review';
@@ -1148,9 +1151,13 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
     [notifications, newIds]
   );
 
-  const reviewCount = items.filter(
-    (i) => i.kind === 'review' && !i.raw.readStatus && !resolvedIds.has(i.id)
-  ).length;
+  const reviewCount = items.filter((i) => {
+    if (i.kind !== 'review') return false;
+    const p = typeof i.raw.payload === 'string'
+      ? (() => { try { return JSON.parse(i.raw.payload); } catch { return null; } })()
+      : i.raw.payload;
+    return !p?.resolved && !resolvedIds.has(i.id);
+  }).length;
 
   // Hero card: the newest unread insight or tip (only on the "All" tab)
   const featured = useMemo(() => {
@@ -1170,8 +1177,11 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
     return order.filter((k) => map[k]?.length).map((k) => ({ title: k, data: map[k] }));
   }, [items, filter, featured]);
 
-  const handleAction = async (notification: any, actionName: 'approve' | 'keep_old') => {
-    const payload = notification.payload;
+  const handleAction = async (notification: any, actionName: 'approve' | 'keep_old', adjustBalance?: boolean) => {
+    let payload = notification.payload;
+    if (typeof payload === 'string') {
+      try { payload = JSON.parse(payload); } catch {}
+    }
     if (!payload) return;
     setBusyId(notification.id);
     try {
@@ -1201,6 +1211,7 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
           body: JSON.stringify({
             notificationId: notification.id,
             decision,
+            adjustBalance,
             transactionData: payload.transactionData,
           }),
         });
@@ -1209,12 +1220,40 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
       }
 
       await notificationService.markAsRead(notification.id);
+      useNotificationStore.getState().resolveNotificationState?.(
+        notification.id,
+        payload.action === 'duplicate_transaction_review'
+          ? actionName === 'approve' ? 'add' : 'ignore'
+          : actionName
+      );
       setResolvedIds((prev) => new Set(prev).add(notification.id));
     } catch (e: any) {
       Alert.alert('Not updated', e.message || 'Could not complete this action. Try again.');
     } finally {
       setBusyId(null);
     }
+  };
+
+  const promptAddDuplicate = (notification: any, payload: any) => {
+    const tx = payload?.transactionData || {};
+    const amount = tx.amount != null ? tx.amount : '';
+    const isDebit = tx.type !== 'credit';
+
+    showGlobalConfirm({
+      title: 'Update Balance?',
+      message: `Do you want to ${isDebit ? 'deduct' : 'add'} ₹${amount} ${isDebit ? 'from' : 'to'} your current balance?`,
+      confirmText: isDebit ? `Yes, Deduct ₹${amount}` : `Yes, Add ₹${amount}`,
+      cancelText: 'No, Keep Balance',
+      showCloseButton: true,
+      icon: 'help-circle',
+      onConfirm: async () => {
+        await handleAction(notification, 'approve', true);
+      },
+      onCancel: async () => {
+        await handleAction(notification, 'approve', false);
+      },
+      onDismiss: () => {},
+    });
   };
 
   const openRegent = () => {
@@ -1235,17 +1274,18 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
     const style = NOTIF_KIND_STYLE[item.kind];
     const [tileBg, tileFg] = isDark ? style.dark : style.light;
     const expanded = expandedId === item.id;
+    const payload = typeof item.raw.payload === 'string'
+      ? (() => { try { return JSON.parse(item.raw.payload); } catch { return null; } })()
+      : item.raw.payload;
+    const resolved = resolvedIds.has(item.id) || !!payload?.resolved;
     const showActions =
-      item.kind === 'review' && !item.raw.readStatus && !resolvedIds.has(item.id) && item.raw.payload;
-    const resolved = resolvedIds.has(item.id);
+      item.kind === 'review' && !resolved && !!payload;
 
     return (
       <Pressable
         key={item.id}
         onPress={() => setExpandedId(expanded ? null : item.id)}
         style={{
-          flexDirection: 'row',
-          gap: 12,
           padding: 14,
           borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth,
           borderBottomColor: line,
@@ -1254,134 +1294,160 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
         accessibilityLabel={`${item.title}. ${item.body}`}
         accessibilityState={{ expanded }}
       >
-        <View
-          style={{
-            width: 42,
-            height: 42,
-            borderRadius: 14,
-            backgroundColor: tileBg,
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          <Ionicons name={style.icon} size={19} color={tileFg} />
-        </View>
-
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-            <Text
-              numberOfLines={1}
-              style={{
-                flex: 1,
-                fontSize: 15,
-                fontWeight: item.isNew ? '700' : '600',
-                color: item.isNew ? ink : isDark ? 'rgba(234, 242, 238, 0.85)' : '#3A4A42',
-              }}
-            >
-              {item.title}
-            </Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Text style={{ fontSize: 12, color: muted }}>{formatNotifTime(item.ts)}</Text>
-              {item.isNew && <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#16A34A' }} />}
-            </View>
+        <View style={{ flexDirection: 'row', gap: 12 }}>
+          <View
+            style={{
+              width: 42,
+              height: 42,
+              borderRadius: 14,
+              backgroundColor: tileBg,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Ionicons name={style.icon} size={19} color={tileFg} />
           </View>
 
-          {!!item.body && (
-            <Text
-              numberOfLines={expanded ? undefined : 2}
-              style={{ fontSize: 13, lineHeight: 19, color: muted, marginTop: 3 }}
-            >
-              {item.body}
-            </Text>
-          )}
-
-          {showActions && (
-            <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
-              {busyId === item.id ? (
-                <ActivityIndicator size="small" color={colors.accent} />
-              ) : item.raw.payload?.action === 'duplicate_transaction_review' ? (
-                <>
-                  <TouchableOpacity
-                    onPress={() => handleAction(item.raw, 'approve')}
-                    activeOpacity={0.8}
-                    style={{
-                      backgroundColor: isDark ? LIME : FOREST,
-                      borderRadius: 999,
-                      height: 36,
-                      paddingHorizontal: 14,
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <Text style={{ color: isDark ? FOREST : '#FFFFFF', fontSize: 12, fontWeight: '700' }}>
-                      Yes, Add Payment
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => handleAction(item.raw, 'keep_old')}
-                    activeOpacity={0.8}
-                    style={{
-                      borderWidth: 1,
-                      borderColor: line,
-                      backgroundColor: cardBg,
-                      borderRadius: 999,
-                      height: 36,
-                      paddingHorizontal: 14,
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <Text style={{ color: ink, fontSize: 12, fontWeight: '600' }}>
-                      No, It's Duplicate
-                    </Text>
-                  </TouchableOpacity>
-                </>
-              ) : (
-                <>
-                  <TouchableOpacity
-                    onPress={() => handleAction(item.raw, 'approve')}
-                    activeOpacity={0.8}
-                    style={{
-                      backgroundColor: isDark ? LIME : FOREST,
-                      borderRadius: 999,
-                      height: 36,
-                      paddingHorizontal: 14,
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <Text style={{ color: isDark ? FOREST : '#FFFFFF', fontSize: 12, fontWeight: '700' }}>
-                      Yes, {item.raw.payload?.suggestedCategory || 'Update'}
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => handleAction(item.raw, 'keep_old')}
-                    activeOpacity={0.8}
-                    style={{
-                      borderWidth: 1,
-                      borderColor: line,
-                      backgroundColor: cardBg,
-                      borderRadius: 999,
-                      height: 36,
-                      paddingHorizontal: 14,
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <Text style={{ color: ink, fontSize: 12, fontWeight: '600' }}>
-                      Keep {item.raw.payload?.oldCategory || 'Current'}
-                    </Text>
-                  </TouchableOpacity>
-                </>
-              )}
-            </View>
-          )}
-
-          {resolved && item.kind === 'review' && (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 8 }}>
-              <Feather name="check" size={13} color={colors.accent} />
-              <Text style={{ fontSize: 12, color: colors.accent, fontWeight: '600' }}>
-                {item.raw.payload?.action === 'duplicate_transaction_review' ? 'Resolved' : 'Category updated'}
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+              <Text
+                numberOfLines={1}
+                style={{
+                  flex: 1,
+                  fontSize: 15,
+                  fontWeight: item.isNew ? '700' : '600',
+                  color: item.isNew ? ink : isDark ? 'rgba(234, 242, 238, 0.85)' : '#3A4A42',
+                }}
+              >
+                {item.title}
               </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Text style={{ fontSize: 12, color: muted }}>{formatNotifTime(item.ts)}</Text>
+                {item.isNew && <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#16A34A' }} />}
+              </View>
             </View>
-          )}
+
+            {!!item.body && (
+              <Text
+                numberOfLines={expanded ? undefined : 2}
+                style={{ fontSize: 13, lineHeight: 19, color: muted, marginTop: 3 }}
+              >
+                {item.body}
+              </Text>
+            )}
+
+            {resolved && item.kind === 'review' && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 8 }}>
+                <Feather name="check" size={13} color={colors.accent} />
+                <Text style={{ fontSize: 12, color: colors.accent, fontWeight: '600' }}>
+                  {payload?.action === 'duplicate_transaction_review'
+                    ? payload?.decision === 'ignore'
+                      ? 'Duplicate dismissed'
+                      : 'Transaction added'
+                    : 'Resolved'}
+                </Text>
+              </View>
+            )}
+          </View>
         </View>
+
+        {showActions && (
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+            {busyId === item.id ? (
+              <ActivityIndicator size="small" color={colors.accent} style={{ paddingVertical: 8 }} />
+            ) : payload?.action === 'duplicate_transaction_review' ? (
+              <>
+                <TouchableOpacity
+                  onPress={() => promptAddDuplicate(item.raw, payload)}
+                  activeOpacity={0.8}
+                  style={{
+                    flex: 1,
+                    backgroundColor: isDark ? LIME : FOREST,
+                    borderRadius: 999,
+                    height: 38,
+                    paddingHorizontal: 8,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Text
+                    numberOfLines={1}
+                    style={{ color: isDark ? FOREST : '#FFFFFF', fontSize: 13, fontWeight: '700' }}
+                  >
+                    Yes, Add Payment
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => handleAction(item.raw, 'keep_old')}
+                  activeOpacity={0.8}
+                  style={{
+                    flex: 1,
+                    borderWidth: 1,
+                    borderColor: line,
+                    backgroundColor: cardBg,
+                    borderRadius: 999,
+                    height: 38,
+                    paddingHorizontal: 8,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Text
+                    numberOfLines={1}
+                    style={{ color: ink, fontSize: 13, fontWeight: '600' }}
+                  >
+                    No, It's Duplicate
+                  </Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                <TouchableOpacity
+                  onPress={() => handleAction(item.raw, 'approve')}
+                  activeOpacity={0.8}
+                  style={{
+                    flex: 1,
+                    backgroundColor: isDark ? LIME : FOREST,
+                    borderRadius: 999,
+                    height: 38,
+                    paddingHorizontal: 8,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Text
+                    numberOfLines={1}
+                    style={{ color: isDark ? FOREST : '#FFFFFF', fontSize: 13, fontWeight: '700' }}
+                  >
+                    Yes, {payload?.suggestedCategory || 'Update'}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => handleAction(item.raw, 'keep_old')}
+                  activeOpacity={0.8}
+                  style={{
+                    flex: 1,
+                    borderWidth: 1,
+                    borderColor: line,
+                    backgroundColor: cardBg,
+                    borderRadius: 999,
+                    height: 38,
+                    paddingHorizontal: 8,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Text
+                    numberOfLines={1}
+                    style={{ color: ink, fontSize: 13, fontWeight: '600' }}
+                  >
+                    Keep {payload?.oldCategory || 'Current'}
+                  </Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        )}
       </Pressable>
     );
   };
@@ -3150,6 +3216,11 @@ const GlobalConfirmModal = () => {
   const primaryBg = isDestructive ? CONFIRM_RED : isDark ? CONFIRM_LIME : CONFIRM_FOREST;
   const primaryFg = isDestructive ? '#FFFFFF' : isDark ? CONFIRM_FOREST : CONFIRM_LIME;
 
+  const handleDismiss = () => {
+    if (loading) return;
+    animateClose(options.onDismiss || options.onCancel);
+  };
+
   const handleCancel = () => {
     if (loading) return;
     animateClose(options.onCancel);
@@ -3178,7 +3249,7 @@ const GlobalConfirmModal = () => {
       animationType="none"
       statusBarTranslucent
       navigationBarTranslucent
-      onRequestClose={handleCancel}
+      onRequestClose={handleDismiss}
     >
       <View style={{ flex: 1, justifyContent: isWide ? 'center' : 'flex-end', alignItems: 'center' }}>
         <Animated.View
@@ -3186,7 +3257,7 @@ const GlobalConfirmModal = () => {
         >
           <Pressable
             style={StyleSheet.absoluteFill}
-            onPress={handleCancel}
+            onPress={handleDismiss}
             accessibilityLabel={options.cancelText || 'Close'}
           />
         </Animated.View>
@@ -3209,6 +3280,28 @@ const GlobalConfirmModal = () => {
             sheetStyle,
           ]}
         >
+          {options.showCloseButton && (
+            <TouchableOpacity
+              onPress={handleDismiss}
+              activeOpacity={0.7}
+              style={{
+                position: 'absolute',
+                top: 18,
+                right: 18,
+                width: 36,
+                height: 36,
+                borderRadius: 18,
+                backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#E8EFEA',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 10,
+              }}
+              accessibilityLabel="Close"
+            >
+              <Feather name="x" size={18} color={colors.text} />
+            </TouchableOpacity>
+          )}
+
           {!isWide && (
             <View
               style={{

@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsIn, IsOptional, IsNumber, IsObject } from 'class-validator';
+import { IsString, IsNotEmpty, IsIn, IsOptional, IsNumber, IsObject, IsBoolean } from 'class-validator';
 
 export class DuplicateTransactionDataDto {
   @IsNumber()
@@ -38,6 +38,10 @@ export class ConfirmDuplicateDto {
 
   @IsIn(['add', 'ignore'])
   decision: 'add' | 'ignore';
+
+  @IsOptional()
+  @IsBoolean()
+  adjustBalance?: boolean;
 
   @IsOptional()
   @IsObject()

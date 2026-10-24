@@ -1,6 +1,6 @@
 {
   "name": "regent-money",
-  "version": "1.0.45",
+  "version": "1.0.46",
   "main": "index.ts",
   "dependencies": {
     "@expo-google-fonts/bricolage-grotesque": "^0.4.1",

@@ -62,6 +62,7 @@ export interface OcrTransactionExtracted {
   merchant: string;
   category?: string;
   balanceAfter?: number | null;
+  referenceId?: string | null;
 }
 
 export interface OcrValidationResult {
@@ -362,6 +363,7 @@ Each transaction in the array must have:
 - merchant: string (clean merchant/payee/payer name or transaction details, remove generic bank noise if possible)
 - category: string ('food', 'shopping', 'transfer', 'entertainment', 'utilities', 'salary', 'investment', 'health', 'travel', or 'general')
 - balanceAfter: number or null (CRITICAL: if the statement has a "Balance" column or indicates the account balance after this transaction, extract that exact numeric balance here!)
+- referenceId: string or null (CRITICAL: Look in the transaction description/narration/details for 12-digit UPI reference numbers / UTRs, IMPS reference numbers, NEFT numbers, Cheque numbers, or transaction IDs, e.g. 'UPI/CR/629349184814' -> '629349184814', or 'TRANSFER TO.../629349830131' -> '629349830131'. If present, extract the exact numeric or alphanumeric reference string; otherwise return null).
 
 Also determine:
 - finalDetectedBalance: number or null (the latest/closing account balance visible in the statement)
@@ -379,7 +381,8 @@ Return ONLY a valid JSON object matching:
       "type": "debit" | "credit",
       "merchant": "Name",
       "category": "transfer",
-      "balanceAfter": 0.00
+      "balanceAfter": 0.00,
+      "referenceId": "629349184814" or null
     }
   ]
 }
@@ -407,11 +410,16 @@ Return ONLY a valid JSON object matching:
           const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text;
           if (rawText) {
             const parsed = JSON.parse(rawText.trim());
-            const txs: OcrTransactionExtracted[] = Array.isArray(parsed.transactions)
+            const rawList = Array.isArray(parsed.transactions)
               ? parsed.transactions
               : Array.isArray(parsed)
               ? parsed
               : [];
+            const txs: OcrTransactionExtracted[] = rawList.map((t: any) => ({
+              ...t,
+              referenceId: t.referenceId ? String(t.referenceId).trim() : null,
+              balanceAfter: typeof t.balanceAfter === 'number' && !isNaN(t.balanceAfter) ? t.balanceAfter : null,
+            }));
 
             let finalBal = parsed.finalDetectedBalance;
             if (finalBal === undefined || finalBal === null) {
@@ -497,6 +505,7 @@ Carefully evaluate the image and classify it into ONE of these categories:
      * merchant: string (clean merchant/payee/payer name or description, remove generic noise)
      * category: string ('food', 'shopping', 'transfer', 'entertainment', 'utilities', 'salary', 'investment', 'health', 'travel', or 'general')
      * balanceAfter: number or null (CRITICAL: if the table or screenshot has a "Balance" column or indicates the running account balance after that transaction, extract that exact numeric balance here!)
+     * referenceId: string or null (CRITICAL: Look for 12-digit UPI reference numbers / UTRs, IMPS reference numbers, NEFT numbers, Cheque numbers, or transaction IDs in the narration, description, or payment receipt screen, e.g. 'UPI/CR/629349184814' -> '629349184814', or 'TRANSFER TO.../629349830131' -> '629349830131'. If present, extract the exact numeric or alphanumeric reference string; otherwise return null).
 
 Also determine:
 - finalDetectedBalance: number or null (the latest/closing account balance visible in the statement or screenshot)
@@ -515,7 +524,8 @@ Return ONLY a valid JSON object matching this schema:
       "type": "debit" | "credit",
       "merchant": "Name",
       "category": "transfer",
-      "balanceAfter": 0.00
+      "balanceAfter": 0.00,
+      "referenceId": "629349184814" or null
     }
   ]
 }
@@ -612,6 +622,8 @@ Return ONLY a valid JSON object matching this schema:
           return {
             ...t,
             date: fixedDate,
+            referenceId: t.referenceId ? String(t.referenceId).trim() : null,
+            balanceAfter: typeof t.balanceAfter === 'number' && !isNaN(t.balanceAfter) ? t.balanceAfter : null,
           };
         });
 

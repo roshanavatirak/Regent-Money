@@ -58,9 +58,9 @@ export class AppService {
       'https://github.com/roshanavatirak/Regent-Money/releases/latest/download/regent-money.apk';
 
     const releaseNotes = [
-      'Enhanced Regent AI Chatbot: Structured tables, 1-tap message copy, and refreshed tree logo',
-      'Instant Background SMS Sync: Expedited sync engine capturing bank alerts even when device is asleep',
-      'Stability & Account Safeguards: Strict multi-account isolation and network performance improvements',
+      'Smart Statement OCR: AI extracts UPI/UTR reference numbers and running balances to distinguish genuine multiple payments on the same day',
+      'Streamlined Review Actions: Clean, minimal confirmation UI for flagged duplicates without confusing text clutter',
+      'Reliable Notification Badges: Interactive duplicate alerts stay active until resolved, keeping review counters accurate',
     ];
 
     const isUpdateAvailable =

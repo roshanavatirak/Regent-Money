@@ -773,7 +773,7 @@ export class SyncService implements OnModuleInit {
         : [];
 
       // Helper to compute exact millisecond timestamp from date, time, and client timestamp
-      const parseExactTimestamp = (dateStr?: string, timeStr?: string | null, clientTimestamp?: number | null): number => {
+      const parseExactTimestamp = (dateStr?: string, timeStr?: string | null, clientTimestamp?: number | null, index = 0): number => {
         if (clientTimestamp && !isNaN(Number(clientTimestamp)) && Number(clientTimestamp) > 0) {
           return Number(clientTimestamp);
         }
@@ -850,36 +850,55 @@ export class SyncService implements OnModuleInit {
               seconds = isNaN(s) ? 0 : s;
             }
           }
+        } else {
+          // Statements without times: distribute by index to avoid millisecond collision and preserve statement sequence
+          seconds = (index % 60);
+          minutes = Math.floor(index / 60);
         }
 
         const resDate = new Date(year, month, day, hours, minutes, seconds);
-        return isNaN(resDate.getTime()) ? Date.now() : resDate.getTime();
+        const baseMs = isNaN(resDate.getTime()) ? Date.now() : resDate.getTime();
+        return baseMs + (index * 10);
       };
 
-      for (const item of data.transactions) {
+      for (let idx = 0; idx < data.transactions.length; idx++) {
+        const item = data.transactions[idx];
         const amount = parseFloat(String(item.amount));
         if (isNaN(amount) || amount <= 0) continue;
 
-        const exactTimestamp = parseExactTimestamp(item.date, item.time, item.timestamp);
+        const exactTimestamp = parseExactTimestamp(item.date, item.time, item.timestamp, idx);
         const parsedDate = new Date(exactTimestamp);
         if (isNaN(parsedDate.getTime())) continue;
 
         const startOfDay = new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate(), 0, 0, 0, 0).getTime();
         const endOfDay = new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate(), 23, 59, 59, 999).getTime();
 
-        const itemRef = item.referenceId;
+        const itemRef = item.referenceId ? String(item.referenceId).trim() : undefined;
         const itemSmsId = item.smsId || (itemRef ? `ref_${itemRef}` : undefined);
         const normItemMerchant = (item.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
         const itemDate = new Date(exactTimestamp);
-        const hasExplicitItemTime = itemDate.getHours() !== 12 || itemDate.getMinutes() !== 0 || itemDate.getSeconds() !== 0;
+        const hasExplicitItemTime = !!(item.time && item.time.trim());
 
         if (item.type === 'debit') {
-          const checkDebitDuplicate = (tx: Transaction): boolean => {
+          const checkDebitDuplicate = (tx: Transaction, isBatchCheck = false): boolean => {
+            // 1. If both transactions have reference IDs / UTRs:
             if (itemRef && (tx.smsId === `ref_${itemRef}` || tx.smsId === itemRef)) return true;
-            if (itemSmsId && tx.smsId && tx.smsId === itemSmsId) return true;
             if (itemRef && tx.smsId && tx.smsId.startsWith('ref_') && tx.smsId !== `ref_${itemRef}`) return false;
 
+            // 2. Intra-statement check (Comparing against another transaction from the same upload batch):
+            if (isBatchCheck) {
+              // Mathematical proof: if running balances differ, they are distinct ledger entries
+              if (item.balanceAfter != null && (tx as any)._balanceAfter != null) {
+                if (Math.abs(item.balanceAfter - (tx as any)._balanceAfter) > 0.01) {
+                  return false;
+                }
+              }
+              // Separate rows in the same certified statement without matching reference IDs are genuine distinct payments
+              return false;
+            }
+
+            // 3. Historical check against existing database transactions:
             const txTime = Number(tx.timestamp);
             const sameAmount = Math.abs(tx.amount - amount) < 0.01;
             // Strict calendar day check: different calendar days are NEVER duplicates
@@ -889,7 +908,7 @@ export class SyncService implements OnModuleInit {
             const normTxMerchant = (tx.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
             if (normTxMerchant && normItemMerchant && normTxMerchant !== normItemMerchant) return false;
 
-            // If both transactions have distinct times (to the minute) and differ by > 2 minutes, NOT a duplicate
+            // If both transactions have explicit times (to the minute) and differ by > 2 minutes, NOT a duplicate
             const txDate = new Date(txTime);
             const hasExplicitTxTime = txDate.getHours() !== 12 || txDate.getMinutes() !== 0 || txDate.getSeconds() !== 0;
             if (hasExplicitTxTime && hasExplicitItemTime) {
@@ -900,7 +919,8 @@ export class SyncService implements OnModuleInit {
             return true;
           };
 
-          const isDuplicate = existingTxs.some(checkDebitDuplicate) || newTransactions.some(checkDebitDuplicate);
+          const isDuplicate = existingTxs.some((tx) => checkDebitDuplicate(tx, false)) ||
+                              newTransactions.some((tx) => checkDebitDuplicate(tx, true));
 
           if (!isDuplicate) {
             const txId = 'tx_ocr_' + Math.random().toString(36).substr(2, 9);
@@ -918,6 +938,7 @@ export class SyncService implements OnModuleInit {
               updatedAt: Date.now(),
               isDeleted: false,
             });
+            (newTx as any)._balanceAfter = item.balanceAfter;
             newTransactions.push(newTx);
             addedTransactionsCount++;
             netBalanceChange -= amount;
@@ -939,12 +960,26 @@ export class SyncService implements OnModuleInit {
                   timestamp: exactTimestamp,
                   bankProfileId: isUnassigned ? null : data.bankProfileId,
                   smsId: itemSmsId || 'ocr_duplicate_review',
+                  referenceId: itemRef || undefined,
+                  balanceAfter: item.balanceAfter != null ? item.balanceAfter : undefined,
                 },
               },
             }).catch((err) => this.logger.warn(`Failed to dispatch duplicate alert: ${err.message}`));
           }
         } else if (item.type === 'credit') {
-          const checkCreditDuplicate = (inc: IncomeRecord): boolean => {
+          const checkCreditDuplicate = (inc: IncomeRecord, isBatchCheck = false): boolean => {
+            if (itemRef && ((inc as any).smsId === `ref_${itemRef}` || (inc as any).referenceId === itemRef)) return true;
+            if (itemRef && (inc as any).smsId && (inc as any).smsId.startsWith('ref_') && (inc as any).smsId !== `ref_${itemRef}`) return false;
+
+            if (isBatchCheck) {
+              if (item.balanceAfter != null && (inc as any)._balanceAfter != null) {
+                if (Math.abs(item.balanceAfter - (inc as any)._balanceAfter) > 0.01) {
+                  return false;
+                }
+              }
+              return false;
+            }
+
             const incTime = Number(inc.timestamp);
             const sameAmount = Math.abs(inc.amount - amount) < 0.01;
             // Strict calendar day check: different calendar days are NEVER duplicates
@@ -964,7 +999,8 @@ export class SyncService implements OnModuleInit {
             return true;
           };
 
-          const isDuplicate = existingIncome.some(checkCreditDuplicate) || newIncomeRecords.some(checkCreditDuplicate);
+          const isDuplicate = existingIncome.some((inc) => checkCreditDuplicate(inc, false)) ||
+                              newIncomeRecords.some((inc) => checkCreditDuplicate(inc, true));
 
           if (!isDuplicate) {
             const incId = 'income_ocr_' + Math.random().toString(36).substr(2, 9);
@@ -978,6 +1014,7 @@ export class SyncService implements OnModuleInit {
               updatedAt: Date.now(),
               isDeleted: false,
             });
+            (newInc as any)._balanceAfter = item.balanceAfter;
             newIncomeRecords.push(newInc);
             addedIncomeCount++;
             netBalanceChange += amount;
@@ -994,9 +1031,12 @@ export class SyncService implements OnModuleInit {
                   amount,
                   type: 'credit',
                   merchant: item.merchant || 'Direct Credit',
+                  category: 'salary',
                   timestamp: exactTimestamp,
                   bankProfileId: isUnassigned ? null : data.bankProfileId,
                   smsId: itemSmsId || 'ocr_duplicate_review',
+                  referenceId: itemRef || undefined,
+                  balanceAfter: item.balanceAfter != null ? item.balanceAfter : undefined,
                 },
               },
             }).catch((err) => this.logger.warn(`Failed to dispatch duplicate alert: ${err.message}`));
@@ -1202,6 +1242,7 @@ export class SyncService implements OnModuleInit {
         merchant: tx.merchant,
         category: tx.category || (await this.classifyCategory(tx.merchant, userId, userRules)),
         balanceAfter: tx.balanceAfter ?? null,
+        referenceId: tx.referenceId ?? null,
       }))
     );
 
@@ -1280,6 +1321,7 @@ export class SyncService implements OnModuleInit {
         merchant: tx.merchant,
         category: tx.category || (await this.classifyCategory(tx.merchant, userId, userRules)),
         balanceAfter: tx.balanceAfter ?? null,
+        referenceId: tx.referenceId ?? null,
       }))
     );
 
@@ -2503,7 +2545,11 @@ export class SyncService implements OnModuleInit {
         });
         await this.transactionRepository.save(newTx);
 
-        if (bank) {
+        const shouldAdjustBalance = dto.adjustBalance !== undefined
+          ? dto.adjustBalance
+          : (txData.source !== 'upload');
+
+        if (bank && shouldAdjustBalance) {
           bank.currentBalance = Math.round((parseFloat(String(bank.currentBalance || 0)) - amount) * 100) / 100;
           bank.lastSyncTimestamp = Date.now();
           bank.updatedAt = Date.now();
@@ -2524,7 +2570,11 @@ export class SyncService implements OnModuleInit {
         });
         await this.incomeRecordRepository.save(newInc);
 
-        if (bank) {
+        const shouldAdjustBalance = dto.adjustBalance !== undefined
+          ? dto.adjustBalance
+          : (txData.source !== 'upload');
+
+        if (bank && shouldAdjustBalance) {
           bank.currentBalance = Math.round((parseFloat(String(bank.currentBalance || 0)) + amount) * 100) / 100;
           bank.lastSyncTimestamp = Date.now();
           bank.updatedAt = Date.now();
@@ -2536,7 +2586,7 @@ export class SyncService implements OnModuleInit {
     }
 
     if (dto.notificationId) {
-      await this.notificationsService.markAsRead(userId, dto.notificationId).catch(() => {});
+      await this.notificationsService.resolveNotification(userId, dto.notificationId, dto.decision).catch(() => {});
     }
 
     return {

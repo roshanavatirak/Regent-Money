@@ -649,7 +649,7 @@ export interface NotificationType {
   agentId: string | null;
   title: string;
   body: string;
-  type: 'anomaly' | 'budget_alert' | 'recommendation' | 'info';
+  type: 'anomaly' | 'budget_alert' | 'recommendation' | 'info' | 'review';
   readStatus: boolean;
   payload: any | null;
   createdAt: number;
@@ -664,6 +664,7 @@ export interface NotificationState {
   addNotification: (notification: NotificationType) => void;
   markAsReadState: (id: string) => void;
   markAllAsReadState: () => void;
+  resolveNotificationState: (id: string, decision?: string) => void;
   deleteNotificationState: (id: string) => void;
 }
 
@@ -750,11 +751,35 @@ export const useNotificationStore = create<NotificationState>((set) => ({
     }),
   markAllAsReadState: () =>
     set((state) => {
-      const updated = state.notifications.map((n) => ({ ...n, readStatus: true }));
+      const updated = state.notifications.map((n) =>
+        n.type === 'review' ? n : { ...n, readStatus: true }
+      );
       mmkvStorage.setObject('cache_notifications', updated);
       return {
         notifications: updated,
-        unreadCount: 0,
+        unreadCount: updated.filter((n) => !n.readStatus).length,
+      };
+    }),
+  resolveNotificationState: (id, decision) =>
+    set((state) => {
+      const updated = state.notifications.map((n) => {
+        if (n.id === id) {
+          return {
+            ...n,
+            readStatus: true,
+            payload: {
+              ...(n.payload || {}),
+              resolved: true,
+              decision,
+            },
+          };
+        }
+        return n;
+      });
+      mmkvStorage.setObject('cache_notifications', updated);
+      return {
+        notifications: updated,
+        unreadCount: updated.filter((n) => !n.readStatus).length,
       };
     }),
   deleteNotificationState: (id) =>
@@ -851,10 +876,12 @@ export interface ConfirmOptions {
   message: string;
   confirmText?: string;
   cancelText?: string;
+  showCloseButton?: boolean;
   isDestructive?: boolean;
   icon?: 'trash-2' | 'alert-triangle' | 'help-circle' | 'info' | 'log-out' | string;
   onConfirm: () => void | Promise<void>;
   onCancel?: () => void;
+  onDismiss?: () => void;
 }
 
 export interface ConfirmState {

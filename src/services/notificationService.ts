@@ -336,6 +336,16 @@ export const notificationService = {
       }
 
       const data = await response.json();
+      const parsePayload = (p: any) => {
+        if (!p) return null;
+        if (typeof p === 'object') return p;
+        try {
+          return JSON.parse(p);
+        } catch {
+          return null;
+        }
+      };
+
       // Map properties from database to local state
       const mapped = data.map((n: any) => ({
         id: n.id,
@@ -345,7 +355,7 @@ export const notificationService = {
         body: n.body,
         type: n.type,
         readStatus: n.readStatus ?? n.read_status,
-        payload: n.payload,
+        payload: parsePayload(n.payload),
         createdAt: Number(n.createdAt ?? n.created_at ?? Date.now()),
       }));
 

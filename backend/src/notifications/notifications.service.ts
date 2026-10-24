@@ -1,6 +1,6 @@
 import { Injectable, Logger, BadRequestException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, Not } from 'typeorm';
 import { Cron } from '@nestjs/schedule';
 import { Notification } from './entities/notification.entity';
 import { User } from '../users/entities/user.entity';
@@ -106,12 +106,31 @@ export class NotificationsService implements OnModuleInit {
   }
 
   async markAllAsRead(userId: string): Promise<{ success: boolean; count: number }> {
-    this.logger.log(`Marking all notifications as read for user ${userId}`);
+    this.logger.log(`Marking all non-review notifications as read for user ${userId}`);
     const result = await this.notificationRepository.update(
-      { userId, readStatus: false, isDeleted: false },
+      { userId, readStatus: false, isDeleted: false, type: Not('review') },
       { readStatus: true, updatedAt: Date.now() },
     );
     return { success: true, count: result.affected || 0 };
+  }
+
+  async resolveNotification(userId: string, notificationId: string, decision?: string): Promise<Notification> {
+    this.logger.log(`Resolving review notification ${notificationId} for user ${userId} with decision: ${decision}`);
+    const notification = await this.notificationRepository.findOne({
+      where: { id: notificationId, userId, isDeleted: false },
+    });
+    if (!notification) {
+      throw new BadRequestException('Notification not found.');
+    }
+
+    notification.readStatus = true;
+    notification.payload = {
+      ...(notification.payload || {}),
+      resolved: true,
+      decision,
+    };
+    notification.updatedAt = Date.now();
+    return this.notificationRepository.save(notification);
   }
 
   async deleteNotification(userId: string, notificationId: string): Promise<{ success: boolean }> {
