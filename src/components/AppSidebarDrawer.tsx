@@ -189,6 +189,7 @@ export const AppSidebarDrawer: React.FC = () => {
           items: [
             { key: 'budgets', label: 'Budgets', icon: 'pie-chart', onPress: () => nav('Main', { screen: 'Budgets' }) },
             { key: 'goals', label: 'Goals', icon: 'target', onPress: () => nav('Main', { screen: 'Goals' }) },
+            { key: 'borrow-lend', label: 'Borrow & Lend', icon: 'users', onPress: () => nav('BorrowLend') },
             {
               key: 'calendar',
               label: 'Calendar',

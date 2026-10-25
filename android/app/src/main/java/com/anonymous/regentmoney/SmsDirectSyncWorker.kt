@@ -105,7 +105,8 @@ class SmsDirectSyncWorker(context: Context, workerParams: WorkerParameters) : Wo
 
         // Read token and active user at execution time
         val prefs = applicationContext.getSharedPreferences("regent_native_prefs", Context.MODE_PRIVATE)
-        val token = prefs.getString("auth_access_token", null)
+        val rawToken = prefs.getString("auth_access_token", null)
+        val token = KeystoreHelper.decrypt(rawToken) ?: rawToken
         val currentUserId = prefs.getString("user_id", null)
         val enqueuedUserId = inputData.getString(KEY_USER_ID)
 
@@ -121,7 +122,7 @@ class SmsDirectSyncWorker(context: Context, workerParams: WorkerParameters) : Wo
         }
 
         if (token.isNullOrBlank()) {
-            Log.w(TAG, "No user auth token found in native storage. Skipping native ingestion.")
+            Log.w(TAG, "No user auth token found or keystore decryption failed. Skipping native ingestion.")
             return Result.failure()
         }
 

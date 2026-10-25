@@ -154,11 +154,6 @@ export const authService = {
     const profile: UserProfile = data.profile;
     const sessionConfirmed = data.sessionConfirmed;
 
-    // Log the email verification link in development so the developer knows it immediately
-    if (data.verificationLink) {
-      console.log(`[DEVELOPMENT] Email verification link: ${data.verificationLink}`);
-    }
-
     if (sessionConfirmed && data.accessToken) {
       // Save profile cache and token locally
       mmkvStorage.setString(SESSION_KEY, profile.id);

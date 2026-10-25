@@ -271,7 +271,7 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
       const payload = {
         bankProfileId: bank.id,
         applyBalanceChange: updateAccountBalance,
-        transactions: items.map((it) => {
+        transactions: items.map((it, idx) => {
           let itemTimestamp: number | undefined = undefined;
           const trimmedDate = it.date.trim();
           const trimmedTime = it.time.trim();
@@ -329,22 +329,27 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
             normalizedDate = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 
             let h = 12;
-            let min = 0;
+            let min = Math.floor(idx / 60) % 60;
+            let sec = idx % 60;
             if (trimmedTime) {
               const ampmMatch = trimmedTime.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?$/i);
               if (ampmMatch) {
                 let parsedH = parseInt(ampmMatch[1], 10);
                 const parsedM = parseInt(ampmMatch[2], 10);
-                const ampm = ampmMatch[3]?.toLowerCase();
+                const parsedS = ampmMatch[3] ? parseInt(ampmMatch[3], 10) : undefined;
+                const ampm = ampmMatch[4]?.toLowerCase();
                 if (ampm === 'pm' && parsedH < 12) parsedH += 12;
                 if (ampm === 'am' && parsedH === 12) parsedH = 0;
                 if (!isNaN(parsedH) && !isNaN(parsedM)) {
                   h = parsedH;
                   min = parsedM;
+                  sec = parsedS !== undefined && !isNaN(parsedS) ? parsedS : (idx % 60);
                 }
               }
+            } else {
+              h = 12 + Math.floor(idx / 3600);
             }
-            const computed = new Date(y, m - 1, d, h, min, 0);
+            const computed = new Date(y, m - 1, d, h, min, sec);
             if (!isNaN(computed.getTime())) {
               itemTimestamp = computed.getTime();
             }

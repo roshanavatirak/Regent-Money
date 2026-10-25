@@ -1,1326 +1,487 @@
+// src/screens/FinancialCalendarScreen.tsx
+//
+// Calendar: how this month is going, a spending heatmap, your no-spend streak,
+// bills coming up, the selected day, and your all-time records.
+
 import React, { useState, useMemo } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
-} from 'react-native';
+import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
+import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
+import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
+import * as Font from 'expo-font';
 import { useCalendarAnalytics } from '../hooks/useCalendarAnalytics';
 import { useTheme } from '../store';
+import { CategoryIcon } from '../components/CategoryIcon';
+
+const FOREST = '#0B3D2C';
+const LIME = '#B8F36B';
+const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
 interface FinancialCalendarScreenProps {
   navigation: any;
-  route?: {
-    params?: {
-      userCreatedAt?: string | number;
-    };
-  };
+  route?: { params?: { userCreatedAt?: string | number } };
 }
 
-const DAYS_OF_WEEK = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-const getOrdinal = (n: number) => {
+/** Local-time YYYY-MM-DD (toISOString uses UTC and shifts dates in India before 5:30 am). */
+const keyOf = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const dateOf = (key: string) => {
+  const [y, m, d] = key.split('-').map(Number);
+  return new Date(y, m - 1, d);
+};
+const ordinal = (n: number) => {
   const s = ['th', 'st', 'nd', 'rd'];
   const v = n % 100;
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 };
+const short = (n: number) => (n >= 100000 ? `₹${(n / 100000).toFixed(1)}L` : n >= 1000 ? `₹${(n / 1000).toFixed(1)}K` : `₹${Math.round(n)}`);
 
-export const FinancialCalendarScreen: React.FC<FinancialCalendarScreenProps> = ({
-  navigation,
-  route,
-}) => {
+export const FinancialCalendarScreen: React.FC<FinancialCalendarScreenProps> = ({ navigation, route }) => {
   const insets = useSafeAreaInsets();
   const { colors, isDark } = useTheme();
-  const userCreatedAt = route?.params?.userCreatedAt;
+  const display = Font.isLoaded('BricolageGrotesque_800ExtraBold') ? 'BricolageGrotesque_800ExtraBold' : undefined;
+  const heading = { fontFamily: display, fontWeight: display ? undefined : ('800' as const) };
 
-  // View Mode: 'calendar' (1st-31st) vs 'salary_cycle' (Payday-to-Payday)
-  const [viewMode, setViewMode] = useState<'calendar' | 'salary_cycle'>('calendar');
+  const todayKey = keyOf(new Date());
+  const [browsing, setBrowsing] = useState(new Date());
+  const [selectedKey, setSelectedKey] = useState(todayKey);
+  const [masked, setMasked] = useState(false);
 
-  // Currently browsed month
-  const [browsingDate, setBrowsingDate] = useState<Date>(new Date());
-
-  // Selected date for detailed breakdown drawer
-  const [selectedDateKey, setSelectedDateKey] = useState<string>(
-    new Date().toISOString().split('T')[0]
-  );
-
-  // Privacy mask toggle
-  const [isMasked, setIsMasked] = useState<boolean>(false);
-
-  // Core Analytics Engine
-  const {
-    dailyDataMap,
-    createdDateKey,
-    recurringBillsByDayOfMonth,
-    salaryCycleStats,
-    records,
-    toggleExcludeRecordTx,
-    isTxExcluded,
-  } = useCalendarAnalytics(browsingDate, userCreatedAt);
+  const { dailyDataMap, createdDateKey, recurringBillsByDayOfMonth, salaryCycleStats, records, toggleExcludeRecordTx, isTxExcluded } =
+    useCalendarAnalytics(browsing, route?.params?.userCreatedAt);
 
   const peakDay = records.peakDay as any;
   const peakWeek = records.peakWeek as any;
-  const bestSavingsMonth = records.bestSavingsMonth as any;
+  const bestMonth = records.bestSavingsMonth as any;
 
-  // Month navigation helpers
-  const handlePrevMonth = () => {
-    setBrowsingDate(new Date(browsingDate.getFullYear(), browsingDate.getMonth() - 1, 1));
+  const money = (v: number | null | undefined, sign = false) => {
+    if (v === null || v === undefined || isNaN(v)) return '';
+    if (masked) return '₹••••';
+    const abs = `₹${Math.abs(v).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+    return sign ? (v >= 0 ? `+${abs}` : `−${abs}`) : abs;
   };
 
-  const handleNextMonth = () => {
-    setBrowsingDate(new Date(browsingDate.getFullYear(), browsingDate.getMonth() + 1, 1));
-  };
+  /* ---------------- Month data ---------------- */
 
-  const handleJumpToToday = () => {
-    const today = new Date();
-    setBrowsingDate(today);
-    setSelectedDateKey(today.toISOString().split('T')[0]);
-  };
+  const year = browsing.getFullYear();
+  const month = browsing.getMonth();
+  const isThisMonth = year === new Date().getFullYear() && month === new Date().getMonth();
+  const monthName = browsing.toLocaleDateString('en-IN', { month: 'long' });
 
-  // Calendar Grid Days Builder
-  const calendarDays = useMemo(() => {
-    const year = browsingDate.getFullYear();
-    const month = browsingDate.getMonth();
+  const { cells, stats, upcoming } = useMemo(() => {
+    const first = new Date(year, month, 1).getDay();
+    const total = new Date(year, month + 1, 0).getDate();
+    const list: any[] = [];
+    for (let i = 0; i < first; i++) list.push(null);
 
-    const firstDayIndex = new Date(year, month, 1).getDay();
-    const totalDaysInMonth = new Date(year, month + 1, 0).getDate();
-    const todayKey = new Date().toISOString().split('T')[0];
+    let spent = 0;
+    let earned = 0;
+    let noSpendDays = 0;
+    let elapsed = 0;
+    let maxDebit = 0;
+    const coming: { day: number; merchant: string; amount: number }[] = [];
 
-    const days: Array<{
-      dayNumber: number | null;
-      dateKey: string;
-      isToday: boolean;
-      isAccountCreated: boolean;
-      data?: {
-        debits: number;
-        credits: number;
-        txs: any[];
-      };
-      expectedBills?: Array<{ merchant: string; amount: number }>;
-    }> = [];
-
-    // Blank padding cells for start of month
-    for (let i = 0; i < firstDayIndex; i++) {
-      days.push({ dayNumber: null, dateKey: `pad-${i}`, isToday: false, isAccountCreated: false });
+    for (let d = 1; d <= total; d++) {
+      const key = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      const data = dailyDataMap.get(key);
+      const debits = data?.debits || 0;
+      const credits = data?.credits || 0;
+      const past = key <= todayKey;
+      const tracked = past && (!createdDateKey || key >= createdDateKey);
+      maxDebit = Math.max(maxDebit, debits);
+      if (tracked) {
+        elapsed++;
+        spent += debits;
+        earned += credits;
+        if (debits === 0) noSpendDays++;
+      }
+      if (!past) {
+        (recurringBillsByDayOfMonth.get(d) || []).forEach((b: any) => coming.push({ day: d, merchant: b.merchant, amount: b.amount }));
+      }
+      list.push({ day: d, key, debits, credits, past, tracked, joined: createdDateKey === key, bills: !past ? recurringBillsByDayOfMonth.get(d) : undefined });
     }
+    return {
+      cells: list.map((c) => (c ? { ...c, heat: maxDebit > 0 ? Math.sqrt(c.debits / maxDebit) : 0 } : null)),
+      stats: { spent, earned, noSpendDays, elapsed, avg: elapsed > 0 ? spent / elapsed : 0 },
+      upcoming: coming.slice(0, 5),
+    };
+  }, [year, month, dailyDataMap, createdDateKey, recurringBillsByDayOfMonth, todayKey]);
 
-    // Days of the month
-    for (let day = 1; day <= totalDaysInMonth; day++) {
-      const monthStr = String(month + 1).padStart(2, '0');
-      const dayStr = String(day).padStart(2, '0');
-      const dateKey = `${year}-${monthStr}-${dayStr}`;
+  const selected = dailyDataMap.get(selectedKey);
+  const selectedDate = dateOf(selectedKey);
+  const selectedIsFuture = selectedKey > todayKey;
 
-      const dayData = dailyDataMap.get(dateKey);
-      const isToday = dateKey === todayKey;
-      const isAccountCreated = createdDateKey === dateKey;
+  // Streak message
+  const cur = records.currentNoSpendStreak || 0;
+  const best = records.longestNoSpendStreak || 0;
+  const streakNudge =
+    cur > 0 && cur >= best
+      ? { title: `Your best streak ever: ${cur} day${cur === 1 ? '' : 's'}.`, text: 'Skip spending tomorrow to push it further.' }
+      : cur > 0 && best > cur
+        ? { title: `${best - cur + 1} more no-spend day${best - cur + 1 === 1 ? '' : 's'}`, text: 'beats your best streak.' }
+        : null;
 
-      // Expected recurring bills for future days
-      const isFuture = new Date(dateKey) > new Date();
-      const expectedBills = isFuture ? recurringBillsByDayOfMonth.get(day) : undefined;
+  /* ---------------- Theme ---------------- */
 
-      days.push({
-        dayNumber: day,
-        dateKey,
-        isToday,
-        isAccountCreated,
-        data: dayData,
-        expectedBills,
-      });
-    }
+  const ink = colors.text;
+  const muted = colors.textSecondary;
+  const pageBg = isDark ? colors.background : '#F3F6F4';
+  const surface = colors.card;
+  const line = isDark ? colors.border : '#E1E9E4';
+  const softGreen = isDark ? 'rgba(184,243,107,0.12)' : '#E3F2E8';
+  const green = isDark ? LIME : '#0B6B3A';
+  const red = isDark ? '#FFA8A8' : '#C92A2A';
 
-    return days;
-  }, [browsingDate, dailyDataMap, createdDateKey, recurringBillsByDayOfMonth]);
-
-  // Selected Day Details
-  const selectedDayData = useMemo(() => {
-    return dailyDataMap.get(selectedDateKey);
-  }, [dailyDataMap, selectedDateKey]);
-
-  // Currency Formatter with privacy and genuine data support
-  const formatCurrency = (val: number | null | undefined, showSign = false) => {
-    if (val === null || val === undefined || isNaN(val)) return 'N/A';
-    if (isMasked) return '₹••••';
-    const abs = Math.abs(val).toLocaleString('en-IN', { maximumFractionDigits: 0 });
-    if (!showSign) return `₹${abs}`;
-    return val >= 0 ? `+₹${abs}` : `-₹${abs}`;
+  const goBack = () => (navigation?.canGoBack?.() ? navigation.goBack() : navigation?.navigate?.('Main'));
+  const changeMonth = (delta: number) => setBrowsing(new Date(year, month + delta, 1));
+  const jumpToday = () => {
+    setBrowsing(new Date());
+    setSelectedKey(todayKey);
   };
 
-  const monthTitle = browsingDate.toLocaleDateString('en-IN', {
-    month: 'long',
-    year: 'numeric',
-  });
+  /* ---------------- Render ---------------- */
 
   return (
-    <View style={[styles.root, { paddingTop: insets.top, backgroundColor: isDark ? colors.background : '#F8FAFC' }]}>
-      {/* 1. Header Bar */}
-      <View style={[styles.headerBar, { backgroundColor: isDark ? colors.card : '#FFFFFF', borderBottomColor: isDark ? colors.border : '#F1F5F9' }]}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => {
-            if (navigation?.canGoBack?.()) {
-              navigation.goBack();
-            } else if (navigation?.navigate) {
-              navigation.navigate('Main');
-            }
-          }}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <Ionicons name="arrow-back" size={24} color={isDark ? colors.text : '#0F172A'} />
-        </TouchableOpacity>
-
-        <View style={styles.headerTitleGroup}>
-          <Text style={[styles.headerTitle, { color: isDark ? colors.text : '#0F172A' }]}>Financial Calendar</Text>
-          <Text style={styles.headerSubtitle}>Spends, Earnings & All-Time Records</Text>
-        </View>
-
-        <View style={styles.headerRightActions}>
-          <TouchableOpacity
-            style={styles.iconAction}
-            onPress={() => setIsMasked(!isMasked)}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Feather name={isMasked ? 'eye-off' : 'eye'} size={20} color={isDark ? colors.textSecondary : '#475569'} />
-          </TouchableOpacity>
-        </View>
+    <View style={{ flex: 1, backgroundColor: pageBg, paddingTop: insets.top }}>
+      <View style={s.header}>
+        <Pressable onPress={goBack} style={[s.roundBtn, { backgroundColor: surface }]} accessibilityLabel="Back">
+          <Feather name="arrow-left" size={20} color={ink} />
+        </Pressable>
+        <Text style={[s.headerTitle, { color: ink }]}>Calendar</Text>
+        <Pressable onPress={() => setMasked((m) => !m)} style={[s.roundBtn, { backgroundColor: surface }]} accessibilityLabel={masked ? 'Show amounts' : 'Hide amounts'}>
+          <Feather name={masked ? 'eye-off' : 'eye'} size={18} color={ink} />
+        </Pressable>
       </View>
 
-      <ScrollView
-        style={styles.scrollArea}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* 2. Salary Cycle Headline Banner */}
-        <View style={styles.salaryBanner}>
-          <View style={styles.salaryBannerHeader}>
-            <View style={styles.salaryBadgeRow}>
-              <MaterialCommunityIcons name="wallet-outline" size={18} color="#10B981" />
-              <Text style={styles.salaryBadgeText}>
-                {salaryCycleStats.payday !== null
-                  ? `Payday on ${getOrdinal(salaryCycleStats.payday)} of month`
-                  : 'Payday: Not detected (N/A)'}
+      <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 40 }} showsVerticalScrollIndicator={false}>
+        {/* Hero */}
+        <Animated.View entering={FadeInDown.duration(380)} style={s.hero}>
+          <View pointerEvents="none" style={s.heroRing} />
+          <Text style={s.heroLabel}>{isThisMonth ? `Spent in ${monthName} so far` : `Spent in ${monthName}`}</Text>
+          <Text style={[s.heroAmount, heading]} numberOfLines={1} adjustsFontSizeToFit>{money(stats.spent)}</Text>
+          <Text style={s.heroSub}>
+            {stats.elapsed > 0 ? `${money(stats.avg)} a day on average` : 'Nothing tracked yet this month'}
+            {stats.earned > 0 ? `, ${money(stats.earned)} came in` : ''}
+          </Text>
+          <View style={s.tiles}>
+            <View style={s.tile}>
+              <Text style={s.tileLabel}>No-spend days</Text>
+              <Text style={s.tileValue}>
+                {stats.noSpendDays} <Text style={s.tileOf}>of {stats.elapsed}</Text>
               </Text>
             </View>
-            <TouchableOpacity onPress={handleJumpToToday} style={styles.todayPill} activeOpacity={0.7}>
-              <Text style={styles.todayPillText}>Today</Text>
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.salaryNumbersRow}>
-            <View>
-              <Text style={styles.salaryHeadline}>
-                {salaryCycleStats.totalBalance !== null
-                  ? formatCurrency(salaryCycleStats.totalBalance)
-                  : 'N/A'}
+            <View style={s.tile}>
+              <Text style={s.tileLabel}>Current streak</Text>
+              <Text style={s.tileValue}>
+                {cur} day{cur === 1 ? '' : 's'} {best > 0 ? <Text style={s.tileOf}>best {best}</Text> : null}
               </Text>
-              <Text style={styles.salarySublabel}>
-                {salaryCycleStats.daysLeft !== null
-                  ? `Available · ${salaryCycleStats.daysLeft} days to next salary`
-                  : 'Total balance across linked accounts'}
-              </Text>
-            </View>
-            <View style={styles.dailyAllowanceBox}>
-              <Text style={styles.allowanceNumber}>
-                {salaryCycleStats.dailyAllowance !== null
-                  ? formatCurrency(salaryCycleStats.dailyAllowance)
-                  : 'N/A'}
-              </Text>
-              <Text style={styles.allowanceLabel}>daily allowance</Text>
             </View>
           </View>
-        </View>
-
-        {/* 3. Mode Toggle (Calendar Month vs Salary Cycle) */}
-        <View style={[styles.viewModeToggle, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#E2E8F0' }]}>
-          <TouchableOpacity
-            style={[styles.modeTab, viewMode === 'calendar' && (isDark ? styles.modeTabActiveDark : styles.modeTabActive)]}
-            onPress={() => setViewMode('calendar')}
-            activeOpacity={0.7}
-          >
-            <Ionicons
-              name="calendar-outline"
-              size={15}
-              color={viewMode === 'calendar' ? (isDark ? '#FFFFFF' : '#0F172A') : '#64748B'}
-            />
-            <Text style={[styles.modeTabText, viewMode === 'calendar' && (isDark ? styles.modeTabTextActiveDark : styles.modeTabTextActive)]}>
-              Calendar Month
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.modeTab, viewMode === 'salary_cycle' && (isDark ? styles.modeTabActiveDark : styles.modeTabActive)]}
-            onPress={() => setViewMode('salary_cycle')}
-            activeOpacity={0.7}
-          >
-            <MaterialCommunityIcons
-              name="cash-sync"
-              size={16}
-              color={viewMode === 'salary_cycle' ? (isDark ? '#FFFFFF' : '#0F172A') : '#64748B'}
-            />
-            <Text style={[styles.modeTabText, viewMode === 'salary_cycle' && (isDark ? styles.modeTabTextActiveDark : styles.modeTabTextActive)]}>
-              Payday Cycle
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* 4. Month Navigator */}
-        <View style={styles.monthNav}>
-          <TouchableOpacity onPress={handlePrevMonth} style={[styles.navArrow, { backgroundColor: isDark ? colors.card : '#FFFFFF', borderColor: isDark ? colors.border : '#E2E8F0' }]} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <Ionicons name="chevron-back" size={20} color={isDark ? colors.text : '#0F172A'} />
-          </TouchableOpacity>
-          <Text style={[styles.monthNavTitle, { color: isDark ? colors.text : '#0F172A' }]}>{monthTitle}</Text>
-          <TouchableOpacity onPress={handleNextMonth} style={[styles.navArrow, { backgroundColor: isDark ? colors.card : '#FFFFFF', borderColor: isDark ? colors.border : '#E2E8F0' }]} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <Ionicons name="chevron-forward" size={20} color={isDark ? colors.text : '#0F172A'} />
-          </TouchableOpacity>
-        </View>
-
-        {/* 5. Calendar Grid */}
-        <View style={[styles.calendarCard, { backgroundColor: isDark ? colors.card : '#FFFFFF', borderColor: isDark ? colors.border : '#F1F5F9' }]}>
-          {/* Weekday Labels */}
-          <View style={[styles.weekdayRow, { borderBottomColor: isDark ? colors.border : '#F1F5F9' }]}>
-            {DAYS_OF_WEEK.map((day, idx) => (
-              <Text
-                key={day}
-                style={[
-                  styles.weekdayLabel,
-                  (idx === 0 || idx === 6) && styles.weekendLabel,
-                ]}
-              >
-                {day}
+          {salaryCycleStats.payday !== null && salaryCycleStats.daysLeft !== null && (
+            <View style={s.payday}>
+              <Feather name="calendar" size={14} color={LIME} />
+              <Text style={s.paydayText}>
+                Payday on the {ordinal(salaryCycleStats.payday)}, in {salaryCycleStats.daysLeft} day{salaryCycleStats.daysLeft === 1 ? '' : 's'}.
+                {salaryCycleStats.dailyAllowance !== null ? ` ${money(salaryCycleStats.dailyAllowance)} a day until then.` : ''}
               </Text>
+            </View>
+          )}
+        </Animated.View>
+
+        {/* Streak nudge */}
+        {streakNudge && isThisMonth && (
+          <Animated.View entering={FadeIn.duration(300)} style={[s.nudge, { backgroundColor: softGreen }]}>
+            <View style={s.nudgeIcon}>
+              <Feather name="shield" size={18} color={LIME} />
+            </View>
+            <Text style={[s.nudgeText, { color: ink }]}>
+              <Text style={{ fontWeight: '700' }}>{streakNudge.title} </Text>
+              {streakNudge.text}
+            </Text>
+          </Animated.View>
+        )}
+
+        {/* Month nav */}
+        <View style={s.monthNav}>
+          <Pressable onPress={() => changeMonth(-1)} style={[s.navBtn, { backgroundColor: surface }]} accessibilityLabel="Previous month">
+            <Feather name="chevron-left" size={18} color={ink} />
+          </Pressable>
+          <Pressable onPress={jumpToday} accessibilityLabel="Go to today">
+            <Text style={[s.monthTitle, { color: ink }, heading]}>
+              {monthName} {year}
+            </Text>
+            {!isThisMonth && <Text style={[s.backToday, { color: green }]}>Back to today</Text>}
+          </Pressable>
+          <Pressable onPress={() => changeMonth(1)} style={[s.navBtn, { backgroundColor: surface }]} accessibilityLabel="Next month">
+            <Feather name="chevron-right" size={18} color={ink} />
+          </Pressable>
+        </View>
+
+        {/* Heatmap */}
+        <View style={[s.calCard, { backgroundColor: surface, borderColor: line }]}>
+          <View style={s.weekRow}>
+            {WEEKDAYS.map((w, i) => (
+              <Text key={i} style={[s.weekday, { color: muted }]}>{w}</Text>
             ))}
           </View>
-
-          {/* Days Grid */}
-          <View style={styles.gridContainer}>
-            {calendarDays.map((item, idx) => {
-              if (item.dayNumber === null) {
-                return <View key={`empty-${idx}`} style={styles.dayCellEmpty} />;
-              }
-
-              const isSelected = item.dateKey === selectedDateKey;
-              const hasDebits = (item.data?.debits || 0) > 0;
-              const hasCredits = (item.data?.credits || 0) > 0;
-              const isPastOrToday = new Date(item.dateKey).setHours(0, 0, 0, 0) <= new Date().setHours(0, 0, 0, 0);
-              const isNoSpend = isPastOrToday && !hasDebits && !hasCredits;
-
+          <View style={s.grid}>
+            {cells.map((c: any, i: number) => {
+              if (!c) return <View key={`pad-${i}`} style={s.cellWrap} />;
+              const isSel = c.key === selectedKey;
+              const isToday = c.key === todayKey;
+              const hasSpend = c.debits > 0;
+              const noSpend = c.tracked && !hasSpend;
+              const alpha = hasSpend ? 0.14 + 0.6 * c.heat : 0;
+              const strong = alpha > 0.5;
+              const bg = hasSpend ? `rgba(224,49,49,${alpha.toFixed(2)})` : noSpend ? softGreen : isDark ? 'rgba(255,255,255,0.03)' : '#FFFFFF';
+              const numColor = hasSpend ? (strong || isDark ? '#FFFFFF' : '#7A1D1D') : noSpend ? green : muted;
               return (
-                <TouchableOpacity
-                  key={item.dateKey}
-                  style={[
-                    styles.dayCell,
-                    isDark && styles.dayCellDark,
-                    isNoSpend && (isDark ? styles.dayCellNoSpendDark : styles.dayCellNoSpend),
-                    hasDebits && (isDark ? styles.dayCellDebitsDark : styles.dayCellDebits),
-                    hasCredits && !hasDebits && (isDark ? styles.dayCellCreditsDark : styles.dayCellCredits),
-                    item.isToday && styles.dayCellToday,
-                    isSelected && styles.dayCellSelected,
-                  ]}
-                  onPress={() => setSelectedDateKey(item.dateKey)}
-                  activeOpacity={0.7}
-                >
-                  {/* Account Created Milestone Indicator */}
-                  {item.isAccountCreated && (
-                    <View style={styles.joinedBadge}>
-                      <Ionicons name="sparkles" size={10} color={isSelected ? '#FDE047' : '#F59E0B'} />
-                    </View>
-                  )}
-
-                  {/* Day Number */}
-                  <Text
+                <View key={c.key} style={s.cellWrap}>
+                  <Pressable
+                    onPress={() => setSelectedKey(c.key)}
                     style={[
-                      styles.dayNumberText,
-                      isDark && { color: colors.text },
-                      item.isToday && styles.dayNumberTextToday,
-                      isSelected && styles.dayNumberTextSelected,
+                      s.cell,
+                      { backgroundColor: bg },
+                      !c.past && !hasSpend && { borderWidth: 1, borderColor: line },
+                      isToday && !isSel && { borderWidth: 2, borderColor: isDark ? LIME : FOREST },
+                      isSel && { borderWidth: 2.5, borderColor: isDark ? LIME : FOREST },
                     ]}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: isSel }}
+                    accessibilityLabel={`${c.day} ${monthName}${hasSpend ? `, spent ${money(c.debits)}` : noSpend ? ', no spend' : ''}`}
                   >
-                    {item.dayNumber}
-                  </Text>
-
-                  {/* Financial Metrics in Cell */}
-                  <View style={styles.cellNumbers}>
-                    {hasDebits && (
-                      <View style={[styles.debitPill, isSelected && styles.debitPillSelected]}>
-                        <Text
-                          style={[styles.debitAmount, isSelected && styles.amountSelected]}
-                          numberOfLines={1}
-                        >
-                          -{formatCurrency(item.data!.debits)}
-                        </Text>
-                      </View>
-                    )}
-                    {hasCredits && (
-                      <View style={[styles.creditPill, isSelected && styles.creditPillSelected]}>
-                        <Text
-                          style={[styles.creditAmount, isSelected && styles.amountSelected]}
-                          numberOfLines={1}
-                        >
-                          +{formatCurrency(item.data!.credits)}
-                        </Text>
-                      </View>
-                    )}
-
-                    {/* Expected Bills (Faded indicator) */}
-                    {item.expectedBills && item.expectedBills.length > 0 && (
-                      <View style={[styles.expectedPill, isSelected && styles.expectedPillSelected]}>
-                        <Feather name="zap" size={8} color={isSelected ? '#C7D2FE' : '#6366F1'} style={{ marginRight: 2 }} />
-                        <Text style={[styles.expectedText, isSelected && { color: '#FFFFFF' }]}>
-                          ₹{item.expectedBills[0].amount}
-                        </Text>
-                      </View>
-                    )}
-
-                    {/* No Spend Shield Icon (Vector Icon, Clean & High Visibility) */}
-                    {isNoSpend && !item.isAccountCreated && (
-                      <View style={styles.noSpendIndicator}>
-                        <MaterialCommunityIcons
-                          name="shield-check"
-                          size={13}
-                          color={isSelected ? '#86EFAC' : '#10B981'}
-                        />
-                      </View>
-                    )}
-                  </View>
-                </TouchableOpacity>
+                    <Text style={[s.cellNum, { color: numColor }, (isToday || isSel) && { fontWeight: '800' }]}>{c.day}</Text>
+                    {hasSpend ? (
+                      <Text style={[s.cellAmt, { color: numColor }]} numberOfLines={1}>{masked ? '••' : short(c.debits)}</Text>
+                    ) : noSpend ? (
+                      <View style={[s.noSpendDot, { backgroundColor: isDark ? LIME : '#16A34A' }]} />
+                    ) : c.bills ? (
+                      <Feather name="clock" size={10} color={muted} style={{ marginTop: 2 }} />
+                    ) : null}
+                    {c.credits > 0 && <View style={[s.creditDot, { backgroundColor: isDark ? LIME : '#16A34A' }]} />}
+                    {c.joined && <Feather name="star" size={9} color="#F59F00" style={s.joinedStar} />}
+                  </Pressable>
+                </View>
               );
             })}
           </View>
-        </View>
-
-        {/* 6. Selected Date Details Drawer */}
-        <View style={[styles.dayInspectorCard, { backgroundColor: isDark ? colors.card : '#FFFFFF', borderColor: isDark ? colors.border : '#F1F5F9' }]}>
-          <View style={[styles.inspectorHeader, { borderBottomColor: isDark ? colors.border : '#F1F5F9' }]}>
-            <View>
-              <Text style={[styles.inspectorDate, { color: isDark ? colors.text : '#0F172A' }]}>
-                {new Date(selectedDateKey).toLocaleDateString('en-IN', {
-                  weekday: 'short',
-                  day: 'numeric',
-                  month: 'short',
-                  year: 'numeric',
-                })}
-              </Text>
-              {createdDateKey === selectedDateKey && (
-                <View style={styles.milestoneRow}>
-                  <Ionicons name="sparkles" size={13} color="#F59E0B" />
-                  <Text style={styles.joinedNote}>Account created on this date</Text>
-                </View>
-              )}
+          <View style={s.legend}>
+            <View style={s.legendItem}>
+              <View style={[s.legendSwatch, { backgroundColor: softGreen }]} />
+              <Text style={[s.legendText, { color: muted }]}>No spend</Text>
             </View>
-            <View style={styles.inspectorTotals}>
-              {selectedDayData?.debits ? (
-                <Text style={styles.inspectorDebit}>
-                  Spent: {formatCurrency(selectedDayData.debits)}
-                </Text>
-              ) : null}
-              {selectedDayData?.credits ? (
-                <Text style={styles.inspectorCredit}>
-                  Earned: {formatCurrency(selectedDayData.credits)}
-                </Text>
-              ) : null}
+            <View style={s.legendItem}>
+              <View style={s.legendRamp}>
+                {[0.18, 0.35, 0.55, 0.74].map((a) => (
+                  <View key={a} style={{ flex: 1, backgroundColor: `rgba(224,49,49,${a})` }} />
+                ))}
+              </View>
+              <Text style={[s.legendText, { color: muted }]}>Less to more</Text>
+            </View>
+            <View style={s.legendItem}>
+              <View style={[s.creditDot, { position: 'relative', top: 0, right: 0, backgroundColor: isDark ? LIME : '#16A34A' }]} />
+              <Text style={[s.legendText, { color: muted }]}>Money in</Text>
             </View>
           </View>
+        </View>
 
-          {/* List of transactions on selected day */}
-          {selectedDayData?.txs && selectedDayData.txs.length > 0 ? (
-            <View style={styles.txListContainer}>
-              {selectedDayData.txs.map((tx: any, i: number) => {
-                const isExcluded = isTxExcluded(tx.id);
+        {/* Selected day */}
+        <Animated.View key={selectedKey} entering={FadeIn.duration(220)} style={[s.dayCard, { backgroundColor: surface, borderColor: line }]}>
+          <View style={s.dayHead}>
+            <Text style={[s.dayTitle, { color: ink }]}>
+              {selectedDate.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
+            </Text>
+            {selected?.debits ? (
+              <Text style={[s.dayTotal, { color: red }]}>{money(selected.debits)} spent</Text>
+            ) : !selectedIsFuture ? (
+              <Text style={[s.dayTotal, { color: green }]}>No spend</Text>
+            ) : null}
+          </View>
+          {createdDateKey === selectedKey && <Text style={[s.joined, { color: '#B8860B' }]}>You joined Regent on this day</Text>}
+
+          {selected?.txs?.length ? (
+            selected.txs.map((tx: any, i: number) => {
+              const isCredit = tx.type === 'credit';
+              const excluded = isTxExcluded(tx.id);
+              return (
+                <View key={tx.id || i} style={[s.txRow, i < selected.txs.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line }]}>
+                  <CategoryIcon category={isCredit ? 'money_received' : tx.category || 'miscellaneous'} variant="soft" size={38} />
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={[s.txName, { color: ink }]} numberOfLines={1}>{tx.merchant || (isCredit ? 'Money received' : 'Payment')}</Text>
+                    {!isCredit && (
+                      <Pressable onPress={() => toggleExcludeRecordTx(tx.id)} hitSlop={6}>
+                        <Text style={[s.txExclude, { color: excluded ? red : muted }]}>
+                          {excluded ? 'Ignored for records. Undo' : 'Ignore for records'}
+                        </Text>
+                      </Pressable>
+                    )}
+                  </View>
+                  <Text style={[s.txAmt, { color: isCredit ? green : ink }]}>{money(isCredit ? Number(tx.amount) : -Number(tx.amount), true)}</Text>
+                </View>
+              );
+            })
+          ) : selectedIsFuture ? (
+            <Text style={[s.dayEmpty, { color: muted }]}>
+              {(recurringBillsByDayOfMonth.get(selectedDate.getDate()) || []).length > 0
+                ? `Expected: ${(recurringBillsByDayOfMonth.get(selectedDate.getDate()) || []).map((b: any) => `${b.merchant} ${money(b.amount)}`).join(', ')}`
+                : 'Nothing expected on this day.'}
+            </Text>
+          ) : (
+            <View style={s.dayNoSpend}>
+              <View style={[s.dayNoSpendIcon, { backgroundColor: softGreen }]}>
+                <Feather name="shield" size={18} color={green} />
+              </View>
+              <Text style={[s.dayEmpty, { color: muted, flex: 1 }]}>
+                {selectedKey === todayKey && cur > 0 ? `Nothing spent. That’s day ${cur} of your streak.` : 'Nothing spent on this day.'}
+              </Text>
+            </View>
+          )}
+        </Animated.View>
+
+        {/* Coming up */}
+        {upcoming.length > 0 && (
+          <>
+            <Text style={[s.section, { color: ink }]}>Coming up this month</Text>
+            <View style={[s.listCard, { backgroundColor: surface, borderColor: line }]}>
+              {upcoming.map((b, i) => (
+                <View key={`${b.day}-${i}`} style={[s.billRow, i < upcoming.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line }]}>
+                  <View style={[s.billDate, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#F1F5F2' }]}>
+                    <Text style={[s.billDay, { color: ink }]}>{b.day}</Text>
+                    <Text style={[s.billMon, { color: muted }]}>{browsing.toLocaleDateString('en-IN', { month: 'short' })}</Text>
+                  </View>
+                  <Text style={[s.billName, { color: ink }]} numberOfLines={1}>{b.merchant}</Text>
+                  <Text style={[s.billAmt, { color: ink }]}>{money(b.amount)}</Text>
+                </View>
+              ))}
+            </View>
+          </>
+        )}
+
+        {/* Records */}
+        <Text style={[s.section, { color: ink }]}>Your records</Text>
+        <View style={s.recordGrid}>
+          {[
+            { label: 'Longest no-spend streak', value: best > 0 ? `${best} day${best === 1 ? '' : 's'}` : null, sub: cur > 0 ? `${cur} going now` : undefined },
+            { label: 'Best savings month', value: bestMonth ? `${bestMonth.rate}%` : null, sub: bestMonth ? `${bestMonth.monthKey}, saved ${money(bestMonth.saved)}` : undefined },
+            { label: 'Biggest day', value: peakDay?.amount > 0 ? money(peakDay.amount) : null, sub: peakDay?.amount > 0 ? `${peakDay.date}${peakDay.tx?.merchant ? `, ${peakDay.tx.merchant}` : ''}` : undefined },
+            { label: 'Biggest week', value: peakWeek?.spent > 0 ? money(peakWeek.spent) : null, sub: peakWeek?.spent > 0 ? peakWeek.weekKey : undefined },
+          ].map((r, i) => (
+            <Animated.View key={r.label} entering={FadeInDown.delay(i * 60).duration(360)} style={[s.recordCard, { backgroundColor: surface, borderColor: line }]}>
+              <Text style={[s.recordLabel, { color: muted }]}>{r.label}</Text>
+              <Text style={[s.recordValue, { color: r.value ? ink : muted }, heading]} numberOfLines={1} adjustsFontSizeToFit>
+                {r.value || 'Not yet'}
+              </Text>
+              {r.sub ? <Text style={[s.recordSub, { color: muted }]} numberOfLines={2}>{r.sub}</Text> : null}
+            </Animated.View>
+          ))}
+        </View>
+
+        {/* Month by month */}
+        {records.monthRows.length > 0 && (
+          <>
+            <Text style={[s.section, { color: ink }]}>Month by month</Text>
+            <View style={[s.listCard, { backgroundColor: surface, borderColor: line }]}>
+              {records.monthRows.map((row: any, i: number) => {
+                const rate = Math.max(0, Math.min(100, row.savingsRate || 0));
                 return (
-                  <View key={tx.id || i} style={[styles.txRow, { borderBottomColor: isDark ? colors.border : '#F8FAFC' }]}>
-                    <View style={styles.txLeft}>
-                      <View
-                        style={[
-                          styles.txIconCircle,
-                          tx.type === 'credit' ? styles.txCreditIcon : styles.txDebitIcon,
-                        ]}
-                      >
-                        <Ionicons
-                          name={tx.type === 'credit' ? 'arrow-down' : 'arrow-up'}
-                          size={14}
-                          color={tx.type === 'credit' ? '#10B981' : '#EF4444'}
-                        />
-                      </View>
-                      <View style={{ flex: 1, marginLeft: 10 }}>
-                        <Text style={[styles.txMerchant, { color: isDark ? colors.text : '#0F172A' }]} numberOfLines={1}>
-                          {tx.merchant || 'Spends'}
-                        </Text>
-                        <Text style={styles.txCategory}>
-                          {tx.category ? tx.category.charAt(0).toUpperCase() + tx.category.slice(1) : 'General'}
-                        </Text>
-                      </View>
+                  <View key={row.monthKey} style={[s.monthRowItem, i < records.monthRows.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line }]}>
+                    <View style={s.monthRowTop}>
+                      <Text style={[s.monthRowName, { color: ink }]}>{row.monthLabel}</Text>
+                      <Text style={[s.monthRowRate, { color: rate >= 30 ? green : muted }]}>{row.savingsRate}% saved</Text>
                     </View>
-
-                    <View style={styles.txRight}>
-                      <Text
-                        style={[
-                          styles.txAmount,
-                          tx.type === 'credit' ? styles.txCreditAmount : styles.txDebitAmount,
-                        ]}
-                      >
-                        {formatCurrency(Number(tx.amount || 0), true)}
-                      </Text>
-                      {/* One-tap Exclude from Records toggle */}
-                      {tx.type === 'debit' && (
-                        <TouchableOpacity
-                          style={[styles.excludePill, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#F1F5F9' }]}
-                          onPress={() => toggleExcludeRecordTx(tx.id)}
-                          activeOpacity={0.7}
-                        >
-                          <Text style={[styles.excludeText, isExcluded && styles.excludeActive]}>
-                            {isExcluded ? 'Excluded' : 'Exclude'}
-                          </Text>
-                        </TouchableOpacity>
-                      )}
+                    <View style={[s.rateTrack, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#EDF2EF' }]}>
+                      <View style={[s.rateFill, { width: `${rate}%`, backgroundColor: isDark ? LIME : '#16A34A' }]} />
                     </View>
+                    <Text style={[s.monthRowSub, { color: muted }]}>
+                      {money(row.spent)} out, {money(row.earned)} in
+                    </Text>
                   </View>
                 );
               })}
             </View>
-          ) : (
-            <View style={styles.noTxPlaceholder}>
-              <View style={styles.noTxIconCircle}>
-                <MaterialCommunityIcons name="shield-check-outline" size={26} color="#10B981" />
-              </View>
-              <Text style={[styles.noTxTitle, { color: isDark ? colors.text : '#0F172A' }]}>Zero Spending Day</Text>
-              <Text style={styles.noTxText}>No debit transactions recorded on this day.</Text>
-            </View>
-          )}
-        </View>
-
-        {/* 7. Celebrated Wins & Positive Records */}
-        <Text style={[styles.sectionTitle, { color: isDark ? colors.text : '#0F172A' }]}>All-Time Records & Wins</Text>
-
-        <View style={styles.recordsGrid}>
-          {/* Win 1: Longest No-Spend Streak */}
-          <View style={[styles.recordCard, styles.winCard, isDark && styles.recordCardDark]}>
-            <View style={styles.recordIconHeader}>
-              <View style={styles.recordIconPillOrange}>
-                <Ionicons name="flame" size={16} color="#EA580C" />
-              </View>
-              <View style={styles.winBadge}>
-                <Text style={styles.winBadgeText}>WIN</Text>
-              </View>
-            </View>
-            <Text style={[styles.recordValue, { color: isDark ? colors.text : '#0F172A' }]}>
-              {records.longestNoSpendStreak > 0
-                ? `${records.longestNoSpendStreak} ${records.longestNoSpendStreak === 1 ? 'Day' : 'Days'}`
-                : 'N/A'}
-            </Text>
-            <Text style={styles.recordLabel}>Longest No-Spend Streak</Text>
-            <Text style={styles.recordContext}>
-              {records.currentNoSpendStreak > 0
-                ? `${records.currentNoSpendStreak} ${records.currentNoSpendStreak === 1 ? 'day' : 'days'} currently active`
-                : records.longestNoSpendStreak > 0
-                ? 'All-time zero spend streak'
-                : 'N/A'}
-            </Text>
-          </View>
-
-          {/* Win 2: Best Savings Month */}
-          <View style={[styles.recordCard, styles.winCard, isDark && styles.recordCardDark]}>
-            <View style={styles.recordIconHeader}>
-              <View style={styles.recordIconPillGreen}>
-                <Ionicons name="trophy" size={16} color="#10B981" />
-              </View>
-              <View style={styles.winBadge}>
-                <Text style={styles.winBadgeText}>SAVINGS</Text>
-              </View>
-            </View>
-            <Text style={[styles.recordValue, { color: isDark ? colors.text : '#0F172A' }]}>
-              {bestSavingsMonth ? `${bestSavingsMonth.rate}%` : 'N/A'}
-            </Text>
-            <Text style={styles.recordLabel}>Best Savings Month</Text>
-            <Text style={styles.recordContext}>
-              {bestSavingsMonth
-                ? `${bestSavingsMonth.monthKey} · Saved ${formatCurrency(bestSavingsMonth.saved)}`
-                : 'N/A'}
-            </Text>
-          </View>
-        </View>
-
-        {/* High-Spending Peak Records with Context */}
-        <View style={styles.recordsGrid}>
-          {/* Peak 1: Highest Spending Day of All Time */}
-          <View style={[styles.recordCard, isDark && styles.recordCardDark]}>
-            <View style={styles.recordIconHeader}>
-              <View style={styles.recordIconPillRed}>
-                <Ionicons name="trending-down" size={16} color="#EF4444" />
-              </View>
-              <View style={styles.peakBadge}>
-                <Text style={styles.peakBadgeText}>PEAK DAY</Text>
-              </View>
-            </View>
-            <Text style={[styles.recordValue, { color: isDark ? colors.text : '#0F172A' }]}>
-              {peakDay && peakDay.amount > 0 ? formatCurrency(peakDay.amount) : 'N/A'}
-            </Text>
-            <Text style={styles.recordLabel}>Highest Spend Day</Text>
-            <Text style={styles.recordContext}>
-              {peakDay && peakDay.amount > 0
-                ? `${peakDay.date} · ${peakDay.tx?.merchant || 'Top item'}`
-                : 'N/A'}
-            </Text>
-          </View>
-
-          {/* Peak 2: Highest Spending Week */}
-          <View style={[styles.recordCard, isDark && styles.recordCardDark]}>
-            <View style={styles.recordIconHeader}>
-              <View style={styles.recordIconPillPurple}>
-                <Ionicons name="bar-chart" size={16} color="#6366F1" />
-              </View>
-              <View style={styles.peakBadge}>
-                <Text style={styles.peakBadgeText}>PEAK WEEK</Text>
-              </View>
-            </View>
-            <Text style={[styles.recordValue, { color: isDark ? colors.text : '#0F172A' }]}>
-              {peakWeek && peakWeek.spent > 0 ? formatCurrency(peakWeek.spent) : 'N/A'}
-            </Text>
-            <Text style={styles.recordLabel}>Highest Spend Week</Text>
-            <Text style={styles.recordContext}>
-              {peakWeek && peakWeek.spent > 0 ? `${peakWeek.weekKey}` : 'N/A'}
-            </Text>
-          </View>
-        </View>
-
-        {/* 8. Monthly Financial Comparison Table */}
-        <Text style={[styles.sectionTitle, { color: isDark ? colors.text : '#0F172A' }]}>Monthly Comparison Table</Text>
-
-        <View style={[styles.tableCard, { backgroundColor: isDark ? colors.card : '#FFFFFF', borderColor: isDark ? colors.border : '#F1F5F9' }]}>
-          <View style={[styles.tableHeaderRow, { borderBottomColor: isDark ? colors.border : '#F1F5F9' }]}>
-            <Text style={[styles.th, { flex: 1.3 }]}>Month</Text>
-            <Text style={[styles.th, { flex: 1.2, textAlign: 'right' }]}>Spent</Text>
-            <Text style={[styles.th, { flex: 1.2, textAlign: 'right' }]}>Earned</Text>
-            <Text style={[styles.th, { flex: 1.1, textAlign: 'right' }]}>Savings</Text>
-          </View>
-
-          {records.monthRows.length > 0 ? (
-            records.monthRows.map((row, idx) => (
-              <View key={row.monthKey} style={[styles.tableRow, idx % 2 === 1 && (isDark ? styles.tableRowAltDark : styles.tableRowAlt)]}>
-                <Text style={[styles.td, styles.tdMonth, { flex: 1.3, color: isDark ? colors.text : '#0F172A' }]}>{row.monthLabel}</Text>
-                <Text style={[styles.td, styles.tdSpent, { flex: 1.2 }]}>
-                  {formatCurrency(row.spent)}
-                </Text>
-                <Text style={[styles.td, styles.tdEarned, { flex: 1.2 }]}>
-                  {formatCurrency(row.earned)}
-                </Text>
-                <View style={[styles.savingsRateCell, { flex: 1.1 }]}>
-                  <Text
-                    style={[
-                      styles.savingsRateText,
-                      row.savingsRate >= 50 ? styles.savingsRateHigh : styles.savingsRateNormal,
-                    ]}
-                  >
-                    {row.savingsRate}%
-                  </Text>
-                </View>
-              </View>
-            ))
-          ) : (
-            <Text style={styles.emptyTableText}>No monthly history available yet.</Text>
-          )}
-        </View>
-
-        <View style={{ height: 40 }} />
+          </>
+        )}
       </ScrollView>
     </View>
   );
 };
 
-const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: '#F8FAFC',
-  },
-  headerBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
-  },
-  backButton: {
-    padding: 6,
-  },
-  headerTitleGroup: {
-    flex: 1,
-    marginLeft: 12,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#0F172A',
-    letterSpacing: -0.3,
-  },
-  headerSubtitle: {
-    fontSize: 11,
-    fontWeight: '500',
-    color: '#64748B',
-    marginTop: 1,
-  },
-  headerRightActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  iconAction: {
-    padding: 6,
-    marginLeft: 8,
-  },
-  scrollArea: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    paddingBottom: 30,
-  },
-  salaryBanner: {
-    backgroundColor: '#0F172A',
-    borderRadius: 20,
-    padding: 16,
-    marginBottom: 14,
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 10,
-    elevation: 4,
-  },
-  salaryBannerHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  salaryBadgeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  salaryBadgeText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#10B981',
-    marginLeft: 6,
-  },
-  todayPill: {
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-    borderRadius: 12,
-  },
-  todayPillText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  salaryNumbersRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-end',
-  },
-  salaryHeadline: {
-    fontSize: 26,
-    fontWeight: '900',
-    color: '#FFFFFF',
-    letterSpacing: -0.5,
-  },
-  salarySublabel: {
-    fontSize: 11.5,
-    fontWeight: '500',
-    color: '#94A3B8',
-    marginTop: 2,
-  },
-  dailyAllowanceBox: {
-    backgroundColor: 'rgba(16, 185, 129, 0.15)',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    alignItems: 'flex-end',
-    borderWidth: 1,
-    borderColor: 'rgba(16, 185, 129, 0.3)',
-  },
-  allowanceNumber: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#10B981',
-  },
-  allowanceLabel: {
-    fontSize: 9.5,
-    fontWeight: '600',
-    color: '#A7F3D0',
-    marginTop: 1,
-  },
-  viewModeToggle: {
-    flexDirection: 'row',
-    backgroundColor: '#E2E8F0',
-    borderRadius: 14,
-    padding: 3,
-    marginBottom: 14,
-  },
-  modeTab: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-    borderRadius: 11,
-  },
-  modeTabActive: {
-    backgroundColor: '#FFFFFF',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  modeTabActiveDark: {
-    backgroundColor: '#1E293B',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  modeTabText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#64748B',
-    marginLeft: 6,
-  },
-  modeTabTextActive: {
-    color: '#0F172A',
-    fontWeight: '800',
-  },
-  modeTabTextActiveDark: {
-    color: '#FFFFFF',
-    fontWeight: '800',
-  },
-  monthNav: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-    paddingHorizontal: 4,
-  },
-  navArrow: {
-    padding: 7,
-    borderRadius: 10,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  monthNavTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#0F172A',
-    letterSpacing: -0.2,
-  },
-  calendarCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    padding: 10,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#F1F5F9',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  weekdayRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingBottom: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
-    marginBottom: 6,
-  },
-  weekdayLabel: {
-    width: '13.4%',
-    marginHorizontal: '0.44%',
-    textAlign: 'center',
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#64748B',
-  },
-  weekendLabel: {
-    color: '#94A3B8',
-  },
-  gridContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-  },
-  dayCellEmpty: {
-    width: '13.4%',
-    marginHorizontal: '0.44%',
-    height: 60,
-    marginVertical: 3,
-  },
-  dayCell: {
-    width: '13.4%',
-    marginHorizontal: '0.44%',
-    height: 60,
-    padding: 2.5,
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    borderRadius: 10,
-    marginVertical: 3,
-    backgroundColor: '#F8FAFC',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  dayCellDark: {
-    backgroundColor: '#1E293B',
-    borderColor: '#334155',
-  },
-  dayCellDebits: {
-    backgroundColor: '#FFF7F7',
-    borderColor: '#FECDD3',
-  },
-  dayCellDebitsDark: {
-    backgroundColor: 'rgba(239, 68, 68, 0.08)',
-    borderColor: 'rgba(239, 68, 68, 0.25)',
-  },
-  dayCellCredits: {
-    backgroundColor: '#F0FDF4',
-    borderColor: '#BBF7D0',
-  },
-  dayCellCreditsDark: {
-    backgroundColor: 'rgba(16, 185, 129, 0.08)',
-    borderColor: 'rgba(16, 185, 129, 0.25)',
-  },
-  dayCellNoSpend: {
-    backgroundColor: '#F0FDF4',
-    borderColor: '#BBF7D0',
-  },
-  dayCellNoSpendDark: {
-    backgroundColor: 'rgba(16, 185, 129, 0.08)',
-    borderColor: 'rgba(16, 185, 129, 0.25)',
-  },
-  dayCellToday: {
-    borderWidth: 2,
-    borderColor: '#00BAF2',
-    backgroundColor: 'rgba(0, 186, 242, 0.08)',
-  },
-  dayCellSelected: {
-    backgroundColor: '#0F172A',
-    borderColor: '#0F172A',
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-  dayNumberText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#0F172A',
-  },
-  dayNumberTextSelected: {
-    color: '#FFFFFF',
-    fontWeight: '900',
-  },
-  dayNumberTextToday: {
-    color: '#00BAF2',
-    fontWeight: '900',
-  },
-  cellNumbers: {
-    width: '100%',
-    alignItems: 'center',
-    marginTop: 1,
-  },
-  debitPill: {
-    paddingHorizontal: 2,
-    borderRadius: 3,
-    marginTop: 1,
-  },
-  debitPillSelected: {
-    backgroundColor: 'rgba(239, 68, 68, 0.25)',
-  },
-  debitAmount: {
-    fontSize: 8.5,
-    fontWeight: '800',
-    color: '#DC2626',
-    textAlign: 'center',
-  },
-  creditPill: {
-    paddingHorizontal: 2,
-    borderRadius: 3,
-    marginTop: 1,
-  },
-  creditPillSelected: {
-    backgroundColor: 'rgba(16, 185, 129, 0.25)',
-  },
-  creditAmount: {
-    fontSize: 8.5,
-    fontWeight: '800',
-    color: '#059669',
-    textAlign: 'center',
-  },
-  amountSelected: {
-    color: '#FFFFFF',
-  },
-  joinedBadge: {
-    position: 'absolute',
-    top: 1,
-    right: 2,
-  },
-  expectedPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(99, 102, 241, 0.12)',
-    borderRadius: 4,
-    paddingHorizontal: 3,
-    paddingVertical: 1,
-    marginTop: 1,
-  },
-  expectedPillSelected: {
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-  },
-  expectedText: {
-    fontSize: 7.5,
-    fontWeight: '800',
-    color: '#6366F1',
-  },
-  noSpendIndicator: {
-    marginTop: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  dayInspectorCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    padding: 16,
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: '#F1F5F9',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  inspectorHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
-  },
-  inspectorDate: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#0F172A',
-  },
-  milestoneRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 3,
-  },
-  joinedNote: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#D97706',
-    marginLeft: 4,
-  },
-  inspectorTotals: {
-    alignItems: 'flex-end',
-  },
-  inspectorDebit: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#EF4444',
-  },
-  inspectorCredit: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#10B981',
-    marginTop: 2,
-  },
-  txListContainer: {
-    paddingTop: 10,
-  },
-  txRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F8FAFC',
-  },
-  txLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  txIconCircle: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  txDebitIcon: {
-    backgroundColor: 'rgba(239, 68, 68, 0.1)',
-  },
-  txCreditIcon: {
-    backgroundColor: 'rgba(16, 185, 129, 0.1)',
-  },
-  txMerchant: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#0F172A',
-  },
-  txCategory: {
-    fontSize: 10.5,
-    fontWeight: '500',
-    color: '#64748B',
-    marginTop: 1,
-  },
-  txRight: {
-    alignItems: 'flex-end',
-  },
-  txAmount: {
-    fontSize: 13.5,
-    fontWeight: '800',
-  },
-  txDebitAmount: {
-    color: '#EF4444',
-  },
-  txCreditAmount: {
-    color: '#10B981',
-  },
-  excludePill: {
-    marginTop: 3,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-    backgroundColor: '#F1F5F9',
-  },
-  excludeText: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: '#64748B',
-  },
-  excludeActive: {
-    color: '#EF4444',
-  },
-  noTxPlaceholder: {
-    alignItems: 'center',
-    paddingVertical: 20,
-  },
-  noTxIconCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#ECFDF5',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 8,
-  },
-  noTxTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#0F172A',
-    marginBottom: 2,
-  },
-  noTxText: {
-    fontSize: 12.5,
-    fontWeight: '500',
-    color: '#64748B',
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#0F172A',
-    marginBottom: 12,
-    letterSpacing: -0.2,
-  },
-  recordsGrid: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-  },
-  recordCard: {
-    flex: 0.485,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#F1F5F9',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    elevation: 2,
-  },
-  recordCardDark: {
-    backgroundColor: '#1E293B',
-    borderColor: '#334155',
-  },
-  winCard: {
-    borderColor: 'rgba(16, 185, 129, 0.3)',
-    backgroundColor: 'rgba(16, 185, 129, 0.02)',
-  },
-  recordIconHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  recordIconPillOrange: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#FFEDD5',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  recordIconPillGreen: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#DCFCE7',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  recordIconPillRed: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#FEE2E2',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  recordIconPillPurple: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#EDE9FE',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  winBadge: {
-    backgroundColor: '#10B981',
-    borderRadius: 6,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-  },
-  winBadgeText: {
-    fontSize: 8.5,
-    fontWeight: '900',
-    color: '#FFFFFF',
-    letterSpacing: 0.5,
-  },
-  peakBadge: {
-    backgroundColor: '#EF4444',
-    borderRadius: 6,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-  },
-  peakBadgeText: {
-    fontSize: 8.5,
-    fontWeight: '900',
-    color: '#FFFFFF',
-    letterSpacing: 0.5,
-  },
-  recordValue: {
-    fontSize: 18,
-    fontWeight: '900',
-    color: '#0F172A',
-    letterSpacing: -0.3,
-  },
-  recordLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#64748B',
-    marginTop: 2,
-  },
-  recordContext: {
-    fontSize: 10,
-    fontWeight: '500',
-    color: '#94A3B8',
-    marginTop: 3,
-  },
-  tableCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#F1F5F9',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    elevation: 2,
-  },
-  tableHeaderRow: {
-    flexDirection: 'row',
-    paddingBottom: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
-  },
-  th: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#64748B',
-    textTransform: 'uppercase',
-  },
-  tableRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-  },
-  tableRowAlt: {
-    backgroundColor: '#F8FAFC',
-    borderRadius: 8,
-  },
-  tableRowAltDark: {
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
-    borderRadius: 8,
-  },
-  td: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  tdMonth: {
-    color: '#0F172A',
-    fontWeight: '700',
-  },
-  tdSpent: {
-    color: '#EF4444',
-    textAlign: 'right',
-  },
-  tdEarned: {
-    color: '#10B981',
-    textAlign: 'right',
-  },
-  savingsRateCell: {
-    alignItems: 'flex-end',
-  },
-  savingsRateText: {
-    fontSize: 11,
-    fontWeight: '800',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  savingsRateHigh: {
-    backgroundColor: 'rgba(16, 185, 129, 0.15)',
-    color: '#10B981',
-  },
-  savingsRateNormal: {
-    backgroundColor: 'rgba(100, 116, 139, 0.1)',
-    color: '#64748B',
-  },
-  emptyTableText: {
-    textAlign: 'center',
-    fontSize: 12,
-    color: '#94A3B8',
-    paddingVertical: 16,
-  },
+const s = StyleSheet.create({
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 8, paddingBottom: 6 },
+  roundBtn: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { fontSize: 16, fontWeight: '700' },
+
+  hero: { marginTop: 10, borderRadius: 28, backgroundColor: FOREST, padding: 20, overflow: 'hidden' },
+  heroRing: { position: 'absolute', width: 220, height: 220, borderRadius: 110, borderWidth: 1, borderColor: 'rgba(184,243,107,0.16)', right: -80, top: -100 },
+  heroLabel: { color: '#B5CEC1', fontSize: 13 },
+  heroAmount: { color: '#FFFFFF', fontSize: 40, letterSpacing: -1.2, marginTop: 4, fontVariant: ['tabular-nums'] },
+  heroSub: { color: '#D9E7DF', fontSize: 14 },
+  tiles: { flexDirection: 'row', gap: 10, marginTop: 18 },
+  tile: { flex: 1, backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 18, padding: 12 },
+  tileLabel: { color: '#B5CEC1', fontSize: 12 },
+  tileValue: { color: '#FFFFFF', fontSize: 16, fontWeight: '700', marginTop: 2 },
+  tileOf: { color: '#B5CEC1', fontSize: 13, fontWeight: '500' },
+  payday: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginTop: 14 },
+  paydayText: { flex: 1, color: '#D9E7DF', fontSize: 13, lineHeight: 18 },
+
+  nudge: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 22, padding: 14, marginTop: 12 },
+  nudgeIcon: { width: 40, height: 40, borderRadius: 13, backgroundColor: FOREST, alignItems: 'center', justifyContent: 'center' },
+  nudgeText: { flex: 1, fontSize: 14, lineHeight: 19 },
+
+  monthNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 22, paddingBottom: 12 },
+  navBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  monthTitle: { fontSize: 20, letterSpacing: -0.3, textAlign: 'center' },
+  backToday: { fontSize: 12, fontWeight: '600', textAlign: 'center', marginTop: 2 },
+
+  calCard: { borderWidth: 1, borderRadius: 24, paddingHorizontal: 8, paddingVertical: 14 },
+  weekRow: { flexDirection: 'row', marginBottom: 6 },
+  weekday: { width: `${100 / 7}%`, textAlign: 'center', fontSize: 12, fontWeight: '600' },
+  grid: { flexDirection: 'row', flexWrap: 'wrap' },
+  cellWrap: { width: `${100 / 7}%`, padding: 3 },
+  cell: { height: 50, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  cellNum: { fontSize: 13, fontWeight: '700' },
+  cellAmt: { fontSize: 9, fontWeight: '700', marginTop: 1, fontVariant: ['tabular-nums'] },
+  noSpendDot: { width: 5, height: 5, borderRadius: 3, marginTop: 4 },
+  creditDot: { position: 'absolute', top: 5, right: 5, width: 6, height: 6, borderRadius: 3 },
+  joinedStar: { position: 'absolute', top: 4, left: 4 },
+  legend: { flexDirection: 'row', justifyContent: 'center', flexWrap: 'wrap', gap: 14, marginTop: 12 },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  legendSwatch: { width: 12, height: 12, borderRadius: 4 },
+  legendRamp: { flexDirection: 'row', width: 32, height: 12, borderRadius: 4, overflow: 'hidden' },
+  legendText: { fontSize: 12 },
+
+  dayCard: { borderWidth: 1, borderRadius: 24, padding: 16, marginTop: 12 },
+  dayHead: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' },
+  dayTitle: { fontSize: 16, fontWeight: '700' },
+  dayTotal: { fontSize: 13, fontWeight: '700' },
+  joined: { fontSize: 12, fontWeight: '600', marginTop: 4 },
+  txRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
+  txName: { fontSize: 15, fontWeight: '600' },
+  txExclude: { fontSize: 12, marginTop: 2 },
+  txAmt: { fontSize: 15, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  dayEmpty: { fontSize: 14, lineHeight: 20, marginTop: 10 },
+  dayNoSpend: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 6 },
+  dayNoSpendIcon: { width: 40, height: 40, borderRadius: 13, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
+
+  section: { fontSize: 15, fontWeight: '700', paddingHorizontal: 4, paddingTop: 22, paddingBottom: 10 },
+  listCard: { borderWidth: 1, borderRadius: 22, paddingHorizontal: 16 },
+  billRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
+  billDate: { width: 42, height: 42, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
+  billDay: { fontSize: 15, fontWeight: '800' },
+  billMon: { fontSize: 10, fontWeight: '600' },
+  billName: { flex: 1, fontSize: 15, fontWeight: '600' },
+  billAmt: { fontSize: 15, fontWeight: '700' },
+
+  recordGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  recordCard: { width: '48.5%', borderWidth: 1, borderRadius: 20, padding: 14 },
+  recordLabel: { fontSize: 12 },
+  recordValue: { fontSize: 22, letterSpacing: -0.4, marginTop: 4 },
+  recordSub: { fontSize: 12, marginTop: 2 },
+
+  monthRowItem: { paddingVertical: 12 },
+  monthRowTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
+  monthRowName: { fontSize: 15, fontWeight: '600' },
+  monthRowRate: { fontSize: 13, fontWeight: '700' },
+  rateTrack: { height: 6, borderRadius: 3, overflow: 'hidden', marginTop: 8 },
+  rateFill: { height: 6, borderRadius: 3 },
+  monthRowSub: { fontSize: 12, marginTop: 6 },
 });

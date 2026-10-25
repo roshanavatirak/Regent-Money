@@ -1,9 +1,14 @@
 package com.anonymous.regentmoney
 
+import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.provider.Telephony
+import android.telephony.SubscriptionManager
+import android.telephony.TelephonyManager
 import android.util.Log
 import com.facebook.react.bridge.Callback
+import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
@@ -18,6 +23,52 @@ class SmsModule(private val reactContext: ReactApplicationContext) : ReactContex
 
     override fun getName(): String {
         return "Sms"
+    }
+
+    @ReactMethod
+    fun getSimPhoneNumbers(promise: Promise) {
+        try {
+            val numbers = JSONArray()
+            val subscriptionManager = reactContext.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as? SubscriptionManager
+            if (subscriptionManager != null) {
+                val activeList = subscriptionManager.activeSubscriptionInfoList
+                if (activeList != null) {
+                    for (info in activeList) {
+                        var number: String? = null
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            try {
+                                number = subscriptionManager.getPhoneNumber(info.subscriptionId)
+                            } catch (_: Exception) {}
+                        }
+                        if (number.isNullOrBlank()) {
+                            try {
+                                @Suppress("DEPRECATION")
+                                number = info.number
+                            } catch (_: Exception) {}
+                        }
+                        if (number.isNullOrBlank()) {
+                            try {
+                                val tm = reactContext.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+                                val subTm = tm?.createForSubscriptionId(info.subscriptionId)
+                                @Suppress("DEPRECATION")
+                                number = subTm?.line1Number
+                            } catch (_: Exception) {}
+                        }
+                        if (!number.isNullOrBlank()) {
+                            val clean = number.replace(Regex("\\D"), "")
+                            if (clean.length >= 10) {
+                                numbers.put(clean.takeLast(10))
+                            }
+                        }
+                    }
+                }
+            }
+            Log.d(TAG, "Detected active SIM numbers count: ${numbers.length()}")
+            promise.resolve(numbers.toString())
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not query SIM phone numbers (permission or unsupported): ${e.message}")
+            promise.resolve("[]")
+        }
     }
 
     @ReactMethod

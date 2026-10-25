@@ -27,7 +27,7 @@ import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import * as Font from 'expo-font';
-import { useTheme, useBankStore, useTransactionStore, useIncomeStore } from '../store';
+import { useTheme, useBankStore, useTransactionStore, useIncomeStore, usePeerStore } from '../store';
 import { authService } from '../services/authService';
 import { getBackendUrl } from '../config/api';
 import { CategoryIcon } from '../components/CategoryIcon';
@@ -257,18 +257,21 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
       const recordTs = result.record?.timestamp ? Number(result.record.timestamp) : timestamp;
       const label = note.trim() || getCategory(category).label;
 
+      const isPeer = category.startsWith('peer_');
       if (type === 'credit' && result.record) {
-        useIncomeStore.getState().addIncomeRecordState({
-          id: result.record.id,
-          amount: parsedAmount,
-          category,
-          merchant: label,
-          source: label,
-          timestamp: recordTs,
-          bankProfileId: bank.id,
-          updatedAt: Date.now(),
-          type: 'credit',
-        });
+        if (!isPeer) {
+          useIncomeStore.getState().addIncomeRecordState({
+            id: result.record.id,
+            amount: parsedAmount,
+            category,
+            merchant: label,
+            source: label,
+            timestamp: recordTs,
+            bankProfileId: bank.id,
+            updatedAt: Date.now(),
+            type: 'credit',
+          });
+        }
       } else if (type === 'debit' && result.record) {
         useTransactionStore.getState().addTransactionState({
           id: result.record.id,
@@ -280,6 +283,17 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
           type: 'debit',
           status: 'confirmed',
         });
+      }
+
+      if (result.record) {
+        const dateStr = format(new Date(recordTs), 'yyyy-MM-dd');
+        usePeerStore.getState().syncWithTransactionTag(
+          result.record.id,
+          category,
+          parsedAmount,
+          dateStr,
+          note.trim() || undefined
+        );
       }
 
       const payload = { type, amount: parsedAmount, updatedBalance, record: result.record };
@@ -648,6 +662,8 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
         onClose={() => setTagSheet(false)}
         selectedTag={category}
         onSelectTag={(tag) => setCategory(tag)}
+        transactionType={type}
+        merchantName={note.trim() || undefined}
         isDark={isDark}
         colors={colors}
       />

@@ -1,17 +1,24 @@
+// src/navigation/UpdateModal.tsx
+//
+// Required update: full screen, can't be dismissed.
+// Optional update: bottom sheet with "Later".
+// The download progress fills the main button itself.
+// Release notes come from the server (see updateService); nothing is hard-coded here.
+
 import React, { useEffect, useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  Modal,
-  TouchableOpacity,
-  BackHandler,
-  Platform,
-  ActivityIndicator,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { View, Text, StyleSheet, Modal, Pressable, BackHandler, Image, ActivityIndicator, ScrollView, Platform } from 'react-native';
+import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing, FadeIn, FadeInDown } from 'react-native-reanimated';
+import { Feather } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Font from 'expo-font';
 import { useTheme } from '../store';
 import { UpdateInfo, updateService } from '../services/updateService';
+
+const FOREST = '#0B3D2C';
+const LIME = '#B8F36B';
+const APP_LOGO = require('../../assets/appicon.png');
+
+type DownloadState = 'idle' | 'downloading' | 'ready' | 'failed';
 
 interface UpdateModalProps {
   updateInfo: UpdateInfo | null;
@@ -19,498 +26,273 @@ interface UpdateModalProps {
   onDismiss?: () => void;
 }
 
-export const UpdateModal: React.FC<UpdateModalProps> = ({
-  updateInfo,
-  visible,
-  onDismiss,
-}) => {
+export const UpdateModal: React.FC<UpdateModalProps> = ({ updateInfo, visible, onDismiss }) => {
+  const insets = useSafeAreaInsets();
   const { colors, isDark } = useTheme();
-  const [downloadState, setDownloadState] = useState<'idle' | 'downloading' | 'ready_to_install' | 'failed'>('idle');
-  const [downloadedFileUri, setDownloadedFileUri] = useState<string | null>(null);
-  const [downloadProgress, setDownloadProgress] = useState(0);
+  const display = Font.isLoaded('BricolageGrotesque_800ExtraBold') ? 'BricolageGrotesque_800ExtraBold' : undefined;
+
+  const [state, setState] = useState<DownloadState>('idle');
+  const [percent, setPercent] = useState(0);
   const [loadedMB, setLoadedMB] = useState('0');
-  const [totalMB, setTotalMB] = useState('...');
-  const [statusMessage, setStatusMessage] = useState('Downloading update...');
+  const [totalMB, setTotalMB] = useState('');
+  const [fileUri, setFileUri] = useState<string | null>(null);
+  const [errorText, setErrorText] = useState('');
 
-  // Block Android hardware back button if update is mandatory
+  const fill = useSharedValue(0);
   useEffect(() => {
-    if (!visible || !updateInfo?.forceUpdate) return;
+    fill.value = withTiming(state === 'ready' ? 1 : percent / 100, { duration: 300, easing: Easing.out(Easing.cubic) });
+  }, [percent, state]);
+  const fillStyle = useAnimatedStyle(() => ({ width: `${fill.value * 100}%` }));
 
-    const backSubscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      // Prevent going back
-      return true;
-    });
+  const isMandatory = !!updateInfo?.forceUpdate;
 
-    return () => backSubscription.remove();
-  }, [visible, updateInfo?.forceUpdate]);
+  // Block the Android back button for required updates
+  useEffect(() => {
+    if (!visible || !isMandatory) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
+    return () => sub.remove();
+  }, [visible, isMandatory]);
 
   if (!updateInfo || !visible) return null;
 
-  const handleUpdate = async () => {
-    setDownloadState('downloading');
-    setDownloadProgress(0);
-    setStatusMessage('Connecting to download server...');
+  const notes = updateInfo.releaseNotes || [];
 
+  const startDownload = async () => {
+    setState('downloading');
+    setPercent(0);
+    setErrorText('');
     try {
-      const result = await updateService.downloadAndInstallApk(
-        updateInfo.downloadUrl,
-        (percent, loaded, total) => {
-          setDownloadProgress(percent);
-          if (loaded) setLoadedMB(loaded);
-          if (total) setTotalMB(total);
-          if (percent >= 100) {
-            setStatusMessage('Opening package installer...');
-          } else {
-            setStatusMessage(`Downloading update (${percent}%)...`);
-          }
-        }
-      );
-
+      const result = await updateService.downloadAndInstallApk(updateInfo.downloadUrl, (p, loaded, total) => {
+        setPercent(p);
+        if (loaded) setLoadedMB(loaded);
+        if (total && total !== '...') setTotalMB(total);
+      });
       if (result.success && result.fileUri) {
-        setDownloadedFileUri(result.fileUri);
-        setDownloadState('ready_to_install');
-        if (result.installerLaunched) {
-          setStatusMessage('Installer opened! Tap Install Now if dialog was missed.');
-        } else {
-          setStatusMessage('Download complete! Tap Install Now below.');
-        }
+        setFileUri(result.fileUri);
+        setState('ready');
       } else {
-        setDownloadState('failed');
-        setStatusMessage(result.error || 'Download could not complete.');
+        setState('failed');
+        setErrorText(result.error || 'The download didn’t finish.');
       }
     } catch (err: any) {
-      console.warn('[UpdateModal] Download failed:', err);
-      setDownloadState('failed');
-      setStatusMessage(err?.message || 'Download encountered an unexpected issue.');
+      setState('failed');
+      setErrorText(err?.message || 'The download didn’t finish.');
     }
   };
 
-  const handleManualInstall = async () => {
-    if (downloadedFileUri) {
-      setStatusMessage('Launching package installer...');
-      const launched = await updateService.installApk(downloadedFileUri);
-      if (!launched) {
-        await updateService.startInstall(updateInfo.downloadUrl);
-      }
-    } else {
-      await updateService.startInstall(updateInfo.downloadUrl);
-    }
+  const install = async () => {
+    const launched = fileUri ? await updateService.installApk(fileUri) : false;
+    if (!launched) await updateService.startInstall(updateInfo.downloadUrl);
   };
 
-  const handleBrowserFallback = async () => {
-    await updateService.startInstall(updateInfo.downloadUrl);
-  };
+  const openInBrowser = () => updateService.startInstall(updateInfo.downloadUrl);
 
-  const isMandatory = updateInfo.forceUpdate;
-  const isDownloading = downloadState === 'downloading';
+  const ink = colors.text;
+  const muted = colors.textSecondary;
+  const pageBg = isDark ? colors.background : '#F3F6F4';
+  const surface = colors.card;
+  const line = isDark ? colors.border : '#E1E9E4';
+  const accent = isDark ? LIME : FOREST;
+  const accentFg = isDark ? FOREST : LIME;
+  const track = isDark ? 'rgba(184,243,107,0.14)' : '#E3F2E8';
+
+  /* ---------------- Pieces ---------------- */
+
+  const NotesList = notes.length > 0 && (
+    <View>
+      {notes.map((n, i) => (
+        <Animated.View key={i} entering={FadeInDown.delay(120 + i * 70).duration(320)} style={s.note}>
+          <View style={[s.noteDot, { backgroundColor: isDark ? LIME : '#16A34A' }]} />
+          <View style={{ flex: 1 }}>
+            <Text style={[s.noteTitle, { color: ink }]}>{n.title}</Text>
+            {n.detail ? <Text style={[s.noteDetail, { color: muted }]}>{n.detail}</Text> : null}
+          </View>
+        </Animated.View>
+      ))}
+    </View>
+  );
+
+  const mainLabel =
+    state === 'downloading'
+      ? `Downloading ${percent}%`
+      : state === 'ready'
+        ? 'Install update'
+        : state === 'failed'
+          ? 'Try again'
+          : 'Update now';
+
+  const onMain = state === 'ready' ? install : state === 'downloading' ? undefined : startDownload;
+
+  const MainButton = (
+    <Pressable
+      onPress={onMain}
+      disabled={state === 'downloading'}
+      style={({ pressed }) => [s.mainBtn, { backgroundColor: state === 'downloading' ? track : accent }, pressed && state !== 'downloading' && { transform: [{ scale: 0.98 }] }]}
+      accessibilityRole="button"
+      accessibilityLabel={mainLabel}
+      accessibilityState={{ busy: state === 'downloading' }}
+    >
+      {state === 'downloading' && <Animated.View style={[s.mainFill, { backgroundColor: accent }, fillStyle]} />}
+      <View style={s.mainContent}>
+        {state === 'downloading' ? (
+          <ActivityIndicator size="small" color={accentFg} />
+        ) : (
+          <Feather name={state === 'ready' ? 'check-circle' : state === 'failed' ? 'refresh-cw' : 'download'} size={18} color={accentFg} />
+        )}
+        <Text style={[s.mainText, { color: accentFg }]}>{mainLabel}</Text>
+      </View>
+      {state === 'downloading' && totalMB ? (
+        <Text style={[s.mainSize, { color: percent > 75 ? accentFg : accent }]}>
+          {loadedMB} of {totalMB} MB
+        </Text>
+      ) : null}
+    </Pressable>
+  );
+
+  const Footer = (
+    <View>
+      {state === 'failed' && (
+        <Animated.View entering={FadeIn.duration(200)} style={s.errorRow}>
+          <Feather name="alert-circle" size={14} color={isDark ? '#FFA8A8' : '#C92A2A'} />
+          <Text style={[s.errorText, { color: isDark ? '#FFA8A8' : '#C92A2A' }]}>{errorText}</Text>
+        </Animated.View>
+      )}
+      {state === 'ready' && (
+        <Text style={[s.helper, { color: muted }]}>If the installer didn’t open, tap Install update.</Text>
+      )}
+      {MainButton}
+      {state === 'ready' || state === 'failed' ? (
+        <Pressable onPress={openInBrowser} style={s.textBtn} accessibilityRole="button">
+          <Text style={[s.textBtnLabel, { color: muted }]}>Download in browser instead</Text>
+        </Pressable>
+      ) : !isMandatory && state === 'idle' && onDismiss ? (
+        <Pressable onPress={onDismiss} style={s.textBtn} accessibilityRole="button">
+          <Text style={[s.textBtnLabel, { color: muted }]}>Later</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+
+  /* ---------------- Required: full screen ---------------- */
+
+  if (isMandatory) {
+    return (
+      <Modal visible animationType="fade" statusBarTranslucent onRequestClose={() => {}}>
+        <View style={[s.full, { backgroundColor: pageBg, paddingTop: insets.top + 12, paddingBottom: Math.max(insets.bottom, 16) + 12 }]}>
+          <ScrollView contentContainerStyle={s.fullBody} showsVerticalScrollIndicator={false}>
+            <Animated.View entering={FadeIn.duration(400)} style={s.hero}>
+              <View style={[s.appIconBox, { borderColor: line }]}>
+                <Image source={APP_LOGO} style={s.appIconImage} resizeMode="cover" />
+              </View>
+            </Animated.View>
+
+            <View style={[s.versionChip, { backgroundColor: surface, borderColor: line }]}>
+              <Text style={[s.versionOld, { color: muted }]}>{updateInfo.currentVersion}</Text>
+              <Feather name="arrow-right" size={12} color={muted} />
+              <Text style={[s.versionNew, { color: ink }]}>{updateInfo.latestVersion}</Text>
+            </View>
+
+            <Text style={[s.fullTitle, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}>
+              {state === 'ready' ? 'Ready to install' : 'Update to continue'}
+            </Text>
+            <Text style={[s.fullSub, { color: muted }]}>This version is needed to keep your accounts syncing safely.</Text>
+
+            {NotesList ? (
+              <View style={[s.notesCard, { backgroundColor: surface, borderColor: line }]}>
+                <Text style={[s.notesLabel, { color: muted }]}>What’s new</Text>
+                {NotesList}
+              </View>
+            ) : null}
+          </ScrollView>
+          {Footer}
+        </View>
+      </Modal>
+    );
+  }
+
+  /* ---------------- Optional: bottom sheet ---------------- */
 
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={() => {
-        if (!isMandatory && !isDownloading && onDismiss) {
-          onDismiss();
-        }
-      }}
-    >
-      <View style={styles.backdrop}>
-        <View style={[styles.dialogCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          {/* Top Accent Strip */}
-          <View style={[styles.accentStrip, { backgroundColor: colors.accent }]} />
-
-          {/* Icon Badge & Version Pill */}
-          <View style={styles.headerRow}>
-            <View style={[styles.iconCircle, { backgroundColor: colors.accentMuted }]}>
-              <Ionicons name="sparkles" size={17} color={colors.accent} />
+    <Modal visible transparent animationType="slide" statusBarTranslucent onRequestClose={() => state !== 'downloading' && onDismiss?.()}>
+      <View style={s.backdrop}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={() => state === 'idle' && onDismiss?.()} accessibilityLabel="Close" />
+        <View style={[s.sheet, { backgroundColor: surface, paddingBottom: Math.max(insets.bottom, 16) + 8 }]}>
+          <View style={[s.grabber, { backgroundColor: isDark ? 'rgba(255,255,255,0.18)' : '#D5DED9' }]} />
+          <View style={s.sheetHead}>
+            <View style={[s.sheetIcon, { borderColor: line }]}>
+              <Image source={APP_LOGO} style={s.sheetIconImage} resizeMode="cover" />
             </View>
-
-            <View style={[styles.versionPill, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#f1f5f9', borderColor: colors.border }]}>
-              <Text style={[styles.versionText, { color: colors.accent }]}>
-                v{updateInfo.currentVersion}
+            <View style={{ flex: 1 }}>
+              <Text style={[s.sheetTitle, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}>
+                {state === 'ready' ? 'Ready to install' : 'New update ready'}
               </Text>
-              <Ionicons name="arrow-forward" size={10} color={colors.textTertiary} style={{ marginHorizontal: 4 }} />
-              <Text style={[styles.versionText, { color: colors.text }]}>
-                v{updateInfo.latestVersion}
-              </Text>
+              <Text style={[s.sheetSub, { color: muted }]}>Version {updateInfo.latestVersion}</Text>
             </View>
           </View>
-
-          {/* Heading */}
-          <Text style={[styles.title, { color: colors.text }]}>
-            {downloadState === 'ready_to_install'
-              ? 'Update Ready to Install'
-              : isMandatory
-              ? 'Mandatory Update Required'
-              : 'New Version Available'}
-          </Text>
-          <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-            {downloadState === 'ready_to_install'
-              ? 'The update package has been downloaded to your device and is ready to install.'
-              : isMandatory
-              ? 'Please update Regent Money to the latest release to continue securely using your account.'
-              : 'A newer, faster version of Regent Money is ready with performance and UI upgrades.'}
-          </Text>
-
-          {/* What's New Section (hide when ready to install to save space) */}
-          {downloadState !== 'ready_to_install' && (
-            <View style={[styles.notesBox, { backgroundColor: isDark ? 'rgba(0,0,0,0.18)' : '#f8fafc', borderColor: colors.border }]}>
-              <View style={styles.notesHeader}>
-                <Ionicons name="list-outline" size={12} color={colors.accent} style={{ marginRight: 5 }} />
-                <Text style={[styles.notesTitle, { color: colors.textSecondary }]}>WHAT'S NEW</Text>
-              </View>
-
-              {updateInfo.releaseNotes.map((note, idx) => (
-                <View key={idx} style={styles.noteItem}>
-                  <Ionicons name="checkmark-circle-outline" size={13} color={colors.accent} style={{ marginRight: 6, marginTop: 1 }} />
-                  <Text style={[styles.noteText, { color: colors.text }]}>{note}</Text>
-                </View>
-              ))}
-            </View>
-          )}
-
-          {/* Live Download Progress Box */}
-          {isDownloading && (
-            <View style={[styles.downloadBox, { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#f1f5f9', borderColor: colors.border }]}>
-              <View style={styles.downloadMetaRow}>
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <ActivityIndicator size="small" color={colors.accent} style={{ marginRight: 6 }} />
-                  <Text style={[styles.downloadStatusText, { color: colors.text }]}>{statusMessage}</Text>
-                </View>
-                <Text style={[styles.downloadPercentText, { color: colors.accent }]}>
-                  {downloadProgress}%
-                </Text>
-              </View>
-
-              {/* Progress Bar Track */}
-              <View style={[styles.progressTrack, { backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : '#e2e8f0' }]}>
-                <View
-                  style={[
-                    styles.progressFill,
-                    { width: `${downloadProgress}%`, backgroundColor: colors.accent },
-                  ]}
-                />
-              </View>
-
-              <View style={styles.downloadSizeRow}>
-                <Text style={[styles.downloadSizeText, { color: colors.textSecondary }]}>
-                  {loadedMB} MB / {totalMB} MB
-                </Text>
-                <Text style={[styles.downloadSizeText, { color: colors.textTertiary }]}>
-                  Direct in-app install
-                </Text>
-              </View>
-            </View>
-          )}
-
-          {/* Ready To Install View */}
-          {downloadState === 'ready_to_install' && (
-            <View style={[styles.downloadBox, { backgroundColor: isDark ? 'rgba(16, 185, 129, 0.08)' : '#f0fdf4', borderColor: '#10b981', marginBottom: 14 }]}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
-                <Ionicons name="checkmark-circle" size={18} color="#10b981" style={{ marginRight: 6 }} />
-                <Text style={[styles.downloadStatusText, { color: colors.text, fontWeight: '700' }]}>
-                  Download 100% Complete
-                </Text>
-              </View>
-              <Text style={{ fontSize: 11, color: colors.textSecondary, lineHeight: 16 }}>
-                If Android didn't show the install dialog, tap "Install Now" below or open in browser.
-              </Text>
-            </View>
-          )}
-
-          {/* Failed Error View */}
-          {downloadState === 'failed' && (
-            <View style={[styles.downloadBox, { backgroundColor: isDark ? 'rgba(239, 68, 68, 0.08)' : '#fef2f2', borderColor: '#ef4444', marginBottom: 14 }]}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-                <Ionicons name="alert-circle" size={18} color="#ef4444" style={{ marginRight: 6 }} />
-                <Text style={[styles.downloadStatusText, { color: '#ef4444', fontWeight: '700' }]}>
-                  Installation Notice
-                </Text>
-              </View>
-              <Text style={{ fontSize: 11, color: colors.textSecondary, lineHeight: 16 }}>
-                {statusMessage}
-              </Text>
-            </View>
-          )}
-
-          {/* Security Notice for Forced Updates */}
-          {!isDownloading && isMandatory && downloadState !== 'ready_to_install' && (
-            <View style={styles.mandatoryNoticeRow}>
-              <Ionicons name="shield-checkmark-outline" size={13} color="#f59e0b" style={{ marginRight: 5 }} />
-              <Text style={styles.mandatoryNoticeText}>
-                Required build for encrypted sync & transaction security.
-              </Text>
-            </View>
-          )}
-
-          {/* Action Buttons */}
-          {!isDownloading && (
-            <View style={{ marginTop: 4 }}>
-              {downloadState === 'ready_to_install' ? (
-                <>
-                  <TouchableOpacity
-                    onPress={handleManualInstall}
-                    activeOpacity={0.85}
-                    style={[styles.updateBtn, { backgroundColor: colors.accent, marginBottom: 8 }]}
-                  >
-                    <Ionicons name="checkmark-done-circle-outline" size={17} color="#ffffff" style={{ marginRight: 6 }} />
-                    <Text style={styles.updateBtnText}>Install Now</Text>
-                  </TouchableOpacity>
-
-                  <View style={styles.actionRow}>
-                    <TouchableOpacity
-                      onPress={handleBrowserFallback}
-                      activeOpacity={0.7}
-                      style={[styles.laterBtn, { borderColor: colors.border }]}
-                    >
-                      <Ionicons name="globe-outline" size={13} color={colors.textSecondary} style={{ marginRight: 4 }} />
-                      <Text style={[styles.laterBtnText, { color: colors.textSecondary }]}>Open in Browser</Text>
-                    </TouchableOpacity>
-
-                    {!isMandatory && onDismiss && (
-                      <TouchableOpacity
-                        onPress={onDismiss}
-                        activeOpacity={0.7}
-                        style={[styles.laterBtn, { borderColor: colors.border }]}
-                      >
-                        <Text style={[styles.laterBtnText, { color: colors.textSecondary }]}>Dismiss</Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                </>
-              ) : downloadState === 'failed' ? (
-                <View style={styles.actionRow}>
-                  <TouchableOpacity
-                    onPress={handleUpdate}
-                    activeOpacity={0.85}
-                    style={[styles.updateBtn, { backgroundColor: colors.accent, flex: 1 }]}
-                  >
-                    <Ionicons name="refresh-outline" size={15} color="#ffffff" style={{ marginRight: 5 }} />
-                    <Text style={styles.updateBtnText}>Retry</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    onPress={handleBrowserFallback}
-                    activeOpacity={0.7}
-                    style={[styles.laterBtn, { borderColor: colors.border, flex: 1.2 }]}
-                  >
-                    <Ionicons name="globe-outline" size={13} color={colors.textSecondary} style={{ marginRight: 4 }} />
-                    <Text style={[styles.laterBtnText, { color: colors.textSecondary }]}>Browser Download</Text>
-                  </TouchableOpacity>
-                </View>
-              ) : (
-                <View style={styles.actionRow}>
-                  {!isMandatory && onDismiss && (
-                    <TouchableOpacity
-                      onPress={onDismiss}
-                      activeOpacity={0.7}
-                      style={[styles.laterBtn, { borderColor: colors.border }]}
-                    >
-                      <Text style={[styles.laterBtnText, { color: colors.textSecondary }]}>Later</Text>
-                    </TouchableOpacity>
-                  )}
-
-                  <TouchableOpacity
-                    onPress={handleUpdate}
-                    activeOpacity={0.85}
-                    style={[
-                      styles.updateBtn,
-                      { backgroundColor: colors.accent, flex: isMandatory ? 1 : 1.3 },
-                    ]}
-                  >
-                    <Ionicons
-                      name="download-outline"
-                      size={15}
-                      color="#ffffff"
-                      style={{ marginRight: 5 }}
-                    />
-                    <Text style={styles.updateBtnText}>Download & Update</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-            </View>
-          )}
+          {NotesList ? <View style={{ marginTop: 10 }}>{NotesList}</View> : null}
+          <View style={{ marginTop: 14 }}>{Footer}</View>
         </View>
       </View>
     </Modal>
   );
 };
 
-const styles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.65)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 22,
-  },
-  dialogCard: {
-    width: '100%',
-    maxWidth: 360,
-    borderRadius: 18,
-    borderWidth: 1,
-    padding: 20,
+const s = StyleSheet.create({
+  full: { flex: 1, paddingHorizontal: 24 },
+  fullBody: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 16 },
+  hero: { alignItems: 'center', justifyContent: 'center', marginTop: 8, marginBottom: 4 },
+  appIconBox: {
+    width: 80,
+    height: 80,
+    borderRadius: 22,
     overflow: 'hidden',
+    borderWidth: 1,
     ...Platform.select({
       ios: {
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.25,
-        shadowRadius: 16,
+        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.18,
+        shadowRadius: 10,
       },
       android: {
-        elevation: 8,
+        elevation: 6,
       },
+      web: {
+        boxShadow: '0 8px 24px rgba(0, 0, 0, 0.12)',
+      } as any,
     }),
   },
-  accentStrip: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 3,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  iconCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  versionPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 9,
-    paddingVertical: 3.5,
-    borderRadius: 8,
-    borderWidth: 1,
-  },
-  versionText: {
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  title: {
-    fontSize: 16,
-    fontWeight: '800',
-    letterSpacing: -0.3,
-  },
-  subtitle: {
-    fontSize: 11.5,
-    lineHeight: 16,
-    marginTop: 4,
-    marginBottom: 13,
-  },
-  notesBox: {
-    borderRadius: 12,
-    borderWidth: 1,
-    padding: 11,
-    marginBottom: 14,
-  },
-  notesHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  notesTitle: {
-    fontSize: 9.5,
-    fontWeight: '800',
-    letterSpacing: 0.6,
-  },
-  noteItem: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginVertical: 2,
-  },
-  noteText: {
-    fontSize: 11.5,
-    lineHeight: 16,
-    flex: 1,
-    fontWeight: '500',
-  },
-  mandatoryNoticeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 14,
-  },
-  mandatoryNoticeText: {
-    fontSize: 10.5,
-    color: '#f59e0b',
-    fontWeight: '600',
-    flex: 1,
-  },
-  downloadBox: {
-    borderRadius: 12,
-    borderWidth: 1,
-    padding: 12,
-    marginTop: 4,
-  },
-  downloadMetaRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  downloadStatusText: {
-    fontSize: 11.5,
-    fontWeight: '700',
-  },
-  downloadPercentText: {
-    fontSize: 12.5,
-    fontWeight: '800',
-  },
-  progressTrack: {
-    height: 6,
-    borderRadius: 3,
-    overflow: 'hidden',
-    marginBottom: 6,
-  },
-  progressFill: {
-    height: '100%',
-    borderRadius: 3,
-  },
-  downloadSizeRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  downloadSizeText: {
-    fontSize: 10.5,
-    fontWeight: '500',
-  },
-  actionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  laterBtn: {
-    flex: 1,
-    paddingVertical: 9.5,
-    borderRadius: 10,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  laterBtnText: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  updateBtn: {
-    flexDirection: 'row',
-    paddingVertical: 9.5,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  updateBtnText: {
-    color: '#ffffff',
-    fontSize: 12,
-    fontWeight: '700',
-  },
+  appIconImage: { width: '100%', height: '100%' },
+  versionChip: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 30, paddingHorizontal: 12, borderRadius: 15, borderWidth: 1, marginTop: 18 },
+  versionOld: { fontSize: 13, fontWeight: '600' },
+  versionNew: { fontSize: 13, fontWeight: '700' },
+  fullTitle: { fontSize: 30, letterSpacing: -0.8, textAlign: 'center', marginTop: 14 },
+  fullSub: { fontSize: 15, lineHeight: 22, textAlign: 'center', marginTop: 8, maxWidth: 300 },
+  notesCard: { width: '100%', borderWidth: 1, borderRadius: 22, paddingHorizontal: 18, paddingVertical: 6, marginTop: 26 },
+  notesLabel: { fontSize: 12, fontWeight: '700', paddingTop: 10 },
+
+  note: { flexDirection: 'row', gap: 12, paddingVertical: 10 },
+  noteDot: { width: 8, height: 8, borderRadius: 4, marginTop: 7 },
+  noteTitle: { fontSize: 15, fontWeight: '700' },
+  noteDetail: { fontSize: 14, lineHeight: 20, marginTop: 2 },
+
+  mainBtn: { height: 56, borderRadius: 28, overflow: 'hidden', justifyContent: 'center', marginTop: 12 },
+  mainFill: { position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 28 },
+  mainContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  mainText: { fontSize: 16, fontWeight: '700' },
+  mainSize: { position: 'absolute', right: 22, fontSize: 13, fontWeight: '600' },
+  textBtn: { height: 44, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
+  textBtnLabel: { fontSize: 14, fontWeight: '600' },
+  helper: { fontSize: 13, textAlign: 'center' },
+  errorRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  errorText: { fontSize: 13, fontWeight: '600', flexShrink: 1 },
+
+  backdrop: { flex: 1, backgroundColor: 'rgba(7, 17, 13, 0.55)', justifyContent: 'flex-end' },
+  sheet: { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 10, width: '100%', maxWidth: 640, alignSelf: 'center' },
+  grabber: { width: 40, height: 5, borderRadius: 3, alignSelf: 'center', marginBottom: 18 },
+  sheetHead: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  sheetIcon: { width: 50, height: 50, borderRadius: 14, overflow: 'hidden', borderWidth: 1 },
+  sheetIconImage: { width: '100%', height: '100%' },
+  sheetTitle: { fontSize: 22, letterSpacing: -0.4 },
+  sheetSub: { fontSize: 13, marginTop: 2 },
 });

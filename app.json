@@ -2,7 +2,7 @@
   "expo": {
     "name": "Regent Money",
     "slug": "regent-money",
-    "version": "1.0.46",
+    "version": "1.0.47",
     "orientation": "portrait",
     "icon": "./assets/appicon.png",
     "notification": {
@@ -22,6 +22,8 @@
       "permissions": [
         "android.permission.RECEIVE_SMS",
         "android.permission.READ_SMS",
+        "android.permission.READ_PHONE_NUMBERS",
+        "android.permission.READ_PHONE_STATE",
         "android.permission.RECEIVE_BOOT_COMPLETED",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
@@ -44,7 +46,7 @@
       ],
       "predictiveBackGestureEnabled": false,
       "package": "com.anonymous.regentmoney",
-      "versionCode": 129,
+      "versionCode": 130,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#04190F"

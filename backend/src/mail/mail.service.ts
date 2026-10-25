@@ -106,7 +106,7 @@ export class MailService {
     const backendUrl = this.getEffectiveBackendUrl();
     const verificationLink = `${backendUrl}/auth/verify?token=${token}`;
 
-    this.logger.log(`Generated verification link for ${email}: ${verificationLink}`);
+    this.logger.log(`Dispatching verification email to ${email}`);
 
     const subject = 'Verify your Regent Money Account';
     const htmlContent = `
@@ -155,8 +155,8 @@ export class MailService {
       }
     }
 
-    // 3. Simulated console output if no mail service succeeds
-    this.logger.warn(`[SIMULATED EMAIL - VERIFICATION] To: ${email}, Link: ${verificationLink}`);
+    // 3. Fallback warning if no mail service succeeds (never log the secret link)
+    this.logger.warn(`No email transport succeeded for verification email to: ${email}`);
     return verificationLink;
   }
 
@@ -164,7 +164,7 @@ export class MailService {
     const backendUrl = this.getEffectiveBackendUrl();
     const resetLink = `${backendUrl}/auth/reset-password-page?token=${token}`;
 
-    this.logger.log(`Generated password reset link for ${email}: ${resetLink}`);
+    this.logger.log(`Dispatching password reset email to ${email}`);
 
     const subject = 'Reset Password & Unlock Regent Money Account';
     const htmlContent = `
@@ -213,8 +213,8 @@ export class MailService {
       }
     }
 
-    // 3. Simulated console output if no mail service succeeds
-    this.logger.warn(`[SIMULATED EMAIL - PASSWORD RESET] To: ${email}, Link: ${resetLink}`);
+    // 3. Fallback warning if no mail service succeeds (never log the secret link)
+    this.logger.warn(`No email transport succeeded for password reset email to: ${email}`);
     return resetLink;
   }
 }

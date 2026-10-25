@@ -285,6 +285,42 @@ export const PAYTM_TRANSACTION_TAGS: TransactionTagDef[] = [
     bgColorDark: '#1A2F45',
     iconColor: '#1976D2',
   },
+  {
+    id: 'peer_lent',
+    label: 'Lent to friend',
+    iconName: 'arrow-up-right',
+    iconType: 'feather',
+    bgColorLight: '#E0F7FA',
+    bgColorDark: 'rgba(8, 145, 178, 0.22)',
+    iconColor: '#0E7490',
+  },
+  {
+    id: 'peer_lent_repaid',
+    label: 'Friend repaid',
+    iconName: 'check-circle',
+    iconType: 'feather',
+    bgColorLight: '#E0F7FA',
+    bgColorDark: 'rgba(8, 145, 178, 0.22)',
+    iconColor: '#0E7490',
+  },
+  {
+    id: 'peer_borrowed',
+    label: 'Borrowed',
+    iconName: 'arrow-down-left',
+    iconType: 'feather',
+    bgColorLight: '#FFFBEB',
+    bgColorDark: 'rgba(217, 119, 6, 0.22)',
+    iconColor: '#B45309',
+  },
+  {
+    id: 'peer_borrow_repaid',
+    label: 'Repaid friend',
+    iconName: 'corner-down-right',
+    iconType: 'feather',
+    bgColorLight: '#FFF7ED',
+    bgColorDark: 'rgba(234, 88, 12, 0.22)',
+    iconColor: '#C2410C',
+  },
 ];
 
 /**

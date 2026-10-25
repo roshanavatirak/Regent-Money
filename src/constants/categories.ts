@@ -16,6 +16,8 @@ export type CategoryFamily =
   | 'bills'
   | 'care'
   | 'money'
+  | 'peer_lend'
+  | 'peer_borrow'
   | 'other';
 
 export type CategoryGroup = 'spending' | 'billsCare' | 'money' | 'other';
@@ -77,6 +79,18 @@ export const CATEGORY_FAMILIES: Record<CategoryFamily, FamilyStyle> = {
     softBgDark: 'rgba(184, 243, 107, 0.14)', softFgDark: '#B8F36B',
     chart: '#16A34A',
   },
+  peer_lend: {
+    color: '#0891B2', glyph: '#FFFFFF',
+    softBgLight: '#E0F7FA', softFgLight: '#0E7490',
+    softBgDark: 'rgba(8, 145, 178, 0.22)', softFgDark: '#38BDF8',
+    chart: '#0891B2',
+  },
+  peer_borrow: {
+    color: '#EA580C', glyph: '#FFFFFF',
+    softBgLight: '#FFF7ED', softFgLight: '#C2410C',
+    softBgDark: 'rgba(234, 88, 12, 0.22)', softFgDark: '#FB923C',
+    chart: '#EA580C',
+  },
   other: {
     color: '#495057', glyph: '#FFFFFF',
     softBgLight: '#EEF0F2', softFgLight: '#343A40',
@@ -126,6 +140,12 @@ export const CATEGORIES: CategoryDef[] = [
   { id: 'cashback', label: 'Cashback', family: 'money', group: 'money', icon: 'cash-refund', aliases: ['refund', 'rewards'] },
   { id: 'insurance', label: 'Insurance', family: 'money', group: 'money', icon: 'shield-check-outline' },
   { id: 'financial_services', label: 'Finance', family: 'money', group: 'money', icon: 'bank-outline', aliases: ['financial', 'loan', 'emi'] },
+
+  // Friends & Lending (Borrow & Lend)
+  { id: 'peer_lent', label: 'Lent to friend', family: 'peer_lend', group: 'money', icon: 'hand-coin-outline', aliases: ['lent', 'lend', 'udhaar', 'udhaar_diya', 'gave_to_friend'] },
+  { id: 'peer_lent_repaid', label: 'Friend repaid', family: 'peer_lend', group: 'money', icon: 'cash-check', aliases: ['lent_repaid', 'lent_back', 'received_back', 'udhaar_wapas'] },
+  { id: 'peer_borrowed', label: 'Borrowed', family: 'peer_borrow', group: 'money', icon: 'hand-back-right-outline', aliases: ['borrow', 'borrowed', 'udhaar_liya', 'took_from_friend'] },
+  { id: 'peer_borrow_repaid', label: 'Repaid friend', family: 'peer_borrow', group: 'money', icon: 'cash-refund', aliases: ['borrow_repaid', 'borrow_back', 'repaid_borrowed'] },
 
   // Other
   { id: 'miscellaneous', label: 'Misc', family: 'other', group: 'other', icon: 'dots-horizontal', aliases: ['misc', 'other', 'others', 'uncategorized'] },

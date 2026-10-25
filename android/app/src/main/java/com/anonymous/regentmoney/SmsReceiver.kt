@@ -79,6 +79,12 @@ class SmsReceiver : BroadcastReceiver() {
 
                     // 1. Direct Native Ingestion via WorkManager
                     val prefs = context.getSharedPreferences("regent_native_prefs", Context.MODE_PRIVATE)
+                    val trackingDisabled = prefs.getBoolean("sms_tracking_disabled", false)
+                    if (trackingDisabled) {
+                        Log.d("SmsReceiver", "SMS tracking disabled on this device (SIM mismatch or user toggle). Skipping.")
+                        continue
+                    }
+
                     val token = prefs.getString("auth_access_token", null)
                     val userId = prefs.getString("user_id", null)
 

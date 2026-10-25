@@ -43,6 +43,7 @@ import { ManualTransactionScreen } from './ManualTransactionScreen';
 import { smsCatchupService } from '../services/smsCatchupService';
 import { smsPermissionService } from '../services/smsPermissionService';
 import { uploadFile, UploadError, isPasswordRequired } from '../services/uploadFile';
+import { statementVaultService } from '../services/statementVaultService';
 
 const BACKEND_URL = getBackendUrl();
 const FOREST = '#0B3D2C';
@@ -210,6 +211,14 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
     const sorted = [...debits, ...credits].sort((a, b) => {
       const diff = (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0);
       if (diff !== 0) return diff;
+      // Secondary tie-breaker: keep sister transactions with matching merchant and amount strictly together
+      const aMerchant = (a.merchant || (a as any).source || '').toLowerCase().trim();
+      const bMerchant = (b.merchant || (b as any).source || '').toLowerCase().trim();
+      if (aMerchant !== bMerchant) {
+        return aMerchant.localeCompare(bMerchant);
+      }
+      const amtDiff = (Number(b.amount) || 0) - (Number(a.amount) || 0);
+      if (amtDiff !== 0) return amtDiff;
       return Number((b as any).updatedAt || 0) - Number((a as any).updatedAt || 0);
     });
 
@@ -404,12 +413,22 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
       });
       const txs = json.transactions || [];
       if (txs.length === 0) throw new UploadError('No transactions were found in this statement.', 422);
+
+      // Successfully unlocked: save password into on-device hardware KeyStore so user never has to re-type it
+      if (password && activeBank?.id) {
+        statementVaultService.savePassword(activeBank.id, password).catch(() => {});
+      }
+
       setExtracted(txs);
       setDetectedFinalBalance(json.detectedFinalBalance ?? null);
       setPasswordError(null);
       setReviewVisible(true);
     } catch (e: any) {
       if (e instanceof UploadError && isPasswordRequired(e.body)) {
+        // If a stored password failed, clear it so user can supply the new password
+        if (password && activeBank?.id) {
+          statementVaultService.clearPassword(activeBank.id).catch(() => {});
+        }
         setPasswordError(password ? 'That password didn’t work. Try again.' : null);
         setPendingPdf(fileAsset);
         setPasswordSheet(true);
@@ -427,13 +446,14 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
   };
 
   const submitPassword = () => {
-    if (!pdfPassword.trim()) {
+    const trimmed = pdfPassword.trim();
+    if (!trimmed) {
       setPasswordError('Enter the PDF password.');
       return;
     }
     if (!pendingPdf) return;
     setPasswordSheet(false);
-    uploadStatementFile(pendingPdf, pdfPassword);
+    uploadStatementFile(pendingPdf, trimmed);
     setPdfPassword('');
   };
 
@@ -480,7 +500,14 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
       const doc = await DocumentPicker.getDocumentAsync({ type: ['application/pdf', 'image/*'], copyToCacheDirectory: true });
       if (doc.canceled || !doc.assets?.[0]?.uri) return;
       setPasswordError(null);
-      await uploadStatementFile(doc.assets[0]);
+
+      // Check on-device hardware KeyStore for previously saved password
+      let savedPwd: string | null = null;
+      if (activeBank?.id) {
+        savedPwd = await statementVaultService.getSavedPassword(activeBank.id);
+      }
+
+      await uploadStatementFile(doc.assets[0], savedPwd || undefined);
     } catch (e: any) {
       setProcessing(false);
       setErrorSheet({ title: 'Couldn’t open the file', message: e?.message || 'Pick a PDF or an image of your statement.' });

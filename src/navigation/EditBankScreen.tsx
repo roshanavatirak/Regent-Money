@@ -1,28 +1,28 @@
-import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  ScrollView,
-  TextInput,
-  ActivityIndicator,
-  StyleSheet,
-  Platform,
-  BackHandler,
-} from 'react-native';
+// src/navigation/EditBankScreen.tsx
+//
+// Edit an account: a live brand-card preview on top, then the fields.
+
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, TextInput, Pressable, ScrollView, ActivityIndicator, StyleSheet, Platform, BackHandler } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import Animated, { FadeIn, FadeInDown, ZoomIn } from 'react-native-reanimated';
+import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
+import * as Font from 'expo-font';
 import { useTheme, useBankStore, BankProfileType } from '../store';
 import { authService } from '../services/authService';
 import { getBackendUrl } from '../config/api';
 import { BankIcon } from '../components/BankIcon';
 import { SmsSenderTagsManager } from '../components/SmsSenderTagsManager';
 import { formatSmsSenderTags, parseSmsSenderTags } from '../constants/bankSmsSenders';
-import { KeyboardScreen } from '../components/KeyboardScreen';
+import { bankBrandColor, getBankCode } from '../constants/bankBrand';
 
 const BACKEND_URL = getBackendUrl();
+const FOREST = '#0B3D2C';
+const LIME = '#B8F36B';
 
+// Still exported: AddBankModal uses the same list
 export const ACCOUNT_TYPES = [
   { id: 'Savings', label: 'Savings Account', icon: 'pocket' },
   { id: 'Current', label: 'Current Account', icon: 'briefcase' },
@@ -38,60 +38,39 @@ export interface EditBankScreenProps {
   onSuccess?: (bank: BankProfileType) => void;
 }
 
+const toBalanceString = (v: any) => {
+  const n = typeof v === 'number' ? v : parseFloat(String(v ?? ''));
+  return isNaN(n) ? '' : String(Math.round(n * 100) / 100);
+};
+
 export const EditBankScreen: React.FC<EditBankScreenProps> = (props) => {
   const insets = useSafeAreaInsets();
   let navigation: any = null;
   let route: any = null;
   try {
     navigation = useNavigation<any>();
-  } catch (e) {}
+  } catch {}
   try {
     route = useRoute<any>();
-  } catch (e) {}
+  } catch {}
   const { colors, isDark } = useTheme();
+  const display = Font.isLoaded('BricolageGrotesque_800ExtraBold') ? 'BricolageGrotesque_800ExtraBold' : undefined;
 
   const bank: BankProfileType = props.bank || route?.params?.bank;
 
-  const [bankNameInput, setBankNameInput] = useState(bank?.bankName || '');
+  const [name, setName] = useState(bank?.bankName || '');
   const [accountType, setAccountType] = useState(bank?.accountType || 'Savings');
-  const [accountTypeDropdownOpen, setAccountTypeDropdownOpen] = useState(false);
-  const [accountSuffix, setAccountSuffix] = useState(bank?.accountNumberSuffix || '');
-  const formatBalanceToTwoDecimals = (val: number | string | undefined | null) => {
-    if (val === undefined || val === null || val === '') return '';
-    const num = typeof val === 'number' ? val : parseFloat(String(val));
-    if (isNaN(num)) return '';
-    return (Math.round(num * 100) / 100).toString();
-  };
-
-  const [balance, setBalance] = useState(formatBalanceToTwoDecimals(bank?.currentBalance));
-  const [smsSenderTags, setSmsSenderTags] = useState<string[]>(
-    parseSmsSenderTags(bank?.smsSenderId)
-  );
+  const [suffix, setSuffix] = useState(bank?.accountNumberSuffix || '');
+  const [balance, setBalance] = useState(toBalanceString(bank?.currentBalance));
+  const [senderTags, setSenderTags] = useState<string[]>(parseSmsSenderTags(bank?.smsSenderId));
   const [upiId, setUpiId] = useState(bank?.upiId || '');
-  const [customKeywords, setCustomKeywords] = useState(bank?.customKeywords || '');
-
-  const [formError, setFormError] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-
-  const handleBalanceChange = (t: string) => {
-    if (!t) {
-      setBalance('');
-      if (formError) setFormError('');
-      return;
-    }
-    // Allow digits and at most one decimal point
-    let cleaned = t.replace(/[^0-9.]/g, '');
-    const parts = cleaned.split('.');
-    if (parts.length > 2) {
-      cleaned = parts[0] + '.' + parts.slice(1).join('');
-    }
-    // Enforce no more than two decimal places after the point
-    if (parts.length >= 2) {
-      cleaned = parts[0] + '.' + parts[1].slice(0, 2);
-    }
-    setBalance(cleaned);
-    if (formError) setFormError('');
-  };
+  const [keywords, setKeywords] = useState(bank?.customKeywords || '');
+  const [moreOpen, setMoreOpen] = useState(!!(bank?.upiId || bank?.customKeywords));
+  const [errorText, setErrorText] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [suffixFocused, setSuffixFocused] = useState(false);
+  const suffixRef = useRef<TextInput>(null);
 
   const handleGoBack = () => {
     if (props.onBack) {
@@ -99,18 +78,15 @@ export const EditBankScreen: React.FC<EditBankScreenProps> = (props) => {
       return;
     }
     const returnToBankId = props.returnToBankId || route?.params?.returnToBankId || bank?.id;
-    if (returnToBankId) {
-      useBankStore.getState().setActiveBankModalId(returnToBankId);
-    }
+    if (returnToBankId) useBankStore.getState().setActiveBankModalId(returnToBankId);
     navigation?.goBack?.();
   };
 
   useEffect(() => {
-    const onBackPress = () => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       handleGoBack();
       return true;
-    };
-    const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    });
     return () => sub.remove();
   }, [props.onBack, props.returnToBankId, route?.params?.returnToBankId, bank?.id]);
 
@@ -119,483 +95,300 @@ export const EditBankScreen: React.FC<EditBankScreenProps> = (props) => {
     return null;
   }
 
-  const handleSubmit = async () => {
-    if (!bankNameInput.trim() || !accountSuffix.trim() || !balance.trim()) {
-      setFormError('Please fill in all required fields.');
-      return;
-    }
-    if (accountSuffix.trim().length !== 4 || isNaN(Number(accountSuffix))) {
-      setFormError('Account suffix must be exactly 4 digits.');
-      return;
-    }
-    if (isNaN(Number(balance))) {
-      setFormError('Current balance must be a valid number.');
-      return;
-    }
-    const balanceParts = balance.split('.');
-    if (balanceParts.length === 2 && balanceParts[1].length > 2) {
-      setFormError('Current balance cannot have more than 2 decimal places.');
-      return;
-    }
+  const dirty =
+    name.trim() !== (bank.bankName || '') ||
+    accountType !== (bank.accountType || 'Savings') ||
+    suffix !== (bank.accountNumberSuffix || '') ||
+    balance !== toBalanceString(bank.currentBalance) ||
+    formatSmsSenderTags(senderTags) !== formatSmsSenderTags(parseSmsSenderTags(bank.smsSenderId)) ||
+    upiId.trim() !== (bank.upiId || '') ||
+    keywords.trim() !== (bank.customKeywords || '');
 
-    setFormError('');
-    setSubmitting(true);
+  const onBalanceChange = (t: string) => {
+    let c = t.replace(/[^0-9.]/g, '');
+    const parts = c.split('.');
+    if (parts.length > 1) c = `${parts[0]}.${parts.slice(1).join('').slice(0, 2)}`;
+    setBalance(c);
+    if (errorText) setErrorText('');
+  };
 
+  const save = async () => {
+    if (!dirty || saving) return;
+    if (!name.trim()) return setErrorText('Add a name for this account.');
+    if (!/^\d{4}$/.test(suffix)) return setErrorText('Enter the last 4 digits of the account number.');
+    if (!balance.trim() || isNaN(Number(balance))) return setErrorText('Enter the current balance.');
+
+    setErrorText('');
+    setSaving(true);
     try {
       const token = authService.getAccessToken();
-      if (!token) {
-        throw new Error('Authentication session expired. Please log in again.');
-      }
-
-      const cleanBalance = Math.round(parseFloat(balance) * 100) / 100;
-      const updatedData = {
+      if (!token) throw new Error('Sign in again to edit this account.');
+      const data = {
         id: bank.id,
-        bankName: bankNameInput.trim(),
+        bankName: name.trim(),
         accountType: accountType || 'Savings',
-        accountNumberSuffix: accountSuffix.trim(),
-        currentBalance: cleanBalance,
-        smsSenderId: formatSmsSenderTags(smsSenderTags) || undefined,
+        accountNumberSuffix: suffix,
+        currentBalance: Math.round(parseFloat(balance) * 100) / 100,
+        smsSenderId: formatSmsSenderTags(senderTags) || undefined,
         upiId: upiId.trim() || undefined,
-        customKeywords: customKeywords.trim() || undefined,
+        customKeywords: keywords.trim() || undefined,
         smsConsent: bank.smsConsent !== undefined ? bank.smsConsent : true,
       };
-
       const response = await fetch(`${BACKEND_URL}/sync/bank-profile`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(updatedData),
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
       });
-
       if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.message || 'Failed to update bank details on server.');
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.message || 'Could not save your changes. Try again.');
       }
-
-      const updatedBank: BankProfileType = {
-        ...bank,
-        ...updatedData,
-        lastSyncTimestamp: Date.now(),
-      };
-
-      useBankStore.getState().updateBankProfileState(updatedBank);
-      if (props.onSuccess) {
-        props.onSuccess(updatedBank);
-      } else {
-        handleGoBack();
-      }
+      const updated: BankProfileType = { ...bank, ...data, lastSyncTimestamp: Date.now() };
+      useBankStore.getState().updateBankProfileState(updated);
+      setSaved(true);
+      setTimeout(() => {
+        if (props.onSuccess) props.onSuccess(updated);
+        else handleGoBack();
+      }, 700);
     } catch (e: any) {
-      setFormError(e.message || 'Could not save bank changes.');
+      setErrorText(e?.message || 'Could not save your changes. Try again.');
     } finally {
-      setSubmitting(false);
+      setSaving(false);
     }
   };
 
-  const selectedAccountTypeObj =
-    ACCOUNT_TYPES.find((t) => t.id === accountType) || ACCOUNT_TYPES[0];
-
-  const styles = getStyles(colors, isDark);
+  const ink = colors.text;
+  const muted = colors.textSecondary;
+  const pageBg = isDark ? colors.background : '#F3F6F4';
+  const surface = colors.card;
+  const field = isDark ? colors.border : '#DCE5E0';
+  const line = isDark ? colors.border : '#E1E9E4';
+  const accent = isDark ? LIME : FOREST;
+  const accentInk = isDark ? FOREST : '#FFFFFF';
+  const brand = bankBrandColor(name || bank.bankName);
+  const previewBalance = parseFloat(balance) || 0;
+  const digits = suffix.padEnd(4, ' ').split('');
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Top Header */}
-      <View style={[styles.header, { paddingTop: Math.max(insets.top, 16) }]}>
-        <TouchableOpacity
-          onPress={handleGoBack}
-          style={styles.backBtn}
-          activeOpacity={0.7}
-        >
-          <Feather name="arrow-left" size={20} color={colors.text} />
-        </TouchableOpacity>
-        <View style={{ flex: 1, marginLeft: 12 }}>
-          <Text style={styles.headerTitle}>Edit Bank Details</Text>
-          <Text style={styles.headerSubtitle}>Direct Mapping Setup</Text>
+    <View style={{ flex: 1, backgroundColor: pageBg }}>
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
+        <View style={[s.header, { paddingTop: Math.max(insets.top, 12) + 4 }]}>
+          <Pressable onPress={handleGoBack} style={[s.roundBtn, { backgroundColor: surface }]} accessibilityLabel="Back">
+            <Feather name="arrow-left" size={20} color={ink} />
+          </Pressable>
+          <Text style={[s.headerTitle, { color: ink }]}>Edit account</Text>
+          <View style={{ width: 44 }} />
         </View>
-      </View>
 
-      <KeyboardScreen
-        showsVerticalScrollIndicator={false}
-        keyboardDismissMode="on-drag"
-        contentContainerStyle={styles.scrollContent}
-      >
-        {/* Bank Icon & Hero Header */}
-          <View style={styles.bankFormHeader}>
-            <View style={{ marginBottom: 12 }}>
-              <BankIcon
-                code={smsSenderTags[0] || bankNameInput || bank.bankName}
-                name={bankNameInput || bank.bankName}
-                size={60}
-              />
-            </View>
-            <Text style={styles.bankFormTitle}>{bankNameInput || bank.bankName}</Text>
-            <Text style={styles.bankFormSubtitle}>Account Ending in •••• {accountSuffix || bank.accountNumberSuffix}</Text>
-          </View>
-
-          {formError ? (
-            <View style={styles.errorContainer}>
-              <Feather name="alert-circle" size={16} color="#FF5252" style={{ marginRight: 8 }} />
-              <Text style={styles.errorTextInline}>{formError}</Text>
-            </View>
-          ) : null}
-
-          {/* Bank Name Field */}
-          <View style={styles.formFieldContainer}>
-            <Text style={styles.fieldLabel}>
-              BANK NAME <Text style={styles.requiredStar}>*</Text>
-            </Text>
-            <View style={styles.inputContainer}>
-              <TextInput
-                style={styles.inputField}
-                value={bankNameInput}
-                onChangeText={(t) => {
-                  setBankNameInput(t);
-                  if (formError) setFormError('');
-                }}
-                placeholder="Bank Name (e.g. State Bank of India)"
-                placeholderTextColor={colors.textTertiary}
-              />
-            </View>
-          </View>
-
-          {/* Account Type Dropdown */}
-          <View style={[styles.formFieldContainer, { zIndex: 1000 }]}>
-            <Text style={styles.fieldLabel}>ACCOUNT TYPE</Text>
-            <TouchableOpacity
-              style={[
-                styles.inputContainer,
-                styles.dropdownTrigger,
-                accountTypeDropdownOpen && styles.dropdownTriggerActive,
-              ]}
-              onPress={() => setAccountTypeDropdownOpen(!accountTypeDropdownOpen)}
-              activeOpacity={0.8}
-            >
-              <View style={styles.dropdownSelectedRow}>
-                <Feather
-                  name={selectedAccountTypeObj.icon as any}
-                  size={16}
-                  color={colors.accent}
-                  style={{ marginRight: 10 }}
-                />
-                <Text style={styles.dropdownSelectedText}>{selectedAccountTypeObj.label}</Text>
+        <ScrollView keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 24 }}>
+          {/* Live preview */}
+          <Animated.View entering={FadeInDown.duration(380)} style={[s.card, { backgroundColor: brand }]}>
+            <View pointerEvents="none" style={[s.ring, { width: 220, height: 220, borderRadius: 110, right: -80, top: -100 }]} />
+            <View pointerEvents="none" style={[s.ring, { width: 140, height: 140, borderRadius: 70, right: -40, top: -60, borderColor: 'rgba(255,255,255,0.2)' }]} />
+            <View style={s.cardTop}>
+              <BankIcon code={getBankCode(bank.bankName)} name={bank.bankName} size={40} />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={s.cardName} numberOfLines={1}>{name.trim() || bank.bankName}</Text>
+                <Text style={s.cardSub}>{accountType} •• {suffix || '····'}</Text>
               </View>
-              <Feather
-                name={accountTypeDropdownOpen ? 'chevron-up' : 'chevron-down'}
-                size={18}
-                color={colors.textSecondary}
-              />
-            </TouchableOpacity>
-
-            {accountTypeDropdownOpen && (
-              <View style={styles.dropdownMenu}>
-                {ACCOUNT_TYPES.map((typeOption) => {
-                  const isSelected = accountType === typeOption.id;
-                  return (
-                    <TouchableOpacity
-                      key={typeOption.id}
-                      style={[styles.dropdownMenuItem, isSelected && styles.dropdownMenuItemActive]}
-                      onPress={() => {
-                        setAccountType(typeOption.id);
-                        setAccountTypeDropdownOpen(false);
-                      }}
-                      activeOpacity={0.7}
-                    >
-                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                        <Feather
-                          name={typeOption.icon as any}
-                          size={16}
-                          color={isSelected ? colors.accent : colors.textSecondary}
-                          style={{ marginRight: 10 }}
-                        />
-                        <Text style={[styles.dropdownItemText, isSelected && styles.dropdownItemTextActive]}>
-                          {typeOption.label}
-                        </Text>
-                      </View>
-                      {isSelected && <Feather name="check" size={16} color={colors.accent} />}
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            )}
-          </View>
-
-          {/* Account Suffix Field */}
-          <View style={styles.formFieldContainer}>
-            <Text style={styles.fieldLabel}>
-              ACCOUNT NUMBER SUFFIX (LAST 4 DIGITS) <Text style={styles.requiredStar}>*</Text>
-            </Text>
-            <View style={styles.inputContainer}>
-              <TextInput
-                style={styles.inputField}
-                value={accountSuffix}
-                onChangeText={(t) => {
-                  setAccountSuffix(t.replace(/[^0-9]/g, '').slice(0, 4));
-                  if (formError) setFormError('');
-                }}
-                placeholder="4020"
-                placeholderTextColor={colors.textTertiary}
-                keyboardType="numeric"
-                maxLength={4}
-              />
             </View>
-          </View>
-
-          {/* Current Balance Field */}
-          <View style={styles.formFieldContainer}>
-            <Text style={styles.fieldLabel}>
-              CURRENT BALANCE (₹) <Text style={styles.requiredStar}>*</Text>
-            </Text>
-            <View style={styles.inputContainer}>
-              <TextInput
-                style={styles.inputField}
-                value={balance}
-                onChangeText={handleBalanceChange}
-                placeholder="e.g. 15000.00"
-                placeholderTextColor={colors.textTertiary}
-                keyboardType="decimal-pad"
-              />
+            <View style={{ marginTop: 'auto' }}>
+              <Text style={s.cardLabel}>Balance</Text>
+              <Text style={[s.cardBalance, { fontFamily: display, fontWeight: display ? undefined : '800' }]} numberOfLines={1} adjustsFontSizeToFit>
+                ₹{previewBalance.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+              </Text>
             </View>
-          </View>
+          </Animated.View>
+          <Text style={[s.previewHint, { color: muted }]}>Preview updates as you edit</Text>
 
-          {/* SMS Sender Tags Manager */}
-          <View style={styles.formFieldContainer}>
-            <SmsSenderTagsManager
-              tags={smsSenderTags}
-              onChangeTags={setSmsSenderTags}
-              bankCodeOrName={bankNameInput || bank.bankName}
-              colors={colors}
-              isDark={isDark}
-              label="SMS SENDER CODES / HEADERS"
-              hint="Add all SMS codes used by your bank (e.g. SBIPSG, SBIBNK, SBIUPI) to capture salary, UPI, and ATM alerts."
+          <Text style={[s.label, { color: muted }]}>Account name</Text>
+          <View style={[s.fieldBox, { backgroundColor: surface, borderColor: field }]}>
+            <TextInput
+              value={name}
+              onChangeText={(t) => {
+                setName(t);
+                if (errorText) setErrorText('');
+              }}
+              placeholder="Like State Bank of India"
+              placeholderTextColor={muted}
+              style={[s.fieldInput, { color: ink }]}
+              accessibilityLabel="Account name"
             />
           </View>
 
-          {/* UPI ID Field */}
-          <View style={styles.formFieldContainer}>
-            <Text style={styles.fieldLabel}>UPI ID (VPA)</Text>
-            <View style={styles.inputContainer}>
-              <TextInput
-                style={styles.inputField}
-                value={upiId}
-                onChangeText={setUpiId}
-                placeholder="e.g. username@okhdfcbank"
-                placeholderTextColor={colors.textTertiary}
-                autoCapitalize="none"
-              />
-            </View>
+          <Text style={[s.label, { color: muted }]}>Account type</Text>
+          <View style={s.chips}>
+            {ACCOUNT_TYPES.map((t) => {
+              const on = accountType === t.id;
+              return (
+                <Pressable
+                  key={t.id}
+                  onPress={() => setAccountType(t.id)}
+                  style={[s.chip, on ? { backgroundColor: accent, borderColor: accent } : { backgroundColor: surface, borderColor: field }]}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: on }}
+                >
+                  <Text style={[s.chipText, { color: on ? accentInk : ink }, on && { fontWeight: '700' }]}>
+                    {t.label.replace(/\s*(\(OD\)\s*)?account$/i, '')}
+                  </Text>
+                </Pressable>
+              );
+            })}
           </View>
 
-          {/* Custom Keywords Field */}
-          <View style={styles.formFieldContainer}>
-            <Text style={styles.fieldLabel}>CUSTOM KEYWORDS (COMMA-SEPARATED)</Text>
-            <View style={styles.inputContainer}>
-              <TextInput
-                style={styles.inputField}
-                value={customKeywords}
-                onChangeText={setCustomKeywords}
-                placeholder="e.g. salary, freelance, rent"
-                placeholderTextColor={colors.textTertiary}
-                autoCapitalize="none"
-              />
-            </View>
+          <Text style={[s.label, { color: muted }]}>Last 4 digits</Text>
+          <Pressable onPress={() => suffixRef.current?.focus()} style={s.digitRow} accessibilityLabel="Last 4 digits">
+            {digits.map((d, i) => {
+              const active = suffixFocused && i === Math.min(suffix.length, 3);
+              return (
+                <View key={i} style={[s.digitBox, { backgroundColor: surface, borderColor: active ? accent : field, borderWidth: active ? 2 : 1 }]}>
+                  <Text style={[s.digitText, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}>{d.trim()}</Text>
+                </View>
+              );
+            })}
+            <TextInput
+              ref={suffixRef}
+              value={suffix}
+              onChangeText={(t) => {
+                setSuffix(t.replace(/\D/g, '').slice(0, 4));
+                if (errorText) setErrorText('');
+              }}
+              onFocus={() => setSuffixFocused(true)}
+              onBlur={() => setSuffixFocused(false)}
+              keyboardType="number-pad"
+              maxLength={4}
+              caretHidden
+              style={s.hiddenInput}
+              accessibilityLabel="Last 4 digits of account number"
+            />
+          </Pressable>
+
+          <Text style={[s.label, { color: muted }]}>Current balance</Text>
+          <View style={[s.balanceBox, { backgroundColor: surface, borderColor: field }]}>
+            <Text style={[s.rupee, { color: muted, fontFamily: display }]}>₹</Text>
+            <TextInput
+              value={balance}
+              onChangeText={onBalanceChange}
+              placeholder="0"
+              placeholderTextColor={muted}
+              keyboardType="decimal-pad"
+              style={[s.balanceInput, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}
+              accessibilityLabel="Current balance in rupees"
+            />
           </View>
 
-          {/* Submit Button */}
-          {submitting ? (
-            <View style={styles.submittingContainer}>
-              <ActivityIndicator size="small" color={colors.accent} />
-              <Text style={styles.submittingText}>Saving changes...</Text>
-            </View>
-          ) : (
-            <TouchableOpacity
-              style={styles.submitBtn}
-              onPress={handleSubmit}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.submitBtnText}>Save Changes</Text>
-            </TouchableOpacity>
+          <View style={{ marginTop: 18 }}>
+            <SmsSenderTagsManager
+              tags={senderTags}
+              onChangeTags={setSenderTags}
+              bankCodeOrName={name || bank.bankName}
+              colors={colors}
+              isDark={isDark}
+              label="Bank SMS senders"
+              hint="We read transaction alerts from these senders."
+            />
+          </View>
+
+          <Pressable onPress={() => setMoreOpen((v) => !v)} style={[s.moreRow, { backgroundColor: surface, borderColor: line }]} accessibilityRole="button" accessibilityState={{ expanded: moreOpen }}>
+            <Text style={[s.moreTitle, { color: ink }]}>More options</Text>
+            <Text style={[s.moreHint, { color: muted }]} numberOfLines={1}>{moreOpen ? '' : 'UPI ID, matching words'}</Text>
+            <Feather name={moreOpen ? 'chevron-up' : 'chevron-down'} size={16} color={muted} />
+          </Pressable>
+
+          {moreOpen && (
+            <Animated.View entering={FadeInDown.duration(220)}>
+              <Text style={[s.label, { color: muted }]}>UPI ID</Text>
+              <View style={[s.fieldBox, { backgroundColor: surface, borderColor: field }]}>
+                <Feather name="at-sign" size={16} color={muted} />
+                <TextInput value={upiId} onChangeText={setUpiId} placeholder="name@okbank" placeholderTextColor={muted} autoCapitalize="none" style={[s.fieldInput, { color: ink }]} accessibilityLabel="UPI ID" />
+              </View>
+              <Text style={[s.hint, { color: muted }]}>Helps match UPI payment alerts.</Text>
+
+              <Text style={[s.label, { color: muted }]}>Matching words</Text>
+              <View style={[s.fieldBox, { backgroundColor: surface, borderColor: field }]}>
+                <Feather name="key" size={16} color={muted} />
+                <TextInput value={keywords} onChangeText={setKeywords} placeholder="salary, rent" placeholderTextColor={muted} autoCapitalize="none" style={[s.fieldInput, { color: ink }]} accessibilityLabel="Matching words" />
+              </View>
+              <Text style={[s.hint, { color: muted }]}>Separate with commas.</Text>
+            </Animated.View>
           )}
-      </KeyboardScreen>
+
+          {errorText ? (
+            <Animated.View entering={FadeIn.duration(200)} style={s.errorRow}>
+              <Feather name="alert-circle" size={14} color={isDark ? '#FFA8A8' : '#C92A2A'} />
+              <Text style={[s.errorText, { color: isDark ? '#FFA8A8' : '#C92A2A' }]}>{errorText}</Text>
+            </Animated.View>
+          ) : null}
+        </ScrollView>
+
+        <View style={[s.footer, { paddingBottom: Math.max(insets.bottom, 12) + 8, borderTopColor: line }]}>
+          <Pressable
+            onPress={save}
+            disabled={!dirty || saving}
+            style={({ pressed }) => [s.cta, { backgroundColor: accent, opacity: dirty ? 1 : 0.5 }, pressed && dirty && { transform: [{ scale: 0.98 }] }]}
+            accessibilityRole="button"
+          >
+            {saving ? <ActivityIndicator color={isDark ? FOREST : LIME} /> : <Text style={[s.ctaText, { color: isDark ? FOREST : LIME }]}>{dirty ? 'Save changes' : 'No changes yet'}</Text>}
+          </Pressable>
+        </View>
+      </KeyboardAvoidingView>
+
+      {saved && (
+        <Animated.View entering={FadeIn.duration(150)} style={[StyleSheet.absoluteFill, s.savedWrap, { backgroundColor: pageBg }]}>
+          <Animated.View entering={ZoomIn.springify().damping(12)} style={[s.savedCircle, { backgroundColor: FOREST }]}>
+            <Feather name="check" size={40} color={LIME} />
+          </Animated.View>
+          <Text style={[s.savedText, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}>Saved</Text>
+        </Animated.View>
+      )}
     </View>
   );
 };
 
-const getStyles = (colors: any, isDark: boolean) =>
-  StyleSheet.create({
-    container: {
-      flex: 1,
-    },
-    header: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingHorizontal: 16,
-      paddingBottom: 14,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.border,
-      backgroundColor: colors.card,
-    },
-    backBtn: {
-      width: 36,
-      height: 36,
-      borderRadius: 18,
-      backgroundColor: colors.buttonSecondaryBackground,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    headerTitle: {
-      fontSize: 17,
-      fontWeight: '800',
-      color: colors.text,
-    },
-    headerSubtitle: {
-      fontSize: 11,
-      color: colors.textSecondary,
-      marginTop: 2,
-    },
-    scrollContent: {
-      paddingHorizontal: 16,
-      paddingTop: 12,
-    },
-    bankFormHeader: {
-      alignItems: 'center',
-      paddingVertical: 14,
-      marginBottom: 8,
-    },
-    bankFormTitle: {
-      fontSize: 19,
-      fontWeight: '800',
-      color: colors.text,
-    },
-    bankFormSubtitle: {
-      fontSize: 12,
-      color: colors.textSecondary,
-      marginTop: 4,
-    },
-    errorContainer: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: 'rgba(255, 82, 82, 0.1)',
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: 'rgba(255, 82, 82, 0.2)',
-      padding: 12,
-      marginBottom: 16,
-    },
-    errorTextInline: {
-      color: '#FF5252',
-      fontSize: 12,
-      fontWeight: '600',
-      flex: 1,
-    },
-    formFieldContainer: {
-      marginBottom: 14,
-    },
-    fieldLabel: {
-      fontSize: 10.5,
-      fontWeight: '800',
-      color: colors.textSecondary,
-      marginBottom: 6,
-      letterSpacing: 0.5,
-    },
-    requiredStar: {
-      color: '#FF5252',
-    },
-    inputContainer: {
-      backgroundColor: colors.card,
-      borderWidth: 1,
-      borderColor: colors.border,
-      borderRadius: 12,
-      height: 48,
-      justifyContent: 'center',
-      paddingHorizontal: 14,
-    },
-    inputField: {
-      color: colors.text,
-      fontSize: 13.5,
-      fontWeight: '600',
-      height: '100%',
-    },
-    dropdownTrigger: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-    },
-    dropdownTriggerActive: {
-      borderColor: colors.accent,
-    },
-    dropdownSelectedRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-    },
-    dropdownSelectedText: {
-      color: colors.text,
-      fontSize: 13.5,
-      fontWeight: '600',
-    },
-    dropdownMenu: {
-      backgroundColor: colors.card,
-      borderWidth: 1,
-      borderColor: colors.border,
-      borderRadius: 12,
-      marginTop: 6,
-      overflow: 'hidden',
-      elevation: 6,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.2,
-      shadowRadius: 8,
-    },
-    dropdownMenuItem: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingHorizontal: 14,
-      paddingVertical: 12,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.border,
-    },
-    dropdownMenuItemActive: {
-      backgroundColor: 'rgba(45, 186, 78, 0.08)',
-    },
-    dropdownItemText: {
-      fontSize: 13,
-      fontWeight: '600',
-      color: colors.text,
-    },
-    dropdownItemTextActive: {
-      color: colors.accent,
-      fontWeight: '700',
-    },
-    submittingContainer: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      paddingVertical: 16,
-      marginTop: 10,
-    },
-    submittingText: {
-      color: colors.accent,
-      fontSize: 13,
-      fontWeight: '700',
-      marginLeft: 10,
-    },
-    submitBtn: {
-      backgroundColor: colors.accent,
-      borderRadius: 12,
-      height: 50,
-      alignItems: 'center',
-      justifyContent: 'center',
-      marginTop: 14,
-      shadowColor: colors.accent,
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.35,
-      shadowRadius: 8,
-      elevation: 4,
-    },
-    submitBtnText: {
-      color: '#ffffff',
-      fontSize: 14,
-      fontWeight: '800',
-    },
-  });
+const s = StyleSheet.create({
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 10 },
+  roundBtn: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { fontSize: 16, fontWeight: '700' },
+
+  card: { height: 150, borderRadius: 26, padding: 18, overflow: 'hidden', marginTop: 6 },
+  ring: { position: 'absolute', borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)' },
+  cardTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  cardName: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  cardSub: { color: 'rgba(255,255,255,0.78)', fontSize: 12, marginTop: 2 },
+  cardLabel: { color: 'rgba(255,255,255,0.78)', fontSize: 12 },
+  cardBalance: { color: '#FFFFFF', fontSize: 30, letterSpacing: -0.8, fontVariant: ['tabular-nums'] },
+  previewHint: { textAlign: 'center', fontSize: 12, marginTop: 8 },
+
+  label: { fontSize: 13, fontWeight: '700', paddingHorizontal: 4, paddingTop: 18, paddingBottom: 10 },
+  fieldBox: { flexDirection: 'row', alignItems: 'center', gap: 10, height: 50, borderRadius: 16, borderWidth: 1, paddingHorizontal: 14 },
+  fieldInput: { flex: 1, fontSize: 15, fontWeight: '600', paddingVertical: 0, ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : {}) },
+  hint: { fontSize: 12, marginTop: 6, paddingHorizontal: 4 },
+
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: { height: 38, paddingHorizontal: 14, borderRadius: 19, borderWidth: 1, justifyContent: 'center' },
+  chipText: { fontSize: 13, fontWeight: '600' },
+
+  digitRow: { flexDirection: 'row', gap: 10 },
+  digitBox: { flex: 1, height: 56, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  digitText: { fontSize: 24 },
+  hiddenInput: { position: 'absolute', width: 1, height: 1, opacity: 0 },
+
+  balanceBox: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 64, borderRadius: 18, borderWidth: 1, paddingHorizontal: 16 },
+  rupee: { fontSize: 22, fontWeight: '700' },
+  balanceInput: { flex: 1, fontSize: 30, letterSpacing: -0.6, paddingVertical: 0, ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : {}) },
+
+  moreRow: { flexDirection: 'row', alignItems: 'center', gap: 8, height: 52, borderRadius: 16, borderWidth: 1, paddingHorizontal: 14, marginTop: 18 },
+  moreTitle: { fontSize: 14, fontWeight: '600' },
+  moreHint: { flex: 1, fontSize: 12, textAlign: 'right' },
+
+  errorRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 16, paddingHorizontal: 4 },
+  errorText: { fontSize: 13, fontWeight: '600', flex: 1 },
+
+  footer: { paddingHorizontal: 16, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth },
+  cta: { height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center' },
+  ctaText: { fontSize: 16, fontWeight: '700' },
+
+  savedWrap: { alignItems: 'center', justifyContent: 'center' },
+  savedCircle: { width: 88, height: 88, borderRadius: 44, alignItems: 'center', justifyContent: 'center' },
+  savedText: { fontSize: 24, marginTop: 18 },
+});

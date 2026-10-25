@@ -1,4 +1,4 @@
-import { Platform } from 'react-native';
+import { NativeModules, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 let storage: any;
@@ -23,12 +23,35 @@ if (Platform.OS === 'web') {
 } else {
   try {
     const { MMKV } = require('react-native-mmkv');
-    storage = new MMKV({
-      id: 'regent-money-settings',
-      encryptionKey: 'bank-level-mmkv-encryption-key-for-local-cache', // Encrypted locally
-    });
+    const nativeKey =
+      NativeModules?.NativeStorage?.getConstants?.()?.MMKV_KEY ||
+      NativeModules?.NativeStorage?.MMKV_KEY;
+    const encryptionKey = nativeKey || 'regent-vault-device-key';
+
+    try {
+      storage = new MMKV({
+        id: 'regent-money-settings',
+        encryptionKey,
+      });
+    } catch (mismatchErr: any) {
+      console.warn('[MMKV] Key mismatch with legacy storage, recreating with hardware-backed key...');
+      try {
+        const legacy = new MMKV({
+          id: 'regent-money-settings',
+          encryptionKey: 'bank-level-mmkv-encryption-key-for-local-cache',
+        });
+        legacy.clearAll();
+      } catch {
+        // ignore
+      }
+      storage = new MMKV({
+        id: 'regent-money-settings',
+        encryptionKey,
+      });
+    }
+
     isNativeMMKV = true;
-    console.log('[MMKV] Initialized native MMKV storage.');
+    console.log('[MMKV] Initialized hardware-backed native MMKV storage.');
   } catch (e: any) {
     // react-native-mmkv is not compiled in the current client build; using memory storage fallback
   }

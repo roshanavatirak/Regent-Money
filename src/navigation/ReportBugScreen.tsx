@@ -1,377 +1,314 @@
-import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  TextInput,
-  Switch,
-  Platform,
-  ActivityIndicator,
-} from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Feather, Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
-import { useTheme, showGlobalConfirm } from '../store';
-import { getAppCurrentVersion } from '../services/updateService';
+// src/navigation/ReportBugScreen.tsx
+//
+// Report a problem: where it happened, what happened, and exactly which
+// device details are sent (you can turn them off).
 
-const BUG_CATEGORIES = [
-  'Display / UI Glitch',
-  'SMS Sync Issue',
-  'Bank Ledger / Balance',
-  'Regent AI Response',
-  'Performance / Crash',
-  'Other',
-];
+import React, { useEffect, useRef, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, Switch, ActivityIndicator, Platform } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import Animated, { FadeIn, FadeInDown, ZoomIn } from 'react-native-reanimated';
+import { Feather } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
+import * as Font from 'expo-font';
+import { format } from 'date-fns';
+import { useTheme } from '../store';
+import { getAppCurrentVersion } from '../services/updateService';
+import { feedbackService, SentFeedback } from '../services/feedbackService';
+
+const FOREST = '#0B3D2C';
+const LIME = '#B8F36B';
+
+const AREAS = ['Home', 'Bank sync', 'Balance', 'Budgets', 'Goals', 'Regent chat', 'Crash or slow', 'Something else'];
 
 export const ReportBugScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
   const { colors, isDark, theme } = useTheme();
+  const display = Font.isLoaded('BricolageGrotesque_800ExtraBold') ? 'BricolageGrotesque_800ExtraBold' : undefined;
+  const heading = { fontFamily: display, fontWeight: display ? undefined : ('800' as const) };
 
-  const [category, setCategory] = useState(BUG_CATEGORIES[0]);
-  const [summary, setSummary] = useState('');
-  const [steps, setSteps] = useState('');
-  const [includeLogs, setIncludeLogs] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
+  const draft = useRef(feedbackService.getDraft('bug')).current;
+  const [area, setArea] = useState(draft.area || '');
+  const [title, setTitle] = useState(draft.title || '');
+  const [details, setDetails] = useState(draft.description || '');
+  const [includeDevice, setIncludeDevice] = useState(true);
+  const [focused, setFocused] = useState<'title' | 'details' | null>(null);
+  const [sending, setSending] = useState(false);
+  const [errorText, setErrorText] = useState('');
+  const [sent, setSent] = useState<SentFeedback | null>(null);
+  const [history, setHistory] = useState<SentFeedback[]>(() => feedbackService.history('bug'));
 
-  const currentVersion = getAppCurrentVersion();
+  useEffect(() => {
+    const t = setTimeout(() => feedbackService.saveDraft('bug', { title, description: details, area }), 400);
+    return () => clearTimeout(t);
+  }, [title, details, area]);
 
-  const handleSubmit = () => {
-    if (!summary.trim()) {
-      showGlobalConfirm({
-        title: 'Missing Summary',
-        message: 'Please provide a short description of the issue you experienced.',
-        confirmText: 'OK',
-        icon: 'alert-triangle',
-        onConfirm: () => { },
+  const version = getAppCurrentVersion();
+  const phone = `${Platform.OS === 'ios' ? 'iOS' : Platform.OS === 'android' ? 'Android' : 'Web'}${Platform.Version ? ` ${Platform.Version}` : ''}`;
+  const themeLabel = theme === 'dark' ? 'Dark' : theme === 'light' ? 'Light' : 'Device';
+
+  const ready = title.trim().length >= 3 && details.trim().length >= 10;
+
+  const send = async () => {
+    if (!ready || sending) return;
+    setSending(true);
+    setErrorText('');
+    try {
+      const item = await feedbackService.submit({
+        kind: 'bug',
+        title,
+        description: details,
+        area: area || undefined,
+        includeDevice,
+        device: { theme: themeLabel.toLowerCase() },
       });
-      return;
+      setSent(item);
+      setHistory(feedbackService.history('bug'));
+    } catch (e: any) {
+      setErrorText(e?.message || 'Couldn’t send it. Try again.');
+    } finally {
+      setSending(false);
     }
-
-    setSubmitting(true);
-    setTimeout(() => {
-      setSubmitting(false);
-      showGlobalConfirm({
-        title: 'Bug Report Dispatched',
-        message: `Thank you for reporting this issue. A diagnostic bundle (${Platform.OS.toUpperCase()} v${currentVersion}) has been logged for our quality assurance team.`,
-        confirmText: 'Return to App',
-        icon: 'info',
-        onConfirm: () => {
-          navigation.goBack();
-        },
-      });
-    }, 750);
   };
 
-  const styles = getStyles(colors, isDark);
+  const ink = colors.text;
+  const muted = colors.textSecondary;
+  const pageBg = isDark ? colors.background : '#F3F6F4';
+  const surface = colors.card;
+  const field = isDark ? colors.border : '#DCE5E0';
+  const line = isDark ? colors.border : '#E1E9E4';
+  const accent = isDark ? LIME : FOREST;
+  const accentFg = isDark ? FOREST : LIME;
+  const accentInk = isDark ? FOREST : '#FFFFFF';
+  const softGreen = isDark ? 'rgba(184,243,107,0.12)' : '#E3F2E8';
+  const red = isDark ? '#FFA8A8' : '#C92A2A';
+
+  /* ---------------- Sent ---------------- */
+
+  if (sent) {
+    return (
+      <View style={[s.doneWrap, { backgroundColor: pageBg, paddingTop: insets.top + 12, paddingBottom: Math.max(insets.bottom, 16) + 10 }]}>
+        <View style={s.doneBody}>
+          <Animated.View entering={ZoomIn.springify().damping(12)} style={[s.doneCircle, { backgroundColor: FOREST }]}>
+            <Feather name="check" size={40} color={LIME} />
+          </Animated.View>
+          <Animated.Text entering={FadeIn.delay(150)} style={[s.doneTitle, { color: ink }, heading]}>Report sent</Animated.Text>
+          <Animated.Text entering={FadeIn.delay(220)} style={[s.doneText, { color: muted }]}>
+            Thanks for telling us about “{sent.title}”. You’ll find it under Your reports.
+          </Animated.Text>
+        </View>
+        <Pressable onPress={() => navigation.goBack()} style={[s.cta, { backgroundColor: accent }]}>
+          <Text style={[s.ctaText, { color: accentFg }]}>Done</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  /* ---------------- Form ---------------- */
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Top Header */}
-      <View style={[styles.header, { paddingTop: Math.max(insets.top, 16) }]}>
-        <TouchableOpacity
-          onPress={() => navigation.goBack()}
-          style={styles.backBtn}
-          activeOpacity={0.7}
-        >
-          <Feather name="arrow-left" size={20} color={colors.text} />
-        </TouchableOpacity>
-        <View style={{ flex: 1, marginLeft: 12 }}>
-          <Text style={styles.headerTitle}>Report a Bug</Text>
-          <Text style={styles.headerSubtitle}>Submit technical issues & diagnostics</Text>
-        </View>
-      </View>
-
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 40 }]}
-      >
-        {/* Banner */}
-        <View style={styles.bannerCard}>
-          <View style={styles.bannerIconBox}>
-            <Ionicons name="bug-outline" size={20} color={colors.accent} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.bannerTitle}>Precision Quality Engineering</Text>
-            <Text style={styles.bannerSub}>
-              We take bugs and sync discrepancies seriously. Every report is reviewed directly by our core software engineers.
-            </Text>
-          </View>
+    <View style={{ flex: 1, backgroundColor: pageBg }}>
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
+        <View style={[s.header, { paddingTop: Math.max(insets.top, 12) + 4 }]}>
+          <Pressable onPress={() => navigation.goBack()} style={[s.roundBtn, { backgroundColor: surface }]} accessibilityLabel="Back">
+            <Feather name="arrow-left" size={20} color={ink} />
+          </Pressable>
+          <Text style={[s.headerTitle, { color: ink }]}>Report a problem</Text>
+          <View style={{ width: 44 }} />
         </View>
 
-        {/* Issue Category */}
-        <View style={styles.card}>
-          <Text style={styles.sectionLabel}>ISSUE CATEGORY</Text>
-          <View style={styles.pillWrap}>
-            {BUG_CATEGORIES.map((cat) => {
-              const isSelected = category === cat;
-              return (
-                <TouchableOpacity
-                  key={cat}
-                  onPress={() => setCategory(cat)}
-                  style={[styles.pill, isSelected && styles.pillActive]}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.pillText, isSelected && styles.pillTextActive]}>
-                    {cat}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
-
-        {/* Summary & Steps */}
-        <View style={styles.card}>
-          <Text style={styles.sectionLabel}>ISSUE SUMMARY</Text>
-          <TextInput
-            style={styles.textInput}
-            value={summary}
-            onChangeText={setSummary}
-            placeholder="e.g. Transaction amount displayed incorrectly"
-            placeholderTextColor={colors.textTertiary}
-          />
-
-          <Text style={[styles.sectionLabel, { marginTop: 14 }]}>STEPS TO REPRODUCE</Text>
-          <TextInput
-            style={[styles.textInput, styles.textArea]}
-            value={steps}
-            onChangeText={setSteps}
-            placeholder="What screen were you on? What did you tap before this occurred?"
-            placeholderTextColor={colors.textTertiary}
-            multiline
-            numberOfLines={4}
-            textAlignVertical="top"
-          />
-        </View>
-
-        {/* Diagnostic Metadata Box */}
-        <View style={styles.card}>
-          <View style={styles.metaHeader}>
-            <Feather name="cpu" size={14} color={colors.accent} style={{ marginRight: 6 }} />
-            <Text style={styles.sectionLabel}>DEVICE DIAGNOSTICS</Text>
-          </View>
-
-          <View style={styles.metaRow}>
-            <Text style={styles.metaKey}>App Build</Text>
-            <Text style={styles.metaVal}>v{currentVersion}</Text>
-          </View>
-          <View style={styles.metaRow}>
-            <Text style={styles.metaKey}>Platform</Text>
-            <Text style={styles.metaVal}>{Platform.OS.toUpperCase()} {Platform.Version ? `(${Platform.Version})` : ''}</Text>
-          </View>
-          <View style={styles.metaRow}>
-            <Text style={styles.metaKey}>Color Interface</Text>
-            <Text style={styles.metaVal}>{theme.toUpperCase()}</Text>
-          </View>
-
-          <View style={styles.toggleRow}>
-            <View style={{ flex: 1, marginRight: 10 }}>
-              <Text style={styles.toggleTitle}>Include Diagnostic Logs</Text>
-              <Text style={styles.toggleSub}>Attaches sanitized system timestamps and memory statistics</Text>
+        <ScrollView keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 24 }}>
+          <Animated.View entering={FadeInDown.duration(380)}>
+            <View style={[s.heroIcon, { backgroundColor: isDark ? 'rgba(224,49,49,0.2)' : '#FFE3E3' }]}>
+              <Feather name="alert-circle" size={22} color={red} />
             </View>
-            <Switch
-              value={includeLogs}
-              onValueChange={setIncludeLogs}
-              thumbColor={includeLogs ? colors.accent : colors.text}
-              trackColor={{ false: colors.buttonSecondaryBackground, true: colors.accentMuted }}
-            />
-          </View>
-        </View>
+            <Text style={[s.title, { color: ink }, heading]}>What went wrong?</Text>
+            <Text style={[s.sub, { color: muted }]}>Tell us what happened and we’ll look into it.</Text>
+          </Animated.View>
 
-        {/* Submit Button */}
-        <TouchableOpacity
-          style={[styles.submitBtn, submitting && { opacity: 0.7 }]}
-          onPress={handleSubmit}
-          disabled={submitting}
-          activeOpacity={0.8}
-        >
-          {submitting ? (
-            <ActivityIndicator size="small" color="#ffffff" />
-          ) : (
-            <>
-              <Feather name="send" size={15} color="#ffffff" style={{ marginRight: 8 }} />
-              <Text style={styles.submitBtnText}>Submit Bug Report</Text>
-            </>
+          <Animated.View entering={FadeInDown.delay(80).duration(380)}>
+            <Text style={[s.label, { color: muted }]}>Where</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.chips}>
+              {AREAS.map((a) => {
+                const on = area === a;
+                return (
+                  <Pressable
+                    key={a}
+                    onPress={() => setArea(on ? '' : a)}
+                    style={[s.chip, on ? { backgroundColor: accent, borderColor: accent } : { backgroundColor: surface, borderColor: field }]}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected: on }}
+                  >
+                    <Text style={[s.chipText, { color: on ? accentInk : ink }, on && { fontWeight: '700' }]}>{a}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            <Text style={[s.label, { color: muted }]}>What happened</Text>
+            <View style={[s.field, { backgroundColor: surface, borderColor: focused === 'title' ? accent : field, borderWidth: focused === 'title' ? 2 : 1 }]}>
+              <TextInput
+                value={title}
+                onChangeText={(t) => {
+                  setTitle(t);
+                  if (errorText) setErrorText('');
+                }}
+                onFocus={() => setFocused('title')}
+                onBlur={() => setFocused(null)}
+                placeholder="In a few words, like ‘Payment didn’t show up’"
+                placeholderTextColor={muted}
+                maxLength={80}
+                style={[s.titleInput, { color: ink }]}
+                accessibilityLabel="What happened, in a few words"
+              />
+            </View>
+            <View style={[s.area, { backgroundColor: surface, borderColor: focused === 'details' ? accent : field, borderWidth: focused === 'details' ? 2 : 1 }]}>
+              <TextInput
+                value={details}
+                onChangeText={(t) => {
+                  setDetails(t);
+                  if (errorText) setErrorText('');
+                }}
+                onFocus={() => setFocused('details')}
+                onBlur={() => setFocused(null)}
+                placeholder="What did you do, what happened, and what did you expect?"
+                placeholderTextColor={muted}
+                multiline
+                maxLength={1000}
+                textAlignVertical="top"
+                style={[s.areaInput, { color: ink }]}
+                accessibilityLabel="Details"
+              />
+            </View>
+            <Text style={[s.hint, { color: muted }]}>{title || details ? 'Draft saved' : ' '}</Text>
+          </Animated.View>
+
+          {/* Device details: shown exactly as they'll be sent */}
+          <Animated.View entering={FadeInDown.delay(140).duration(380)}>
+            <Text style={[s.label, { color: muted }]}>Device details</Text>
+            <View style={[s.deviceCard, { backgroundColor: surface, borderColor: line }]}>
+              <View style={[s.deviceToggle, { borderBottomColor: line }]}>
+                <Text style={[s.deviceToggleText, { color: ink }]}>Send these with my report</Text>
+                <Switch
+                  value={includeDevice}
+                  onValueChange={setIncludeDevice}
+                  trackColor={{ false: isDark ? '#3A3A3C' : '#D1D5DB', true: '#16A34A' }}
+                  thumbColor="#FFFFFF"
+                  ios_backgroundColor={isDark ? '#3A3A3C' : '#D1D5DB'}
+                />
+              </View>
+              {[
+                ['App version', version],
+                ['Phone', phone],
+                ['Theme', themeLabel],
+              ].map(([k, v], i) => (
+                <View key={k} style={[s.deviceRow, i < 2 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line }, !includeDevice && { opacity: 0.4 }]}>
+                  <Text style={[s.deviceKey, { color: muted }]}>{k}</Text>
+                  <Text style={[s.deviceVal, { color: ink }]}>{v}</Text>
+                </View>
+              ))}
+            </View>
+            <Text style={[s.deviceNote, { color: muted }]}>Helps us reproduce the problem. Nothing else from your phone is sent.</Text>
+          </Animated.View>
+
+          {errorText ? (
+            <Animated.View entering={FadeIn.duration(200)} style={s.errorRow}>
+              <Feather name="alert-circle" size={14} color={red} />
+              <Text style={[s.errorText, { color: red }]}>{errorText}</Text>
+            </Animated.View>
+          ) : null}
+
+          {history.length > 0 && (
+            <Animated.View entering={FadeInDown.delay(200).duration(380)}>
+              <View style={s.historyHead}>
+                <Text style={[s.historyTitle, { color: ink }]}>Your reports</Text>
+                <Text style={[s.historyCount, { color: muted }]}>{history.length} sent</Text>
+              </View>
+              <View style={[s.historyCard, { backgroundColor: surface, borderColor: line }]}>
+                {history.slice(0, 5).map((h, i) => (
+                  <View key={h.id} style={[s.historyRow, i < Math.min(history.length, 5) - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line }]}>
+                    <View style={[s.historyIcon, { backgroundColor: softGreen }]}>
+                      <Feather name="check" size={16} color={accent} />
+                    </View>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={[s.historyName, { color: ink }]} numberOfLines={1}>{h.title}</Text>
+                      <Text style={[s.historyMeta, { color: muted }]}>
+                        {h.area ? `${h.area}, ` : ''}sent {format(new Date(h.sentAt), 'd MMM')}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            </Animated.View>
           )}
-        </TouchableOpacity>
-      </ScrollView>
+        </ScrollView>
+
+        <View style={[s.footer, { paddingBottom: Math.max(insets.bottom, 12) + 8, borderTopColor: line }]}>
+          <Pressable
+            onPress={send}
+            disabled={!ready || sending}
+            style={({ pressed }) => [s.cta, { backgroundColor: accent, opacity: ready ? 1 : 0.5 }, pressed && ready && { transform: [{ scale: 0.98 }] }]}
+            accessibilityRole="button"
+          >
+            {sending ? (
+              <ActivityIndicator color={accentFg} />
+            ) : (
+              <Text style={[s.ctaText, { color: accentFg }]}>{ready ? 'Send report' : 'Say what happened first'}</Text>
+            )}
+          </Pressable>
+        </View>
+      </KeyboardAvoidingView>
     </View>
   );
 };
 
-const getStyles = (colors: any, isDark: boolean) =>
-  StyleSheet.create({
-    container: {
-      flex: 1,
-    },
-    header: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingHorizontal: 16,
-      paddingBottom: 14,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.border,
-      backgroundColor: colors.card,
-    },
-    backBtn: {
-      width: 36,
-      height: 36,
-      borderRadius: 18,
-      backgroundColor: colors.buttonSecondaryBackground,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    headerTitle: {
-      fontSize: 17,
-      fontWeight: '800',
-      color: colors.text,
-    },
-    headerSubtitle: {
-      fontSize: 11,
-      color: colors.textSecondary,
-      marginTop: 2,
-    },
-    scrollContent: {
-      paddingHorizontal: 16,
-      paddingTop: 16,
-      gap: 14,
-    },
-    bannerCard: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: isDark ? 'rgba(45, 186, 78, 0.08)' : '#f0fdf4',
-      borderRadius: 16,
-      borderWidth: 1,
-      borderColor: isDark ? 'rgba(45, 186, 78, 0.25)' : '#bbf7d0',
-      padding: 14,
-      gap: 12,
-    },
-    bannerIconBox: {
-      width: 38,
-      height: 38,
-      borderRadius: 10,
-      backgroundColor: isDark ? 'rgba(45, 186, 78, 0.15)' : 'rgba(45, 186, 78, 0.1)',
-      justifyContent: 'center',
-      alignItems: 'center',
-    },
-    bannerTitle: {
-      fontSize: 13.5,
-      fontWeight: '800',
-      color: colors.text,
-      marginBottom: 3,
-    },
-    bannerSub: {
-      fontSize: 11.5,
-      color: colors.textSecondary,
-      lineHeight: 16,
-    },
-    card: {
-      backgroundColor: colors.card,
-      borderRadius: 14,
-      borderWidth: 1,
-      borderColor: colors.border,
-      padding: 14,
-    },
-    sectionLabel: {
-      fontSize: 10.5,
-      fontWeight: '800',
-      letterSpacing: 0.8,
-      color: colors.textSecondary,
-      marginBottom: 10,
-    },
-    pillWrap: {
-      flexDirection: 'row',
-      flexWrap: 'wrap',
-      gap: 8,
-    },
-    pill: {
-      paddingHorizontal: 12,
-      paddingVertical: 7,
-      borderRadius: 8,
-      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.04)' : '#f8fafc',
-      borderWidth: 1,
-      borderColor: colors.border,
-    },
-    pillActive: {
-      backgroundColor: '#ef4444',
-      borderColor: '#ef4444',
-    },
-    pillText: {
-      fontSize: 12,
-      fontWeight: '600',
-      color: colors.text,
-    },
-    pillTextActive: {
-      color: '#ffffff',
-      fontWeight: '700',
-    },
-    textInput: {
-      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.04)' : '#f8fafc',
-      borderWidth: 1,
-      borderColor: colors.border,
-      borderRadius: 10,
-      paddingHorizontal: 12,
-      paddingVertical: 10,
-      fontSize: 13,
-      color: colors.text,
-    },
-    textArea: {
-      minHeight: 90,
-      paddingTop: 10,
-      lineHeight: 19,
-    },
-    metaHeader: {
-      flexDirection: 'row',
-      alignItems: 'center',
-    },
-    metaRow: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      paddingVertical: 6,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.border,
-    },
-    metaKey: {
-      fontSize: 12,
-      color: colors.textSecondary,
-    },
-    metaVal: {
-      fontSize: 12,
-      fontWeight: '700',
-      color: colors.text,
-    },
-    toggleRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      marginTop: 12,
-      paddingTop: 8,
-    },
-    toggleTitle: {
-      fontSize: 12.5,
-      fontWeight: '700',
-      color: colors.text,
-    },
-    toggleSub: {
-      fontSize: 10.5,
-      color: colors.textSecondary,
-      marginTop: 2,
-    },
-    submitBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      backgroundColor: '#ef4444',
-      paddingVertical: 14,
-      borderRadius: 12,
-      marginTop: 4,
-    },
-    submitBtnText: {
-      color: '#ffffff',
-      fontSize: 14,
-      fontWeight: '700',
-    },
-  });
+const s = StyleSheet.create({
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 6 },
+  roundBtn: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { fontSize: 16, fontWeight: '700' },
+
+  heroIcon: { width: 52, height: 52, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginTop: 14 },
+  title: { fontSize: 28, letterSpacing: -0.6, marginTop: 14 },
+  sub: { fontSize: 15, lineHeight: 22, marginTop: 6 },
+
+  label: { fontSize: 13, fontWeight: '700', paddingHorizontal: 4, paddingTop: 20, paddingBottom: 10 },
+  chips: { gap: 8 },
+  chip: { height: 36, paddingHorizontal: 14, borderRadius: 18, borderWidth: 1, justifyContent: 'center' },
+  chipText: { fontSize: 13, fontWeight: '600' },
+  field: { height: 52, borderRadius: 16, paddingHorizontal: 14, justifyContent: 'center' },
+  titleInput: { fontSize: 15, fontWeight: '600', paddingVertical: 0, ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : {}) },
+  area: { minHeight: 110, borderRadius: 16, padding: 14, marginTop: 10 },
+  areaInput: { fontSize: 15, lineHeight: 22, minHeight: 80, paddingVertical: 0, ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : {}) },
+  hint: { fontSize: 12, textAlign: 'right', marginTop: 6, paddingHorizontal: 4 },
+
+  deviceCard: { borderWidth: 1, borderRadius: 20, paddingHorizontal: 16 },
+  deviceToggle: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  deviceToggleText: { flex: 1, fontSize: 14, fontWeight: '600' },
+  deviceRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 11 },
+  deviceKey: { fontSize: 13 },
+  deviceVal: { fontSize: 13, fontWeight: '600' },
+  deviceNote: { fontSize: 12, lineHeight: 17, marginTop: 8, paddingHorizontal: 4 },
+
+  errorRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 16, paddingHorizontal: 4 },
+  errorText: { fontSize: 13, fontWeight: '600', flex: 1 },
+
+  historyHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', paddingHorizontal: 4, paddingTop: 26, paddingBottom: 10 },
+  historyTitle: { fontSize: 15, fontWeight: '700' },
+  historyCount: { fontSize: 12 },
+  historyCard: { borderWidth: 1, borderRadius: 22, paddingHorizontal: 16 },
+  historyRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14 },
+  historyIcon: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  historyName: { fontSize: 15, fontWeight: '600' },
+  historyMeta: { fontSize: 12, marginTop: 2 },
+
+  footer: { paddingHorizontal: 16, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth },
+  cta: { height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center' },
+  ctaText: { fontSize: 16, fontWeight: '700' },
+
+  doneWrap: { flex: 1, paddingHorizontal: 24 },
+  doneBody: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  doneCircle: { width: 96, height: 96, borderRadius: 48, alignItems: 'center', justifyContent: 'center' },
+  doneTitle: { fontSize: 26, letterSpacing: -0.5, marginTop: 22, textAlign: 'center' },
+  doneText: { fontSize: 15, lineHeight: 22, marginTop: 8, textAlign: 'center', maxWidth: 300 },
+});

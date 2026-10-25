@@ -149,19 +149,26 @@ export const syncService = {
       const mappedTxs: any[] = [];
       for (const t of sortedTxs) {
         if (!t) continue;
-        if (t.id && seenTx.has(`id:${t.id}`)) continue;
-        if (t.id) seenTx.add(`id:${t.id}`);
+        if (t.id) {
+          if (seenTx.has(`id:${t.id}`)) continue;
+          seenTx.add(`id:${t.id}`);
+        }
 
-        const txDate = new Date(Number(t.timestamp) || 0);
-        const dayKey = `${txDate.getFullYear()}-${txDate.getMonth()}-${txDate.getDate()}`;
-        const normMerchant = (t.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-        // If exact minute/hour is present, differentiate by minute so repeat payments at different times of day are preserved
-        const hasTime = txDate.getHours() !== 12 || txDate.getMinutes() !== 0 || txDate.getSeconds() !== 0;
-        const timeKey = hasTime ? `${txDate.getHours()}:${txDate.getMinutes()}` : 'default';
-        const sig = `sig:${t.bankProfileId ?? t.bank_profile_id}_${Math.round(parseFloat(t.amount || 0) * 100)}_${normMerchant}_${dayKey}_${timeKey}`;
+        const smsIdStr = String(t.smsId ?? t.sms_id ?? '');
+        const isUserConfirmed = smsIdStr.startsWith('user_confirmed');
 
-        if (seenTx.has(sig)) continue;
-        seenTx.add(sig);
+        // Only apply signature-based deduplication for draft items without a database ID
+        if (!isUserConfirmed && !t.id) {
+          const txDate = new Date(Number(t.timestamp) || 0);
+          const dayKey = `${txDate.getFullYear()}-${txDate.getMonth()}-${txDate.getDate()}`;
+          const normMerchant = (t.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          const hasTime = txDate.getHours() !== 12 || txDate.getMinutes() !== 0 || txDate.getSeconds() !== 0;
+          const timeKey = hasTime ? `${txDate.getHours()}:${txDate.getMinutes()}` : 'default';
+          const sig = `sig:${t.bankProfileId ?? t.bank_profile_id}_${Math.round(parseFloat(t.amount || 0) * 100)}_${normMerchant}_${dayKey}_${timeKey}`;
+
+          if (seenTx.has(sig)) continue;
+          seenTx.add(sig);
+        }
 
         mappedTxs.push({
           id: t.id,

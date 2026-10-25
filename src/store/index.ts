@@ -36,9 +36,26 @@ export const useTransactionStore = create<TransactionState>((set) => ({
     const deduplicated: any[] = [];
     for (const t of transactions) {
       if (!t) continue;
-      if (t.id && seen.has(`id:${t.id}`)) continue;
-      if (t.id) seen.add(`id:${t.id}`);
+      // 1. Primary Key Deduplication: Ensure each transaction ID is added at most once
+      if (t.id) {
+        if (seen.has(`id:${t.id}`)) continue;
+        seen.add(`id:${t.id}`);
+      }
 
+      // 2. User-confirmed duplicate review approvals MUST always be preserved
+      const smsIdStr = String(t.smsId ?? t.sms_id ?? '');
+      if (smsIdStr.startsWith('user_confirmed')) {
+        deduplicated.push(t);
+        continue;
+      }
+
+      // 3. Transactions with distinct database IDs are distinct records from PostgreSQL
+      if (t.id) {
+        deduplicated.push(t);
+        continue;
+      }
+
+      // 4. Fallback signature deduplication ONLY for draft/unsaved items without a database ID
       const txDate = new Date(Number(t.timestamp) || 0);
       const dayKey = `${txDate.getFullYear()}-${txDate.getMonth()}-${txDate.getDate()}`;
       const normMerchant = (t.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -1041,6 +1058,5 @@ export const usePrivacyModalStore = create<PrivacyModalState>((set) => ({
   closePrivacyModal: () => set({ isOpen: false }),
 }));
 
-
-
-
+// 15. Peer Ledger (Borrow & Lend) Store
+export { usePeerStore, PeerState } from './peerStore';

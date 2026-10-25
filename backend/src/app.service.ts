@@ -1,4 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
+import * as fs from 'fs';
+import * as path from 'path';
+
+export interface ReleaseNoteItem {
+  title: string;
+  detail?: string;
+}
 
 export interface AppVersionResponse {
   isUpdateAvailable: boolean;
@@ -6,7 +13,23 @@ export interface AppVersionResponse {
   currentVersion: string;
   latestVersion: string;
   downloadUrl: string;
-  releaseNotes: string[];
+  releaseNotes: (string | ReleaseNoteItem)[];
+}
+
+/** Read on every version check, so editing the file is enough; no code change or rebuild. */
+function readReleaseNotes(): { title: string; detail?: string }[] {
+  try {
+    const candidates = [
+      path.join(process.cwd(), 'release-notes.json'),
+      path.join(process.cwd(), 'backend', 'release-notes.json'),
+      path.join(__dirname, '..', 'release-notes.json'),
+    ];
+    const file = candidates.find((p) => fs.existsSync(p)) || candidates[0];
+    const json = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return Array.isArray(json?.notes) ? json.notes : [];
+  } catch {
+    return []; // No file or bad JSON: the app simply hides "What's new"
+  }
 }
 
 @Injectable()
@@ -57,11 +80,7 @@ export class AppService {
       process.env.APK_DOWNLOAD_URL ||
       'https://github.com/roshanavatirak/Regent-Money/releases/latest/download/regent-money.apk';
 
-    const releaseNotes = [
-      'Smart Statement OCR: AI extracts UPI/UTR reference numbers and running balances to distinguish genuine multiple payments on the same day',
-      'Streamlined Review Actions: Clean, minimal confirmation UI for flagged duplicates without confusing text clutter',
-      'Reliable Notification Badges: Interactive duplicate alerts stay active until resolved, keeping review counters accurate',
-    ];
+    const releaseNotes = readReleaseNotes();
 
     const isUpdateAvailable =
       !!latestVersion &&

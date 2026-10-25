@@ -1,382 +1,236 @@
+// src/navigation/PrivacyCenterScreen.tsx
+//
+// Privacy: what Regent reads, where it goes, and how to clear it.
+// Every control on this page does something real.
+
 import React from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Platform,
-} from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, Linking, Platform } from 'react-native';
+import Animated, { FadeInDown } from 'react-native-reanimated';
+import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Feather, Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
-import { useTheme, showGlobalConfirm, usePrivacyModalStore } from '../store';
+import * as Font from 'expo-font';
+import {
+  useTheme,
+  useAIStore,
+  showGlobalConfirm,
+  usePrivacyModalStore,
+  useTermsModalStore,
+} from '../store';
+
+const FOREST = '#0B3D2C';
+const LIME = '#B8F36B';
+
+type Tone = 'green' | 'blue' | 'purple' | 'orange' | 'red' | 'neutral';
+
+const TONES: Record<Tone, { light: [string, string]; dark: [string, string] }> = {
+  green: { light: ['#E3F2E8', '#0B3D2C'], dark: ['rgba(184,243,107,0.14)', LIME] },
+  blue: { light: ['#DCEBFF', '#1450A3'], dark: ['rgba(59,130,246,0.18)', '#93C5FD'] },
+  purple: { light: ['#ECE6FF', '#4B2DB8'], dark: ['rgba(139,124,246,0.2)', '#C4B8FF'] },
+  orange: { light: ['#FFE8D9', '#B23F00'], dark: ['rgba(255,138,76,0.18)', '#FFB38A'] },
+  red: { light: ['#FFE3E3', '#C92A2A'], dark: ['rgba(224,49,49,0.2)', '#FFA8A8'] },
+  neutral: { light: ['#F1F5F2', '#3A4A42'], dark: ['rgba(255,255,255,0.08)', '#C9D9D0'] },
+};
+
+// Plain statements about how the app works. Keep these accurate to the product.
+const HOW_IT_WORKS: { icon: keyof typeof Feather.glyphMap; tone: Tone; title: string; detail: string }[] = [
+  {
+    icon: 'message-square',
+    tone: 'green',
+    title: 'Only bank messages',
+    detail: 'Regent reads SMS only from the bank senders you add. Never personal chats or OTPs.',
+  },
+  {
+    icon: 'cloud',
+    tone: 'blue',
+    title: 'Synced to your account',
+    detail: 'Accounts and transactions back up to your Regent account, so a new phone picks up where you left off.',
+  },
+  {
+    icon: 'zap',
+    tone: 'purple',
+    title: 'Regent chat sees a summary',
+    detail: 'When you ask Regent, it gets your balances, budgets and recent transactions to answer.',
+  },
+  {
+    icon: 'slash',
+    tone: 'orange',
+    title: 'No ads, no data selling',
+    detail: 'Your spending is never sold or shared with advertisers.',
+  },
+];
 
 export const PrivacyCenterScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
   const { colors, isDark } = useTheme();
+  const display = Font.isLoaded('BricolageGrotesque_800ExtraBold') ? 'BricolageGrotesque_800ExtraBold' : undefined;
+  const chatCount = useAIStore((s) => s.chatHistory.length);
 
-  const styles = getStyles(colors, isDark);
+  const ink = colors.text;
+  const muted = colors.textSecondary;
+  const pageBg = isDark ? colors.background : '#F3F6F4';
+  const surface = colors.card;
+  const line = isDark ? colors.border : '#E1E9E4';
 
-  const PRIVACY_PILLARS = [
-    {
-      icon: 'lock',
-      title: 'Local Hardware Encryption',
-      desc: 'All your accounts, transaction records, and budgets are stored locally on your device with high-performance encrypted storage (MMKV) and secure hardware keystores.',
-      badge: 'On-Device',
-    },
-    {
-      icon: 'message-square',
-      title: 'Strict Financial SMS Filtering',
-      desc: 'Regent Money only parses sender headers from registered Indian banking institutions (e.g. HDFC, SBI, ICICI, Axis). We NEVER read personal chats or store sensitive OTP passwords.',
-      badge: 'Bank Only',
-    },
-    {
-      icon: 'shield',
-      title: 'Zero Third-Party Ad Tracking',
-      desc: 'Your financial portfolio, net worth, and spending behaviors are strictly confidential. We do not sell your data or share it with third-party advertising networks.',
-      badge: 'Protected',
-    },
-    {
-      icon: 'database',
-      title: 'Complete Data Ownership',
-      desc: 'You maintain absolute control over your records. You can reset chat memory, clear offline cache, or request full account deletion with a single tap.',
-      badge: 'User Controlled',
-    },
-  ];
+  const tone = (t: Tone) => (isDark ? TONES[t].dark : TONES[t].light);
 
-  const handleClearAIChat = () => {
+  const clearChat = () => {
     showGlobalConfirm({
-      title: 'Clear AI Memory',
-      message: 'This will reset your local Regent AIbot conversation history. Your financial accounts and transactions will NOT be affected.',
-      confirmText: 'Clear Memory',
+      title: 'Clear your Regent chat?',
+      message: 'Your conversation on this phone will be deleted. Accounts and transactions stay as they are.',
+      confirmText: 'Clear chat',
       cancelText: 'Cancel',
       isDestructive: true,
       icon: 'trash-2',
-      onConfirm: () => {
-        // Chat cache reset confirmation
-      },
+      onConfirm: () => useAIStore.getState().clearChatHistory(),
     });
   };
 
-  const handleClearCache = () => {
-    showGlobalConfirm({
-      title: 'Purge Sync Cache',
-      message: 'Clear temporary SMS parsing caches? The app will resynchronize directly from your device ledger.',
-      confirmText: 'Purge Cache',
-      cancelText: 'Cancel',
-      icon: 'info',
-      onConfirm: () => { },
-    });
+  const openSmsSettings = () => {
+    Linking.openSettings().catch(() => {});
+  };
+
+  const Row = ({
+    icon,
+    t,
+    title,
+    detail,
+    onPress,
+    last,
+    danger,
+    trailing,
+  }: {
+    icon: keyof typeof Feather.glyphMap;
+    t: Tone;
+    title: string;
+    detail: string;
+    onPress?: () => void;
+    last?: boolean;
+    danger?: boolean;
+    trailing?: string;
+  }) => {
+    const [bg, fg] = tone(t);
+    const content = (
+      <>
+        <View style={[s.tile, { backgroundColor: bg }]}>
+          <Feather name={icon} size={18} color={fg} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={[s.rowTitle, { color: danger ? fg : ink }]}>{title}</Text>
+          <Text style={[s.rowDetail, { color: muted }]}>{detail}</Text>
+        </View>
+        {trailing ? <Text style={[s.trailing, { color: muted }]}>{trailing}</Text> : null}
+        {onPress ? <Feather name="chevron-right" size={16} color={muted} /> : null}
+      </>
+    );
+    const rowStyle = [s.row, !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line }];
+    return onPress ? (
+      <Pressable onPress={onPress} style={({ pressed }) => [...rowStyle, pressed && { opacity: 0.7 }]} accessibilityRole="button" accessibilityLabel={title}>
+        {content}
+      </Pressable>
+    ) : (
+      <View style={rowStyle}>{content}</View>
+    );
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Top Header */}
-      <View style={[styles.header, { paddingTop: Math.max(insets.top, 16) }]}>
-        <TouchableOpacity
-          onPress={() => navigation.goBack()}
-          style={styles.backBtn}
-          activeOpacity={0.7}
-        >
-          <Feather name="arrow-left" size={20} color={colors.text} />
-        </TouchableOpacity>
-        <View style={{ flex: 1, marginLeft: 12 }}>
-          <Text style={styles.headerTitle}>Privacy Center</Text>
-          <Text style={styles.headerSubtitle}>Bank-grade transparency and data protection</Text>
-        </View>
+    <View style={{ flex: 1, backgroundColor: pageBg }}>
+      <View style={[s.header, { paddingTop: Math.max(insets.top, 12) + 4 }]}>
+        <Pressable onPress={() => navigation.goBack()} style={[s.roundBtn, { backgroundColor: surface }]} accessibilityLabel="Back">
+          <Feather name="arrow-left" size={20} color={ink} />
+        </Pressable>
+        <Text style={[s.headerTitle, { color: ink }]}>Privacy</Text>
+        <View style={{ width: 44 }} />
       </View>
 
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 40 }]}
-      >
-        {/* Trust Banner */}
-        <View style={styles.trustBanner}>
-          <View style={styles.trustBadge}>
-            <Feather name="check-circle" size={12} color={colors.accent} style={{ marginRight: 5 }} />
-            <Text style={styles.trustBadgeText}>REGENT TRUST STANDARD</Text>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 32 }}>
+        {/* Hero */}
+        <Animated.View entering={FadeInDown.duration(380)} style={s.hero}>
+          <View pointerEvents="none" style={[s.ring, { width: 220, height: 220, borderRadius: 110, right: -80, top: -100 }]} />
+          <View pointerEvents="none" style={[s.ring, { width: 140, height: 140, borderRadius: 70, right: -40, top: -60, borderColor: 'rgba(184,243,107,0.24)' }]} />
+          <View style={s.heroIcon}>
+            <Feather name="shield" size={22} color={FOREST} />
           </View>
-          <Text style={styles.trustTitle}>Private Wealth Financial Security</Text>
-          <Text style={styles.trustSub}>
-            We engineer Regent Money around client privacy. Your financial figures exist to empower your wealth journey — never to be monetized or tracked by third parties.
-          </Text>
-        </View>
+          <Text style={[s.heroTitle, { fontFamily: display, fontWeight: display ? undefined : '800' }]}>Your money stays yours</Text>
+          <Text style={s.heroSub}>Here’s what Regent reads, where it goes, and how to clear it.</Text>
+        </Animated.View>
 
-        {/* Pillars List */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>CORE ARCHITECTURE PILLARS</Text>
-        </View>
+        <Animated.View entering={FadeInDown.delay(80).duration(380)}>
+          <Text style={[s.section, { color: muted }]}>How it works</Text>
+          <View style={[s.card, { backgroundColor: surface, borderColor: line }]}>
+            {HOW_IT_WORKS.map((item, i) => (
+              <Row key={item.title} icon={item.icon} t={item.tone} title={item.title} detail={item.detail} last={i === HOW_IT_WORKS.length - 1} />
+            ))}
+          </View>
+        </Animated.View>
 
-        <View style={styles.pillarsList}>
-          {PRIVACY_PILLARS.map((item, idx) => (
-            <View key={idx} style={styles.pillarCard}>
-              <View style={styles.pillarHeader}>
-                <View style={styles.pillarIconBox}>
-                  <Feather name={item.icon as any} size={15} color={colors.accent} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.pillarTitle}>{item.title}</Text>
-                </View>
-                <View style={styles.tagBadge}>
-                  <Text style={styles.tagBadgeText}>{item.badge}</Text>
-                </View>
-              </View>
-              <Text style={styles.pillarDesc}>{item.desc}</Text>
-            </View>
-          ))}
-        </View>
+        <Animated.View entering={FadeInDown.delay(160).duration(380)}>
+          <Text style={[s.section, { color: muted }]}>Your controls</Text>
+          <View style={[s.card, { backgroundColor: surface, borderColor: line }]}>
+            <Row
+              icon="trash-2"
+              t="red"
+              danger
+              title="Clear Regent chat"
+              detail={chatCount > 0 ? 'Deletes your conversation on this phone.' : 'Nothing to clear right now.'}
+              trailing={chatCount > 0 ? `${chatCount} messages` : undefined}
+              onPress={chatCount > 0 ? clearChat : undefined}
+            />
+            {Platform.OS === 'android' ? (
+              <Row
+                icon="smartphone"
+                t="neutral"
+                title="SMS access"
+                detail="Turn reading bank messages on or off in phone settings."
+                onPress={openSmsSettings}
+                last
+              />
+            ) : null}
+          </View>
+        </Animated.View>
 
-        {/* Data Rights & Control */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>DATA CONTROL & ACTIONS</Text>
-        </View>
-
-        <View style={styles.card}>
-          <TouchableOpacity
-            style={styles.actionRow}
-            onPress={handleClearAIChat}
-            activeOpacity={0.7}
-          >
-            <View style={[styles.actionIconBox, { backgroundColor: isDark ? 'rgba(239, 68, 68, 0.12)' : '#fee2e2' }]}>
-              <Feather name="trash-2" size={15} color="#ef4444" />
-            </View>
-            <View style={{ flex: 1, marginRight: 8 }}>
-              <Text style={styles.actionTitle}>Clear Regent AI History</Text>
-              <Text style={styles.actionDesc}>Reset locally stored AI prompt memory and conversation context.</Text>
-            </View>
-            <Feather name="chevron-right" size={15} color={colors.textSecondary} />
-          </TouchableOpacity>
-
-          <View style={styles.divider} />
-
-          <TouchableOpacity
-            style={styles.actionRow}
-            onPress={handleClearCache}
-            activeOpacity={0.7}
-          >
-            <View style={[styles.actionIconBox, { backgroundColor: isDark ? 'rgba(59, 130, 246, 0.12)' : '#e0f2fe' }]}>
-              <Feather name="refresh-cw" size={15} color="#0284c7" />
-            </View>
-            <View style={{ flex: 1, marginRight: 8 }}>
-              <Text style={styles.actionTitle}>Purge Parsing Cache</Text>
-              <Text style={styles.actionDesc}>Clear temporary local synchronization caches without losing transactions.</Text>
-            </View>
-            <Feather name="chevron-right" size={15} color={colors.textSecondary} />
-          </TouchableOpacity>
-        </View>
-
-        {/* Legal Disclosures */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>LEGAL & COMPLIANCE</Text>
-        </View>
-
-        <View style={styles.card}>
-          <TouchableOpacity
-            style={styles.actionRow}
-            onPress={() => usePrivacyModalStore.getState().openPrivacyModal()}
-            activeOpacity={0.7}
-          >
-            <View style={[styles.actionIconBox, { backgroundColor: isDark ? 'rgba(16, 185, 129, 0.12)' : 'rgba(16, 185, 129, 0.08)' }]}>
-              <Ionicons name="shield-checkmark-outline" size={16} color={colors.accent} />
-            </View>
-            <View style={{ flex: 1, marginRight: 8 }}>
-              <Text style={styles.actionTitle}>Official Privacy Policy</Text>
-              <Text style={styles.actionDesc}>Read full legal disclosures, RBI compliance standards & data terms.</Text>
-            </View>
-            <Feather name="chevron-right" size={15} color={colors.textSecondary} />
-          </TouchableOpacity>
-        </View>
-
-        {/* Compliance Note */}
-        <View style={styles.complianceBox}>
-          <Ionicons name="information-circle-outline" size={16} color={colors.textSecondary} style={{ marginRight: 8, marginTop: 2 }} />
-          <Text style={styles.complianceText}>
-            Regent Money complies with Indian Information Technology (Intermediary Guidelines and Digital Media Ethics Code) Rules and RBI data residency recommendations.
-          </Text>
-        </View>
+        <Animated.View entering={FadeInDown.delay(240).duration(380)}>
+          <Text style={[s.section, { color: muted }]}>Legal</Text>
+          <View style={[s.card, { backgroundColor: surface, borderColor: line }]}>
+            <Row
+              icon="shield"
+              t="neutral"
+              title="Privacy policy"
+              detail="The full details, in plain terms."
+              onPress={() => usePrivacyModalStore.getState().openPrivacyModal()}
+            />
+            <Row
+              icon="file-text"
+              t="neutral"
+              title="Terms and conditions"
+              detail="What you agree to when using Regent."
+              onPress={() => useTermsModalStore.getState().openTermsModal(true)}
+              last
+            />
+          </View>
+        </Animated.View>
       </ScrollView>
     </View>
   );
 };
 
-const getStyles = (colors: any, isDark: boolean) =>
-  StyleSheet.create({
-    container: {
-      flex: 1,
-    },
-    header: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingHorizontal: 16,
-      paddingBottom: 14,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.border,
-      backgroundColor: colors.card,
-    },
-    backBtn: {
-      width: 36,
-      height: 36,
-      borderRadius: 18,
-      backgroundColor: colors.buttonSecondaryBackground,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    headerTitle: {
-      fontSize: 17,
-      fontWeight: '800',
-      color: colors.text,
-    },
-    headerSubtitle: {
-      fontSize: 11,
-      color: colors.textSecondary,
-      marginTop: 2,
-    },
-    scrollContent: {
-      paddingHorizontal: 16,
-      paddingTop: 16,
-      gap: 14,
-    },
-    trustBanner: {
-      backgroundColor: isDark ? 'rgba(45, 186, 78, 0.08)' : '#f0fdf4',
-      borderRadius: 16,
-      borderWidth: 1,
-      borderColor: isDark ? 'rgba(45, 186, 78, 0.25)' : '#bbf7d0',
-      padding: 16,
-    },
-    trustBadge: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      alignSelf: 'flex-start',
-      backgroundColor: isDark ? 'rgba(45, 186, 78, 0.15)' : 'rgba(45, 186, 78, 0.1)',
-      paddingHorizontal: 8,
-      paddingVertical: 4,
-      borderRadius: 6,
-      marginBottom: 10,
-    },
-    trustBadgeText: {
-      fontSize: 10.5,
-      fontWeight: '800',
-      color: colors.accent,
-      letterSpacing: 0.6,
-    },
-    trustTitle: {
-      fontSize: 15,
-      fontWeight: '800',
-      color: colors.text,
-      marginBottom: 6,
-    },
-    trustSub: {
-      fontSize: 12,
-      color: colors.textSecondary,
-      lineHeight: 18,
-    },
-    sectionHeader: {
-      marginTop: 6,
-    },
-    sectionTitle: {
-      fontSize: 11,
-      fontWeight: '800',
-      letterSpacing: 0.8,
-      color: colors.textSecondary,
-    },
-    pillarsList: {
-      gap: 10,
-    },
-    pillarCard: {
-      backgroundColor: colors.card,
-      borderRadius: 14,
-      borderWidth: 1,
-      borderColor: colors.border,
-      padding: 14,
-    },
-    pillarHeader: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      marginBottom: 8,
-    },
-    pillarIconBox: {
-      width: 28,
-      height: 28,
-      borderRadius: 8,
-      backgroundColor: isDark ? 'rgba(45, 186, 78, 0.15)' : 'rgba(45, 186, 78, 0.08)',
-      justifyContent: 'center',
-      alignItems: 'center',
-      marginRight: 10,
-    },
-    pillarTitle: {
-      fontSize: 13.5,
-      fontWeight: '700',
-      color: colors.text,
-    },
-    tagBadge: {
-      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : '#f1f5f9',
-      paddingHorizontal: 7,
-      paddingVertical: 3,
-      borderRadius: 6,
-      marginLeft: 8,
-    },
-    tagBadgeText: {
-      fontSize: 10.5,
-      fontWeight: '700',
-      color: colors.textSecondary,
-    },
-    pillarDesc: {
-      fontSize: 12,
-      color: colors.textSecondary,
-      lineHeight: 18,
-    },
-    card: {
-      backgroundColor: colors.card,
-      borderRadius: 14,
-      borderWidth: 1,
-      borderColor: colors.border,
-      padding: 6,
-    },
-    actionRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      padding: 10,
-    },
-    actionIconBox: {
-      width: 32,
-      height: 32,
-      borderRadius: 8,
-      justifyContent: 'center',
-      alignItems: 'center',
-      marginRight: 12,
-    },
-    actionTitle: {
-      fontSize: 13,
-      fontWeight: '700',
-      color: colors.text,
-    },
-    actionDesc: {
-      fontSize: 11,
-      color: colors.textSecondary,
-      marginTop: 2,
-      lineHeight: 15,
-    },
-    divider: {
-      height: 1,
-      backgroundColor: colors.border,
-      marginHorizontal: 10,
-    },
-    complianceBox: {
-      flexDirection: 'row',
-      alignItems: 'flex-start',
-      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.02)' : '#f8fafc',
-      padding: 12,
-      borderRadius: 10,
-      borderWidth: 1,
-      borderColor: colors.border,
-      marginTop: 4,
-    },
-    complianceText: {
-      flex: 1,
-      fontSize: 11,
-      color: colors.textSecondary,
-      lineHeight: 16,
-    },
-  });
+const s = StyleSheet.create({
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 6 },
+  roundBtn: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { fontSize: 16, fontWeight: '700' },
+
+  hero: { marginTop: 10, borderRadius: 26, backgroundColor: FOREST, padding: 22, overflow: 'hidden' },
+  ring: { position: 'absolute', borderWidth: 1, borderColor: 'rgba(184,243,107,0.16)' },
+  heroIcon: { width: 48, height: 48, borderRadius: 16, backgroundColor: LIME, alignItems: 'center', justifyContent: 'center' },
+  heroTitle: { color: '#FFFFFF', fontSize: 26, letterSpacing: -0.6, marginTop: 16 },
+  heroSub: { color: '#D9E7DF', fontSize: 14, lineHeight: 20, marginTop: 6 },
+
+  section: { fontSize: 13, fontWeight: '700', paddingHorizontal: 4, paddingTop: 22, paddingBottom: 10 },
+  card: { borderWidth: 1, borderRadius: 22, overflow: 'hidden' },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 16, paddingVertical: 14 },
+  tile: { width: 40, height: 40, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
+  rowTitle: { fontSize: 15, fontWeight: '600' },
+  rowDetail: { fontSize: 13, lineHeight: 18, marginTop: 2 },
+  trailing: { fontSize: 12, fontWeight: '600' },
+});

@@ -378,7 +378,12 @@ export function isExcludedFromBudget(tx: any, explicitExcludedIds?: string[]): b
     category === 'transfer' ||
     category === 'self_transfer' ||
     category === 'self transfer' ||
-    category === 'self-transfer'
+    category === 'self-transfer' ||
+    category === 'peer_lent' ||
+    category === 'peer_lent_repaid' ||
+    category === 'peer_borrowed' ||
+    category === 'peer_borrow_repaid' ||
+    category.startsWith('peer_')
   ) return true;
 
   if (explicitExcludedIds && tx.id && explicitExcludedIds.includes(tx.id)) {

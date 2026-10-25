@@ -101,6 +101,23 @@ export class SyncController {
     return this.syncService.saveMerchantTagRule(userId, body.merchant, body.tag);
   }
 
+  @Delete('merchant-tag-rule')
+  @HttpCode(HttpStatus.OK)
+  async deleteMerchantTagRule(
+    @Req() req: any,
+    @Query('merchant') merchant: string,
+  ) {
+    const userId = req.user.id;
+    return this.syncService.deleteMerchantTagRule(userId, merchant);
+  }
+
+  @Get('merchant-tag-rules')
+  @HttpCode(HttpStatus.OK)
+  async getMerchantTagRules(@Req() req: any) {
+    const userId = req.user.id;
+    return this.syncService.getUserMerchantTagRules(userId);
+  }
+
   @Post('ocr-sync')
   @HttpCode(HttpStatus.OK)
   async syncOcrTransactions(
@@ -151,6 +168,7 @@ export class SyncController {
       amount: number;
       category: string;
       note?: string;
+      timestamp?: number;
       updateMerchantRule?: boolean;
     },
   ) {

@@ -335,6 +335,25 @@ ${txsSummary}
     };
   }
 
+  private sanitizeFinancialPii(rawText: string): string {
+    if (!rawText) return '';
+    return rawText
+      // 1. Redact Indian Aadhaar numbers (12 digits with spaces or hyphens)
+      .replace(/\b\d{4}[-\s]\d{4}[-\s]\d{4}\b/g, '[AADHAAR_REDACTED]')
+      // 2. Redact Indian PAN numbers (5 letters + 4 digits + 1 letter)
+      .replace(/\b[A-Z]{5}[0-9]{4}[A-Z]\b/g, '[PAN_REDACTED]')
+      // 3. Redact Email addresses
+      .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, '[EMAIL_REDACTED]')
+      // 4. Redact Indian Phone numbers
+      .replace(/(?:\+91[-\s]?)?[6-9]\d{9}\b/g, '[PHONE_REDACTED]')
+      // 5. Redact IFSC codes
+      .replace(/\b[A-Z]{4}0[A-Z0-9]{6}\b/g, '[IFSC_REDACTED]')
+      // 6. Redact explicit account number headers while preserving transaction line UTRs
+      .replace(/(?:A\/c(?:\s*No\.?)?|Account(?:\s*(?:Number|No\.?))?|Acc\s*No\.?)\s*[:#-]?\s*([0-9A-Za-z*X]{6,22})/gi, 'Account No: [ACCOUNT_REDACTED]')
+      // 7. Redact CIF / Customer ID patterns
+      .replace(/(?:CIF(?:\s*No\.?)?|Customer\s*ID)\s*[:#-]?\s*([0-9A-Za-z]{6,16})/gi, 'CIF No: [CUSTOMER_ID_REDACTED]');
+  }
+
   async parseStatementText(text: string): Promise<StatementValidationResult> {
     const geminiKey = this.configService.get<string>('GEMINI_API_KEY')?.trim();
     if (!text || text.trim().length === 0) {
@@ -388,7 +407,8 @@ Return ONLY a valid JSON object matching:
 }
 `;
 
-    const prompt = `Raw Statement Text:\n${text.slice(0, 30000)}\n\nAnalyze and extract transactions:`;
+    const sanitizedText = this.sanitizeFinancialPii(text);
+    const prompt = `Sanitized Statement Text (PII Redacted):\n${sanitizedText.slice(0, 30000)}\n\nAnalyze and extract transactions:`;
 
     if (geminiKey) {
       try {

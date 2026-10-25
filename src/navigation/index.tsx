@@ -76,6 +76,8 @@ import {
 } from '../constants/executivePrompts';
 import { QuickActionsRow } from '../components/QuickActionsRow';
 import { FinancialCalendarScreen } from '../screens/FinancialCalendarScreen';
+import { BorrowLendScreen } from '../screens/BorrowLendScreen';
+import { PersonDetailScreen } from '../screens/PersonDetailScreen';
 import { ReviewTransactionsModal } from './ReviewTransactionsModal';
 import { AdminDashboardScreen } from '../features/admin/AdminDashboardScreen';
 import { AdminTabNavigator } from '../features/admin/AdminTabNavigator';
@@ -3741,6 +3743,24 @@ export default function AppNavigator() {
                     options={{
                       presentation: 'card',
                       animation: 'slide_from_bottom',
+                      headerShown: false,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="BorrowLend"
+                    component={BorrowLendScreen}
+                    options={{
+                      presentation: 'card',
+                      animation: 'slide_from_right',
+                      headerShown: false,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="PersonDetail"
+                    component={PersonDetailScreen}
+                    options={{
+                      presentation: 'card',
+                      animation: 'slide_from_right',
                       headerShown: false,
                     }}
                   />

@@ -31,10 +31,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import * as Font from 'expo-font';
 import { format } from 'date-fns';
-import { useTheme, showGlobalConfirm, useBankStore, useTransactionStore, useIncomeStore } from '../store';
+import { useTheme, showGlobalConfirm, useBankStore, useTransactionStore, useIncomeStore, usePeerStore } from '../store';
 import { authService } from '../services/authService';
 import { getBackendUrl } from '../config/api';
 import { TagPaymentModal } from '../components/TagPaymentModal';
+import { DateTimePickerSheet } from '../components/DateTimePickerSheet';
 import { CategoryIcon } from '../components/CategoryIcon';
 import { BankIcon } from '../components/BankIcon';
 import { getCategory } from '../constants/categories';
@@ -149,19 +150,57 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
   const originalAmount = Number(transaction?.amount || 0);
   const originalCategory = (transaction?.category || (transaction?.type === 'credit' ? 'money_received' : 'miscellaneous')).toLowerCase();
   const originalNote = transaction?.merchant || '';
+  const originalTimestamp = Number(transaction?.timestamp) || Date.now();
+
+  const initialMerchant = originalNote.trim() || transaction?.merchant || '';
+  const cleanMerchant = initialMerchant.replace(/\s*\([^)]*\)/g, '').trim();
+  const initialSavedRuleTag = initialMerchant
+    ? tagLearningService.getLearnedTag(initialMerchant) ||
+      tagLearningService.getLearnedTag(firstWord(niceName(initialMerchant))) ||
+      (cleanMerchant ? tagLearningService.getLearnedTag(cleanMerchant) : null)
+    : null;
+  const initialHasActiveRule = Boolean(
+    initialSavedRuleTag &&
+    getCategory(initialSavedRuleTag).id === getCategory(originalCategory).id
+  );
 
   const [amountStr, setAmountStr] = useState(originalAmount ? String(originalAmount) : '');
   const [category, setCategory] = useState(originalCategory);
   const [note, setNote] = useState(originalNote);
-  const [rememberRule, setRememberRule] = useState(false);
+  const [timestamp, setTimestamp] = useState<number>(originalTimestamp);
+  const [rememberRule, setRememberRule] = useState<boolean>(initialHasActiveRule);
+
+  // Sync rules from backend on mount so devices always have latest rules
+  useEffect(() => {
+    let isMounted = true;
+    tagLearningService.syncWithBackend().then(() => {
+      if (!isMounted) return;
+      const merchantToCheck = note.trim() || transaction?.merchant || '';
+      const clean = merchantToCheck.replace(/\s*\([^)]*\)/g, '').trim();
+      const tag =
+        tagLearningService.getLearnedTag(merchantToCheck) ||
+        tagLearningService.getLearnedTag(firstWord(niceName(merchantToCheck))) ||
+        (clean ? tagLearningService.getLearnedTag(clean) : null);
+      if (tag && getCategory(tag).id === getCategory(category).id) {
+        setRememberRule(true);
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [initialMerchant, category]);
   const [editingAmount, setEditingAmount] = useState(false);
   const [saving, setSaving] = useState(false);
   const [tagSheet, setTagSheet] = useState(false);
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [errorText, setErrorText] = useState('');
   const [saved, setSaved] = useState(false);
 
   const amountRef = useRef<TextInput>(null);
-  const display = Font.isLoaded('BricolageGrotesque_800ExtraBold') ? 'BricolageGrotesque_800ExtraBold' : undefined;
+  const display =
+    typeof Font?.isLoaded === 'function' && Font.isLoaded('BricolageGrotesque_800ExtraBold')
+      ? 'BricolageGrotesque_800ExtraBold'
+      : undefined;
 
   const caret = useSharedValue(1);
   useEffect(() => {
@@ -194,6 +233,14 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
 
   /* ---------------- Derived ---------------- */
 
+  const currentMerchant = note.trim() || transaction?.merchant || '';
+  const cleanCurrentMerchant = currentMerchant.replace(/\s*\([^)]*\)/g, '').trim();
+  const currentSavedRuleTag = currentMerchant
+    ? tagLearningService.getLearnedTag(currentMerchant) ||
+      tagLearningService.getLearnedTag(firstWord(niceName(currentMerchant))) ||
+      (cleanCurrentMerchant ? tagLearningService.getLearnedTag(cleanCurrentMerchant) : null)
+    : null;
+
   const isCredit = transaction.type === 'credit';
   const parsedAmount = parseFloat(amountStr) || 0;
   const diff = parsedAmount - originalAmount;
@@ -201,11 +248,12 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
     Math.abs(diff) > 0.001 ||
     getCategory(category).id !== getCategory(originalCategory).id ||
     note.trim() !== originalNote.trim() ||
-    rememberRule;
+    Math.abs(timestamp - originalTimestamp) > 60000 ||
+    rememberRule !== initialHasActiveRule;
 
   const payee = niceName(note.trim() || transaction.merchant) || (isCredit ? 'Money received' : 'Payment');
   const catLabel = getCategory(category).label;
-  const when = formatWhen(transaction.timestamp);
+  const when = formatWhen(timestamp);
 
   // Balance effect of an edited amount
   const balanceEffect = isCredit ? diff : -diff;
@@ -242,6 +290,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
           amount: parsedAmount,
           category,
           note: note.trim() || undefined,
+          timestamp,
           updateMerchantRule: rememberRule,
         }),
       });
@@ -256,24 +305,43 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
       }
 
       const label = note.trim() || category;
+      const isPeer = category.startsWith('peer_');
       if (isCredit) {
-        useIncomeStore.getState().updateIncomeRecordState(transaction.id, {
-          amount: parsedAmount,
-          category,
-          merchant: label,
-          source: label,
-        });
+        if (isPeer) {
+          useIncomeStore.getState().removeIncomeRecordState(transaction.id);
+        } else {
+          useIncomeStore.getState().updateIncomeRecordState(transaction.id, {
+            amount: parsedAmount,
+            category,
+            merchant: label,
+            source: label,
+            timestamp,
+          });
+        }
       } else {
         useTransactionStore.getState().updateTransactionState(transaction.id, {
           amount: parsedAmount,
           category,
           merchant: label,
+          timestamp,
         });
       }
 
+      // Sync with Peer Ledger
+      const dateStr = format(new Date(timestamp), 'yyyy-MM-dd');
       const merchant = note.trim() || transaction.merchant;
+      usePeerStore.getState().syncWithTransactionTag(
+        transaction.id,
+        category,
+        parsedAmount,
+        dateStr,
+        merchant
+      );
+
       if (merchant && rememberRule) {
         await tagLearningService.saveLearnedTag(merchant, category).catch(() => {});
+      } else if (merchant && initialHasActiveRule && !rememberRule) {
+        await tagLearningService.removeLearnedTag(merchant).catch(() => {});
       }
 
       const payload = {
@@ -283,6 +351,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
         newAmount: parsedAmount,
         category,
         merchant: label,
+        timestamp,
       };
       if (typeof props.onSuccess === 'function') props.onSuccess('updated', payload);
       else if (typeof route?.params?.onSuccess === 'function') route.params.onSuccess('updated', payload);
@@ -414,10 +483,21 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
 
           <View style={styles.metaRow}>
             {when ? (
-              <View style={[styles.metaChip, { backgroundColor: chip }]}>
+              <Pressable
+                onPress={() => setDatePickerOpen(true)}
+                style={({ pressed }) => [
+                  styles.metaChip,
+                  { backgroundColor: chip },
+                  pressed && { opacity: 0.75 },
+                ]}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel={`Date and time ${when}. Tap to edit`}
+              >
                 <Feather name="calendar" size={13} color={ink} />
                 <Text style={[styles.metaText, { color: ink }]}>{when}</Text>
-              </View>
+                <Feather name="edit-2" size={11} color={muted} style={{ marginLeft: 3 }} />
+              </Pressable>
             ) : null}
             {bankName ? (
               <View style={[styles.metaChip, { backgroundColor: chip, paddingLeft: 4 }]}>
@@ -534,11 +614,32 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
         selectedTag={category}
         onSelectTag={(tag, updateRule) => {
           setCategory(tag);
-          if (updateRule !== undefined) setRememberRule(Boolean(updateRule));
+          if (updateRule !== undefined) {
+            setRememberRule(Boolean(updateRule));
+          } else {
+            const matchesRule =
+              currentSavedRuleTag &&
+              getCategory(currentSavedRuleTag).id === getCategory(tag).id;
+            setRememberRule(Boolean(matchesRule));
+          }
         }}
         merchantName={niceName(note.trim() || transaction.merchant) || undefined}
+        transactionType={transaction.type}
         isDark={isDark}
         colors={colors}
+      />
+
+      <DateTimePickerSheet
+        visible={datePickerOpen}
+        mode="datetime"
+        title="Edit date and time"
+        value={new Date(timestamp)}
+        maximumDate={new Date()}
+        onClose={() => setDatePickerOpen(false)}
+        onConfirm={(selectedDate) => {
+          setTimestamp(selectedDate.getTime());
+          setDatePickerOpen(false);
+        }}
       />
     </View>
   );
@@ -571,7 +672,7 @@ const styles = StyleSheet.create({
   rowAction: { fontSize: 13, fontWeight: '600' },
   noteIcon: { width: 38, height: 38, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
   noteInput: { fontSize: 15, fontWeight: '600', paddingVertical: 0, marginTop: 1, ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : {}) },
-  ruleText: { flex: 1, fontSize: 14, fontWeight: '600' },
+  ruleText: { flex: 1, fontSize: 14, fontWeight: '600', marginRight: 12 },
 
   errorRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 20, marginTop: 12 },
   errorText: { fontSize: 13, fontWeight: '600', flex: 1 },

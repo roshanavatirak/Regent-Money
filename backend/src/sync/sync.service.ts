@@ -732,6 +732,33 @@ export class SyncService implements OnModuleInit {
     return newRule;
   }
 
+  async deleteMerchantTagRule(userId: string, merchant: string) {
+    if (!merchant) return { success: false };
+    const norm = merchant
+      .toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!norm) return { success: false };
+
+    const existing = await this.userMerchantTagRepository.findOne({
+      where: { userId, merchantNormalized: norm },
+    });
+    if (existing) {
+      await this.userMerchantTagRepository.remove(existing);
+      this.logger.log(`Deleted merchant tag rule for user ${userId}: "${norm}"`);
+    }
+    return { success: true };
+  }
+
+  async getUserMerchantTagRules(userId: string) {
+    if (!userId) return [];
+    return this.userMerchantTagRepository.find({
+      where: { userId },
+      order: { updatedAt: 'DESC' },
+    });
+  }
+
   async syncOcrTransactions(userId: string, data: OcrSyncDto) {
     return this.withUserLock(userId, async () => {
       this.logger.log(`Syncing OCR transactions for user ${userId}, bank: ${data.bankProfileId || 'unassigned'}`);
@@ -775,7 +802,13 @@ export class SyncService implements OnModuleInit {
       // Helper to compute exact millisecond timestamp from date, time, and client timestamp
       const parseExactTimestamp = (dateStr?: string, timeStr?: string | null, clientTimestamp?: number | null, index = 0): number => {
         if (clientTimestamp && !isNaN(Number(clientTimestamp)) && Number(clientTimestamp) > 0) {
-          return Number(clientTimestamp);
+          const clientMs = Number(clientTimestamp);
+          const cDate = new Date(clientMs);
+          // If the timestamp came without seconds (seconds === 0 and ms === 0), add sequential second offset
+          if (cDate.getSeconds() === 0 && cDate.getMilliseconds() === 0 && index > 0) {
+            return clientMs + (index * 1000);
+          }
+          return clientMs;
         }
         if (!dateStr) return Date.now();
 
@@ -840,25 +873,25 @@ export class SyncService implements OnModuleInit {
           if (ampmMatch) {
             let h = parseInt(ampmMatch[1], 10);
             const m = parseInt(ampmMatch[2], 10);
-            const s = ampmMatch[3] ? parseInt(ampmMatch[3], 10) : 0;
+            const s = ampmMatch[3] ? parseInt(ampmMatch[3], 10) : (index % 60);
             const ampm = ampmMatch[4]?.toLowerCase();
             if (ampm === 'pm' && h < 12) h += 12;
             if (ampm === 'am' && h === 12) h = 0;
             if (!isNaN(h) && !isNaN(m)) {
               hours = h;
               minutes = m;
-              seconds = isNaN(s) ? 0 : s;
+              seconds = isNaN(s) ? (index % 60) : s;
             }
           }
         } else {
-          // Statements without times: distribute by index to avoid millisecond collision and preserve statement sequence
+          // Statements without times: distribute by 1-second index offset to preserve exact statement sequence
           seconds = (index % 60);
-          minutes = Math.floor(index / 60);
+          minutes = Math.floor(index / 60) % 60;
+          hours = 12 + Math.floor(index / 3600);
         }
 
         const resDate = new Date(year, month, day, hours, minutes, seconds);
-        const baseMs = isNaN(resDate.getTime()) ? Date.now() : resDate.getTime();
-        return baseMs + (index * 10);
+        return isNaN(resDate.getTime()) ? (Date.now() + index * 1000) : resDate.getTime();
       };
 
       for (let idx = 0; idx < data.transactions.length; idx++) {
@@ -1277,23 +1310,18 @@ export class SyncService implements OnModuleInit {
       transactions = ocrResult.transactions;
       detectedFinalBalance = ocrResult.finalDetectedBalance ?? null;
     } else {
-      let passwordToUse = password || bank.statementPassword || '';
+      // Strict Data Minimization: Statement passwords (DOB/PAN/phone) are NEVER stored in the database.
+      // Password is used strictly in-memory to decrypt the PDF buffer and discarded immediately.
+      const passwordToUse = password || '';
       let extractedText = '';
 
-      try {
-        extractedText = await this.extractTextFromPdfBuffer(fileBuffer, passwordToUse);
-      } catch (e: any) {
-        if (bank.statementPassword && !password) {
-          bank.statementPassword = null;
-          await this.bankProfileRepository.save(bank);
-        }
-        throw e;
+      // Scrub legacy stored password from DB if one existed on this profile
+      if (bank.statementPassword) {
+        bank.statementPassword = null;
+        await this.bankProfileRepository.save(bank).catch(() => {});
       }
 
-      if (password && password !== bank.statementPassword) {
-        bank.statementPassword = password;
-        await this.bankProfileRepository.save(bank);
-      }
+      extractedText = await this.extractTextFromPdfBuffer(fileBuffer, passwordToUse);
 
       // Structure extracted PDF text using backend AI
       const statementResult = await this.aiService.parseStatementText(extractedText);
@@ -1497,6 +1525,7 @@ export class SyncService implements OnModuleInit {
       amount: number;
       category: string;
       note?: string;
+      timestamp?: number;
       updateMerchantRule?: boolean;
     },
   ) {
@@ -1528,6 +1557,9 @@ export class SyncService implements OnModuleInit {
       tx.amount = newAmount;
       tx.category = cleanCategory.toLowerCase();
       tx.merchant = note;
+      if (data.timestamp && !isNaN(Number(data.timestamp))) {
+        tx.timestamp = Number(data.timestamp);
+      }
       tx.updatedAt = Date.now();
       await this.transactionRepository.save(tx);
 
@@ -1569,6 +1601,9 @@ export class SyncService implements OnModuleInit {
       inc.amount = newAmount;
       inc.category = cleanCategory.toLowerCase();
       inc.source = note;
+      if (data.timestamp && !isNaN(Number(data.timestamp))) {
+        inc.timestamp = Number(data.timestamp);
+      }
       inc.updatedAt = Date.now();
       await this.incomeRecordRepository.save(inc);
 
@@ -2516,7 +2551,7 @@ export class SyncService implements OnModuleInit {
       }
 
       const amount = parseFloat(String(txData.amount));
-      const txTime = txData.timestamp && !isNaN(Number(txData.timestamp)) ? Number(txData.timestamp) : Date.now();
+      let txTime = txData.timestamp && !isNaN(Number(txData.timestamp)) ? Number(txData.timestamp) : Date.now();
       const uniqueConfirmedSmsId = `user_confirmed_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
 
       let bank: BankProfile | null = null;
@@ -2527,6 +2562,18 @@ export class SyncService implements OnModuleInit {
       }
 
       if (txData.type === 'debit') {
+        // Prevent timestamp collisions: if an existing transaction already occupies this exact millisecond,
+        // offset by +1 second (1000 ms) so the confirmed duplicate sits immediately adjacent to the sister transaction.
+        let collision = await this.transactionRepository.findOne({
+          where: { userId, timestamp: txTime, isDeleted: false },
+        });
+        while (collision) {
+          txTime += 1000;
+          collision = await this.transactionRepository.findOne({
+            where: { userId, timestamp: txTime, isDeleted: false },
+          });
+        }
+
         const category = txData.category || (txData.merchant ? await this.classifyCategory(txData.merchant, userId) : 'miscellaneous');
         const txId = 'tx_confirmed_' + Math.random().toString(36).substr(2, 9);
         const newTx = this.transactionRepository.create({
@@ -2556,6 +2603,17 @@ export class SyncService implements OnModuleInit {
           await this.bankProfileRepository.save(bank);
         }
       } else {
+        let incTime = txTime;
+        let collision = await this.incomeRecordRepository.findOne({
+          where: { userId, timestamp: incTime, isDeleted: false },
+        });
+        while (collision) {
+          incTime += 1000;
+          collision = await this.incomeRecordRepository.findOne({
+            where: { userId, timestamp: incTime, isDeleted: false },
+          });
+        }
+
         const incId = 'income_confirmed_' + Math.random().toString(36).substr(2, 9);
         const newInc = this.incomeRecordRepository.create({
           id: incId,
@@ -2563,7 +2621,7 @@ export class SyncService implements OnModuleInit {
           amount,
           source: txData.merchant || 'Direct Credit',
           category: 'Other Income',
-          timestamp: txTime,
+          timestamp: incTime,
           bankProfileId: bank ? bank.id : null,
           updatedAt: Date.now(),
           isDeleted: false,

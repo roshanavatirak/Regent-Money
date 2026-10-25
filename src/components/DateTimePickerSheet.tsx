@@ -10,7 +10,7 @@
 // Clock: 24-hour dial. Outer ring 1–12, inner ring 13–23 and 00. Tap or drag.
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, Pressable, Modal, StyleSheet, PanResponder } from 'react-native';
+import { View, Text, Pressable, Modal, StyleSheet, PanResponder, ScrollView } from 'react-native';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -19,6 +19,8 @@ import {
   format,
   addMonths,
   subMonths,
+  addYears,
+  subYears,
   startOfMonth,
   endOfMonth,
   startOfWeek,
@@ -213,6 +215,7 @@ export const DateTimePickerSheet: React.FC<DateTimePickerSheetProps> = ({
   const [monthView, setMonthView] = useState<Date>(startOfMonth(value || new Date()));
   const [tab, setTab] = useState<'date' | 'time'>(mode === 'time' ? 'time' : 'date');
   const [unit, setUnit] = useState<'hour' | 'minute'>('hour');
+  const [viewMode, setViewMode] = useState<'calendar' | 'year'>('calendar');
 
   useEffect(() => {
     if (visible) {
@@ -221,6 +224,7 @@ export const DateTimePickerSheet: React.FC<DateTimePickerSheetProps> = ({
       setMonthView(startOfMonth(v));
       setTab(mode === 'time' ? 'time' : 'date');
       setUnit('hour');
+      setViewMode('calendar');
     }
   }, [visible]);
 
@@ -250,6 +254,16 @@ export const DateTimePickerSheet: React.FC<DateTimePickerSheetProps> = ({
 
   const canPrev = !minimumDate || startOfMonth(monthView) > startOfMonth(minimumDate);
   const canNext = !maximumDate || startOfMonth(monthView) < startOfMonth(maximumDate);
+  const canPrevYear = !minimumDate || subYears(startOfMonth(monthView), 1) >= startOfMonth(minimumDate);
+  const canNextYear = !maximumDate || addYears(startOfMonth(monthView), 1) <= startOfMonth(maximumDate);
+
+  const availableYears = useMemo(() => {
+    const min = minimumDate ? minimumDate.getFullYear() : new Date().getFullYear() - 100;
+    const max = maximumDate ? maximumDate.getFullYear() : new Date().getFullYear() + 20;
+    const list: number[] = [];
+    for (let y = max; y >= min; y--) list.push(y);
+    return list;
+  }, [minimumDate, maximumDate]);
 
   const pickDay = (d: Date) => {
     const next = new Date(d.getFullYear(), d.getMonth(), d.getDate(), draft.getHours(), draft.getMinutes(), 0, 0);
@@ -350,73 +364,154 @@ export const DateTimePickerSheet: React.FC<DateTimePickerSheetProps> = ({
           {tab === 'date' && mode !== 'time' && (
             <Animated.View key="date" entering={FadeIn.duration(200)}>
               <View style={styles.monthRow}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                  <Pressable
+                    onPress={() => canPrevYear && setMonthView(subYears(monthView, 1))}
+                    style={[styles.navBtn, { backgroundColor: soft, opacity: canPrevYear ? 1 : 0.3 }]}
+                    disabled={!canPrevYear}
+                    accessibilityLabel="Previous year"
+                  >
+                    <Feather name="chevrons-left" size={16} color={ink} />
+                  </Pressable>
+                  <Pressable
+                    onPress={() => canPrev && setMonthView(subMonths(monthView, 1))}
+                    style={[styles.navBtn, { backgroundColor: soft, opacity: canPrev ? 1 : 0.3 }]}
+                    disabled={!canPrev}
+                    accessibilityLabel="Previous month"
+                  >
+                    <Feather name="chevron-left" size={16} color={ink} />
+                  </Pressable>
+                </View>
+
                 <Pressable
-                  onPress={() => canPrev && setMonthView(subMonths(monthView, 1))}
-                  style={[styles.navBtn, { backgroundColor: soft, opacity: canPrev ? 1 : 0.35 }]}
-                  disabled={!canPrev}
-                  accessibilityLabel="Previous month"
+                  onPress={() => setViewMode((m) => (m === 'year' ? 'calendar' : 'year'))}
+                  style={[styles.monthTitleBtn, { backgroundColor: viewMode === 'year' ? soft : 'transparent' }]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Toggle year selection"
                 >
-                  <Feather name="chevron-left" size={18} color={ink} />
+                  <Text style={[styles.monthText, { color: ink }]}>{format(monthView, 'MMMM yyyy')}</Text>
+                  <Feather
+                    name={viewMode === 'year' ? 'chevron-up' : 'chevron-down'}
+                    size={14}
+                    color={muted}
+                    style={{ marginLeft: 4 }}
+                  />
                 </Pressable>
-                <Text style={[styles.monthText, { color: ink }]}>{format(monthView, 'MMMM yyyy')}</Text>
-                <Pressable
-                  onPress={() => canNext && setMonthView(addMonths(monthView, 1))}
-                  style={[styles.navBtn, { backgroundColor: soft, opacity: canNext ? 1 : 0.35 }]}
-                  disabled={!canNext}
-                  accessibilityLabel="Next month"
-                >
-                  <Feather name="chevron-right" size={18} color={ink} />
-                </Pressable>
+
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                  <Pressable
+                    onPress={() => canNext && setMonthView(addMonths(monthView, 1))}
+                    style={[styles.navBtn, { backgroundColor: soft, opacity: canNext ? 1 : 0.3 }]}
+                    disabled={!canNext}
+                    accessibilityLabel="Next month"
+                  >
+                    <Feather name="chevron-right" size={16} color={ink} />
+                  </Pressable>
+                  <Pressable
+                    onPress={() => canNextYear && setMonthView(addYears(monthView, 1))}
+                    style={[styles.navBtn, { backgroundColor: soft, opacity: canNextYear ? 1 : 0.3 }]}
+                    disabled={!canNextYear}
+                    accessibilityLabel="Next year"
+                  >
+                    <Feather name="chevrons-right" size={16} color={ink} />
+                  </Pressable>
+                </View>
               </View>
 
-              <View style={styles.weekRow}>
-                {weekdayLabels.map((w, i) => (
-                  <Text key={i} style={[styles.weekday, { color: muted }]}>
-                    {w}
-                  </Text>
-                ))}
-              </View>
-
-              <View style={styles.grid}>
-                {days.map((d) => {
-                  const inMonth = isSameMonth(d, monthView);
-                  const selected = isSameDay(d, draft);
-                  const today = isToday(d);
-                  const disabled = dayDisabled(d);
-                  return (
-                    <View key={d.toISOString()} style={styles.cell}>
-                      <Pressable
-                        onPress={() => !disabled && pickDay(d)}
-                        disabled={disabled}
-                        style={[
-                          styles.day,
-                          selected && { backgroundColor: accent },
-                          !selected && today && { borderWidth: 1.5, borderColor: accent },
-                        ]}
-                        accessibilityRole="button"
-                        accessibilityState={{ selected, disabled }}
-                        accessibilityLabel={format(d, 'EEEE d MMMM yyyy')}
-                      >
-                        <Text
-                          style={{
-                            fontSize: 15,
-                            fontWeight: selected || today ? '700' : '500',
-                            color: selected
-                              ? accentInk
-                              : disabled
-                                ? isDark ? 'rgba(255,255,255,0.2)' : 'rgba(11,31,23,0.2)'
-                                : inMonth
-                                  ? ink
-                                  : isDark ? 'rgba(255,255,255,0.35)' : 'rgba(11,31,23,0.35)',
-                          }}
-                        >
-                          {format(d, 'd')}
-                        </Text>
-                      </Pressable>
+              {viewMode === 'year' ? (
+                <View style={styles.yearGridWrap}>
+                  <ScrollView style={{ maxHeight: 230 }} showsVerticalScrollIndicator={false}>
+                    <View style={styles.yearGrid}>
+                      {availableYears.map((yr) => {
+                        const isSelected = yr === monthView.getFullYear();
+                        return (
+                          <Pressable
+                            key={yr}
+                            onPress={() => {
+                              const newMonth = new Date(yr, monthView.getMonth(), 1);
+                              if (maximumDate && newMonth > maximumDate) {
+                                setMonthView(startOfMonth(maximumDate));
+                              } else if (minimumDate && newMonth < minimumDate) {
+                                setMonthView(startOfMonth(minimumDate));
+                              } else {
+                                setMonthView(newMonth);
+                              }
+                              setViewMode('calendar');
+                            }}
+                            style={[
+                              styles.yearCell,
+                              { backgroundColor: isSelected ? accent : soft },
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.yearCellText,
+                                {
+                                  color: isSelected ? accentInk : ink,
+                                  fontWeight: isSelected ? '700' : '600',
+                                },
+                              ]}
+                            >
+                              {yr}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
                     </View>
-                  );
-                })}
-              </View>
+                  </ScrollView>
+                </View>
+              ) : (
+                <>
+                  <View style={styles.weekRow}>
+                    {weekdayLabels.map((w, i) => (
+                      <Text key={i} style={[styles.weekday, { color: muted }]}>
+                        {w}
+                      </Text>
+                    ))}
+                  </View>
+
+                  <View style={styles.grid}>
+                    {days.map((d) => {
+                      const inMonth = isSameMonth(d, monthView);
+                      const selected = isSameDay(d, draft);
+                      const today = isToday(d);
+                      const disabled = dayDisabled(d);
+                      return (
+                        <View key={d.toISOString()} style={styles.cell}>
+                          <Pressable
+                            onPress={() => !disabled && pickDay(d)}
+                            disabled={disabled}
+                            style={[
+                              styles.day,
+                              selected && { backgroundColor: accent },
+                              !selected && today && { borderWidth: 1.5, borderColor: accent },
+                            ]}
+                            accessibilityRole="button"
+                            accessibilityState={{ selected, disabled }}
+                            accessibilityLabel={format(d, 'EEEE d MMMM yyyy')}
+                          >
+                            <Text
+                              style={{
+                                fontSize: 15,
+                                fontWeight: selected || today ? '700' : '500',
+                                color: selected
+                                  ? accentInk
+                                  : disabled
+                                    ? isDark ? 'rgba(255,255,255,0.2)' : 'rgba(11,31,23,0.2)'
+                                    : inMonth
+                                      ? ink
+                                      : isDark ? 'rgba(255,255,255,0.35)' : 'rgba(11,31,23,0.35)',
+                              }}
+                            >
+                              {format(d, 'd')}
+                            </Text>
+                          </Pressable>
+                        </View>
+                      );
+                    })}
+                  </View>
+                </>
+              )}
             </Animated.View>
           )}
 
@@ -516,8 +611,13 @@ const styles = StyleSheet.create({
   tabText: { fontSize: 15, fontWeight: '700' },
 
   monthRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 16, marginBottom: 8 },
-  navBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  navBtn: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+  monthTitleBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12 },
   monthText: { fontSize: 16, fontWeight: '700' },
+  yearGridWrap: { paddingVertical: 6, marginBottom: 8 },
+  yearGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center' },
+  yearCell: { width: '22%', paddingVertical: 10, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  yearCellText: { fontSize: 14 },
 
   weekRow: { flexDirection: 'row', marginBottom: 2 },
   weekday: { width: `${100 / 7}%`, textAlign: 'center', fontSize: 12, fontWeight: '600', paddingVertical: 6 },

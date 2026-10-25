@@ -208,9 +208,6 @@ export class AuthService implements OnModuleInit {
     const savedUser = await this.userRepository.save(user) as User;
 
     // 5. Send verification email asynchronously in the background (DO NOT await it!)
-    const backendUrl = this.configService.get<string>('BACKEND_URL') || 'http://localhost:3000';
-    const verificationLink = `${backendUrl}/auth/verify?token=${verificationToken}`;
-
     this.mailService.sendVerificationEmail(email, dto.name, verificationToken).catch((err) => {
       console.error(`[AuthService] Background verification email dispatch failed: ${err.message}`);
     });
@@ -234,8 +231,6 @@ export class AuthService implements OnModuleInit {
     return {
       profile,
       sessionConfirmed: false, // Must verify email first
-      verificationToken,
-      verificationLink,
     };
   }
 

@@ -25,6 +25,7 @@ import { AiModule } from './ai/ai.module';
 import { RedisModule } from './redis/redis.module';
 import { AdminModule } from './admin/admin.module';
 import { AdminAuditLog } from './admin/entities/admin-audit-log.entity';
+import { FeedbackModule } from './feedback/feedback.module';
 import * as dns from 'dns';
 
 // Helper to resolve host to IPv4 address programmatically
@@ -98,7 +99,6 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
         };
 
         if (dbUrl) {
-          console.log(`[Database] DATABASE_URL raw value: "${dbUrl}"`);
           connectionOptions.url = dbUrl;
           if (isSupabase) {
             try {
@@ -120,6 +120,7 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
     NotificationsModule,
     AiModule,
     RedisModule,
+    FeedbackModule,
     ScheduleModule.forRoot(),
     ThrottlerModule.forRoot([
       {

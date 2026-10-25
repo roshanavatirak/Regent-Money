@@ -80,6 +80,10 @@ export const smsCatchupService = {
       return null;
     }
 
+    if (mmkvStorage.getBoolean('sms_tracking_disabled_sim_mismatch')) {
+      return null;
+    }
+
     const now = Date.now();
     // Throttle automatic scans to at most once per 60 seconds unless forced (manual is always forced)
     if (!force && now - lastReconcileTime < 60000) {

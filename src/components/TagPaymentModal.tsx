@@ -23,6 +23,7 @@ import {
 } from '../constants/categories';
 import { CategoryIcon } from './CategoryIcon';
 import { tagLearningService } from '../services/tagLearningService';
+import { usePeerStore } from '../store';
 
 interface TagPaymentModalProps {
   visible: boolean;
@@ -30,6 +31,7 @@ interface TagPaymentModalProps {
   selectedTag: string;
   onSelectTag: (tag: string, updatePayeeRule?: boolean) => void;
   merchantName?: string;
+  transactionType?: 'credit' | 'debit';
   isDark: boolean;
   colors: any;
 }
@@ -43,6 +45,7 @@ export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
   selectedTag,
   onSelectTag,
   merchantName,
+  transactionType = 'debit',
   isDark,
   colors,
 }) => {
@@ -106,6 +109,9 @@ export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
   };
 
   const handleConfirm = () => {
+    if (current.startsWith('peer_') && merchantName) {
+      usePeerStore.getState().findOrCreateContact(merchantName);
+    }
     onSelectTag(current, merchantName ? rememberForPayee : undefined);
     onClose();
   };
@@ -226,9 +232,34 @@ export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
                 {CATEGORY_GROUPS.map((g) => (
                   <View key={g.id}>
                     <Text style={[styles.groupTitle, { color: muted }]}>{g.label}</Text>
-                    {renderBuiltIn(CATEGORIES.filter((c) => c.group === g.id))}
+                    {renderBuiltIn(CATEGORIES.filter((c) => c.group === g.id && !c.id.startsWith('peer_')))}
                   </View>
                 ))}
+
+                {/* Friends & Lending (Direction-Aware: 2 contextual options) - Placed above Your tags */}
+                <View style={styles.peerSection}>
+                  <Text style={[styles.groupTitle, { color: muted, paddingTop: 16, paddingBottom: 2 }]}>
+                    Friends & lending
+                  </Text>
+                  <Text style={[styles.peerPromptText, { color: muted }]}>
+                    {transactionType === 'credit'
+                      ? 'Did a friend repay you, or did you borrow this?'
+                      : 'Did you lend money to a friend, or repay a debt?'}
+                  </Text>
+                  <View style={styles.grid}>
+                    {transactionType === 'credit' ? (
+                      <>
+                        {renderTile('peer_lent_repaid', 'Friend repaid')}
+                        {renderTile('peer_borrowed', 'Borrowed')}
+                      </>
+                    ) : (
+                      <>
+                        {renderTile('peer_lent', 'Lent to friend')}
+                        {renderTile('peer_borrow_repaid', 'Repaid friend')}
+                      </>
+                    )}
+                  </View>
+                </View>
 
                 <Text style={[styles.groupTitle, { color: muted }]}>Your tags</Text>
                 <View style={styles.grid}>
@@ -424,6 +455,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 22,
     paddingTop: 22,
     paddingBottom: 12,
+  },
+  peerSection: {
+    marginBottom: 6,
+  },
+  peerPromptText: {
+    fontSize: 12,
+    paddingHorizontal: 22,
+    paddingBottom: 12,
+    lineHeight: 16,
   },
   grid: {
     flexDirection: 'row',

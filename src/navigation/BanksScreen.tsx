@@ -49,10 +49,13 @@ const shortName = (name: string) =>
 const inr = (n: number, decimals = 2) =>
   `₹${Math.abs(n).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: decimals })}`;
 
-const sharePct = (part: number, total: number) => {
-  if (total <= 0) return 0;
+const sharePct = (part: number, total: number): string => {
+  if (total <= 0 || part <= 0) return '0%';
+  if (part >= total) return '100%';
   const p = (part / total) * 100;
-  return p > 0 && p < 1 ? 1 : Math.round(p);
+  if (p > 0 && p < 1) return '<1%';
+  if (p > 99 && p < 100) return '>99%';
+  return `${Math.round(p)}%`;
 };
 
 /** Smooth count-up for the total. */
@@ -120,7 +123,7 @@ const ShareBar: React.FC<{ items: { id: string; value: number; color: string }[]
 
 const AccountCard: React.FC<{
   bank: any;
-  share: number;
+  share: string;
   display?: string;
   onOpen: () => void;
   onMoneyIn: () => void;
@@ -158,7 +161,7 @@ const AccountCard: React.FC<{
             </Text>
           </View>
           <View style={styles.sharePill}>
-            <Text style={styles.shareText}>{share}%</Text>
+            <Text style={styles.shareText}>{share}</Text>
           </View>
         </View>
 
@@ -230,9 +233,12 @@ export const BanksScreen: React.FC<BanksScreenProps> = ({ AppTopBarComponent, Ad
   const [refreshing, setRefreshing] = useState(false);
 
   const display = Font.isLoaded('BricolageGrotesque_800ExtraBold') ? 'BricolageGrotesque_800ExtraBold' : undefined;
+  const heading = { fontFamily: display, fontWeight: display ? undefined : ('800' as const) };
   const ink = colors.text;
   const muted = colors.textSecondary;
   const pageBg = isDark ? colors.background : '#F3F6F4';
+  const accent = isDark ? LIME : FOREST;
+  const accentFg = isDark ? FOREST : LIME;
 
   // Space for the floating tab bar
   const tabOffset = Platform.OS === 'web' ? 18 : Math.max(insets.bottom + (Platform.OS === 'ios' ? 4 : 8), 16);
@@ -301,14 +307,28 @@ export const BanksScreen: React.FC<BanksScreenProps> = ({ AppTopBarComponent, Ad
 
   return (
     <View style={{ flex: 1, backgroundColor: pageBg }}>
-      {AppTopBarComponent ? <AppTopBarComponent onOpenAddBank={() => setAddBankVisible(true)} /> : null}
-
       <ScrollView
         style={{ flex: 1 }}
-        contentContainerStyle={{ paddingBottom: bottomSpace }}
+        contentContainerStyle={{
+          paddingTop: Math.max(insets.top, 16) + 8,
+          paddingBottom: bottomSpace,
+        }}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#16A34A" colors={['#16A34A']} />}
       >
+        {/* ---------------- Header ---------------- */}
+        <View style={styles.titleRow}>
+          <Text style={[styles.pageTitle, { color: ink }, heading]}>Banks</Text>
+          <Pressable
+            onPress={() => setAddBankVisible(true)}
+            style={({ pressed }) => [styles.plus, { backgroundColor: accent }, pressed && { transform: [{ scale: 0.94 }] }]}
+            accessibilityRole="button"
+            accessibilityLabel="Link another account"
+          >
+            <Feather name="plus" size={18} color={accentFg} />
+          </Pressable>
+        </View>
+
         {sorted.length === 0 ? (
           /* ---------------- Empty ---------------- */
           <Animated.View entering={FadeInDown.duration(400)} style={styles.emptyWrap}>
@@ -348,14 +368,6 @@ export const BanksScreen: React.FC<BanksScreenProps> = ({ AppTopBarComponent, Ad
                   Across {sorted.length} account{sorted.length > 1 ? 's' : ''}
                 </Text>
               </View>
-              <Pressable
-                onPress={() => setAddBankVisible(true)}
-                style={({ pressed }) => [styles.plusBtn, { backgroundColor: isDark ? LIME : FOREST }, pressed && { transform: [{ scale: 0.94 }] }]}
-                accessibilityRole="button"
-                accessibilityLabel="Link another account"
-              >
-                <Feather name="plus" size={20} color={isDark ? FOREST : LIME} />
-              </Pressable>
             </Animated.View>
 
             {/* ---------------- Where it sits ---------------- */}
@@ -367,7 +379,7 @@ export const BanksScreen: React.FC<BanksScreenProps> = ({ AppTopBarComponent, Ad
                     <View key={it.id} style={styles.legendItem}>
                       <View style={[styles.legendDot, { backgroundColor: it.color }]} />
                       <Text style={[styles.legendText, { color: muted }]} numberOfLines={1}>
-                        {it.label} {sharePct(it.value, positiveTotal)}%
+                        {it.label} {sharePct(it.value, positiveTotal)}
                       </Text>
                     </View>
                   ))}
@@ -431,13 +443,16 @@ export const BanksScreen: React.FC<BanksScreenProps> = ({ AppTopBarComponent, Ad
 };
 
 const styles = StyleSheet.create({
-  totalRow: { flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 20, paddingTop: 22 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 6 },
+  pageTitle: { fontSize: 24, letterSpacing: -0.5 },
+  plus: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+
+  totalRow: { flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 20, paddingTop: 10 },
   totalLabel: { fontSize: 13, fontWeight: '600' },
   totalAmountRow: { flexDirection: 'row', alignItems: 'baseline', marginTop: 4 },
   totalAmount: { fontSize: 40, letterSpacing: -1.4, fontVariant: ['tabular-nums'] },
   totalPaise: { fontSize: 22, fontWeight: '700', marginLeft: 1 },
   totalSub: { fontSize: 13, marginTop: 2 },
-  plusBtn: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center', marginTop: 6 },
 
   shareWrap: { paddingHorizontal: 20, paddingTop: 18 },
   legend: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 16, rowGap: 6, marginTop: 10 },

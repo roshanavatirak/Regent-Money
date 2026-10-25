@@ -1,17 +1,24 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image, Platform } from 'react-native';
+// src/features/goals/components/GoalCard.tsx
+//
+// One goal: a cover photo that fills in with colour as you save, the name and
+// amount on the photo, a progress bar with milestone marks, and one clear
+// "Add money" action.
+
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, Pressable, Image, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Ionicons } from '@expo/vector-icons';
+import Animated, { useSharedValue, useAnimatedStyle, withTiming, withSpring, Easing } from 'react-native-reanimated';
+import { Feather } from '@expo/vector-icons';
+import * as Font from 'expo-font';
 import { useTheme, useBankStore, useGoalsStore } from '../../../store';
 import type { Goal } from '../services/goalPacingService';
 import { getGoalPacing } from '../services/goalPacingService';
-import {
-  getGoalCardCopy,
-  formatIndianCompactRupees,
-  formatIndianFullRupees,
-} from '../services/goalNudgeTemplates';
+import { getGoalCardCopy, formatIndianCompactRupees, formatIndianFullRupees } from '../services/goalNudgeTemplates';
 import { getCoverImageUri } from '../services/goalIllustrationMap';
 import { getBankAllocationSummary } from '../services/goalBankAllocationService';
+
+const FOREST = '#0B3D2C';
+const LIME = '#B8F36B';
 
 interface GoalCardProps {
   goal: Goal;
@@ -21,362 +28,192 @@ interface GoalCardProps {
   onEditImage?: (goal: Goal) => void;
 }
 
-export const GoalCard: React.FC<GoalCardProps> = ({
-  goal,
-  onPress,
-  onLogSavings,
-  onSecondaryAction,
-  onEditImage,
-}) => {
+/** Short label for the chip on the photo. */
+const statusChip = (status: string, monthsDelta: number) => {
+  switch (status) {
+    case 'completed':
+      return { label: 'Done', tone: 'gold' as const };
+    case 'ahead':
+      return { label: `${monthsDelta} month${monthsDelta === 1 ? '' : 's'} early`, tone: 'green' as const };
+    case 'on_pace':
+      return { label: 'On track', tone: 'green' as const };
+    case 'slightly_behind':
+      return { label: 'A little behind', tone: 'amber' as const };
+    case 'behind':
+      return { label: 'Behind', tone: 'amber' as const };
+    default:
+      return { label: 'Not started', tone: 'grey' as const };
+  }
+};
+
+export const GoalCard: React.FC<GoalCardProps> = ({ goal, onPress, onLogSavings, onEditImage }) => {
   const { colors, isDark } = useTheme();
-  const [frameWidth, setFrameWidth] = useState<number>(0);
+  const display = Font.isLoaded('BricolageGrotesque_800ExtraBold') ? 'BricolageGrotesque_800ExtraBold' : undefined;
+  const [frameWidth, setFrameWidth] = useState(0);
 
-  const bankProfiles = useBankStore((state) => state.bankProfiles);
-  const allGoals = useGoalsStore((state) => state.goals);
-
-  const linkedBank = goal.linkedBankId
-    ? bankProfiles.find((b) => b.id === goal.linkedBankId)
-    : undefined;
+  const bankProfiles = useBankStore((s) => s.bankProfiles);
+  const allGoals = useGoalsStore((s) => s.goals);
+  const linkedBank = goal.linkedBankId ? bankProfiles.find((b) => b.id === goal.linkedBankId) : undefined;
   const bankSummary = linkedBank ? getBankAllocationSummary(linkedBank, allGoals) : undefined;
 
   const pacing = getGoalPacing(goal);
   const coverUri = getCoverImageUri(goal);
-  const hasReminder = Boolean(goal.reminder && !goal.reminder.paused);
-  const copy = getGoalCardCopy(pacing, hasReminder);
+  const copy = getGoalCardCopy(pacing, Boolean(goal.reminder && !goal.reminder.paused));
+  const chip = statusChip(pacing.status, pacing.monthsDelta);
+  const done = pacing.status === 'completed';
+  const pct = Math.min(100, Math.max(0, pacing.pctSaved));
+  const toGo = Math.max(0, pacing.effectiveTarget - pacing.saved);
 
-  // Status dot color mapping aligned with global theme tokens
-  const getDotColor = () => {
-    switch (copy.statusDot) {
-      case 'green':
-        return colors.accent;
-      case 'amber':
-      case 'gold':
-        return colors.warning;
-      case 'grey':
-      default:
-        return colors.textTertiary;
-    }
-  };
+  // Remove duplicate "X month(s) early" clause if already shown in the top chip
+  const cleanStatusText = copy.statusText.replace(/,\s*\d+\s*months?\s*early/i, '');
 
-  const dotColor = getDotColor();
+  // Animations: bar fill and press
+  const fill = useSharedValue(0);
+  const scale = useSharedValue(1);
+  useEffect(() => {
+    fill.value = withTiming(pct, { duration: 800, easing: Easing.out(Easing.cubic) });
+  }, [pct]);
+  const fillStyle = useAnimatedStyle(() => ({ width: `${fill.value}%` }));
+  const pressStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+
+  const ink = colors.text;
+  const muted = colors.textSecondary;
+  const line = isDark ? colors.border : '#E1E9E4';
+  const track = isDark ? 'rgba(255,255,255,0.08)' : '#EDF2EF';
+  const accent = isDark ? LIME : FOREST;
+  const accentFg = isDark ? FOREST : LIME;
+  const toneColor = { green: '#16A34A', amber: '#F59F00', gold: '#D4A017', grey: '#8A9A92' }[chip.tone];
+  const barColor = done ? '#D4A017' : chip.tone === 'amber' ? '#F59F00' : isDark ? LIME : '#16A34A';
 
   return (
-    <TouchableOpacity
-      activeOpacity={0.92}
-      onPress={onPress}
-      style={[
-        styles.cardContainer,
-        {
-          backgroundColor: colors.card,
-          borderColor: colors.border,
-        },
-      ]}
-    >
-      {/* 1. TOP COVER ART WITH GAMIFIED PROGRESSIVE REVEAL */}
-      <View
-        style={styles.artFrame}
-        onLayout={(e) => setFrameWidth(e.nativeEvent.layout.width)}
+    <Animated.View style={pressStyle}>
+      <Pressable
+        onPress={onPress}
+        onLongPress={() => onEditImage?.(goal)}
+        onPressIn={() => (scale.value = withSpring(0.98, { damping: 15, stiffness: 300 }))}
+        onPressOut={() => (scale.value = withSpring(1, { damping: 15, stiffness: 300 }))}
+        style={[s.card, { backgroundColor: colors.card, borderColor: line }]}
+        accessibilityRole="button"
+        accessibilityLabel={`${goal.name}. ${formatIndianFullRupees(pacing.saved)} of ${formatIndianCompactRupees(pacing.effectiveTarget)}. ${cleanStatusText}`}
       >
-        {/* Layer A: Base Grayed/Blurred Image (0% or unreached progress) with subtle reduced blur */}
-        <Image
-          source={{ uri: coverUri }}
-          blurRadius={Platform.OS === 'web' ? undefined : 2.5}
-          style={[
-            styles.coverImage,
-            (Platform.OS === 'web'
-              ? { filter: 'blur(2.5px) grayscale(100%) contrast(1.05) brightness(0.65)' }
-              : {}) as any,
-          ]}
-          resizeMode="cover"
-        />
-        {/* Tone wash overlay matching global theme background */}
-        <View
-          style={[
-            StyleSheet.absoluteFill,
-            {
-              backgroundColor: isDark ? 'rgba(36, 41, 46, 0.45)' : 'rgba(226, 232, 240, 0.35)',
-            },
-          ]}
-        />
-
-        {/* Layer B: Revealed Vivid Full-Color Clear Portion (Progressively unlocks from 1% to 100%) */}
-        {frameWidth > 0 && pacing.pctSaved > 0 ? (
-          <View
-            style={[
-              styles.revealedFrame,
-              { width: `${Math.min(100, Math.max(0, pacing.pctSaved))}%` },
-            ]}
-          >
-            <Image
-              source={{ uri: coverUri }}
-              style={{ width: frameWidth, height: '100%' }}
-              resizeMode="cover"
-            />
-            {/* Soft horizontal feather fade at transition edge (no harsh line) */}
-            {pacing.pctSaved < 100 ? (
-              <LinearGradient
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                colors={[
-                  'transparent',
-                  isDark ? 'rgba(43, 49, 55, 0.35)' : 'rgba(226, 232, 240, 0.3)',
-                  isDark ? 'rgba(43, 49, 55, 0.8)' : 'rgba(226, 232, 240, 0.7)',
-                ]}
-                style={styles.featherEdge}
-              />
-            ) : null}
-          </View>
-        ) : null}
-
-        {/* Layer C: Downward Fadeout Gradient Scrim (Blends directly into colors.card) */}
-        <LinearGradient
-          colors={[
-            'transparent',
-            'transparent',
-            isDark ? 'rgba(43, 49, 55, 0.35)' : 'rgba(255, 255, 255, 0.35)',
-            isDark ? 'rgba(43, 49, 55, 0.85)' : 'rgba(255, 255, 255, 0.85)',
-            colors.card,
-          ]}
-          locations={[0.0, 0.28, 0.58, 0.82, 1.0]}
-          style={styles.gradientScrim}
-        />
-
-        {/* Linked Bank Badge on top-left of art frame */}
-        {linkedBank ? (
-          <View
-            style={[
-              styles.bankTag,
-              {
-                backgroundColor: bankSummary?.isOverallocated
-                  ? (isDark ? 'rgba(255, 82, 82, 0.85)' : 'rgba(220, 38, 38, 0.9)')
-                  : (isDark ? 'rgba(36, 41, 46, 0.8)' : 'rgba(15, 23, 42, 0.7)'),
-                borderColor: bankSummary?.isOverallocated
-                  ? colors.danger
-                  : (isDark ? 'rgba(250, 251, 252, 0.2)' : 'rgba(255, 255, 255, 0.3)'),
-              },
-            ]}
-          >
-            <Ionicons
-              name={bankSummary?.isOverallocated ? 'alert-circle' : 'business'}
-              size={10}
-              color={bankSummary?.isOverallocated ? '#FFFFFF' : colors.accent}
-              style={{ marginRight: 4 }}
-            />
-            <Text style={styles.bankTagText} numberOfLines={1}>
-              {linkedBank.bankName || 'Bank'} {linkedBank.accountNumberSuffix ? `••${linkedBank.accountNumberSuffix}` : ''}
-              {bankSummary?.isOverallocated ? ` (-${formatIndianCompactRupees(bankSummary.deficitAmount)})` : ''}
-            </Text>
-          </View>
-        ) : null}
-      </View>
-
-      {/* 2. BODY CONTENT (Solid card background for 100% predictable contrast) */}
-      <View style={styles.contentBody}>
-        {/* Goal Name (16sp, Semibold) */}
-        <Text style={[styles.goalTitle, { color: colors.text }]} numberOfLines={1}>
-          {goal.name}
-        </Text>
-
-        {/* Amount Line: "₹35,000 of ₹2.5L" left, "14%" right */}
-        <View style={styles.amountRow}>
-          <Text style={[styles.savedAmountText, { color: colors.text }]}>
-            {formatIndianFullRupees(pacing.saved)}{' '}
-            <Text style={[styles.targetAmountText, { color: colors.textSecondary }]}>
-              of {formatIndianCompactRupees(pacing.effectiveTarget)}
-            </Text>
-          </Text>
-          <Text style={[styles.percentText, { color: colors.text }]}>
-            {pacing.pctSaved}%
-          </Text>
-        </View>
-
-        {/* Progress Bar (6dp, rounded, accent green) */}
-        <View
-          style={[
-            styles.progressTrack,
-            { backgroundColor: isDark ? 'rgba(250, 251, 252, 0.08)' : colors.border },
-          ]}
-        >
-          <View
-            style={[
-              styles.progressFill,
-              {
-                width: `${Math.min(100, Math.max(0, pacing.pctSaved))}%`,
-                backgroundColor: copy.statusDot === 'gold' ? colors.warning : colors.accent,
-              },
-            ]}
+        {/* Cover: grey and soft until you save, then fills with colour */}
+        <View style={s.art} onLayout={(e) => setFrameWidth(e.nativeEvent.layout.width)}>
+          <Image
+            source={{ uri: coverUri }}
+            blurRadius={Platform.OS === 'web' ? undefined : 2}
+            style={[s.cover, (Platform.OS === 'web' ? { filter: 'blur(2px) grayscale(100%) brightness(0.7)' } : {}) as any]}
+            resizeMode="cover"
           />
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(30, 38, 34, 0.35)' }]} />
+
+          {frameWidth > 0 && pct > 0 && (
+            <View style={[s.reveal, { width: `${pct}%` }]}>
+              <Image source={{ uri: coverUri }} style={{ width: frameWidth, height: '100%' }} resizeMode="cover" />
+              {pct < 100 && (
+                <LinearGradient start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} colors={['transparent', 'rgba(30,38,34,0.45)']} style={s.feather} />
+              )}
+            </View>
+          )}
+
+          <LinearGradient colors={['rgba(7,17,13,0)', 'rgba(7,17,13,0.15)', 'rgba(7,17,13,0.8)']} locations={[0, 0.4, 1]} style={StyleSheet.absoluteFill} />
+
+          {/* Status chip */}
+          <View style={s.chip}>
+            <View style={[s.chipDot, { backgroundColor: toneColor }]} />
+            <Text style={s.chipText}>{chip.label}</Text>
+          </View>
+
+          {/* Change photo */}
+          {onEditImage && (
+            <Pressable onPress={() => onEditImage(goal)} hitSlop={8} style={s.photoBtn} accessibilityLabel="Change photo">
+              <Feather name="image" size={13} color="#FFFFFF" />
+            </Pressable>
+          )}
+
+          {/* Name and amount on the photo */}
+          <View style={s.artText}>
+            <Text style={[s.name, { fontFamily: display, fontWeight: display ? undefined : '800' }]} numberOfLines={1}>
+              {goal.name}
+            </Text>
+            <Text style={s.amount} numberOfLines={1}>
+              <Text style={{ fontWeight: '700' }}>{formatIndianFullRupees(pacing.saved)}</Text>
+              <Text style={{ color: 'rgba(255,255,255,0.8)' }}> of {formatIndianCompactRupees(pacing.effectiveTarget)}</Text>
+            </Text>
+          </View>
         </View>
 
-        {/* Status Line: Dot + One Sentence */}
-        <View style={styles.statusLine}>
-          <View style={[styles.statusDot, { backgroundColor: dotColor }]} />
-          <Text style={[styles.statusText, { color: colors.textSecondary }]} numberOfLines={1}>
-            {copy.statusText}
+        {/* Body */}
+        <View style={s.body}>
+          <View style={[s.track, { backgroundColor: track }]}>
+            <Animated.View style={[s.fill, { backgroundColor: barColor }, fillStyle]} />
+            {[25, 50, 75].map((m) => (
+              <View key={m} style={[s.tick, { left: `${m}%`, backgroundColor: colors.card }]} />
+            ))}
+          </View>
+
+          <View style={s.metaRow}>
+            <Text style={[s.meta, { color: muted }]}>{done ? 'Goal reached' : `${formatIndianFullRupees(toGo)} to go`}</Text>
+            <Text style={[s.pct, { color: ink }]}>{pct}%</Text>
+          </View>
+
+          <Text style={[s.status, { color: bankSummary?.isOverallocated ? (isDark ? '#FFA8A8' : '#C92A2A') : muted }]} numberOfLines={2}>
+            {bankSummary?.isOverallocated
+              ? `${linkedBank?.bankName || 'Linked account'} is short by ${formatIndianCompactRupees(bankSummary.deficitAmount)} for your goals.`
+              : cleanStatusText}
           </Text>
+
+          {!done && (
+            <View style={s.actions}>
+              <Pressable
+                onPress={() => onLogSavings?.(goal)}
+                style={({ pressed }) => [s.addBtn, { backgroundColor: accent }, pressed && { transform: [{ scale: 0.97 }] }]}
+                accessibilityRole="button"
+                accessibilityLabel={`Add money to ${goal.name}`}
+              >
+                <Feather name="plus" size={14} color={accentFg} />
+                <Text style={[s.addText, { color: accentFg }]}>Add money</Text>
+              </Pressable>
+              {pacing.requiredMonthly > 0 && (
+                <View style={[s.monthly, { borderColor: isDark ? colors.border : '#DCE5E0' }]}>
+                  <Text style={[s.monthlyText, { color: muted }]}>{formatIndianCompactRupees(pacing.requiredMonthly)} a month</Text>
+                </View>
+              )}
+            </View>
+          )}
         </View>
-      </View>
-    </TouchableOpacity>
+      </Pressable>
+    </Animated.View>
   );
 };
 
-const styles = StyleSheet.create({
-  cardContainer: {
-    borderRadius: 14,
-    borderWidth: 1,
-    overflow: 'hidden',
-    marginBottom: 10,
-  },
-  artFrame: {
-    height: 96,
-    width: '100%',
-    position: 'relative',
-    overflow: 'hidden',
-  },
-  coverImage: {
-    width: '100%',
-    height: '100%',
-  },
-  revealedFrame: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    bottom: 0,
-    overflow: 'hidden',
-  },
-  featherEdge: {
-    position: 'absolute',
-    right: 0,
-    top: 0,
-    bottom: 0,
-    width: 24,
-  },
-  gradientScrim: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    left: 0,
-    right: 0,
-  },
-  editImageBtn: {
-    position: 'absolute',
-    top: 6,
-    right: 6,
-    backgroundColor: 'rgba(15, 23, 42, 0.65)',
-    borderRadius: 12,
-    width: 24,
-    height: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.25)',
-  },
-  contentBody: {
-    paddingHorizontal: 12,
-    paddingTop: 3,
-    paddingBottom: 12,
-    marginTop: -24,
-  },
-  goalTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    letterSpacing: -0.2,
-    marginBottom: 2,
-    textShadowColor: 'rgba(0, 0, 0, 0.45)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 3,
-  },
-  amountRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'baseline',
-    marginBottom: 4,
-  },
-  savedAmountText: {
-    fontSize: 12.5,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-  },
-  targetAmountText: {
-    fontSize: 11.5,
-    fontWeight: '400',
-  },
-  percentText: {
-    fontSize: 11.5,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-  },
-  progressTrack: {
-    height: 3.5,
-    borderRadius: 2,
-    overflow: 'hidden',
-    marginBottom: 5,
-  },
-  progressFill: {
-    height: '100%',
-    borderRadius: 2,
-  },
-  statusLine: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  statusDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-    marginRight: 5,
-  },
-  statusText: {
-    fontSize: 11,
-    fontWeight: '400',
-    flex: 1,
-  },
-  buttonsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  primaryBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 6,
-    borderRadius: 6,
-  },
-  primaryBtnText: {
-    color: '#FFFFFF',
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  secondaryBtn: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 6,
-    borderRadius: 6,
-    borderWidth: 1,
-  },
-  secondaryBtnText: {
-    fontSize: 11,
-    fontWeight: '500',
-  },
-  bankTag: {
-    position: 'absolute',
-    top: 6,
-    left: 6,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 7,
-    paddingVertical: 2.5,
-    borderRadius: 8,
-    borderWidth: 1,
-    maxWidth: '75%',
-  },
-  bankTagText: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '600',
-  },
+const s = StyleSheet.create({
+  card: { borderRadius: 18, borderWidth: 1, overflow: 'hidden' },
+  art: { height: 100, width: '100%', overflow: 'hidden' },
+  cover: { width: '100%', height: '100%' },
+  reveal: { position: 'absolute', top: 0, left: 0, bottom: 0, overflow: 'hidden' },
+  feather: { position: 'absolute', right: 0, top: 0, bottom: 0, width: 28 },
+
+  chip: { position: 'absolute', top: 8, right: 8, flexDirection: 'row', alignItems: 'center', gap: 5, height: 22, paddingHorizontal: 8, borderRadius: 11, backgroundColor: 'rgba(255,255,255,0.92)' },
+  chipDot: { width: 6, height: 6, borderRadius: 3 },
+  chipText: { fontSize: 11, fontWeight: '700', color: '#0B1F17' },
+  photoBtn: { position: 'absolute', top: 8, left: 8, width: 26, height: 26, borderRadius: 13, backgroundColor: 'rgba(7,17,13,0.45)', alignItems: 'center', justifyContent: 'center' },
+
+  artText: { position: 'absolute', left: 12, right: 12, bottom: 8 },
+  name: { color: '#FFFFFF', fontSize: 17, letterSpacing: -0.3 },
+  amount: { color: '#FFFFFF', fontSize: 12.5, marginTop: 1, fontVariant: ['tabular-nums'] },
+
+  body: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: 12 },
+  track: { height: 6, borderRadius: 3, overflow: 'hidden' },
+  fill: { height: 6, borderRadius: 3 },
+  tick: { position: 'absolute', top: 0, bottom: 0, width: 2 },
+  metaRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
+  meta: { fontSize: 11.5, fontVariant: ['tabular-nums'] },
+  pct: { fontSize: 11.5, fontWeight: '700' },
+  status: { fontSize: 12, lineHeight: 16, marginTop: 3 },
+
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
+  addBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, height: 36, borderRadius: 18 },
+  addText: { fontSize: 13, fontWeight: '700' },
+  monthly: { height: 36, paddingHorizontal: 12, borderRadius: 18, borderWidth: 1, justifyContent: 'center' },
+  monthlyText: { fontSize: 12 },
 });

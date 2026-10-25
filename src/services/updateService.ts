@@ -5,36 +5,59 @@ import * as Application from 'expo-application';
 import appConfig from '../../app.json';
 import { BACKEND_URL } from '../config/api';
 
+/** One line in "What's new". */
+export interface ReleaseNote {
+  title: string;
+  detail?: string;
+}
+
 export interface UpdateInfo {
   isUpdateAvailable: boolean;
   forceUpdate: boolean;
   currentVersion: string;
   latestVersion: string;
   downloadUrl: string;
-  releaseNotes: string[];
+  /** Comes from the server only. Empty means the "What's new" section is hidden. */
+  releaseNotes: ReleaseNote[];
 }
+
+/**
+ * Accepts notes from the server in either shape:
+ *   "Faster SMS sync: Bank alerts are caught while your phone sleeps"
+ *   { "title": "Faster SMS sync", "detail": "Bank alerts are caught while your phone sleeps" }
+ */
+const normalizeNotes = (raw: unknown): ReleaseNote[] => {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((n: any): ReleaseNote | null => {
+      if (n && typeof n === 'object' && typeof n.title === 'string') {
+        return { title: n.title.trim(), detail: typeof n.detail === 'string' ? n.detail.trim() : undefined };
+      }
+      if (typeof n === 'string' && n.trim()) {
+        const i = n.indexOf(':');
+        return i > 0 ? { title: n.slice(0, i).trim(), detail: n.slice(i + 1).trim() } : { title: n.trim() };
+      }
+      return null;
+    })
+    .filter((n): n is ReleaseNote => !!n && !!n.title);
+};
 
 /**
  * Single source of truth for the application version is app.json.
  * On native builds, Application.nativeApplicationVersion reads the native binary's versionName.
- * Otherwise, falls back to Constants.expoConfig?.version or app.json directly.
  */
-export const BASE_APP_VERSION = (appConfig?.expo?.version || '1.0.16').replace(/^v/, '').trim();
+export const BASE_APP_VERSION = (appConfig?.expo?.version || '1.0.0').replace(/^v/, '').trim();
 
 export const getAppCurrentVersion = (): string => {
-  // On native Android / iOS standalone binary, read the installed binary version
   if (Platform.OS !== 'web') {
     const nativeVer = Application.nativeApplicationVersion;
     if (nativeVer && typeof nativeVer === 'string' && nativeVer.trim().length > 0) {
       return nativeVer.replace(/^v/, '').trim();
     }
   }
-
-  // Directly read from app.json so web & dev immediately reflect the configured version
   if (appConfig?.expo?.version) {
     return appConfig.expo.version.replace(/^v/, '').trim();
   }
-
   return BASE_APP_VERSION;
 };
 
@@ -42,86 +65,59 @@ export const APP_CURRENT_VERSION = getAppCurrentVersion();
 
 class UpdateService {
   private compareVersions(v1: string, v2: string): number {
-    const clean1 = (v1 || '0.0.0').replace(/^v/, '').trim();
-    const clean2 = (v2 || '0.0.0').replace(/^v/, '').trim();
-
-    const parts1 = clean1.split('.').map((p) => parseInt(p, 10) || 0);
-    const parts2 = clean2.split('.').map((p) => parseInt(p, 10) || 0);
-
-    const maxLen = Math.max(parts1.length, parts2.length);
-    for (let i = 0; i < maxLen; i++) {
-      const a = parts1[i] || 0;
-      const b = parts2[i] || 0;
+    const p1 = (v1 || '0.0.0').replace(/^v/, '').trim().split('.').map((p) => parseInt(p, 10) || 0);
+    const p2 = (v2 || '0.0.0').replace(/^v/, '').trim().split('.').map((p) => parseInt(p, 10) || 0);
+    for (let i = 0; i < Math.max(p1.length, p2.length); i++) {
+      const a = p1[i] || 0;
+      const b = p2[i] || 0;
       if (a > b) return 1;
       if (a < b) return -1;
     }
     return 0;
   }
 
-  /**
-   * Check for updates from Regent Money Backend API
-   */
+  /** Ask the backend whether a newer version exists. */
   async checkForUpdates(): Promise<UpdateInfo | null> {
-    if (Platform.OS === 'web') {
-      return null;
-    }
+    if (Platform.OS === 'web') return null;
+    if (__DEV__) return null; // Never block local development with production APK self-updates
 
     const currentVersion = getAppCurrentVersion();
 
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 6000);
-
       const url = `${BACKEND_URL}/app/version-check?platform=${Platform.OS}&currentVersion=${encodeURIComponent(currentVersion)}`;
       const res = await fetch(url, { signal: controller.signal });
       clearTimeout(timeoutId);
+      if (!res.ok) return null;
 
-      if (res.ok) {
-        const data = await res.json();
-        const latestVersion = (data.latestVersion || currentVersion).replace(/^v/, '').trim();
-        const isUpdateAvailable = this.compareVersions(latestVersion, currentVersion) > 0;
-        const forceUpdate = isUpdateAvailable && !!data.forceUpdate;
+      const data = await res.json();
+      const latestVersion = (data.latestVersion || currentVersion).replace(/^v/, '').trim();
+      const isUpdateAvailable = this.compareVersions(latestVersion, currentVersion) > 0;
+      if (!isUpdateAvailable) return null;
 
-        if (!isUpdateAvailable) {
-          return null;
-        }
-
-        return {
-          isUpdateAvailable,
-          forceUpdate,
-          currentVersion,
-          latestVersion,
-          downloadUrl:
-            data.downloadUrl ||
-            'https://github.com/roshanavatirak/Regent-Money/releases/latest/download/regent-money.apk',
-          releaseNotes: Array.isArray(data.releaseNotes) && data.releaseNotes.length > 0
-            ? data.releaseNotes
-            : [
-                'Enhanced Regent AI Chatbot: Structured tables, 1-tap message copy, and refreshed tree logo',
-                'Instant Background SMS Sync: Expedited sync engine capturing bank alerts even when device is asleep',
-                'Stability & Account Safeguards: Strict multi-account isolation and network performance improvements',
-              ],
-        };
-      }
-
-      return null;
+      return {
+        isUpdateAvailable,
+        forceUpdate: !!data.forceUpdate,
+        currentVersion,
+        latestVersion,
+        downloadUrl:
+          data.downloadUrl ||
+          'https://github.com/roshanavatirak/Regent-Money/releases/latest/download/regent-money.apk',
+        releaseNotes: normalizeNotes(data.releaseNotes),
+      };
     } catch (e) {
       console.warn('[UpdateService] Update check failed:', e);
       return null;
     }
   }
 
-  /**
-   * Directly triggers the Android Package Installer for an APK already saved locally.
-   */
+  /** Opens the Android package installer for an APK already on the device. */
   async installApk(fileUri: string): Promise<boolean> {
     try {
       if (Platform.OS !== 'android') return false;
-
-      // Convert file URI to Android content URI via FileProvider
       const contentUri = await FileSystem.getContentUriAsync(fileUri);
-
-      // Flags: FLAG_GRANT_READ_URI_PERMISSION (1) | FLAG_ACTIVITY_NEW_TASK (268435456)
+      // FLAG_GRANT_READ_URI_PERMISSION (1) | FLAG_ACTIVITY_NEW_TASK (268435456)
       await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
         data: contentUri,
         flags: 1 | 268435456,
@@ -134,10 +130,7 @@ class UpdateService {
     }
   }
 
-  /**
-   * Downloads APK silently inside the app with a live progress bar,
-   * then launches the native Android installer dialog directly.
-   */
+  /** Downloads the APK with live progress, then opens the installer. */
   async downloadAndInstallApk(
     downloadUrl: string,
     onProgress: (percent: number, loadedMB: string, totalMB: string) => void
@@ -149,60 +142,31 @@ class UpdateService {
       }
 
       const fileUri = `${FileSystem.documentDirectory}regent-money-update.apk`;
-
-      // Clean previous temp download
       try {
-        const fileInfo = await FileSystem.getInfoAsync(fileUri);
-        if (fileInfo.exists) {
-          await FileSystem.deleteAsync(fileUri, { idempotent: true });
-        }
-      } catch (cleanErr) {
-        // Continue
-      }
+        const info = await FileSystem.getInfoAsync(fileUri);
+        if (info.exists) await FileSystem.deleteAsync(fileUri, { idempotent: true });
+      } catch {}
 
-      const downloadResumable = FileSystem.createDownloadResumable(
-        downloadUrl,
-        fileUri,
-        {},
-        (downloadProgress) => {
-          const written = downloadProgress.totalBytesWritten;
-          const total = downloadProgress.totalBytesExpectedToWrite;
-          const percent = total > 0 ? Math.min(100, Math.round((written / total) * 100)) : 0;
-          const loadedMB = (written / (1024 * 1024)).toFixed(1);
-          const totalMB = total > 0 ? (total / (1024 * 1024)).toFixed(1) : '...';
-          onProgress(percent, loadedMB, totalMB);
-        }
-      );
+      const resumable = FileSystem.createDownloadResumable(downloadUrl, fileUri, {}, (p) => {
+        const written = p.totalBytesWritten;
+        const total = p.totalBytesExpectedToWrite;
+        const percent = total > 0 ? Math.min(100, Math.round((written / total) * 100)) : 0;
+        onProgress(percent, (written / (1024 * 1024)).toFixed(1), total > 0 ? (total / (1024 * 1024)).toFixed(1) : '...');
+      });
 
-      const downloadResult = await downloadResumable.downloadAsync();
-      if (!downloadResult || !downloadResult.uri) {
-        throw new Error('Download failed to produce APK file.');
-      }
+      const result = await resumable.downloadAsync();
+      if (!result || !result.uri) throw new Error('The update file didn’t download.');
 
-      // Report 100% progress
       onProgress(100, '', '');
-
-      // Trigger native Android package installer
-      const installerLaunched = await this.installApk(downloadResult.uri);
-
-      return {
-        success: true,
-        fileUri: downloadResult.uri,
-        installerLaunched,
-      };
+      const installerLaunched = await this.installApk(result.uri);
+      return { success: true, fileUri: result.uri, installerLaunched };
     } catch (err: any) {
       console.warn('[UpdateService] In-app install error:', err);
-      return {
-        success: false,
-        installerLaunched: false,
-        error: err?.message || 'Download error',
-      };
+      return { success: false, installerLaunched: false, error: err?.message || 'The download didn’t finish.' };
     }
   }
 
-  /**
-   * Fallback direct download launcher via system browser / download manager
-   */
+  /** Fallback: open the download link in the browser. */
   async startInstall(downloadUrl: string): Promise<boolean> {
     try {
       await Linking.openURL(downloadUrl);
@@ -213,14 +177,10 @@ class UpdateService {
     }
   }
 
-  /**
-   * Opens Google Play Store (or App Store on iOS) for in-store updates
-   */
+  /** Opens Google Play (Android). */
   async openStore(): Promise<boolean> {
     const id = Application.applicationId || appConfig?.expo?.android?.package || 'com.anonymous.regentmoney';
-    const urls = Platform.OS === 'android'
-      ? [`market://details?id=${id}`, `https://play.google.com/store/apps/details?id=${id}`]
-      : [];
+    const urls = Platform.OS === 'android' ? [`market://details?id=${id}`, `https://play.google.com/store/apps/details?id=${id}`] : [];
     for (const url of urls) {
       try {
         await Linking.openURL(url);
@@ -232,4 +192,3 @@ class UpdateService {
 }
 
 export const updateService = new UpdateService();
-
