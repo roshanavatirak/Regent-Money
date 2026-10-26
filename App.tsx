@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Platform, LogBox } from 'react-native';
+import { Platform, LogBox, NativeModules } from 'react-native';
 import * as Font from 'expo-font';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import AppNavigator from './src/navigation';
@@ -81,10 +81,26 @@ export default function App() {
     } catch (e) {
       // Non-critical startup fallback
     }
+
+    // Trigger financial record background sync on app launch
+    try {
+      const { syncService } = require('./src/services/syncService');
+      syncService.sync().catch((err: any) => {
+        console.warn('[App] Background sync notice:', err);
+      });
+    } catch {
+      // Non-critical
+    }
   }, []);
 
   return (
-    <KeyboardProvider>
+    <KeyboardProvider
+      onLayout={() => {
+        if (Platform.OS === 'android') {
+          NativeModules?.NativeStorage?.notifyAppReady?.();
+        }
+      }}
+    >
       <AppNavigator />
     </KeyboardProvider>
   );

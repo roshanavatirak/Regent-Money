@@ -499,9 +499,21 @@ export interface AuthState {
   setLoading: (loading: boolean) => void;
 }
 
+const getInitialAuthUser = (): UserProfile | null => {
+  try {
+    return (
+      mmkvStorage.getObject<UserProfile>('auth_user_profile') ||
+      mmkvStorage.getObject<UserProfile>('user_profile') ||
+      null
+    );
+  } catch {
+    return null;
+  }
+};
+
 export const useAuthStore = create<AuthState>((set) => ({
-  user: null,
-  isLoading: true,
+  user: getInitialAuthUser(),
+  isLoading: false,
   setUser: (user) => {
     if (user) {
       mmkvStorage.setObject('auth_user_profile', user);

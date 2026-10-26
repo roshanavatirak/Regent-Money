@@ -100,4 +100,14 @@ class NativeStorageModule(reactContext: ReactApplicationContext) : ReactContextB
             promise.resolve(false)
         }
     }
+
+    @ReactMethod
+    fun notifyAppReady(promise: Promise) {
+        try {
+            MainActivity.onReactNativeReady()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.resolve(false)
+        }
+    }
 }

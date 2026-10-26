@@ -25,6 +25,7 @@ import {
   AppStateStatus,
   PanResponder,
   Animated as RNAnimated,
+  NativeModules,
 } from 'react-native';
 import { NavigationContainer, useFocusEffect, createNavigationContainerRef, useNavigation } from '@react-navigation/native';
 import { createMaterialTopTabNavigator, MaterialTopTabBarProps } from '@react-navigation/material-top-tabs';
@@ -1182,7 +1183,7 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
   const handleAction = async (notification: any, actionName: 'approve' | 'keep_old', adjustBalance?: boolean) => {
     let payload = notification.payload;
     if (typeof payload === 'string') {
-      try { payload = JSON.parse(payload); } catch {}
+      try { payload = JSON.parse(payload); } catch { }
     }
     if (!payload) return;
     setBusyId(notification.id);
@@ -1254,7 +1255,7 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
       onCancel: async () => {
         await handleAction(notification, 'approve', false);
       },
-      onDismiss: () => {},
+      onDismiss: () => { },
     });
   };
 
@@ -3407,7 +3408,7 @@ export default function AppNavigator() {
   const isLoading = useAuthStore((state) => state.isLoading);
   const { colors, isDark } = useTheme();
 
-  const [splashFinished, setSplashFinished] = useState(false);
+  const [splashFinished, setSplashFinished] = useState(Platform.OS === 'android');
   const hasSeenOnboarding = mmkvStorage.getBoolean('has_seen_onboarding_v1') ?? false;
   const hasSetupTracking = mmkvStorage.getBoolean(TRACKING_SETUP_KEY) ?? false;
 
@@ -3470,6 +3471,10 @@ export default function AppNavigator() {
       // Restore persisted theme after MMKV async fallback loads
       await useThemeStore.getState().rehydrateTheme();
       await authService.checkSession();
+      // Signal native intro overlay that React Native state is completely hydrated and ready
+      if (Platform.OS === 'android') {
+        NativeModules?.NativeStorage?.notifyAppReady?.();
+      }
       // Sync notifications with backend
       notificationService.fetchNotifications().catch(() => { });
       // Auto-scan recent SMS on Android once session and stores are completely hydrated (only for consumer users)
@@ -3564,7 +3569,15 @@ export default function AppNavigator() {
       <StatusBar style={colors.statusBar} />
       <ErrorBoundary>
         {!isLoading && (
-          <NavigationContainer ref={navigationRef} theme={navTheme}>
+          <NavigationContainer
+            ref={navigationRef}
+            theme={navTheme}
+            onReady={() => {
+              if (Platform.OS === 'android') {
+                NativeModules?.NativeStorage?.notifyAppReady?.();
+              }
+            }}
+          >
             <Stack.Navigator screenOptions={{ headerShown: false }}>
               {user === null ? (
                 <>
@@ -3795,7 +3808,7 @@ export default function AppNavigator() {
           onDismiss={() => setSmsModalVisible(false)}
           onGranted={() => setSmsModalVisible(false)}
         />
-        {!splashFinished && (
+        {Platform.OS !== 'android' && !splashFinished && (
           <AppSplashScreen onFinish={() => setSplashFinished(true)} />
         )}
       </ErrorBoundary>

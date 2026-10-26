@@ -1,8 +1,8 @@
-import { 
-  useAuthStore, 
-  useTransactionStore, 
-  useBudgetStore, 
-  useGoalsStore, 
+import {
+  useAuthStore,
+  useTransactionStore,
+  useBudgetStore,
+  useGoalsStore,
   useBankStore,
   useAnalyticsStore,
   useIncomeStore,
@@ -38,7 +38,7 @@ export const syncService = {
     const timeoutId = setTimeout(() => {
       try {
         controller.abort();
-      } catch {}
+      } catch { }
     }, 12000);
 
     try {
@@ -120,13 +120,13 @@ export const syncService = {
     const syncTimeoutId = setTimeout(() => {
       try {
         syncController.abort();
-      } catch {}
+      } catch { }
     }, 12000);
 
     try {
       // Trigger analytics and notifications fetch concurrently
-      this.fetchAnalytics(force).catch(() => {});
-      notificationService.fetchNotifications().catch(() => {});
+      this.fetchAnalytics(force).catch(() => { });
+      notificationService.fetchNotifications().catch(() => { });
 
       const response = await apiFetch('/sync', {
         method: 'GET',

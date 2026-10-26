@@ -266,7 +266,7 @@ export const BanksScreen: React.FC<BanksScreenProps> = ({ AppTopBarComponent, Ad
     useCallback(() => {
       sync();
       if (Platform.OS === 'android') {
-        smsCatchupService.reconcile(false, smsCatchupService.getDynamicStartupLookback()).catch(() => {});
+        smsCatchupService.reconcile(false, smsCatchupService.getDynamicStartupLookback()).catch(() => { });
       }
     }, [sync])
   );
@@ -274,7 +274,7 @@ export const BanksScreen: React.FC<BanksScreenProps> = ({ AppTopBarComponent, Ad
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await smsCatchupService.reconcile(true, 10 / 60).catch(() => {});
+      await smsCatchupService.reconcile(true, 10 / 60).catch(() => { });
       await sync();
     } finally {
       setRefreshing(false);

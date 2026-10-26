@@ -195,7 +195,7 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
   useFocusEffect(
     useCallback(() => {
       sync();
-      budgetService.cleanupDuplicateBudgets().catch(() => {});
+      budgetService.cleanupDuplicateBudgets().catch(() => { });
       if (route.params?.openTab) setActiveTab(route.params.openTab);
       if (route.params?.selectedBudgetId) setSelectedMonthlyBudgetId(route.params.selectedBudgetId);
     }, [sync, route.params?.openTab, route.params?.selectedBudgetId])

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { StyleSheet, Animated, Image } from 'react-native';
+import { StyleSheet, Animated, Image, Platform } from 'react-native';
 import RegentIntro from './RegentIntro';
 import { mmkvStorage } from '../db/mmkv';
 
@@ -8,10 +8,16 @@ export interface AppSplashScreenProps {
 }
 
 export const AppSplashScreen: React.FC<AppSplashScreenProps> = ({ onFinish }) => {
+  // On Android, the native Kotlin IntroActivity handles the 5s intro. Never render static splash image.
+  if (Platform.OS === 'android') {
+    return null;
+  }
+
   const [playFullIntro, setPlayFullIntro] = useState<boolean | null>(null);
   const fadeAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
+
     try {
       const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
       const lastIntroDate = mmkvStorage.getString('regent_last_full_intro_date');
@@ -26,7 +32,7 @@ export const AppSplashScreen: React.FC<AppSplashScreenProps> = ({ onFinish }) =>
     } catch {
       setPlayFullIntro(true);
     }
-  }, []);
+  }, [onFinish]);
 
   const handleFullIntroFinish = () => {
     try {
