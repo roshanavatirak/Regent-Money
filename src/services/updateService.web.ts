@@ -1,13 +1,18 @@
 import { Linking } from 'react-native';
 import appConfig from '../../app.json';
 
+export interface ReleaseNote {
+  title: string;
+  detail?: string;
+}
+
 export interface UpdateInfo {
   isUpdateAvailable: boolean;
   forceUpdate: boolean;
   currentVersion: string;
   latestVersion: string;
   downloadUrl: string;
-  releaseNotes: string[];
+  releaseNotes: ReleaseNote[];
 }
 
 export const BASE_APP_VERSION = (appConfig?.expo?.version || '1.0.16').replace(/^v/, '').trim();

@@ -26,7 +26,22 @@ function readReleaseNotes(): { title: string; detail?: string }[] {
     ];
     const file = candidates.find((p) => fs.existsSync(p)) || candidates[0];
     const json = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return Array.isArray(json?.notes) ? json.notes : [];
+    if (!Array.isArray(json?.notes)) return [];
+    return json.notes
+      .map((n: any) => {
+        if (typeof n === 'string') {
+          const i = n.indexOf(':');
+          return i > 0 ? { title: n.slice(0, i).trim(), detail: n.slice(i + 1).trim() } : { title: n.trim() };
+        }
+        if (n && typeof n === 'object' && typeof n.title === 'string') {
+          return {
+            title: n.title.trim(),
+            detail: typeof n.detail === 'string' ? n.detail.trim() : undefined,
+          };
+        }
+        return null;
+      })
+      .filter((n: any): n is { title: string; detail?: string } => !!n && !!n.title);
   } catch {
     return []; // No file or bad JSON: the app simply hides "What's new"
   }
@@ -80,7 +95,18 @@ export class AppService {
       process.env.APK_DOWNLOAD_URL ||
       'https://github.com/roshanavatirak/Regent-Money/releases/latest/download/regent-money.apk';
 
-    const releaseNotes = readReleaseNotes();
+    const rawNotes = readReleaseNotes();
+
+    // Backward compatibility:
+    // Versions prior to 1.0.47 (e.g. 1.0.46) rendered `note` directly inside `<Text>{note}</Text>`.
+    // If the server returns objects with {title, detail}, React in those older clients throws:
+    // "Objects are not valid as a React child (found: object with keys {title, detail})"
+    // which crashes the app into ErrorBoundary on startup.
+    // For clients < 1.0.47 (or if currentVersion is unknown), format each note as a string: "Title: Detail".
+    const supportsObjectNotes = !!safeCurrentVersion && this.compareVersions(safeCurrentVersion, '1.0.47') >= 0;
+    const releaseNotes: (string | ReleaseNoteItem)[] = supportsObjectNotes
+      ? rawNotes
+      : rawNotes.map((n) => (n.detail ? `${n.title}: ${n.detail}` : n.title));
 
     const isUpdateAvailable =
       !!latestVersion &&

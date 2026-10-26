@@ -100,15 +100,36 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({ updateInfo, visible, o
 
   const NotesList = notes.length > 0 && (
     <View>
-      {notes.map((n, i) => (
-        <Animated.View key={i} entering={FadeInDown.delay(120 + i * 70).duration(320)} style={s.note}>
-          <View style={[s.noteDot, { backgroundColor: isDark ? LIME : '#16A34A' }]} />
-          <View style={{ flex: 1 }}>
-            <Text style={[s.noteTitle, { color: ink }]}>{n.title}</Text>
-            {n.detail ? <Text style={[s.noteDetail, { color: muted }]}>{n.detail}</Text> : null}
-          </View>
-        </Animated.View>
-      ))}
+      {notes.map((rawNote: any, i) => {
+        const title =
+          typeof rawNote === 'string'
+            ? rawNote.includes(':')
+              ? rawNote.slice(0, rawNote.indexOf(':')).trim()
+              : rawNote.trim()
+            : typeof rawNote?.title === 'string'
+              ? rawNote.title.trim()
+              : '';
+        const detail =
+          typeof rawNote === 'string'
+            ? rawNote.includes(':')
+              ? rawNote.slice(rawNote.indexOf(':') + 1).trim()
+              : undefined
+            : typeof rawNote?.detail === 'string'
+              ? rawNote.detail.trim()
+              : undefined;
+
+        if (!title) return null;
+
+        return (
+          <Animated.View key={i} entering={FadeInDown.delay(120 + i * 70).duration(320)} style={s.note}>
+            <View style={[s.noteDot, { backgroundColor: isDark ? LIME : '#16A34A' }]} />
+            <View style={{ flex: 1 }}>
+              <Text style={[s.noteTitle, { color: ink }]}>{title}</Text>
+              {detail ? <Text style={[s.noteDetail, { color: muted }]}>{detail}</Text> : null}
+            </View>
+          </Animated.View>
+        );
+      })}
     </View>
   );
 
