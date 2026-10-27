@@ -94,13 +94,7 @@ export default function App() {
   }, []);
 
   return (
-    <KeyboardProvider
-      onLayout={() => {
-        if (Platform.OS === 'android') {
-          NativeModules?.NativeStorage?.notifyAppReady?.();
-        }
-      }}
-    >
+    <KeyboardProvider>
       <AppNavigator />
     </KeyboardProvider>
   );

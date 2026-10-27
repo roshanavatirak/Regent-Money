@@ -14,6 +14,7 @@ import {
   NativeScrollEvent,
   StyleProp,
   ViewStyle,
+  NativeModules,
 } from 'react-native';
 import Animated, {
   useSharedValue,
@@ -183,20 +184,29 @@ const relativeDay = (ts: number) => {
 };
 
 /** Smooth count-up for headline numbers. */
-const useCountUp = (target: number, duration = 900) => {
-  const [value, setValue] = useState(0);
-  const currentRef = useRef(0);
+const useCountUp = (target: number, duration = 800) => {
+  const [value, setValue] = useState(target);
+  const currentRef = useRef(target);
+  const firstRun = useRef(true);
 
   useEffect(() => {
+    if (firstRun.current) {
+      firstRun.current = false;
+      currentRef.current = target;
+      setValue(target);
+      return;
+    }
     const from = currentRef.current;
-    const start = Date.now();
+    if (from === target) return;
+    const start = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
     let raf = 0;
-    const tick = () => {
-      const t = Math.min(1, (Date.now() - start) / duration);
+    const tick = (nowTime?: number) => {
+      const now = nowTime || (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
+      const t = Math.min((now - start) / duration, 1);
       const eased = 1 - Math.pow(1 - t, 3);
-      const next = from + (target - from) * eased;
-      currentRef.current = next;
-      setValue(next);
+      const v = from + (target - from) * eased;
+      currentRef.current = v;
+      setValue(v);
       if (t < 1) raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -388,14 +398,21 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
   const [heroWidth, setHeroWidth] = useState(0);
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (Platform.OS === 'android') {
+      NativeModules?.NativeStorage?.notifyAppReady?.();
+    }
+  }, []);
+
   /* ---------------- Headline numbers ---------------- */
 
   const animatedNetWorth = useCountUp(netWorth);
   const animatedIncome = useCountUp(income, 800);
   const animatedSpent = useCountUp(spent, 800);
 
-  const netWorthWhole = Math.floor(Math.abs(animatedNetWorth)).toLocaleString('en-IN');
-  const netWorthPaise = (Math.abs(netWorth) % 1).toFixed(2).slice(1);
+  const abs = Math.abs(animatedNetWorth);
+  const netWorthWhole = Math.floor(abs).toLocaleString('en-IN');
+  const netWorthPaise = (abs % 1).toFixed(2).slice(1);
 
   const delta = useMemo(() => {
     if (!previousNetWorth || previousNetWorth <= 0) return null;
@@ -600,6 +617,11 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
       style={styles.container}
       contentContainerStyle={{ paddingBottom: bottomInset + 110 }}
       showsVerticalScrollIndicator={false}
+      onLayout={() => {
+        if (Platform.OS === 'android') {
+          NativeModules?.NativeStorage?.notifyAppReady?.();
+        }
+      }}
       refreshControl={
         <RefreshControl refreshing={refreshing} onRefresh={props.onRefresh} tintColor={GREEN} colors={[GREEN]} />
       }

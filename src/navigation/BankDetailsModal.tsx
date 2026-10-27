@@ -32,7 +32,7 @@ import { BankIcon } from '../components/BankIcon';
 import { CategoryIcon } from '../components/CategoryIcon';
 import { getCategory } from '../constants/categories';
 import { bankBrandColor, getBankCode, niceName } from '../constants/bankBrand';
-import { useTheme, useBankStore, useTransactionStore, useIncomeStore } from '../store';
+import { useTheme, useBankStore, useTransactionStore, useIncomeStore, showGlobalAlert, showGlobalConfirm } from '../store';
 import { authService } from '../services/authService';
 import { syncService } from '../services/syncService';
 import { getBackendUrl } from '../config/api';
@@ -313,10 +313,13 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
           granted['android.permission.READ_SMS'] === PermissionsAndroid.RESULTS.GRANTED;
         if (!ok) {
           setSmsConsent(false);
-          Alert.alert('SMS access needed', 'Allow SMS access in Settings to turn on auto-tracking.', [
-            { text: 'Not now', style: 'cancel' },
-            { text: 'Open Settings', onPress: () => Linking.openSettings() },
-          ]);
+          showGlobalConfirm({
+            title: 'SMS access needed',
+            message: 'Allow SMS access in Settings to turn on auto-tracking.',
+            cancelText: 'Not now',
+            confirmText: 'Open Settings',
+            onConfirm: () => Linking.openSettings(),
+          });
           return;
         }
       } catch {
@@ -378,7 +381,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
       const res = await smsCatchupService.reconcile(true, 48, activeBank.id);
       await fetchIncomeRecords();
       await syncService.sync(true).catch(() => {});
-      Alert.alert(
+      showGlobalAlert(
         res && res.syncedCount > 0 ? `${res.syncedCount} transaction${res.syncedCount > 1 ? 's' : ''} added` : 'You’re up to date',
         res && res.syncedCount > 0
           ? `Missed transactions for •• ${activeBank.accountNumberSuffix} were added and the balance updated.`
@@ -937,7 +940,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
         onConfirmSuccess={async (summary: any) => {
           await syncService.sync();
           await fetchIncomeRecords();
-          Alert.alert(
+          showGlobalAlert(
             'Import complete',
             `${summary.addedTransactionsCount} out and ${summary.addedIncomeCount} in added. Balance is now ${inr(summary.updatedBalance, 2)}.`
           );

@@ -511,9 +511,11 @@ const getInitialAuthUser = (): UserProfile | null => {
   }
 };
 
+const initialAuthUser = getInitialAuthUser();
+
 export const useAuthStore = create<AuthState>((set) => ({
-  user: getInitialAuthUser(),
-  isLoading: false,
+  user: initialAuthUser,
+  isLoading: initialAuthUser === null,
   setUser: (user) => {
     if (user) {
       mmkvStorage.setObject('auth_user_profile', user);
@@ -935,13 +937,20 @@ export const showGlobalConfirm = (options: ConfirmOptions) => {
   useConfirmStore.getState().showConfirm(options);
 };
 
-export const showGlobalAlert = (title: string, message?: string, onOk?: () => void) => {
+export const showGlobalAlert = (
+  title: string,
+  message?: string,
+  onOk?: () => void,
+  options?: Partial<ConfirmOptions>
+) => {
+  const isSuccess = /complete|success|imported|added|saved|up to date/i.test(title);
   useConfirmStore.getState().showConfirm({
     title,
     message: message || '',
     confirmText: 'OK',
-    icon: 'info',
+    icon: options?.icon || (isSuccess ? 'check-circle' : 'info'),
     onConfirm: onOk || (() => {}),
+    ...options,
   });
 };
 

@@ -16,7 +16,7 @@ import {
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useTheme, useTransactionStore } from '../store';
+import { useTheme, useTransactionStore, showGlobalAlert } from '../store';
 import { authService } from '../services/authService';
 import { syncService } from '../services/syncService';
 import { getBackendUrl } from '../config/api';
@@ -234,12 +234,12 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
 
   const handleConfirmSave = async () => {
     if (!bank?.id) {
-      Alert.alert('Error', 'Bank account information is missing.');
+      showGlobalAlert('Error', 'Bank account information is missing.');
       return;
     }
 
     if (items.length === 0) {
-      Alert.alert('No Transactions', 'There are no transactions to import.');
+      showGlobalAlert('No Transactions', 'There are no transactions to import.');
       return;
     }
 
@@ -248,14 +248,14 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
       const item = items[i];
       const amt = parseFloat(item.amount);
       if (isNaN(amt) || amt <= 0) {
-        Alert.alert(
+        showGlobalAlert(
           'Invalid Amount',
           `Row #${i + 1} has an invalid amount. Please enter an amount greater than 0.`
         );
         return;
       }
       if (!item.merchant.trim()) {
-        Alert.alert(
+        showGlobalAlert(
           'Merchant Required',
           `Row #${i + 1} requires a merchant or transaction description.`
         );
@@ -396,7 +396,7 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
 
       onClose();
     } catch (err: any) {
-      Alert.alert('Save Failed', err.message || 'Unable to import reviewed transactions.');
+      showGlobalAlert('Save Failed', err.message || 'Unable to import reviewed transactions.');
     } finally {
       setSaving(false);
     }

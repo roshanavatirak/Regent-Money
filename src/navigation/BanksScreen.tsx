@@ -60,14 +60,23 @@ const sharePct = (part: number, total: number): string => {
 
 /** Smooth count-up for the total. */
 const useCountUp = (target: number, duration = 800) => {
-  const [value, setValue] = useState(0);
-  const current = useRef(0);
+  const [value, setValue] = useState(target);
+  const current = useRef(target);
+  const firstRun = useRef(true);
   useEffect(() => {
+    if (firstRun.current) {
+      firstRun.current = false;
+      current.current = target;
+      setValue(target);
+      return;
+    }
     const from = current.current;
-    const start = Date.now();
+    if (from === target) return;
+    const start = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
     let raf = 0;
-    const tick = () => {
-      const t = Math.min(1, (Date.now() - start) / duration);
+    const tick = (nowTime?: number) => {
+      const now = nowTime || (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
+      const t = Math.min(1, (now - start) / duration);
       const v = from + (target - from) * (1 - Math.pow(1 - t, 3));
       current.current = v;
       setValue(v);
@@ -75,7 +84,7 @@ const useCountUp = (target: number, duration = 800) => {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [target]);
+  }, [target, duration]);
   return value;
 };
 

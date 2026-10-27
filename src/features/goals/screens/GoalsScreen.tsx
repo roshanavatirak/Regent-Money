@@ -32,15 +32,24 @@ export interface GoalsScreenProps {
 }
 
 /** Counts up to a number for the hero total. */
-const useCountUp = (target: number, duration = 900) => {
-  const [v, setV] = useState(0);
-  const from = useRef(0);
+const useCountUp = (target: number, duration = 800) => {
+  const [v, setV] = useState(target);
+  const from = useRef(target);
+  const firstRun = useRef(true);
   useEffect(() => {
-    const start = Date.now();
+    if (firstRun.current) {
+      firstRun.current = false;
+      from.current = target;
+      setV(target);
+      return;
+    }
     const a = from.current;
+    if (a === target) return;
+    const start = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
     let raf = 0;
-    const tick = () => {
-      const t = Math.min(1, (Date.now() - start) / duration);
+    const tick = (nowTime?: number) => {
+      const now = nowTime || (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
+      const t = Math.min(1, (now - start) / duration);
       const next = a + (target - a) * (1 - Math.pow(1 - t, 3));
       from.current = next;
       setV(next);
@@ -48,7 +57,7 @@ const useCountUp = (target: number, duration = 900) => {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [target]);
+  }, [target, duration]);
   return v;
 };
 

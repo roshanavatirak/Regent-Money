@@ -22,38 +22,55 @@ if (Platform.OS === 'web') {
   };
 } else {
   try {
-    const { MMKV } = require('react-native-mmkv');
+    const MMKVModule = require('react-native-mmkv');
+    const createMMKV = MMKVModule?.createMMKV;
+    const MMKVClass = MMKVModule?.MMKV;
+
+    // MMKV encryption keys for AES-128 must be <= 16 bytes
     const nativeKey =
       NativeModules?.NativeStorage?.getConstants?.()?.MMKV_KEY ||
       NativeModules?.NativeStorage?.MMKV_KEY;
-    const encryptionKey = nativeKey || 'regent-vault-device-key';
+    const rawKey = nativeKey || 'regent-vault-device-key';
+    const encryptionKey = typeof rawKey === 'string' && rawKey.length > 0
+      ? rawKey.slice(0, 16)
+      : undefined;
 
-    try {
-      storage = new MMKV({
-        id: 'regent-money-settings',
-        encryptionKey,
-      });
-    } catch (mismatchErr: any) {
-      console.warn('[MMKV] Key mismatch with legacy storage, recreating with hardware-backed key...');
-      try {
-        const legacy = new MMKV({
-          id: 'regent-money-settings',
-          encryptionKey: 'bank-level-mmkv-encryption-key-for-local-cache',
-        });
-        legacy.clearAll();
-      } catch {
-        // ignore
-      }
-      storage = new MMKV({
-        id: 'regent-money-settings',
-        encryptionKey,
-      });
+    const mmkvConfig: any = {
+      id: 'regent-money-settings',
+    };
+    if (encryptionKey) {
+      mmkvConfig.encryptionKey = encryptionKey;
     }
 
-    isNativeMMKV = true;
-    console.log('[MMKV] Initialized hardware-backed native MMKV storage.');
+    if (typeof createMMKV === 'function') {
+      try {
+        storage = createMMKV(mmkvConfig);
+      } catch (err: any) {
+        console.warn('[MMKV] Failed with encryption key, falling back to unencrypted:', err?.message || err);
+        try {
+          storage = createMMKV({ id: 'regent-money-settings' });
+        } catch {
+          // ignore
+        }
+      }
+    } else if (typeof MMKVClass === 'function') {
+      try {
+        storage = new MMKVClass(mmkvConfig);
+      } catch (err: any) {
+        try {
+          storage = new MMKVClass({ id: 'regent-money-settings' });
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    if (storage) {
+      isNativeMMKV = true;
+      console.log('[MMKV] Initialized hardware-backed native MMKV storage.');
+    }
   } catch (e: any) {
-    // react-native-mmkv is not compiled in the current client build; using memory storage fallback
+    console.warn('[MMKV] Native module unavailable, using memory/AsyncStorage fallback:', e?.message || e);
   }
 
   if (!storage) {
@@ -80,6 +97,12 @@ if (Platform.OS === 'web') {
           console.error('[mmkvStorage] Error deleting from AsyncStorage:', err.message);
         });
       },
+      remove: (key: string) => {
+        fallbackMap.delete(key);
+        AsyncStorage.removeItem(key).catch((err) => {
+          console.error('[mmkvStorage] Error deleting from AsyncStorage:', err.message);
+        });
+      },
       clearAll: () => {
         fallbackMap.clear();
         AsyncStorage.clear().catch((err) => {
@@ -91,21 +114,31 @@ if (Platform.OS === 'web') {
 }
 
 export const mmkvStorage = {
+  isNative: (): boolean => isNativeMMKV,
   initialize: async (): Promise<void> => {
-    if (Platform.OS === 'web' || isNativeMMKV) {
+    if (Platform.OS === 'web') {
       return;
     }
     try {
       const keys = await AsyncStorage.getAllKeys();
-      const pairs = await AsyncStorage.multiGet(keys);
-      for (const [key, value] of pairs) {
-        if (value !== null) {
-          fallbackMap.set(key, value);
+      if (keys.length > 0) {
+        const pairs = await AsyncStorage.multiGet(keys);
+        for (const [key, value] of pairs) {
+          if (value !== null) {
+            fallbackMap.set(key, value);
+            // Migrate any existing AsyncStorage data into native MMKV so previous logins/flags are preserved
+            if (isNativeMMKV && storage) {
+              const currentVal = storage.getString(key);
+              if (currentVal === undefined) {
+                storage.set(key, value);
+              }
+            }
+          }
         }
+        console.log(`[mmkvStorage] Synced ${keys.length} keys from AsyncStorage storage.`);
       }
-      console.log(`[mmkvStorage] Loaded ${keys.length} keys from AsyncStorage fallback storage.`);
     } catch (err: any) {
-      console.error('[mmkvStorage] Failed to initialize AsyncStorage fallback:', err.message);
+      console.error('[mmkvStorage] Failed to initialize storage:', err.message);
     }
   },
   setString: (key: string, value: string) => {
@@ -139,7 +172,12 @@ export const mmkvStorage = {
     }
   },
   delete: (key: string) => {
-    storage.delete(key);
+    if (!storage) return;
+    if (typeof storage.delete === 'function') {
+      storage.delete(key);
+    } else if (typeof storage.remove === 'function') {
+      storage.remove(key);
+    }
   },
   clearAll: () => {
     storage.clearAll();

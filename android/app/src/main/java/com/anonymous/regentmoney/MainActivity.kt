@@ -4,7 +4,6 @@ import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
-import android.view.ViewTreeObserver
 import com.anonymous.regentmoney.intro.IntroView
 import java.lang.ref.WeakReference
 
@@ -57,11 +56,10 @@ class MainActivity : ReactActivity() {
         ViewGroup.LayoutParams.MATCH_PARENT
       )
       elevation = 9999f
-      isClickable = true
-      isFocusable = true
+      isClickable = false
+      isFocusable = false
     }
     introOverlay = intro
-    intro.setOnClickListener { intro.skip() }
     root.addView(intro)
 
     if (isReactNativeReady) {
@@ -74,45 +72,16 @@ class MainActivity : ReactActivity() {
       root.removeView(intro)
     }
 
-    // Layer 2: Automatic Native Layout Observer
-    // Detects the moment React Native attaches its view hierarchy to the screen
-    val layoutListener = object : ViewTreeObserver.OnGlobalLayoutListener {
-      override fun onGlobalLayout() {
-        val rrv = findReactRootView(root)
-        if (rrv != null && rrv.childCount > 0) {
-          root.viewTreeObserver.removeOnGlobalLayoutListener(this)
-          handleReactNativeReady()
-        }
-      }
-    }
-    root.viewTreeObserver.addOnGlobalLayoutListener(layoutListener)
-
-    // Layer 3: Safety Fallback Timeout (14s max in debug, to prevent hanging if JS crashes)
+    // Safety Fallback Timeout (9s max to prevent permanently hanging if JS crashes completely)
     root.postDelayed({
-      root.viewTreeObserver.removeOnGlobalLayoutListener(layoutListener)
       handleReactNativeReady()
-    }, 14000L)
+    }, 9000L)
   }
 
   private fun handleReactNativeReady() {
     if (isReactNativeReady) return
     isReactNativeReady = true
     introOverlay?.notifyAppReady()
-  }
-
-  private fun findReactRootView(parent: ViewGroup): ViewGroup? {
-    for (i in 0 until parent.childCount) {
-      val child = parent.getChildAt(i)
-      if (child !== introOverlay && child is ViewGroup) {
-        val name = child.javaClass.simpleName
-        if (name.contains("ReactRootView") || name.contains("Fabric") || child.childCount > 0) {
-          return child
-        }
-        val nested = findReactRootView(child)
-        if (nested != null) return nested
-      }
-    }
-    return null
   }
 
   override fun onResume() {

@@ -639,6 +639,6 @@ class IntroView @JvmOverloads constructor(
 
     companion object {
         const val MAX_FRAME_STEP_MS = 100f
-        const val HOLD_AT_MS = 4350f
+        const val HOLD_AT_MS = 5000f
     }
 }

@@ -1,16 +1,16 @@
 {
   "notes": [
     {
-      "title": "Suggest Ideas & Report Problems",
-      "detail": "Share feature ideas or report glitches directly with live draft autosave, transparent device diagnostics, and local history."
+      "title": "Themed In-App Dialogs",
+      "detail": "Replaced system OS popups with Regent Money's luxury branded dialogs for statement & OCR transaction reviews."
     },
     {
-      "title": "Borrow & Lend Ledger",
-      "detail": "Track money lent to or borrowed from friends and family, with overdue nudges and one-tap WhatsApp reminders."
+      "title": "Synchronized App Launch",
+      "detail": "Eliminated startup screen flicker and counter lag for a seamless 5-second intro transition straight into dashboard."
     },
     {
-      "title": "Refined Financial Calendar & Accounts",
-      "detail": "Clear spending heatmaps, daily allowance pacing, accurate bank share distribution, and streamlined goal tracking."
+      "title": "Faster Storage & Sync",
+      "detail": "Upgraded native storage engine and background sync pipelines for instant session rehydration and quick bank imports."
     }
   ]
 }

@@ -26,6 +26,7 @@ import {
   PanResponder,
   Animated as RNAnimated,
   NativeModules,
+  InteractionManager,
 } from 'react-native';
 import { NavigationContainer, useFocusEffect, createNavigationContainerRef, useNavigation } from '@react-navigation/native';
 import { createMaterialTopTabNavigator, MaterialTopTabBarProps } from '@react-navigation/material-top-tabs';
@@ -142,27 +143,25 @@ import {
 } from '../services/aiService';
 import { sanitizeTransactions } from '../services/sanitizer';
 
-// Route React Native Web alerts to Regent Money's luxury GlobalConfirmModal
-if (Platform.OS === 'web') {
-  Alert.alert = (title: string, message?: string, buttons?: any[]) => {
-    if (!buttons || buttons.length <= 1) {
-      showGlobalAlert(title, message || '', buttons?.[0]?.onPress);
-    } else {
-      const cancelBtn = buttons.find((b: any) => b.style === 'cancel') || buttons[0];
-      const confirmBtn = buttons.find((b: any) => b !== cancelBtn) || buttons[1];
-      showGlobalConfirm({
-        title,
-        message: message || '',
-        cancelText: cancelBtn?.text || 'Cancel',
-        confirmText: confirmBtn?.text || 'OK',
-        isDestructive: confirmBtn?.style === 'destructive',
-        icon: confirmBtn?.style === 'destructive' ? 'trash-2' : 'alert-triangle',
-        onConfirm: confirmBtn?.onPress || (() => { }),
-        onCancel: cancelBtn?.onPress,
-      });
-    }
-  };
-}
+// Route React Native alerts to Regent Money's luxury GlobalConfirmModal across all platforms
+Alert.alert = (title: string, message?: string, buttons?: any[]) => {
+  if (!buttons || buttons.length <= 1) {
+    showGlobalAlert(title, message || '', buttons?.[0]?.onPress);
+  } else {
+    const cancelBtn = buttons.find((b: any) => b.style === 'cancel') || buttons[0];
+    const confirmBtn = buttons.find((b: any) => b !== cancelBtn) || buttons[1];
+    showGlobalConfirm({
+      title,
+      message: message || '',
+      cancelText: cancelBtn?.text || 'Cancel',
+      confirmText: confirmBtn?.text || 'OK',
+      isDestructive: confirmBtn?.style === 'destructive',
+      icon: confirmBtn?.style === 'destructive' ? 'trash-2' : 'alert-triangle',
+      onConfirm: confirmBtn?.onPress || (() => { }),
+      onCancel: cancelBtn?.onPress,
+    });
+  }
+};
 
 // ----------------------------------------------------
 // Bouncing Dots Component (Reanimated Typing Indicator)
@@ -1904,8 +1903,11 @@ const DashboardScreen = () => {
 
   useFocusEffect(
     useCallback(() => {
-      sync();
-      syncService.fetchAnalytics();
+      const task = InteractionManager.runAfterInteractions(() => {
+        sync();
+        syncService.fetchAnalytics();
+      });
+      return () => task.cancel();
     }, [sync])
   );
 
@@ -3144,10 +3146,13 @@ const CONFIRM_RED = '#E03131';
 
 // Picks a sensible icon when the caller didn't pass one
 const inferConfirmIcon = (options: any): keyof typeof Feather.glyphMap => {
+  if (options?.icon && options.icon !== 'info') return options.icon;
   const text = `${options?.confirmText || ''} ${options?.title || ''}`.toLowerCase();
+  if (text.includes('complete') || text.includes('success') || text.includes('imported') || text.includes('added') || text.includes('saved') || text.includes('up to date')) return 'check-circle';
+  if (text.includes('fail') || text.includes('error') || text.includes('invalid') || text.includes('missing')) return 'alert-circle';
   if (text.includes('log out') || text.includes('logout') || text.includes('sign out')) return 'log-out';
-  if (options?.icon) return options.icon;
   if (text.includes('delete') || text.includes('remove') || text.includes('clear')) return 'trash-2';
+  if (options?.icon) return options.icon;
   return options?.isDestructive ? 'alert-triangle' : 'info';
 };
 
@@ -3466,25 +3471,28 @@ export default function AppNavigator() {
 
   useEffect(() => {
     const initAndCheck = async () => {
-      await mmkvStorage.initialize();
-      await rehydrateAllStores();
-      // Restore persisted theme after MMKV async fallback loads
-      await useThemeStore.getState().rehydrateTheme();
-      await authService.checkSession();
-      // Signal native intro overlay that React Native state is completely hydrated and ready
-      if (Platform.OS === 'android') {
-        NativeModules?.NativeStorage?.notifyAppReady?.();
+      try {
+        await mmkvStorage.initialize();
+        await rehydrateAllStores();
+        // Restore persisted theme after MMKV async fallback loads
+        await useThemeStore.getState().rehydrateTheme();
+        await authService.checkSession();
+      } catch (err) {
+        console.warn('[AppNavigator] Startup hydration error:', err);
+        useAuthStore.getState().setLoading(false);
       }
       // Sync notifications with backend
       notificationService.fetchNotifications().catch(() => { });
       // Auto-scan recent SMS on Android once session and stores are completely hydrated (only for consumer users)
       if (Platform.OS === 'android') {
         setTimeout(() => {
-          const currentUser = useAuthStore.getState().user;
-          if (currentUser?.role === 'admin' || currentUser?.role === 'superadmin') return;
-          const dynamicHours = smsCatchupService.getDynamicStartupLookback();
-          smsCatchupService.reconcile(false, dynamicHours).catch((err) => {
-            console.warn('[AppRoot] Initial SMS catchup notice:', err);
+          InteractionManager.runAfterInteractions(() => {
+            const currentUser = useAuthStore.getState().user;
+            if (currentUser?.role === 'admin' || currentUser?.role === 'superadmin') return;
+            const dynamicHours = smsCatchupService.getDynamicStartupLookback();
+            smsCatchupService.reconcile(false, dynamicHours).catch((err) => {
+              console.warn('[AppRoot] Initial SMS catchup notice:', err);
+            });
           });
         }, 1500);
       }
@@ -3573,7 +3581,7 @@ export default function AppNavigator() {
             ref={navigationRef}
             theme={navTheme}
             onReady={() => {
-              if (Platform.OS === 'android') {
+              if (Platform.OS === 'android' && user === null) {
                 NativeModules?.NativeStorage?.notifyAppReady?.();
               }
             }}
