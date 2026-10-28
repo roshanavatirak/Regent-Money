@@ -132,7 +132,7 @@ class IntroView @JvmOverloads constructor(
         alpha = 1f
         if (reduceMotionEnabled()) {
             clock = HOLD_AT_MS
-            holdMs = 4000f
+            holdMs = 1200f
         }
         running = true
         paused = false
@@ -639,6 +639,6 @@ class IntroView @JvmOverloads constructor(
 
     companion object {
         const val MAX_FRAME_STEP_MS = 100f
-        const val HOLD_AT_MS = 5000f
+        const val HOLD_AT_MS = 4200f
     }
 }

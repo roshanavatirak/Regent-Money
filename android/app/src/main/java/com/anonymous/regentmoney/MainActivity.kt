@@ -48,8 +48,27 @@ class MainActivity : ReactActivity() {
     showIntroOverlay()
   }
 
+  override fun onContentChanged() {
+    super.onContentChanged()
+    // When React Native or Expo Updates asynchronously calls setContentView in release mode,
+    // ensure introOverlay remains securely attached on top until dismissed.
+    ensureIntroOverlayAttached()
+  }
+
+  private fun ensureIntroOverlayAttached() {
+    val intro = introOverlay ?: return
+    val targetParent = (window?.decorView as? ViewGroup) ?: findViewById<ViewGroup>(android.R.id.content) ?: return
+    if (intro.parent == null) {
+      targetParent.addView(intro)
+    } else if (intro.parent !== targetParent) {
+      (intro.parent as? ViewGroup)?.removeView(intro)
+      targetParent.addView(intro)
+    }
+    intro.bringToFront()
+  }
+
   private fun showIntroOverlay() {
-    val root = findViewById<ViewGroup>(android.R.id.content) ?: return
+    val targetParent = (window?.decorView as? ViewGroup) ?: findViewById<ViewGroup>(android.R.id.content) ?: return
     val intro = IntroView(this).apply {
       layoutParams = ViewGroup.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -60,7 +79,8 @@ class MainActivity : ReactActivity() {
       isFocusable = false
     }
     introOverlay = intro
-    root.addView(intro)
+    targetParent.addView(intro)
+    intro.bringToFront()
 
     if (isReactNativeReady) {
       intro.notifyAppReady()
@@ -68,12 +88,15 @@ class MainActivity : ReactActivity() {
 
     intro.start {
       // Intro finished: React Native is already loaded and rendered underneath!
+      val currentIntro = introOverlay
       introOverlay = null
-      root.removeView(intro)
+      currentIntro?.let { view ->
+        (view.parent as? ViewGroup)?.removeView(view)
+      }
     }
 
     // Safety Fallback Timeout (9s max to prevent permanently hanging if JS crashes completely)
-    root.postDelayed({
+    targetParent.postDelayed({
       handleReactNativeReady()
     }, 9000L)
   }

@@ -1,27 +1,33 @@
+// src/navigation/ReviewTransactionsModal.tsx
+//
+// Review transactions found in a statement or screenshot before importing.
+// Compact rows you tick on or off (likely duplicates start unticked), tap a row
+// to fix it, see the balance before and after, then import.
+
 import React, { useState, useMemo, useEffect } from 'react';
-import {
-  Modal,
-  View,
-  Text,
-  TouchableOpacity,
-  TextInput,
-  ScrollView,
-  ActivityIndicator,
-  Alert,
-  StyleSheet,
-  Platform,
-  useWindowDimensions,
-  Switch,
-} from 'react-native';
+import { Modal, View, Text, Pressable, TextInput, ScrollView, ActivityIndicator, StyleSheet, Platform, useWindowDimensions, Switch } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import Animated, { FadeIn, FadeInDown, LinearTransition } from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useTheme, useTransactionStore, showGlobalAlert } from '../store';
+import * as Font from 'expo-font';
+import { format } from 'date-fns';
+import { useTheme, useTransactionStore } from '../store';
 import { authService } from '../services/authService';
 import { syncService } from '../services/syncService';
 import { getBackendUrl } from '../config/api';
+import { CategoryIcon } from '../components/CategoryIcon';
+import { TagPaymentModal } from '../components/TagPaymentModal';
+import { DateTimePickerSheet } from '../components/DateTimePickerSheet';
+import { getCategory } from '../constants/categories';
+import { niceName } from '../constants/bankBrand';
 
 const BACKEND_URL = getBackendUrl();
+const FOREST = '#0B3D2C';
+const LIME = '#B8F36B';
+
+const OUT_CATS = ['food', 'groceries', 'shopping', 'transport', 'bills', 'entertainment', 'medical', 'miscellaneous'];
+const IN_CATS = ['salary', 'money_received', 'investment', 'cashback', 'interest', 'self_transfer'];
 
 export interface EditableTransactionItem {
   id: string;
@@ -33,6 +39,8 @@ export interface EditableTransactionItem {
   category: string;
   balanceAfter: string;
   referenceId?: string;
+  selected: boolean;
+  duplicate: boolean;
 }
 
 export interface ReviewTransactionsModalProps {
@@ -52,351 +60,274 @@ export interface ReviewTransactionsModalProps {
     referenceId?: string | null;
   }>;
   detectedFinalBalance?: number | null;
-  onConfirmSuccess: (summary: {
-    addedTransactionsCount: number;
-    addedIncomeCount: number;
-    updatedBalance: number;
-  }) => void;
+  onConfirmSuccess: (summary: { addedTransactionsCount: number; addedIncomeCount: number; updatedBalance: number }) => void;
 }
 
-const CATEGORIES = [
-  { id: 'transfer', label: 'Transfer' },
-  { id: 'food', label: 'Food' },
-  { id: 'shopping', label: 'Shopping' },
-  { id: 'transport', label: 'Travel' },
-  { id: 'utilities', label: 'Bills' },
-  { id: 'entertainment', label: 'Entertainment' },
-  { id: 'salary', label: 'Salary' },
-  { id: 'investment', label: 'Investment' },
-  { id: 'health', label: 'Health' },
-  { id: 'general', label: 'General' },
-];
+/* ------------------------------------------------------------------ */
+/* Date parsing (same rules as before, shared by display and save)      */
+/* ------------------------------------------------------------------ */
 
-export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = ({
-  visible,
-  onClose,
-  bank,
-  rawTransactions,
-  detectedFinalBalance,
-  onConfirmSuccess,
-}) => {
+const MONTHS: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+
+const parseRowDate = (dateStr: string, timeStr: string, idx: number) => {
+  const now = new Date();
+  const year = now.getFullYear();
+  let y = year;
+  let m = now.getMonth() + 1;
+  let d = now.getDate();
+  const t = (dateStr || '').trim();
+
+  const iso = t.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+  const dmy = t.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/);
+  const txt = t.match(/^(\d{1,2})\s*[-/.\s]?\s*([a-zA-Z]+)(?:\s*[-/.\s]?\s*(\d{2,4}))?$/);
+  if (iso) {
+    y = +iso[1];
+    m = +iso[2];
+    d = +iso[3];
+  } else if (dmy) {
+    d = +dmy[1];
+    m = +dmy[2];
+    y = +dmy[3];
+    if (y < 100) y += 2000;
+  } else if (txt) {
+    d = +txt[1];
+    m = MONTHS[txt[2].toLowerCase().slice(0, 3)] || m;
+    if (txt[3]) {
+      y = +txt[3];
+      if (y < 100) y += 2000;
+    }
+  } else if (t) {
+    const dt = new Date(t);
+    if (!isNaN(dt.getTime())) {
+      y = dt.getFullYear();
+      m = dt.getMonth() + 1;
+      d = dt.getDate();
+    }
+  }
+  // Guard against a misread year
+  if (y < year - 1 || y > year + 1) y = year;
+
+  let h = 12;
+  let min = Math.floor(idx / 60) % 60;
+  let sec = idx % 60;
+  let hasTime = false;
+  const tm = (timeStr || '').trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?$/i);
+  if (tm) {
+    h = +tm[1];
+    min = +tm[2];
+    sec = tm[3] ? +tm[3] : idx % 60;
+    const ap = tm[4]?.toLowerCase();
+    if (ap === 'pm' && h < 12) h += 12;
+    if (ap === 'am' && h === 12) h = 0;
+    hasTime = true;
+  } else if (!timeStr) {
+    h = 12 + Math.floor(idx / 3600);
+  }
+  const date = new Date(y, m - 1, d, h, min, sec);
+  return {
+    normalizedDate: `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`,
+    timestamp: isNaN(date.getTime()) ? undefined : date.getTime(),
+    date,
+    hasTime,
+  };
+};
+
+const money = (n: number) => `₹${Math.abs(n).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+
+/* ------------------------------------------------------------------ */
+/* Component                                                           */
+/* ------------------------------------------------------------------ */
+
+export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = ({ visible, onClose, bank, rawTransactions, detectedFinalBalance, onConfirmSuccess }) => {
   const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
-  const styles = useMemo(() => getStyles(colors, isDark), [colors, isDark]);
+  const display = Font.isLoaded('BricolageGrotesque_800ExtraBold') ? 'BricolageGrotesque_800ExtraBold' : undefined;
+  const heading = { fontFamily: display, fontWeight: display ? undefined : ('800' as const) };
 
-  const existingTransactions = useTransactionStore((s) => s.transactions);
+  const existing = useTransactionStore((s) => s.transactions);
   const [items, setItems] = useState<EditableTransactionItem[]>([]);
-  const [updateAccountBalance, setUpdateAccountBalance] = useState<boolean>(true);
-  const [useExactClosingBalance, setUseExactClosingBalance] = useState<boolean>(false);
-  const [statementBalance, setStatementBalance] = useState<string>('');
-  const [saving, setSaving] = useState<boolean>(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [updateBalance, setUpdateBalance] = useState(true);
+  const [useClosing, setUseClosing] = useState(false);
+  const [closingStr, setClosingStr] = useState('');
+  const [editingClosing, setEditingClosing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [errorText, setErrorText] = useState('');
+  const [invalidId, setInvalidId] = useState<string | null>(null);
+  const [dateFor, setDateFor] = useState<string | null>(null);
+  const [tagFor, setTagFor] = useState<string | null>(null);
 
-  const checkIsPossibleDuplicate = (item: EditableTransactionItem): boolean => {
-    const amt = parseFloat(item.amount);
-    if (isNaN(amt) || amt <= 0) return false;
-    const normMerchant = (item.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    if (!normMerchant) return false;
-
-    return existingTransactions.some((tx) => {
+  const isDuplicate = (amount: string, merchant: string, date: string) => {
+    const amt = parseFloat(amount);
+    const norm = (merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (isNaN(amt) || amt <= 0 || !norm) return false;
+    return existing.some((tx) => {
       if (Math.abs(Number(tx.amount) - amt) >= 0.01) return false;
-      const txNorm = (tx.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-      if (txNorm !== normMerchant) return false;
-
-      const txDate = new Date(Number(tx.timestamp));
-      if (isNaN(txDate.getTime())) return false;
-      const txDay = `${txDate.getFullYear()}-${String(txDate.getMonth() + 1).padStart(2, '0')}-${String(txDate.getDate()).padStart(2, '0')}`;
-      return item.date.includes(txDay) || txDay.includes(item.date.trim());
+      if ((tx.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '') !== norm) return false;
+      const td = new Date(Number(tx.timestamp));
+      if (isNaN(td.getTime())) return false;
+      const key = `${td.getFullYear()}-${String(td.getMonth() + 1).padStart(2, '0')}-${String(td.getDate()).padStart(2, '0')}`;
+      return date.includes(key) || key.includes(date.trim());
     });
   };
 
   useEffect(() => {
-    if (visible && rawTransactions) {
-      setItems(
-        rawTransactions.map((tx, idx) => {
-          let timeVal = tx.time || '';
-          if (!timeVal && tx.timestamp) {
-            const d = new Date(Number(tx.timestamp));
-            if (!isNaN(d.getTime())) {
-              const hh = String(d.getHours()).padStart(2, '0');
-              const mm = String(d.getMinutes()).padStart(2, '0');
-              timeVal = `${hh}:${mm}`;
-            }
-          }
-          return {
-            id: tx.id || `item_${Date.now()}_${idx}`,
-            date: tx.date || new Date().toISOString().split('T')[0],
-            time: timeVal,
-            amount: String(tx.amount || ''),
-            type: tx.type === 'credit' ? 'credit' : 'debit',
-            merchant: tx.merchant || '',
-            category: tx.category || 'transfer',
-            balanceAfter:
-              tx.balanceAfter !== undefined && tx.balanceAfter !== null
-                ? String(tx.balanceAfter)
-                : '',
-            referenceId: tx.referenceId ? String(tx.referenceId) : '',
-          };
-        })
-      );
-
-      // Default balance update is ON
-      setUpdateAccountBalance(true);
-
-      if (detectedFinalBalance !== undefined && detectedFinalBalance !== null) {
-        setStatementBalance(String(detectedFinalBalance));
-        setUseExactClosingBalance(true);
-      } else {
-        // Fallback: check if the last item has balanceAfter
-        const lastWithBalance = [...rawTransactions]
-          .reverse()
-          .find((t) => t.balanceAfter !== undefined && t.balanceAfter !== null);
-        if (lastWithBalance && lastWithBalance.balanceAfter !== undefined && lastWithBalance.balanceAfter !== null) {
-          setStatementBalance(String(lastWithBalance.balanceAfter));
-          setUseExactClosingBalance(true);
-        } else {
-          setStatementBalance('');
-          setUseExactClosingBalance(false);
-        }
+    if (!visible || !rawTransactions) return;
+    const mapped = rawTransactions.map((tx, idx) => {
+      let time = tx.time || '';
+      if (!time && tx.timestamp) {
+        const d = new Date(Number(tx.timestamp));
+        if (!isNaN(d.getTime())) time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
       }
+      const date = tx.date || format(new Date(), 'yyyy-MM-dd');
+      const amount = String(tx.amount || '');
+      const merchant = tx.merchant || '';
+      const dup = isDuplicate(amount, merchant, date);
+      return {
+        id: tx.id || `item_${Date.now()}_${idx}`,
+        date,
+        time,
+        amount,
+        type: tx.type === 'credit' ? 'credit' : 'debit',
+        merchant,
+        category: tx.category || (tx.type === 'credit' ? 'money_received' : 'miscellaneous'),
+        balanceAfter: tx.balanceAfter !== undefined && tx.balanceAfter !== null ? String(tx.balanceAfter) : '',
+        referenceId: tx.referenceId ? String(tx.referenceId) : '',
+        selected: !dup,
+        duplicate: dup,
+      } as EditableTransactionItem;
+    });
+    setItems(mapped);
+    setExpandedId(null);
+    setErrorText('');
+    setInvalidId(null);
+    setUpdateBalance(true);
+    setEditingClosing(false);
+
+    const detected =
+      detectedFinalBalance ?? [...rawTransactions].reverse().find((t) => t.balanceAfter !== undefined && t.balanceAfter !== null)?.balanceAfter ?? null;
+    if (detected !== null && detected !== undefined) {
+      setClosingStr(String(detected));
+      setUseClosing(true);
+    } else {
+      setClosingStr('');
+      setUseClosing(false);
     }
   }, [visible, rawTransactions, detectedFinalBalance]);
 
-  // Calculations for live summary header & balance adjustments
+  const update = (id: string, patch: Partial<EditableTransactionItem>) => {
+    setItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)));
+    if (invalidId === id) {
+      setInvalidId(null);
+      setErrorText('');
+    }
+  };
+
+  /* ---------------- Totals ---------------- */
+
+  const selected = items.filter((i) => i.selected);
   const totals = useMemo(() => {
-    let debitsSum = 0;
-    let creditsSum = 0;
-    let validCount = 0;
-
-    items.forEach((item) => {
-      const val = parseFloat(item.amount);
-      if (!isNaN(val) && val > 0) {
-        validCount++;
-        if (item.type === 'debit') {
-          debitsSum += val;
-        } else {
-          creditsSum += val;
-        }
-      }
+    let out = 0;
+    let inn = 0;
+    selected.forEach((i) => {
+      const v = parseFloat(i.amount);
+      if (!isNaN(v) && v > 0) i.type === 'debit' ? (out += v) : (inn += v);
     });
-
-    return { debitsSum, creditsSum, validCount, totalCount: items.length };
+    return { out, inn };
   }, [items]);
+  const dupCount = items.filter((i) => i.duplicate).length;
 
-  const currentBankBalance = useMemo(() => {
-    const b = Number(bank?.currentBalance);
-    return isNaN(b) ? 0 : b;
-  }, [bank?.currentBalance]);
+  const current = Number(bank?.currentBalance) || 0;
+  const projected = current + totals.inn - totals.out;
+  const closing = useClosing && closingStr.trim() && !isNaN(parseFloat(closingStr)) ? parseFloat(closingStr) : undefined;
+  const after = closing !== undefined ? closing : projected;
 
-  const netFlow = totals.creditsSum - totals.debitsSum;
-  const projectedBalance = currentBankBalance + netFlow;
+  /* ---------------- Actions ---------------- */
 
-  const parsedStatementBalance = useMemo(() => {
-    if (!useExactClosingBalance || !statementBalance.trim()) return undefined;
-    const p = parseFloat(statementBalance.trim());
-    return isNaN(p) ? undefined : p;
-  }, [useExactClosingBalance, statementBalance]);
-
-  const finalEffectiveBalance =
-    parsedStatementBalance !== undefined ? parsedStatementBalance : projectedBalance;
-
-  const updateItem = (id: string, field: keyof EditableTransactionItem, value: any) => {
-    setItems((prev) =>
-      prev.map((item) => {
-        if (item.id === id) {
-          return { ...item, [field]: value };
-        }
-        return item;
-      })
-    );
-  };
-
-  const removeItem = (id: string) => {
-    setItems((prev) => prev.filter((item) => item.id !== id));
-  };
-
-  const addNewItem = () => {
+  const addRow = () => {
     const now = new Date();
-    const today = now.toISOString().split('T')[0];
-    const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    const newItem: EditableTransactionItem = {
-      id: `manual_new_${Date.now()}`,
-      date: today,
-      time: currentTime,
+    const row: EditableTransactionItem = {
+      id: `manual_${Date.now()}`,
+      date: format(now, 'yyyy-MM-dd'),
+      time: format(now, 'HH:mm'),
       amount: '',
       type: 'debit',
       merchant: '',
-      category: 'transfer',
+      category: 'miscellaneous',
       balanceAfter: '',
+      selected: true,
+      duplicate: false,
     };
-    setItems((prev) => [...prev, newItem]);
+    setItems((prev) => [...prev, row]);
+    setExpandedId(row.id);
   };
 
-  const handleConfirmSave = async () => {
-    if (!bank?.id) {
-      showGlobalAlert('Error', 'Bank account information is missing.');
-      return;
-    }
+  const removeRow = (id: string) => {
+    setItems((prev) => prev.filter((i) => i.id !== id));
+    if (expandedId === id) setExpandedId(null);
+  };
 
-    if (items.length === 0) {
-      showGlobalAlert('No Transactions', 'There are no transactions to import.');
-      return;
-    }
+  const toggleAll = () => {
+    const allOn = items.every((i) => i.selected);
+    setItems((prev) => prev.map((i) => ({ ...i, selected: !allOn })));
+  };
 
-    // Validate inputs
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      const amt = parseFloat(item.amount);
-      if (isNaN(amt) || amt <= 0) {
-        showGlobalAlert(
-          'Invalid Amount',
-          `Row #${i + 1} has an invalid amount. Please enter an amount greater than 0.`
-        );
-        return;
-      }
-      if (!item.merchant.trim()) {
-        showGlobalAlert(
-          'Merchant Required',
-          `Row #${i + 1} requires a merchant or transaction description.`
-        );
-        return;
+  const save = async () => {
+    if (!bank?.id) return setErrorText('Account details are missing. Close and try again.');
+    if (selected.length === 0) return setErrorText('Tick at least one transaction to import.');
+    for (const it of selected) {
+      const amt = parseFloat(it.amount);
+      if (isNaN(amt) || amt <= 0 || !it.merchant.trim()) {
+        setExpandedId(it.id);
+        setInvalidId(it.id);
+        return setErrorText(isNaN(amt) || amt <= 0 ? 'One transaction needs an amount.' : 'One transaction needs a name.');
       }
     }
 
+    setSaving(true);
+    setErrorText('');
     try {
-      setSaving(true);
       const token = authService.getAccessToken();
-      if (!token) throw new Error('Session authentication missing.');
-
+      if (!token) throw new Error('Sign in again to import.');
       const payload = {
         bankProfileId: bank.id,
-        applyBalanceChange: updateAccountBalance,
-        transactions: items.map((it, idx) => {
-          let itemTimestamp: number | undefined = undefined;
-          const trimmedDate = it.date.trim();
-          const trimmedTime = it.time.trim();
-          let normalizedDate = trimmedDate;
-
-          if (trimmedDate) {
-            const now = new Date();
-            const currentYear = now.getFullYear();
-            let y = currentYear;
-            let m = now.getMonth() + 1;
-            let d = now.getDate();
-
-            const isoMatch = trimmedDate.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
-            const dmyMatch = trimmedDate.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/);
-            const textMatch = trimmedDate.match(/^(\d{1,2})\s*[-/.\s]?\s*([a-zA-Z]+)(?:\s*[-/.\s]?\s*(\d{2,4}))?$/);
-            const MONTH_MAP: Record<string, number> = {
-              jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
-              jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
-            };
-
-            if (isoMatch) {
-              y = parseInt(isoMatch[1], 10);
-              m = parseInt(isoMatch[2], 10);
-              d = parseInt(isoMatch[3], 10);
-            } else if (dmyMatch) {
-              d = parseInt(dmyMatch[1], 10);
-              m = parseInt(dmyMatch[2], 10);
-              y = parseInt(dmyMatch[3], 10);
-              if (y < 100) y += 2000;
-            } else if (textMatch) {
-              d = parseInt(textMatch[1], 10);
-              const mStr = textMatch[2].toLowerCase().slice(0, 3);
-              m = MONTH_MAP[mStr] || (now.getMonth() + 1);
-              if (textMatch[3]) {
-                let yVal = parseInt(textMatch[3], 10);
-                if (yVal < 100) yVal += 2000;
-                y = yVal;
-              } else {
-                y = currentYear;
-              }
-            } else {
-              const dt = new Date(trimmedDate);
-              if (!isNaN(dt.getTime())) {
-                y = dt.getFullYear();
-                m = dt.getMonth() + 1;
-                d = dt.getDate();
-              }
-            }
-
-            // Safety clamp on year: default to current year if model drifted into distant past or future
-            if (y < currentYear - 1 || y > currentYear + 1) {
-              y = currentYear;
-            }
-
-            normalizedDate = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-
-            let h = 12;
-            let min = Math.floor(idx / 60) % 60;
-            let sec = idx % 60;
-            if (trimmedTime) {
-              const ampmMatch = trimmedTime.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?$/i);
-              if (ampmMatch) {
-                let parsedH = parseInt(ampmMatch[1], 10);
-                const parsedM = parseInt(ampmMatch[2], 10);
-                const parsedS = ampmMatch[3] ? parseInt(ampmMatch[3], 10) : undefined;
-                const ampm = ampmMatch[4]?.toLowerCase();
-                if (ampm === 'pm' && parsedH < 12) parsedH += 12;
-                if (ampm === 'am' && parsedH === 12) parsedH = 0;
-                if (!isNaN(parsedH) && !isNaN(parsedM)) {
-                  h = parsedH;
-                  min = parsedM;
-                  sec = parsedS !== undefined && !isNaN(parsedS) ? parsedS : (idx % 60);
-                }
-              }
-            } else {
-              h = 12 + Math.floor(idx / 3600);
-            }
-            const computed = new Date(y, m - 1, d, h, min, sec);
-            if (!isNaN(computed.getTime())) {
-              itemTimestamp = computed.getTime();
-            }
-          }
-
+        applyBalanceChange: updateBalance,
+        transactions: selected.map((it, idx) => {
+          const p = parseRowDate(it.date, it.time, idx);
           return {
             amount: parseFloat(it.amount),
             type: it.type,
-            date: normalizedDate,
-            time: trimmedTime || null,
-            timestamp: itemTimestamp,
+            date: p.normalizedDate,
+            time: it.time.trim() || null,
+            timestamp: p.timestamp,
             merchant: it.merchant.trim(),
             category: it.category,
             balanceAfter: it.balanceAfter.trim() ? parseFloat(it.balanceAfter) : null,
             referenceId: it.referenceId ? it.referenceId.trim() : undefined,
           };
         }),
-        updatedBalance: updateAccountBalance ? finalEffectiveBalance : undefined,
+        updatedBalance: updateBalance ? after : undefined,
       };
-
       const res = await fetch(`${BACKEND_URL}/sync/ocr-sync`, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-
-      const resJson = await res.json().catch(() => ({}));
+      const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const raw = resJson.message || resJson.error;
-        const msg = Array.isArray(raw) ? raw.join('\n') : (typeof raw === 'string' ? raw : 'Failed to save transactions.');
-        throw new Error(msg);
+        const raw = json.message || json.error;
+        throw new Error(Array.isArray(raw) ? raw.join('\n') : typeof raw === 'string' ? raw : 'Couldn’t import these transactions.');
       }
-
       await syncService.sync();
-
       onConfirmSuccess({
-        addedTransactionsCount: resJson.addedTransactionsCount || 0,
-        addedIncomeCount: resJson.addedIncomeCount || 0,
-        updatedBalance: resJson.updatedBalance ?? bank.currentBalance,
+        addedTransactionsCount: json.addedTransactionsCount || 0,
+        addedIncomeCount: json.addedIncomeCount || 0,
+        updatedBalance: json.updatedBalance ?? bank.currentBalance,
       });
-
       onClose();
-    } catch (err: any) {
-      showGlobalAlert('Save Failed', err.message || 'Unable to import reviewed transactions.');
+    } catch (e: any) {
+      setErrorText(e?.message || 'Couldn’t import these transactions. Try again.');
     } finally {
       setSaving(false);
     }
@@ -404,913 +335,391 @@ export const ReviewTransactionsModal: React.FC<ReviewTransactionsModalProps> = (
 
   if (!visible) return null;
 
-  return (
-    <Modal visible={visible} animationType="slide" transparent statusBarTranslucent navigationBarTranslucent onRequestClose={onClose}>
-      <View style={styles.modalOverlay}>
-        <KeyboardAvoidingView
-          behavior="padding"
-          style={styles.keyboardAvoidingWrap}
-        >
-          <View style={[styles.modalContainer, { height: windowHeight * 0.92, paddingBottom: Math.max(insets.bottom, 16) }]}>
-          {/* Header */}
-          <View style={styles.header}>
-            <View style={{ flex: 1 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <Feather name="check-circle" size={18} color="#2dba4e" />
-                <Text style={styles.headerTitle}>Review Transactions</Text>
-              </View>
-              <Text style={styles.headerSubtitle}>
-                {bank?.bankName || 'Account'} • {totals.totalCount} entries detected
-              </Text>
-            </View>
-            <TouchableOpacity onPress={onClose} style={styles.closeBtn} activeOpacity={0.7}>
-              <Feather name="x" size={20} color="#8E8E9F" />
-            </TouchableOpacity>
-          </View>
+  /* ---------------- Theme ---------------- */
 
-          {/* Top Master Balance Update Toggle Card */}
-          <View
-            style={[
-              styles.masterBalanceCard,
-              updateAccountBalance ? styles.masterBalanceCardActive : styles.masterBalanceCardInactive,
-            ]}
+  const ink = colors.text;
+  const muted = colors.textSecondary;
+  const pageBg = isDark ? colors.background : '#F3F6F4';
+  const surface = colors.card;
+  const line = isDark ? colors.border : '#E1E9E4';
+  const field = isDark ? colors.border : '#DCE5E0';
+  const accent = isDark ? LIME : FOREST;
+  const accentFg = isDark ? FOREST : LIME;
+  const accentInk = isDark ? FOREST : '#FFFFFF';
+  const green = isDark ? LIME : '#0B6B3A';
+  const red = isDark ? '#FFA8A8' : '#C92A2A';
+
+  const dateRow = dateFor ? items.find((i) => i.id === dateFor) : null;
+  const tagRow = tagFor ? items.find((i) => i.id === tagFor) : null;
+
+  /* ---------------- Row ---------------- */
+
+  const renderRow = (it: EditableTransactionItem, idx: number) => {
+    const open = expandedId === it.id;
+    const isOut = it.type === 'debit';
+    const amt = parseFloat(it.amount) || 0;
+    const p = parseRowDate(it.date, it.time, idx);
+    const when = format(p.date, it.time ? 'd MMM, HH:mm' : 'd MMM');
+    const quick = isOut ? OUT_CATS : IN_CATS;
+    const catList = quick.includes(getCategory(it.category).id) ? quick : [it.category, ...quick];
+    const bad = invalidId === it.id;
+
+    return (
+      <Animated.View key={it.id} layout={LinearTransition.duration(200)} style={[idx < items.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line }, bad && { backgroundColor: isDark ? 'rgba(224,49,49,0.08)' : '#FFF5F5' }]}>
+        <Pressable onPress={() => setExpandedId(open ? null : it.id)} style={[s.row, !it.selected && { opacity: 0.55 }]} accessibilityRole="button" accessibilityState={{ expanded: open }}>
+          <Pressable
+            onPress={() => update(it.id, { selected: !it.selected })}
+            hitSlop={10}
+            style={[s.check, it.selected ? { backgroundColor: accent, borderColor: accent } : { borderColor: field }]}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: it.selected }}
+            accessibilityLabel={`Include ${it.merchant || 'transaction'}`}
           >
-            <View style={styles.masterBalanceHeaderRow}>
-              <View
-                style={[
-                  styles.masterBalanceIconWrap,
-                  updateAccountBalance ? styles.masterBalanceIconActive : styles.masterBalanceIconInactive,
-                ]}
-              >
-                <Feather
-                  name={updateAccountBalance ? 'trending-up' : 'slash'}
-                  size={18}
-                  color={updateAccountBalance ? '#2dba4e' : '#8E8E9F'}
-                />
-              </View>
-              <View style={{ flex: 1, marginHorizontal: 10 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <Text style={styles.masterBalanceTitle}>Update Account Balance</Text>
-                  <View
-                    style={[
-                      styles.statusBadge,
-                      updateAccountBalance ? styles.statusBadgeActive : styles.statusBadgeInactive,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.statusBadgeText,
-                        updateAccountBalance ? styles.statusBadgeTextActive : styles.statusBadgeTextInactive,
-                      ]}
-                    >
-                      {updateAccountBalance ? 'ENABLED' : 'OFF'}
-                    </Text>
-                  </View>
+            {it.selected && <Feather name="check" size={13} color={accentFg} />}
+          </Pressable>
+          <CategoryIcon category={it.category} variant="soft" size={38} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <View style={s.nameRow}>
+              <Text style={[s.name, { color: it.merchant ? ink : muted }]} numberOfLines={1}>{niceName(it.merchant) || 'Add a name'}</Text>
+              {it.duplicate && (
+                <View style={[s.dupTag, { backgroundColor: isDark ? 'rgba(245,159,0,0.18)' : '#FFF1D6' }]}>
+                  <Text style={[s.dupText, { color: isDark ? '#FFD27A' : '#8A5A00' }]}>Already added?</Text>
                 </View>
-                <Text style={styles.masterBalanceSubtitle}>
-                  {updateAccountBalance
-                    ? 'Statement transactions will adjust your bank balance'
-                    : 'Records transactions only • Balance stays unchanged'}
-                </Text>
+              )}
+            </View>
+            <Text style={[s.meta, { color: muted }]}>{when}</Text>
+          </View>
+          <Text style={[s.amt, { color: isOut ? ink : green }]}>
+            {amt > 0 ? `${isOut ? '−' : '+'}${money(amt)}` : '₹0'}
+          </Text>
+        </Pressable>
+
+        {open && (
+          <Animated.View entering={FadeIn.duration(200)} style={[s.editor, { backgroundColor: isDark ? 'rgba(255,255,255,0.02)' : '#FBFCFB' }]}>
+            <View style={s.editRow}>
+              <View style={[s.input, { flex: 1, backgroundColor: surface, borderColor: bad && !it.merchant.trim() ? red : field }]}>
+                <TextInput value={it.merchant} onChangeText={(v) => update(it.id, { merchant: v })} placeholder="Name, like Swiggy" placeholderTextColor={muted} style={[s.inputText, { color: ink }]} />
               </View>
-              <Switch
-                value={updateAccountBalance}
-                onValueChange={(val) => setUpdateAccountBalance(val)}
-                trackColor={{ false: isDark ? '#2c2c38' : '#d5d7e2', true: '#2dba4e' }}
-                thumbColor="#FFFFFF"
-                ios_backgroundColor={isDark ? '#2c2c38' : '#d5d7e2'}
-              />
+              <View style={[s.input, { width: 120, backgroundColor: surface, borderColor: bad && !(amt > 0) ? red : field }]}>
+                <Text style={[s.inputPrefix, { color: muted }]}>₹</Text>
+                <TextInput value={it.amount} onChangeText={(v) => update(it.id, { amount: v.replace(/[^0-9.]/g, '') })} keyboardType="decimal-pad" placeholder="0" placeholderTextColor={muted} style={[s.inputText, { color: ink, fontWeight: '700' }]} />
+              </View>
             </View>
 
-            {updateAccountBalance ? (
-              <View style={styles.balanceImpactContainer}>
-                {/* Visual Impact Flow */}
-                <View style={styles.impactFlowRow}>
-                  <View style={styles.flowBalanceBox}>
-                    <Text style={styles.flowLabel}>CURRENT</Text>
-                    <Text style={styles.flowAmount}>
-                      ₹{currentBankBalance.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
-                    </Text>
-                  </View>
-
-                  <View style={styles.flowArrowBox}>
-                    <Feather name="arrow-right" size={16} color={colors.textTertiary || '#8E8E9F'} />
-                    <View
-                      style={[
-                        styles.netFlowPill,
-                        netFlow >= 0 ? styles.netFlowPillCredit : styles.netFlowPillDebit,
-                      ]}
+            <View style={s.editRow}>
+              <Pressable onPress={() => setDateFor(it.id)} style={[s.input, { flex: 1, backgroundColor: surface, borderColor: field }]} accessibilityLabel="Change date and time">
+                <Feather name="calendar" size={14} color={muted} />
+                <Text style={[s.inputText, { color: ink }]}>{format(p.date, 'd MMM yyyy, HH:mm')}</Text>
+              </Pressable>
+              <View style={[s.seg, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#E9EFEB' }]}>
+                {(['debit', 'credit'] as const).map((t) => {
+                  const on = it.type === t;
+                  return (
+                    <Pressable
+                      key={t}
+                      onPress={() => update(it.id, { type: t, category: t === 'credit' ? 'money_received' : 'miscellaneous' })}
+                      style={[s.segBtn, on && { backgroundColor: isDark ? '#1E3329' : '#FFFFFF' }]}
                     >
-                      <Text
-                        style={[
-                          styles.netFlowPillText,
-                          netFlow >= 0 ? styles.netFlowTextCredit : styles.netFlowTextDebit,
-                        ]}
-                      >
-                        {netFlow >= 0
-                          ? `+₹${netFlow.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
-                          : `-₹${Math.abs(netFlow).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`}
-                      </Text>
-                    </View>
-                  </View>
+                      <Text style={[s.segText, { color: on ? ink : muted }, on && { fontWeight: '700' }]}>{t === 'debit' ? 'Out' : 'In'}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
 
-                  <View style={[styles.flowBalanceBox, styles.flowBalanceBoxHighlight]}>
-                    <Text style={styles.flowLabelHighlight}>NEW BALANCE</Text>
-                    <Text style={styles.flowAmountHighlight}>
-                      ₹{finalEffectiveBalance.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
-                    </Text>
-                  </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.cats} keyboardShouldPersistTaps="handled">
+              {catList.map((c) => {
+                const on = getCategory(it.category).id === getCategory(c).id;
+                return (
+                  <Pressable key={c} onPress={() => update(it.id, { category: c })} style={[s.cat, on ? { backgroundColor: accent, borderColor: accent } : { backgroundColor: surface, borderColor: field }]}>
+                    <Text style={[s.catText, { color: on ? accentInk : ink }, on && { fontWeight: '700' }]}>{getCategory(c).label}</Text>
+                  </Pressable>
+                );
+              })}
+              <Pressable onPress={() => setTagFor(it.id)} style={[s.cat, { backgroundColor: surface, borderColor: field }]}>
+                <Text style={[s.catText, { color: ink }]}>More</Text>
+              </Pressable>
+            </ScrollView>
+
+            <View style={s.editFoot}>
+              <Text style={[s.footNote, { color: muted }]} numberOfLines={1}>
+                {it.balanceAfter ? `Balance after: ${money(parseFloat(it.balanceAfter) || 0)}` : ' '}
+              </Text>
+              <Pressable onPress={() => removeRow(it.id)} hitSlop={8} accessibilityLabel="Remove this transaction">
+                <Text style={[s.remove, { color: red }]}>Remove</Text>
+              </Pressable>
+            </View>
+          </Animated.View>
+        )}
+      </Animated.View>
+    );
+  };
+
+  /* ---------------- Render ---------------- */
+
+  return (
+    <Modal visible animationType="slide" transparent statusBarTranslucent navigationBarTranslucent onRequestClose={onClose}>
+      <View style={s.overlay}>
+        <KeyboardAvoidingView behavior="padding" style={{ width: '100%' }}>
+          <View style={[s.container, { backgroundColor: pageBg, height: windowHeight * 0.94 }]}>
+            <View style={[s.grabber, { backgroundColor: isDark ? 'rgba(255,255,255,0.18)' : '#C9D4CE' }]} />
+
+            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 24 }}>
+              {/* Header */}
+              <View style={s.head}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[s.title, { color: ink }, heading]}>
+                    {items.length} transaction{items.length === 1 ? '' : 's'} found
+                  </Text>
+                  <Text style={[s.sub, { color: muted }]}>From your {bank?.bankName || 'bank'} statement. Check, then import.</Text>
                 </View>
+                <Pressable onPress={onClose} style={[s.close, { backgroundColor: surface }]} accessibilityLabel="Close without importing">
+                  <Feather name="x" size={18} color={ink} />
+                </Pressable>
+              </View>
 
-                {/* Optional Override with exact Statement Closing Balance */}
-                <View style={styles.closingBalanceToggleRow}>
-                  <TouchableOpacity
-                    style={styles.overrideCheckbox}
-                    activeOpacity={0.7}
-                    onPress={() => setUseExactClosingBalance(!useExactClosingBalance)}
-                  >
-                    <Feather
-                      name={useExactClosingBalance ? 'check-square' : 'square'}
-                      size={15}
-                      color={useExactClosingBalance ? '#2dba4e' : '#8E8E9F'}
-                    />
-                    <Text style={styles.overrideCheckboxLabel}>
-                      Override with exact statement closing balance
-                    </Text>
-                  </TouchableOpacity>
+              {/* Totals */}
+              <Animated.View entering={FadeInDown.duration(350)} style={s.tiles}>
+                <View style={[s.tile, { backgroundColor: surface, borderColor: line }]}>
+                  <Text style={[s.tileLabel, { color: muted }]}>Money out</Text>
+                  <Text style={[s.tileValue, { color: ink }]}>{money(totals.out)}</Text>
                 </View>
+                <View style={[s.tile, { backgroundColor: surface, borderColor: line }]}>
+                  <Text style={[s.tileLabel, { color: muted }]}>Money in</Text>
+                  <Text style={[s.tileValue, { color: green }]}>{money(totals.inn)}</Text>
+                </View>
+              </Animated.View>
 
-                {useExactClosingBalance && (
-                  <View style={styles.exactBalanceInputRow}>
-                    <Text style={styles.exactCurrencyPrefix}>₹</Text>
-                    <TextInput
-                      style={styles.exactBalanceInput}
-                      value={statementBalance}
-                      onChangeText={setStatementBalance}
-                      keyboardType="numeric"
-                      placeholder="0.00"
-                      placeholderTextColor={colors.textTertiary}
-                    />
-                    {detectedFinalBalance !== undefined && detectedFinalBalance !== null && (
-                      <View style={styles.detectedBadge}>
-                        <Text style={styles.detectedBadgeText}>OCR Detected</Text>
+              {/* Balance */}
+              <Animated.View entering={FadeInDown.delay(60).duration(350)} style={s.balance}>
+                <View pointerEvents="none" style={s.balanceRing} />
+                <View style={s.balanceHead}>
+                  <Text style={s.balanceTitle}>Update account balance</Text>
+                  <Switch
+                    value={updateBalance}
+                    onValueChange={setUpdateBalance}
+                    trackColor={{ false: 'rgba(255,255,255,0.25)', true: LIME }}
+                    thumbColor={updateBalance ? FOREST : '#FFFFFF'}
+                    ios_backgroundColor="rgba(255,255,255,0.25)"
+                  />
+                </View>
+                {updateBalance ? (
+                  <>
+                    <View style={s.flow}>
+                      <View>
+                        <Text style={s.flowLabel}>Now</Text>
+                        <Text style={s.flowNow}>{money(current)}</Text>
                       </View>
+                      <Feather name="arrow-right" size={16} color="#B5CEC1" />
+                      <View style={{ flex: 1 }}>
+                        <Text style={s.flowLabel}>After import</Text>
+                        <Text style={[s.flowAfter, heading]} numberOfLines={1} adjustsFontSizeToFit>{after < 0 ? '−' : ''}{money(after)}</Text>
+                      </View>
+                    </View>
+                    {editingClosing ? (
+                      <View style={s.closingRow}>
+                        <Text style={s.closingPrefix}>₹</Text>
+                        <TextInput
+                          value={closingStr}
+                          onChangeText={(v) => {
+                            setClosingStr(v.replace(/[^0-9.-]/g, ''));
+                            setUseClosing(true);
+                          }}
+                          keyboardType="decimal-pad"
+                          autoFocus
+                          placeholder="Closing balance"
+                          placeholderTextColor="#B5CEC1"
+                          style={s.closingInput}
+                        />
+                        <Pressable onPress={() => setEditingClosing(false)} hitSlop={8}>
+                          <Text style={s.closingDone}>Done</Text>
+                        </Pressable>
+                      </View>
+                    ) : (
+                      <Pressable onPress={() => setEditingClosing(true)} style={s.closingNote} accessibilityRole="button">
+                        <Feather name={closing !== undefined ? 'check' : 'info'} size={13} color="#B5CEC1" />
+                        <Text style={s.closingNoteText}>
+                          {closing !== undefined
+                            ? detectedFinalBalance !== null && detectedFinalBalance !== undefined
+                              ? 'Closing balance read from your statement. '
+                              : 'Using the closing balance you entered. '
+                            : 'Worked out from these transactions. '}
+                          <Text style={s.closingLink}>{closing !== undefined ? 'Edit' : 'Enter exact closing balance'}</Text>
+                        </Text>
+                      </Pressable>
                     )}
-                  </View>
+                    {closing !== undefined && (
+                      <Pressable onPress={() => setUseClosing(false)} hitSlop={6}>
+                        <Text style={s.closingReset}>Use the transactions instead</Text>
+                      </Pressable>
+                    )}
+                  </>
+                ) : (
+                  <Text style={s.balanceOff}>Only the transactions are added. Your balance stays {money(current)}.</Text>
+                )}
+              </Animated.View>
+
+              {/* Duplicates */}
+              {dupCount > 0 && (
+                <View style={[s.dupNote, { backgroundColor: isDark ? 'rgba(245,159,0,0.14)' : '#FFF4E0' }]}>
+                  <Text style={[s.dupNoteText, { color: ink }]}>
+                    <Text style={{ fontWeight: '700' }}>
+                      {dupCount} look{dupCount === 1 ? 's' : ''} like {dupCount === 1 ? 'one' : 'ones'} you already have,
+                    </Text>{' '}
+                    so {dupCount === 1 ? 'it’s' : 'they’re'} unticked. Tick to import anyway.
+                  </Text>
+                </View>
+              )}
+
+              {/* List */}
+              <View style={s.listHead}>
+                <Text style={[s.listCount, { color: muted }]}>
+                  {selected.length} of {items.length} selected
+                </Text>
+                {items.length > 0 && (
+                  <Pressable onPress={toggleAll} hitSlop={8}>
+                    <Text style={[s.link, { color: green }]}>{items.every((i) => i.selected) ? 'Clear all' : 'Select all'}</Text>
+                  </Pressable>
                 )}
               </View>
-            ) : (
-              <View style={styles.balanceDisabledBanner}>
-                <Feather name="shield" size={14} color="#8E8E9F" />
-                <Text style={styles.balanceDisabledBannerText}>
-                  Safe Mode: Bank balance will remain ₹{currentBankBalance.toLocaleString('en-IN')}. Only transactions will be imported.
-                </Text>
-              </View>
-            )}
-          </View>
+              <View style={[s.list, { backgroundColor: surface, borderColor: line }]}>{items.map(renderRow)}</View>
 
-          {/* Totals Summary Ribbon */}
-          <View style={styles.summaryRibbon}>
-            <View style={styles.summaryItem}>
-              <Text style={styles.summaryLabel}>Total Debits</Text>
-              <Text style={[styles.summaryVal, { color: '#ef4444' }]}>
-                -₹{totals.debitsSum.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
-              </Text>
-            </View>
-            <View style={styles.summaryDivider} />
-            <View style={styles.summaryItem}>
-              <Text style={styles.summaryLabel}>Total Credits</Text>
-              <Text style={[styles.summaryVal, { color: '#2dba4e' }]}>
-                +₹{totals.creditsSum.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
-              </Text>
-            </View>
-            <View style={styles.summaryDivider} />
-            <View style={styles.summaryItem}>
-              <Text style={styles.summaryLabel}>Net Flow</Text>
-              <Text
-                style={[
-                  styles.summaryVal,
-                  {
-                    color:
-                      totals.creditsSum - totals.debitsSum >= 0 ? '#2dba4e' : '#ef4444',
-                  },
-                ]}
+              <Pressable onPress={addRow} style={[s.addRow, { borderColor: field }]} accessibilityRole="button">
+                <Feather name="plus" size={16} color={ink} />
+                <Text style={[s.addRowText, { color: ink }]}>Add a missing transaction</Text>
+              </Pressable>
+            </ScrollView>
+
+            {/* Footer */}
+            <View style={[s.footer, { borderTopColor: line, paddingBottom: Math.max(insets.bottom, 12) + 8 }]}>
+              {errorText ? (
+                <Animated.View entering={FadeIn.duration(200)} style={s.errorRow}>
+                  <Feather name="alert-circle" size={14} color={red} />
+                  <Text style={[s.errorText, { color: red }]}>{errorText}</Text>
+                </Animated.View>
+              ) : null}
+              <Pressable
+                onPress={save}
+                disabled={saving || selected.length === 0}
+                style={({ pressed }) => [s.cta, { backgroundColor: accent, opacity: selected.length ? 1 : 0.5 }, pressed && { transform: [{ scale: 0.98 }] }]}
+                accessibilityRole="button"
               >
-                {totals.creditsSum - totals.debitsSum >= 0 ? '+' : '-'}₹
-                {Math.abs(totals.creditsSum - totals.debitsSum).toLocaleString('en-IN', {
-                  maximumFractionDigits: 2,
-                })}
-              </Text>
+                {saving ? (
+                  <ActivityIndicator color={accentFg} />
+                ) : (
+                  <Text style={[s.ctaText, { color: accentFg }]}>
+                    {selected.length ? `Import ${selected.length} transaction${selected.length === 1 ? '' : 's'}` : 'Tick something to import'}
+                  </Text>
+                )}
+              </Pressable>
             </View>
           </View>
-
-          {/* List of Editable Items */}
-          <ScrollView
-            style={styles.scrollList}
-            contentContainerStyle={{ paddingBottom: 24 }}
-            showsVerticalScrollIndicator={false}
-          >
-            {items.map((item, idx) => {
-              const isDebit = item.type === 'debit';
-              return (
-                <View key={item.id} style={styles.itemCard}>
-                  {/* Item Header & Delete */}
-                  <View style={styles.itemHeader}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <View style={styles.indexBadge}>
-                        <Text style={styles.indexText}>#{idx + 1}</Text>
-                      </View>
-                      {checkIsPossibleDuplicate(item) && (
-                        <View style={styles.duplicateWarningBadge}>
-                          <Feather name="alert-triangle" size={11} color="#d97706" />
-                          <Text style={styles.duplicateWarningText}>Matches existing</Text>
-                        </View>
-                      )}
-                    </View>
-
-                    {/* Debit / Credit Switcher */}
-                    <View style={styles.typeSwitcher}>
-                      <TouchableOpacity
-                        onPress={() => updateItem(item.id, 'type', 'debit')}
-                        style={[
-                          styles.typeBtn,
-                          isDebit && styles.typeBtnDebitActive,
-                        ]}
-                        activeOpacity={0.8}
-                      >
-                        <Feather
-                          name="arrow-down-left"
-                          size={14}
-                          color={isDebit ? '#ffffff' : '#8E8E9F'}
-                        />
-                        <Text style={[styles.typeBtnText, isDebit && { color: '#ffffff' }]}>
-                          Debit (Spent)
-                        </Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        onPress={() => updateItem(item.id, 'type', 'credit')}
-                        style={[
-                          styles.typeBtn,
-                          !isDebit && styles.typeBtnCreditActive,
-                        ]}
-                        activeOpacity={0.8}
-                      >
-                        <Feather
-                          name="arrow-up-right"
-                          size={14}
-                          color={!isDebit ? '#ffffff' : '#8E8E9F'}
-                        />
-                        <Text style={[styles.typeBtnText, !isDebit && { color: '#ffffff' }]}>
-                          Credit (Received)
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-
-                    <TouchableOpacity
-                      onPress={() => removeItem(item.id)}
-                      style={styles.deleteRowBtn}
-                      activeOpacity={0.7}
-                      accessibilityLabel="Remove transaction"
-                    >
-                      <Feather name="trash-2" size={16} color="#ef4444" />
-                    </TouchableOpacity>
-                  </View>
-
-                  {/* Amount Field */}
-                  <View style={{ marginTop: 6 }}>
-                    <Text style={styles.fieldLabel}>Amount (₹)</Text>
-                    <View style={styles.inputContainer}>
-                      <Text style={[styles.inlineCurrency, { color: isDebit ? '#ef4444' : '#2dba4e' }]}>
-                        {isDebit ? '-' : '+'}₹
-                      </Text>
-                      <TextInput
-                        style={styles.textInput}
-                        value={item.amount}
-                        onChangeText={(v) => updateItem(item.id, 'amount', v)}
-                        keyboardType="numeric"
-                        placeholder="0.00"
-                        placeholderTextColor={colors.textTertiary}
-                      />
-                    </View>
-                  </View>
-
-                  {/* Date & Time Row */}
-                  <View style={[styles.inputGridRow, { marginTop: 10 }]}>
-                    <View style={{ flex: 1.2, marginRight: 10 }}>
-                      <Text style={styles.fieldLabel}>Date (YYYY-MM-DD)</Text>
-                      <View style={styles.inputContainer}>
-                        <Feather name="calendar" size={14} color="#8E8E9F" style={{ marginRight: 6 }} />
-                        <TextInput
-                          style={styles.textInput}
-                          value={item.date}
-                          onChangeText={(v) => updateItem(item.id, 'date', v)}
-                          placeholder="YYYY-MM-DD"
-                          placeholderTextColor={colors.textTertiary}
-                        />
-                      </View>
-                    </View>
-
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.fieldLabel}>Time (HH:MM)</Text>
-                      <View style={styles.inputContainer}>
-                        <Feather name="clock" size={14} color="#8E8E9F" style={{ marginRight: 6 }} />
-                        <TextInput
-                          style={styles.textInput}
-                          value={item.time}
-                          onChangeText={(v) => updateItem(item.id, 'time', v)}
-                          placeholder="14:30"
-                          placeholderTextColor={colors.textTertiary}
-                        />
-                      </View>
-                    </View>
-                  </View>
-
-                  {/* Merchant / Payee Description */}
-                  <View style={{ marginTop: 10 }}>
-                    <Text style={styles.fieldLabel}>Merchant / Payee / Description</Text>
-                    <View style={styles.inputContainer}>
-                      <TextInput
-                        style={styles.textInput}
-                        value={item.merchant}
-                        onChangeText={(v) => updateItem(item.id, 'merchant', v)}
-                        placeholder="e.g. Swiggy, Salary, UPI Transfer"
-                        placeholderTextColor={colors.textTertiary}
-                      />
-                    </View>
-                  </View>
-
-                  {/* Category Pills */}
-                  <View style={{ marginTop: 10 }}>
-                    <Text style={styles.fieldLabel}>Category</Text>
-                    <ScrollView
-                      horizontal
-                      showsHorizontalScrollIndicator={false}
-                      contentContainerStyle={{ gap: 6, paddingVertical: 4 }}
-                    >
-                      {CATEGORIES.map((cat) => {
-                        const active = item.category === cat.id;
-                        return (
-                          <TouchableOpacity
-                            key={cat.id}
-                            onPress={() => updateItem(item.id, 'category', cat.id)}
-                            style={[
-                              styles.catChip,
-                              active && styles.catChipActive,
-                            ]}
-                            activeOpacity={0.7}
-                          >
-                            <Text
-                              style={[
-                                styles.catChipText,
-                                active && styles.catChipTextActive,
-                              ]}
-                            >
-                              {cat.label}
-                            </Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </ScrollView>
-                  </View>
-
-                  {/* Balance After Transaction */}
-                  <View style={{ marginTop: 10 }}>
-                    <Text style={styles.fieldLabel}>
-                      Statement Balance After This Tx (Optional ₹)
-                    </Text>
-                    <View style={styles.inputContainer}>
-                      <Text style={styles.inlineCurrency}>₹</Text>
-                      <TextInput
-                        style={styles.textInput}
-                        value={item.balanceAfter}
-                        onChangeText={(v) => updateItem(item.id, 'balanceAfter', v)}
-                        keyboardType="numeric"
-                        placeholder="e.g. 5,523.43"
-                        placeholderTextColor={colors.textTertiary}
-                      />
-                    </View>
-                  </View>
-                </View>
-              );
-            })}
-
-            {/* Add Another Transaction Button */}
-            <TouchableOpacity
-              onPress={addNewItem}
-              style={styles.addBtn}
-              activeOpacity={0.8}
-            >
-              <Feather name="plus-circle" size={18} color={colors.accent || '#03DAC6'} />
-              <Text style={styles.addBtnText}>Add Another Transaction</Text>
-            </TouchableOpacity>
-          </ScrollView>
-
-          {/* Footer Action Buttons */}
-          <View style={styles.footer}>
-            <TouchableOpacity
-              onPress={onClose}
-              style={styles.cancelBtn}
-              disabled={saving}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.cancelBtnText}>Discard</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={handleConfirmSave}
-              style={[styles.saveBtn, saving && { opacity: 0.7 }]}
-              disabled={saving}
-              activeOpacity={0.8}
-            >
-              {saving ? (
-                <ActivityIndicator size="small" color="#ffffff" />
-              ) : (
-                <>
-                  <Feather name="check" size={18} color="#ffffff" style={{ marginRight: 6 }} />
-                  <Text style={styles.saveBtnText}>
-                    Confirm & Save ({totals.totalCount})
-                  </Text>
-                </>
-              )}
-            </TouchableOpacity>
-          </View>
-        </View>
         </KeyboardAvoidingView>
       </View>
+
+      {dateRow && (
+        <DateTimePickerSheet
+          visible
+          mode="datetime"
+          title="When was this?"
+          value={parseRowDate(dateRow.date, dateRow.time, 0).date}
+          maximumDate={new Date()}
+          onClose={() => setDateFor(null)}
+          onConfirm={(d) => {
+            update(dateRow.id, { date: format(d, 'yyyy-MM-dd'), time: format(d, 'HH:mm') });
+            setDateFor(null);
+          }}
+        />
+      )}
+
+      {tagRow && (
+        <TagPaymentModal
+          visible
+          onClose={() => setTagFor(null)}
+          selectedTag={tagRow.category}
+          onSelectTag={(tag: string) => {
+            update(tagRow.id, { category: tag });
+            setTagFor(null);
+          }}
+          merchantName={tagRow.merchant || undefined}
+          isDark={isDark}
+          colors={colors}
+        />
+      )}
     </Modal>
   );
 };
 
-const getStyles = (colors: any, isDark: boolean) =>
-  StyleSheet.create({
-    modalOverlay: {
-      flex: 1,
-      backgroundColor: 'rgba(0, 0, 0, 0.7)',
-      justifyContent: 'flex-end',
-      ...(Platform.OS === 'web' ? { height: '100dvh' as any, width: '100vw' as any, position: 'fixed' as any, top: 0, left: 0, right: 0, bottom: 0 } : {}),
-    },
-    keyboardAvoidingWrap: {
-      width: '100%',
-      justifyContent: 'flex-end',
-    },
-    modalContainer: {
-      backgroundColor: isDark ? '#121217' : '#ffffff',
-      borderTopLeftRadius: 24,
-      borderTopRightRadius: 24,
-      display: 'flex',
-      flexDirection: 'column',
-    },
-    header: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingHorizontal: 20,
-      paddingTop: 18,
-      paddingBottom: 14,
-      borderBottomWidth: 1,
-      borderBottomColor: isDark ? '#23232c' : '#f0f0f4',
-    },
-    headerTitle: {
-      fontSize: 18,
-      fontWeight: '800',
-      color: colors.text,
-    },
-    headerSubtitle: {
-      fontSize: 13,
-      color: colors.textSecondary || '#8E8E9F',
-      marginTop: 2,
-    },
-    closeBtn: {
-      width: 36,
-      height: 36,
-      borderRadius: 18,
-      backgroundColor: isDark ? '#1f1f28' : '#f4f4f8',
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    masterBalanceCard: {
-      marginHorizontal: 16,
-      marginTop: 12,
-      padding: 14,
-      borderRadius: 16,
-      borderWidth: 1,
-    },
-    masterBalanceCardActive: {
-      backgroundColor: isDark ? 'rgba(45, 186, 78, 0.06)' : 'rgba(45, 186, 78, 0.05)',
-      borderColor: isDark ? 'rgba(45, 186, 78, 0.3)' : 'rgba(45, 186, 78, 0.35)',
-    },
-    masterBalanceCardInactive: {
-      backgroundColor: isDark ? '#161620' : '#f7f8fc',
-      borderColor: isDark ? '#262633' : '#e4e6f0',
-    },
-    masterBalanceHeaderRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-    },
-    masterBalanceIconWrap: {
-      width: 36,
-      height: 36,
-      borderRadius: 10,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    masterBalanceIconActive: {
-      backgroundColor: 'rgba(45, 186, 78, 0.15)',
-    },
-    masterBalanceIconInactive: {
-      backgroundColor: isDark ? '#242430' : '#ebeef5',
-    },
-    masterBalanceTitle: {
-      fontSize: 14,
-      fontWeight: '800',
-      color: colors.text,
-    },
-    statusBadge: {
-      paddingHorizontal: 6,
-      paddingVertical: 2,
-      borderRadius: 6,
-    },
-    statusBadgeActive: {
-      backgroundColor: 'rgba(45, 186, 78, 0.18)',
-    },
-    statusBadgeInactive: {
-      backgroundColor: isDark ? '#272736' : '#e5e7f0',
-    },
-    statusBadgeText: {
-      fontSize: 10,
-      fontWeight: '800',
-      letterSpacing: 0.5,
-    },
-    statusBadgeTextActive: {
-      color: '#2dba4e',
-    },
-    statusBadgeTextInactive: {
-      color: '#8E8E9F',
-    },
-    masterBalanceSubtitle: {
-      fontSize: 11,
-      color: colors.textSecondary || '#8E8E9F',
-      marginTop: 2,
-      lineHeight: 15,
-    },
-    balanceImpactContainer: {
-      marginTop: 12,
-      paddingTop: 12,
-      borderTopWidth: 1,
-      borderTopColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
-    },
-    impactFlowRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      backgroundColor: isDark ? '#0e0e14' : '#ffffff',
-      padding: 10,
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: isDark ? '#262635' : '#e6e8f2',
-    },
-    flowBalanceBox: {
-      flex: 1,
-      alignItems: 'flex-start',
-    },
-    flowBalanceBoxHighlight: {
-      alignItems: 'flex-end',
-    },
-    flowLabel: {
-      fontSize: 10,
-      fontWeight: '700',
-      color: colors.textTertiary || '#8E8E9F',
-      letterSpacing: 0.4,
-      marginBottom: 2,
-    },
-    flowLabelHighlight: {
-      fontSize: 10,
-      fontWeight: '800',
-      color: '#2dba4e',
-      letterSpacing: 0.4,
-      marginBottom: 2,
-    },
-    flowAmount: {
-      fontSize: 13,
-      fontWeight: '700',
-      color: colors.text,
-    },
-    flowAmountHighlight: {
-      fontSize: 14,
-      fontWeight: '900',
-      color: '#2dba4e',
-    },
-    flowArrowBox: {
-      alignItems: 'center',
-      justifyContent: 'center',
-      paddingHorizontal: 6,
-    },
-    netFlowPill: {
-      marginTop: 2,
-      paddingHorizontal: 6,
-      paddingVertical: 2,
-      borderRadius: 6,
-    },
-    netFlowPillCredit: {
-      backgroundColor: 'rgba(45, 186, 78, 0.12)',
-    },
-    netFlowPillDebit: {
-      backgroundColor: 'rgba(239, 68, 68, 0.12)',
-    },
-    netFlowPillText: {
-      fontSize: 10,
-      fontWeight: '800',
-    },
-    netFlowTextCredit: {
-      color: '#2dba4e',
-    },
-    netFlowTextDebit: {
-      color: '#ef4444',
-    },
-    closingBalanceToggleRow: {
-      marginTop: 8,
-      flexDirection: 'row',
-      alignItems: 'center',
-    },
-    overrideCheckbox: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 6,
-      paddingVertical: 4,
-    },
-    overrideCheckboxLabel: {
-      fontSize: 11,
-      fontWeight: '600',
-      color: colors.textSecondary || '#8E8E9F',
-    },
-    exactBalanceInputRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      marginTop: 6,
-      backgroundColor: isDark ? '#0a0a0f' : '#ffffff',
-      borderRadius: 10,
-      paddingHorizontal: 12,
-      borderWidth: 1,
-      borderColor: isDark ? '#2f2f40' : '#e0e2ec',
-    },
-    exactCurrencyPrefix: {
-      fontSize: 16,
-      fontWeight: '800',
-      color: '#2dba4e',
-      marginRight: 6,
-    },
-    exactBalanceInput: {
-      flex: 1,
-      fontSize: 15,
-      fontWeight: '800',
-      color: colors.text,
-      paddingVertical: 6,
-    },
-    detectedBadge: {
-      backgroundColor: 'rgba(45, 186, 78, 0.15)',
-      paddingHorizontal: 8,
-      paddingVertical: 3,
-      borderRadius: 6,
-    },
-    detectedBadgeText: {
-      fontSize: 10,
-      fontWeight: '700',
-      color: '#2dba4e',
-    },
-    balanceDisabledBanner: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 8,
-      marginTop: 10,
-      paddingTop: 10,
-      borderTopWidth: 1,
-      borderTopColor: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.05)',
-    },
-    balanceDisabledBannerText: {
-      flex: 1,
-      fontSize: 11,
-      color: colors.textTertiary || '#8E8E9F',
-      lineHeight: 15,
-    },
-    summaryRibbon: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-around',
-      marginHorizontal: 16,
-      marginVertical: 10,
-      paddingVertical: 10,
-      paddingHorizontal: 8,
-      backgroundColor: isDark ? '#161620' : '#f4f5fa',
-      borderRadius: 12,
-    },
-    summaryItem: {
-      alignItems: 'center',
-      flex: 1,
-    },
-    summaryLabel: {
-      fontSize: 11,
-      color: colors.textSecondary || '#8E8E9F',
-      fontWeight: '600',
-    },
-    summaryVal: {
-      fontSize: 14,
-      fontWeight: '800',
-      marginTop: 2,
-    },
-    summaryDivider: {
-      width: 1,
-      height: 24,
-      backgroundColor: isDark ? '#262636' : '#dedee8',
-    },
-    scrollList: {
-      flex: 1,
-      paddingHorizontal: 16,
-    },
-    itemCard: {
-      backgroundColor: isDark ? '#171721' : '#ffffff',
-      borderRadius: 16,
-      padding: 14,
-      marginBottom: 12,
-      borderWidth: 1,
-      borderColor: isDark ? '#262636' : '#e6e8f0',
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: isDark ? 0.3 : 0.05,
-      shadowRadius: 4,
-      elevation: 2,
-    },
-    itemHeader: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      marginBottom: 10,
-    },
-    indexBadge: {
-      paddingHorizontal: 8,
-      paddingVertical: 3,
-      borderRadius: 6,
-      backgroundColor: isDark ? '#232332' : '#edf0f7',
-    },
-    indexText: {
-      fontSize: 11,
-      fontWeight: '800',
-      color: colors.textSecondary || '#8E8E9F',
-    },
-    duplicateWarningBadge: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 4,
-      backgroundColor: isDark ? 'rgba(245, 158, 11, 0.15)' : '#fef3c7',
-      paddingHorizontal: 7,
-      paddingVertical: 3,
-      borderRadius: 6,
-      borderWidth: 1,
-      borderColor: isDark ? 'rgba(245, 158, 11, 0.3)' : '#fde68a',
-    },
-    duplicateWarningText: {
-      fontSize: 10,
-      fontWeight: '700',
-      color: isDark ? '#fbbf24' : '#b45309',
-    },
-    typeSwitcher: {
-      flexDirection: 'row',
-      backgroundColor: isDark ? '#0f0f15' : '#f0f2f8',
-      borderRadius: 8,
-      padding: 2,
-      gap: 4,
-    },
-    typeBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 4,
-      paddingHorizontal: 10,
-      paddingVertical: 5,
-      borderRadius: 6,
-    },
-    typeBtnDebitActive: {
-      backgroundColor: '#ef4444',
-    },
-    typeBtnCreditActive: {
-      backgroundColor: '#2dba4e',
-    },
-    typeBtnText: {
-      fontSize: 11,
-      fontWeight: '700',
-      color: '#8E8E9F',
-    },
-    deleteRowBtn: {
-      padding: 6,
-      borderRadius: 6,
-      backgroundColor: 'rgba(239, 68, 68, 0.1)',
-    },
-    inputGridRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-    },
-    fieldLabel: {
-      fontSize: 11,
-      fontWeight: '600',
-      color: colors.textSecondary || '#8E8E9F',
-      marginBottom: 4,
-    },
-    inputContainer: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: isDark ? '#0e0e14' : '#fcfcfd',
-      borderWidth: 1,
-      borderColor: isDark ? '#2a2a3b' : '#dcdfe8',
-      borderRadius: 10,
-      paddingHorizontal: 10,
-      height: 40,
-    },
-    inlineCurrency: {
-      fontSize: 14,
-      fontWeight: '800',
-      color: colors.text,
-      marginRight: 4,
-    },
-    textInput: {
-      flex: 1,
-      fontSize: 13,
-      fontWeight: '600',
-      color: colors.text,
-      paddingVertical: 6,
-    },
-    catChip: {
-      paddingHorizontal: 10,
-      paddingVertical: 5,
-      borderRadius: 8,
-      backgroundColor: isDark ? '#232332' : '#f0f2f8',
-      borderWidth: 1,
-      borderColor: 'transparent',
-    },
-    catChipActive: {
-      backgroundColor: isDark ? 'rgba(3, 218, 198, 0.18)' : 'rgba(3, 218, 198, 0.22)',
-      borderColor: colors.accent || '#03DAC6',
-    },
-    catChipText: {
-      fontSize: 11,
-      fontWeight: '600',
-      color: colors.textSecondary || '#8E8E9F',
-    },
-    catChipTextActive: {
-      color: colors.accent || '#03DAC6',
-      fontWeight: '700',
-    },
-    addBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 8,
-      paddingVertical: 14,
-      borderRadius: 14,
-      borderWidth: 1,
-      borderColor: colors.accent || '#03DAC6',
-      borderStyle: 'dashed',
-      backgroundColor: isDark ? 'rgba(3, 218, 198, 0.05)' : 'rgba(3, 218, 198, 0.08)',
-      marginTop: 4,
-    },
-    addBtnText: {
-      fontSize: 13,
-      fontWeight: '700',
-      color: colors.accent || '#03DAC6',
-    },
-    footer: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 12,
-      paddingHorizontal: 16,
-      paddingTop: 12,
-      borderTopWidth: 1,
-      borderTopColor: isDark ? '#23232c' : '#f0f0f4',
-    },
-    cancelBtn: {
-      flex: 1,
-      paddingVertical: 13,
-      borderRadius: 12,
-      backgroundColor: isDark ? '#1f1f28' : '#f0f0f5',
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    cancelBtnText: {
-      fontSize: 14,
-      fontWeight: '700',
-      color: colors.textSecondary || '#8E8E9F',
-    },
-    saveBtn: {
-      flex: 2,
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      paddingVertical: 13,
-      borderRadius: 12,
-      backgroundColor: '#2dba4e',
-    },
-    saveBtnText: {
-      fontSize: 14,
-      fontWeight: '800',
-      color: '#ffffff',
-    },
-  });
+const s = StyleSheet.create({
+  overlay: { flex: 1, backgroundColor: 'rgba(7, 17, 13, 0.55)', justifyContent: 'flex-end' },
+  container: { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingTop: 10, overflow: 'hidden', width: '100%', maxWidth: 640, alignSelf: 'center' },
+  grabber: { width: 40, height: 5, borderRadius: 3, alignSelf: 'center', marginBottom: 14 },
+
+  head: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingHorizontal: 4 },
+  title: { fontSize: 24, letterSpacing: -0.5 },
+  sub: { fontSize: 14, marginTop: 2 },
+  close: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+
+  tiles: { flexDirection: 'row', gap: 10, marginTop: 16 },
+  tile: { flex: 1, borderWidth: 1, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 12 },
+  tileLabel: { fontSize: 12 },
+  tileValue: { fontSize: 17, fontWeight: '700', marginTop: 2, fontVariant: ['tabular-nums'] },
+
+  balance: { marginTop: 12, borderRadius: 24, backgroundColor: FOREST, padding: 16, overflow: 'hidden' },
+  balanceRing: { position: 'absolute', width: 180, height: 180, borderRadius: 90, borderWidth: 1, borderColor: 'rgba(184,243,107,0.16)', right: -60, top: -80 },
+  balanceHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  balanceTitle: { color: '#FFFFFF', fontSize: 15, fontWeight: '600' },
+  flow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 12 },
+  flowLabel: { color: '#B5CEC1', fontSize: 12 },
+  flowNow: { color: '#FFFFFF', fontSize: 16, fontWeight: '700', marginTop: 2 },
+  flowAfter: { color: LIME, fontSize: 24, letterSpacing: -0.4, marginTop: 2 },
+  closingNote: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 10 },
+  closingNoteText: { flex: 1, color: '#B5CEC1', fontSize: 12, lineHeight: 17 },
+  closingLink: { color: '#FFFFFF', fontWeight: '600', textDecorationLine: 'underline' },
+  closingReset: { color: '#B5CEC1', fontSize: 12, marginTop: 6, textDecorationLine: 'underline' },
+  closingRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12, height: 44, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 12 },
+  closingPrefix: { color: '#B5CEC1', fontSize: 16, fontWeight: '700' },
+  closingInput: { flex: 1, color: '#FFFFFF', fontSize: 16, fontWeight: '700', paddingVertical: 0, ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : {}) },
+  closingDone: { color: LIME, fontSize: 14, fontWeight: '700' },
+  balanceOff: { color: '#D9E7DF', fontSize: 13, lineHeight: 18, marginTop: 8 },
+
+  dupNote: { borderRadius: 18, padding: 14, marginTop: 12 },
+  dupNoteText: { fontSize: 13, lineHeight: 18 },
+
+  listHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 4, paddingTop: 18, paddingBottom: 8 },
+  listCount: { fontSize: 13, fontWeight: '700' },
+  link: { fontSize: 13, fontWeight: '600' },
+  list: { borderWidth: 1, borderRadius: 22, overflow: 'hidden' },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 12 },
+  check: { width: 22, height: 22, borderRadius: 7, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  name: { fontSize: 15, fontWeight: '600', flexShrink: 1 },
+  dupTag: { borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2 },
+  dupText: { fontSize: 11, fontWeight: '700' },
+  meta: { fontSize: 12, marginTop: 2 },
+  amt: { fontSize: 15, fontWeight: '700', fontVariant: ['tabular-nums'] },
+
+  editor: { paddingHorizontal: 14, paddingBottom: 14 },
+  editRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
+  input: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 44, borderRadius: 14, borderWidth: 1, paddingHorizontal: 12 },
+  inputPrefix: { fontSize: 14, fontWeight: '700' },
+  inputText: { flex: 1, fontSize: 14, fontWeight: '600', paddingVertical: 0, ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : {}) },
+  seg: { flexDirection: 'row', borderRadius: 14, padding: 3 },
+  segBtn: { height: 38, paddingHorizontal: 14, borderRadius: 11, justifyContent: 'center' },
+  segText: { fontSize: 13, fontWeight: '600' },
+  cats: { gap: 6, paddingTop: 10 },
+  cat: { height: 32, paddingHorizontal: 12, borderRadius: 16, borderWidth: 1, justifyContent: 'center' },
+  catText: { fontSize: 12, fontWeight: '600' },
+  editFoot: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 12 },
+  footNote: { flex: 1, fontSize: 12 },
+  remove: { fontSize: 13, fontWeight: '600' },
+
+  addRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 52, borderRadius: 20, borderWidth: 1.5, borderStyle: 'dashed', marginTop: 12 },
+  addRowText: { fontSize: 14, fontWeight: '600' },
+
+  footer: { paddingHorizontal: 16, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth },
+  errorRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
+  errorText: { flex: 1, fontSize: 13, fontWeight: '600' },
+  cta: { height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center' },
+  ctaText: { fontSize: 16, fontWeight: '700' },
+});
