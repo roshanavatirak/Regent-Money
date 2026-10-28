@@ -144,29 +144,59 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({ updateInfo, visible, o
 
   const onMain = state === 'ready' ? install : state === 'downloading' ? undefined : startDownload;
 
+  const isDownloading = state === 'downloading';
+
   const MainButton = (
     <Pressable
       onPress={onMain}
-      disabled={state === 'downloading'}
-      style={({ pressed }) => [s.mainBtn, { backgroundColor: state === 'downloading' ? track : accent }, pressed && state !== 'downloading' && { transform: [{ scale: 0.98 }] }]}
+      disabled={isDownloading}
+      style={({ pressed }) => [
+        s.mainBtn,
+        {
+          backgroundColor: isDownloading
+            ? (isDark ? '#142E22' : '#0B3D2C')
+            : accent,
+        },
+        pressed && !isDownloading && { transform: [{ scale: 0.98 }] },
+      ]}
       accessibilityRole="button"
       accessibilityLabel={mainLabel}
-      accessibilityState={{ busy: state === 'downloading' }}
+      accessibilityState={{ busy: isDownloading }}
     >
-      {state === 'downloading' && <Animated.View style={[s.mainFill, { backgroundColor: accent }, fillStyle]} />}
-      <View style={s.mainContent}>
-        {state === 'downloading' ? (
-          <ActivityIndicator size="small" color={accentFg} />
-        ) : (
-          <Feather name={state === 'ready' ? 'check-circle' : state === 'failed' ? 'refresh-cw' : 'download'} size={18} color={accentFg} />
-        )}
-        <Text style={[s.mainText, { color: accentFg }]}>{mainLabel}</Text>
-      </View>
-      {state === 'downloading' && totalMB ? (
-        <Text style={[s.mainSize, { color: percent > 75 ? accentFg : accent }]}>
-          {loadedMB} of {totalMB} MB
-        </Text>
-      ) : null}
+      {isDownloading && (
+        <Animated.View
+          style={[
+            s.mainFill,
+            { backgroundColor: isDark ? 'rgba(184, 243, 107, 0.32)' : 'rgba(184, 243, 107, 0.24)' },
+            fillStyle,
+          ]}
+        />
+      )}
+
+      {isDownloading ? (
+        <View style={s.downloadingCol}>
+          <View style={s.downloadingTitleRow}>
+            <ActivityIndicator size="small" color={LIME} style={{ marginRight: 8 }} />
+            <Text style={s.downloadingTitleText}>Downloading {percent}%</Text>
+          </View>
+          <Text style={s.downloadingSubText}>
+            {percent === 100
+              ? 'Opening installer...'
+              : totalMB
+                ? `${loadedMB} MB of ${totalMB} MB`
+                : `${loadedMB} MB`}
+          </Text>
+        </View>
+      ) : (
+        <View style={s.mainContent}>
+          <Feather
+            name={state === 'ready' ? 'check-circle' : state === 'failed' ? 'refresh-cw' : 'download'}
+            size={18}
+            color={accentFg}
+          />
+          <Text style={[s.mainText, { color: accentFg }]}>{mainLabel}</Text>
+        </View>
+      )}
     </Pressable>
   );
 
@@ -297,11 +327,14 @@ const s = StyleSheet.create({
   noteTitle: { fontSize: 15, fontWeight: '700' },
   noteDetail: { fontSize: 14, lineHeight: 20, marginTop: 2 },
 
-  mainBtn: { height: 56, borderRadius: 28, overflow: 'hidden', justifyContent: 'center', marginTop: 12 },
-  mainFill: { position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 28 },
+  mainBtn: { height: 58, borderRadius: 29, overflow: 'hidden', justifyContent: 'center', marginTop: 12 },
+  mainFill: { position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 29 },
   mainContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   mainText: { fontSize: 16, fontWeight: '700' },
-  mainSize: { position: 'absolute', right: 22, fontSize: 13, fontWeight: '600' },
+  downloadingCol: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16 },
+  downloadingTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  downloadingTitleText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
+  downloadingSubText: { fontSize: 12, fontWeight: '600', color: LIME, marginTop: 2, opacity: 0.95 },
   textBtn: { height: 44, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
   textBtnLabel: { fontSize: 14, fontWeight: '600' },
   helper: { fontSize: 13, textAlign: 'center' },
