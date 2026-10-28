@@ -20,6 +20,8 @@ import { IncomeRecord } from './sync/entities/income-record.entity';
 import { UserMerchantTag } from './sync/entities/user-merchant-tag.entity';
 import { BudgetTransactionExclusion } from './sync/entities/budget-exclusion.entity';
 import { Notification } from './notifications/entities/notification.entity';
+import { NotificationLog } from './notifications/entities/notification-log.entity';
+import { UserSignals } from './notifications/entities/user-signals.entity';
 import { NotificationsModule } from './notifications/notifications.module';
 import { AiModule } from './ai/ai.module';
 import { RedisModule } from './redis/redis.module';
@@ -92,6 +94,8 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
             UserMerchantTag,
             BudgetTransactionExclusion,
             Notification,
+            NotificationLog,
+            UserSignals,
             AdminAuditLog,
           ],
           synchronize: false, // Set to false to avoid altering tables automatically, schemas exist

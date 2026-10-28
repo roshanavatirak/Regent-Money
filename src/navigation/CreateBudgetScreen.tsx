@@ -1,379 +1,158 @@
+// src/navigation/CreateBudgetScreen.tsx
+//
+// Two flows on one screen:
+//  - New budget: monthly (pick a month, set an amount, optionally copy a past one)
+//    or a trip/event with its own dates.
+//  - Split a month (initialScope 'category'): share the month's budget across
+//    categories, with a live bar of what's planned and what's left.
+// Budget logic and saving are unchanged; the UI is new.
+
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  TextInput,
-  Platform,
-  ActivityIndicator,
-  Alert,
-  Modal,
-} from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, Platform, ActivityIndicator, Modal } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
-import { Ionicons } from '@expo/vector-icons';
-import {
-  format,
-  addDays,
-  addMonths,
-  endOfMonth,
-  startOfMonth,
-  isValid,
-  parseISO,
-} from 'date-fns';
+import Animated, { FadeIn, FadeInDown, LinearTransition } from 'react-native-reanimated';
+import { Ionicons, Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import {
-  useTheme,
-  useBudgetStore,
-  BudgetCustomCategory,
-} from '../store';
-import {
-  BUDGET_DEBIT_CATEGORIES,
-  getBudgetPeriodRange,
-  getCategoryMeta,
-  budgetService,
-  getBudgetTemplateData,
-} from '../services/budgetService';
-import { CalendarDatePickerModal } from '../components/CalendarDatePickerModal';
+import * as Font from 'expo-font';
+import { format, addDays, addMonths, endOfMonth, startOfMonth, isValid, parseISO } from 'date-fns';
+import { useTheme, useBudgetStore, BudgetCustomCategory } from '../store';
+import { BUDGET_DEBIT_CATEGORIES, getBudgetPeriodRange, getCategoryMeta, budgetService, getBudgetTemplateData } from '../services/budgetService';
+import { CategoryIcon } from '../components/CategoryIcon';
+import { getCategoryColor } from '../constants/categories';
+import { DateTimePickerSheet } from '../components/DateTimePickerSheet';
+
+const FOREST = '#0B3D2C';
+const LIME = '#B8F36B';
 
 export interface CreateBudgetScreenProps {
   AppTopBarComponent?: React.ComponentType;
 }
 
-const CUSTOM_ICONS = [
-  'airplane-outline',
-  'restaurant-outline',
-  'cart-outline',
-  'car-outline',
-  'film-outline',
-  'barbell-outline',
-  'gift-outline',
-  'wine-outline',
-  'paw-outline',
-  'book-outline',
-  'construct-outline',
-  'heart-outline',
-  'camera-outline',
-  'game-controller-outline',
-  'musical-notes-outline',
-  'wallet-outline',
-];
-
-const CUSTOM_COLORS = [
-  '#2dba4e',
-  '#3b82f6',
-  '#f59e0b',
-  '#ef4444',
-  '#8b5cf6',
-  '#ec4899',
-  '#06b6d4',
-  '#10b981',
-];
+const CUSTOM_ICONS = ['airplane-outline', 'restaurant-outline', 'cart-outline', 'car-outline', 'film-outline', 'barbell-outline', 'gift-outline', 'wine-outline', 'paw-outline', 'book-outline', 'construct-outline', 'heart-outline', 'camera-outline', 'game-controller-outline', 'musical-notes-outline', 'wallet-outline'];
+const CUSTOM_COLORS = ['#2B8A3E', '#1971C2', '#E8590C', '#E03131', '#6741D9', '#C2255C', '#0C8599', '#5C940D'];
 
 const EVENT_PRESETS = [
-  { id: 'trip', label: 'Vacation / Trip', icon: 'airplane-outline', defaultName: 'Goa Trip' },
-  { id: 'wedding', label: 'Wedding', icon: 'heart-outline', defaultName: 'Wedding Budget' },
-  { id: 'festival', label: 'Festival', icon: 'sparkles-outline', defaultName: 'Diwali Budget' },
-  { id: 'party', label: 'Celebration', icon: 'wine-outline', defaultName: 'Birthday Party' },
-  { id: 'shopping', label: 'Big Purchase', icon: 'cart-outline', defaultName: 'Shopping Spree' },
-  { id: 'roadtrip', label: 'Road Trip', icon: 'car-outline', defaultName: 'Road Trip' },
-  { id: 'home', label: 'Home Project', icon: 'home-outline', defaultName: 'Home Renovation' },
+  { id: 'trip', label: 'Trip', icon: 'airplane-outline', defaultName: 'Goa trip' },
+  { id: 'wedding', label: 'Wedding', icon: 'heart-outline', defaultName: 'Wedding' },
+  { id: 'festival', label: 'Festival', icon: 'sparkles-outline', defaultName: 'Diwali' },
+  { id: 'party', label: 'Party', icon: 'wine-outline', defaultName: 'Birthday party' },
+  { id: 'shopping', label: 'Big buy', icon: 'cart-outline', defaultName: 'New phone' },
+  { id: 'roadtrip', label: 'Road trip', icon: 'car-outline', defaultName: 'Road trip' },
+  { id: 'home', label: 'Home', icon: 'home-outline', defaultName: 'Home project' },
 ];
+
+const inr = (n: number) => `₹${Math.round(Math.abs(n)).toLocaleString('en-IN')}`;
 
 export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBarComponent }) => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const { colors, isDark } = useTheme();
+  const display = Font.isLoaded('BricolageGrotesque_800ExtraBold') ? 'BricolageGrotesque_800ExtraBold' : undefined;
+  const heading = { fontFamily: display, fontWeight: display ? undefined : ('800' as const) };
 
-  const budgets = useBudgetStore((state) => state.budgets);
-  const customCategories = useBudgetStore((state) => state.customCategories || []);
-  const addCustomCategory = useBudgetStore((state) => state.addCustomCategory);
+  const budgets = useBudgetStore((s) => s.budgets);
+  const customCategories = useBudgetStore((s) => s.customCategories || []);
+  const addCustomCategory = useBudgetStore((s) => s.addCustomCategory);
 
-  const allOverallAndEventBudgets = useMemo(() => {
-    return budgets.filter(
-      (b) => b.isOverall || b.periodType === 'custom_event' || (b.periodType !== 'monthly' && b.periodType !== undefined)
-    );
-  }, [budgets]);
-
-  const [activeTemplateBudget, setActiveTemplateBudget] = useState<any>(() => {
-    if (route.params?.cloneFromBudgetId) {
-      return budgets.find((b) => b.id === route.params.cloneFromBudgetId) || null;
-    }
-    return null;
-  });
-
-  const applyBudgetTemplate = (source: any) => {
-    const tpl = getBudgetTemplateData(source, budgets);
-    if (tpl.periodType === 'custom_event' || !source.isOverall) {
-      setBudgetType('custom_event');
-      setBudgetName(tpl.name || 'Special Event');
-      setAmountStr(String(tpl.amount || ''));
-    } else {
-      setBudgetType('monthly');
-      setAmountStr(String(tpl.amount || ''));
-      if (tpl.subCategories && tpl.subCategories.length > 0) {
-        const newAllocs: Record<string, { id?: string; amountStr: string }> = {};
-        tpl.subCategories.forEach((sc) => {
-          newAllocs[sc.category] = { amountStr: String(sc.limitAmount || 0) };
-        });
-        setAllocations(newAllocs);
-      }
-    }
-  };
-
-  // 1. Duration Type: 'monthly' vs 'custom_event'
-  const [budgetType, setBudgetType] = useState<'monthly' | 'custom_event'>(() => {
-    return route.params?.initialType === 'custom_event' ? 'custom_event' : 'monthly';
-  });
-
-  // 2. Monthly Date Mode: 'calendar' vs 'custom_dates'
-  const [monthlyDateMode, setMonthlyDateMode] = useState<'calendar' | 'custom_dates'>('calendar');
-
-  // Next 6 Months computation
-  const next6Months = useMemo(() => {
-    const now = new Date();
-    const list = [];
-    for (let i = 0; i < 6; i++) {
-      const m = addMonths(now, i);
-      const monthKey = format(m, 'MMMM yyyy');
-      const hasBudget = budgets.some((b) => {
-        if (!b.isOverall || (b.periodType && b.periodType !== 'monthly')) return false;
-        const bPeriod = (b.period || '').toLowerCase().trim();
-        const mKey = monthKey.toLowerCase().trim();
-        if (bPeriod.includes(mKey) || mKey.includes(bPeriod)) return true;
-        if (b.startDate) {
-          const bMonthKey = format(new Date(b.startDate), 'MMMM yyyy').toLowerCase().trim();
-          if (bMonthKey === mKey) return true;
-        }
-        return false;
-      });
-      list.push({
-        index: i,
-        date: m,
-        label: format(m, 'MMM yyyy'),
-        fullLabel: monthKey,
-        hasBudget,
-        startDateStr: format(startOfMonth(m), 'yyyy-MM-dd'),
-        endDateStr: format(endOfMonth(m), 'yyyy-MM-dd'),
-      });
-    }
-    return list;
-  }, [budgets]);
-
-  // Default month selection:
-  // If parentBudgetId, period or targetDate passed via route, match that month!
-  // If adding category sub-budget, default to current month (0) or matching parent budget, NOT next month!
-  const [selectedMonthIndex, setSelectedMonthIndex] = useState(() => {
-    const now = new Date();
-    if (route.params?.period) {
-      const idx = next6Months.findIndex(
-        (m) =>
-          m.fullLabel.toLowerCase() === route.params.period.toLowerCase() ||
-          route.params.period.toLowerCase().includes(m.fullLabel.toLowerCase())
-      );
-      if (idx !== -1) return idx;
-    }
-    if (route.params?.parentBudgetId) {
-      const parent = budgets.find((b) => b.id === route.params.parentBudgetId);
-      if (parent) {
-        const pDate = parent.startDate ? new Date(parent.startDate) : now;
-        const pMonthKey = format(pDate, 'MMMM yyyy');
-        const idx = next6Months.findIndex(
-          (m) =>
-            m.fullLabel.toLowerCase() === pMonthKey.toLowerCase() ||
-            parent.period?.toLowerCase().includes(m.fullLabel.toLowerCase())
-        );
-        if (idx !== -1) return idx;
-      }
-    }
-    if (route.params?.targetDate) {
-      const tDate = new Date(route.params.targetDate);
-      const tMonthKey = format(tDate, 'MMMM yyyy');
-      const idx = next6Months.findIndex((m) => m.fullLabel.toLowerCase() === tMonthKey.toLowerCase());
-      if (idx !== -1) return idx;
-    }
-    if (route.params?.initialScope === 'category') {
-      return 0;
-    }
-
-    // If duplicating from template, find the first upcoming month that does NOT already have a budget!
-    if (route.params?.cloneFromBudgetId) {
-      const firstAvailable = next6Months.find((m) => !m.hasBudget);
-      if (firstAvailable) return firstAvailable.index;
-    }
-
-    // Default for new budget creation: find first upcoming month without an existing budget
-    const firstAvailable = next6Months.find((m) => !m.hasBudget);
-    if (firstAvailable) return firstAvailable.index;
-
-    const currentMonthKey = format(now, 'MMMM yyyy');
-    const currentHasBudget = budgets.some(
-      (b) => b.isOverall && (!b.periodType || b.periodType === 'monthly') && b.period?.includes(currentMonthKey)
-    );
-    return currentHasBudget ? 1 : 0;
-  });
-
-  const [monthDropdownOpen, setMonthDropdownOpen] = useState(false);
-  const [templateDropdownOpen, setTemplateDropdownOpen] = useState(false);
-
-  // 3. Category Mode vs New Budget
   const isCategoryMode = route.params?.initialScope === 'category';
 
-  // 4. Form Fields
-  const [selectedCategory, setSelectedCategory] = useState('food');
+  const pastBudgets = useMemo(
+    () => budgets.filter((b) => b.isOverall || b.periodType === 'custom_event' || (b.periodType !== 'monthly' && b.periodType !== undefined)),
+    [budgets]
+  );
+
+  const [template, setTemplate] = useState<any>(() => (route.params?.cloneFromBudgetId ? budgets.find((b) => b.id === route.params.cloneFromBudgetId) || null : null));
+  const [budgetType, setBudgetType] = useState<'monthly' | 'custom_event'>(route.params?.initialType === 'custom_event' ? 'custom_event' : 'monthly');
+  const [monthlyDateMode, setMonthlyDateMode] = useState<'calendar' | 'custom_dates'>('calendar');
+
+  /* ---------------- Months ---------------- */
+
+  const months = useMemo(() => {
+    const now = new Date();
+    return Array.from({ length: 6 }, (_, i) => {
+      const m = addMonths(now, i);
+      const key = format(m, 'MMMM yyyy');
+      const hasBudget = budgets.some((b) => {
+        if (!b.isOverall || (b.periodType && b.periodType !== 'monthly')) return false;
+        const p = (b.period || '').toLowerCase().trim();
+        const k = key.toLowerCase();
+        if (p && (p.includes(k) || k.includes(p))) return true;
+        return !!b.startDate && format(new Date(b.startDate), 'MMMM yyyy').toLowerCase() === k;
+      });
+      return { index: i, date: m, short: format(m, 'MMMM'), fullLabel: key, hasBudget, days: endOfMonth(m).getDate(), startDateStr: format(startOfMonth(m), 'yyyy-MM-dd'), endDateStr: format(endOfMonth(m), 'yyyy-MM-dd') };
+    });
+  }, [budgets]);
+
+  const [monthIdx, setMonthIdx] = useState(() => {
+    const p = route.params || {};
+    const byLabel = (label?: string) => (label ? months.findIndex((m) => m.fullLabel.toLowerCase() === label.toLowerCase() || label.toLowerCase().includes(m.fullLabel.toLowerCase())) : -1);
+    if (p.period) {
+      const i = byLabel(p.period);
+      if (i !== -1) return i;
+    }
+    if (p.parentBudgetId) {
+      const parent = budgets.find((b) => b.id === p.parentBudgetId);
+      if (parent) {
+        const i = byLabel(format(parent.startDate ? new Date(parent.startDate) : new Date(), 'MMMM yyyy'));
+        if (i !== -1) return i;
+      }
+    }
+    if (p.targetDate) {
+      const i = byLabel(format(new Date(p.targetDate), 'MMMM yyyy'));
+      if (i !== -1) return i;
+    }
+    if (p.initialScope === 'category') return 0;
+    const free = months.find((m) => !m.hasBudget);
+    return free ? free.index : 0;
+  });
+
+  /* ---------------- Fields ---------------- */
+
   const [amountStr, setAmountStr] = useState('');
   const [budgetName, setBudgetName] = useState('');
+  const [eventPreset, setEventPreset] = useState(EVENT_PRESETS[0].id);
+  const [startDateStr, setStartDateStr] = useState(() =>
+    route.params?.initialType === 'custom_event' ? format(addDays(new Date(), 10), 'yyyy-MM-dd') : months[monthIdx]?.startDateStr || format(startOfMonth(new Date()), 'yyyy-MM-dd')
+  );
+  const [endDateStr, setEndDateStr] = useState(() =>
+    route.params?.initialType === 'custom_event' ? format(addDays(new Date(), 16), 'yyyy-MM-dd') : months[monthIdx]?.endDateStr || format(endOfMonth(new Date()), 'yyyy-MM-dd')
+  );
+  const [datePicker, setDatePicker] = useState<'start' | 'end' | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [errorText, setErrorText] = useState('');
 
-  // 5. Special Event Preset
-  const [selectedEventPreset, setSelectedEventPreset] = useState(EVENT_PRESETS[0].id);
-
-  // 6. Dates
-  const [startDateStr, setStartDateStr] = useState(() => {
-    if (route.params?.initialType === 'custom_event') {
-      return format(addDays(new Date(), 10), 'yyyy-MM-dd');
-    }
-    const defaultMonth = next6Months[selectedMonthIndex] || next6Months[0];
-    return defaultMonth?.startDateStr || format(startOfMonth(new Date()), 'yyyy-MM-dd');
-  });
-
-  const [endDateStr, setEndDateStr] = useState(() => {
-    if (route.params?.initialType === 'custom_event') {
-      return format(addDays(new Date(), 16), 'yyyy-MM-dd');
-    }
-    const defaultMonth = next6Months[selectedMonthIndex] || next6Months[0];
-    return defaultMonth?.endDateStr || format(endOfMonth(new Date()), 'yyyy-MM-dd');
-  });
-
-  // Calendar Modal Picker State
-  const [calendarPickerTarget, setCalendarPickerTarget] = useState<'start' | 'end' | null>(null);
-
-  // Sync route params when component initially mounts - do not re-run on saving or background budget updates!
-  const hasInitializedFromParamsRef = useRef(false);
-
-  useEffect(() => {
-    if (hasInitializedFromParamsRef.current) return;
-    hasInitializedFromParamsRef.current = true;
-
-    if (route.params?.initialType) {
-      setBudgetType(route.params.initialType);
-      if (route.params.initialType === 'custom_event') {
-        if (!budgetName) setBudgetName('Goa Trip');
-      }
-    }
-    if (route.params?.period) {
-      const idx = next6Months.findIndex(
-        (m) =>
-          m.fullLabel.toLowerCase() === route.params.period.toLowerCase() ||
-          route.params.period.toLowerCase().includes(m.fullLabel.toLowerCase())
-      );
-      if (idx !== -1) setSelectedMonthIndex(idx);
-    } else if (route.params?.parentBudgetId) {
-      const parent = budgets.find((b) => b.id === route.params.parentBudgetId);
-      if (parent) {
-        const pDate = parent.startDate ? new Date(parent.startDate) : new Date();
-        const pMonthKey = format(pDate, 'MMMM yyyy');
-        const idx = next6Months.findIndex(
-          (m) =>
-            m.fullLabel.toLowerCase() === pMonthKey.toLowerCase() ||
-            parent.period?.toLowerCase().includes(m.fullLabel.toLowerCase())
-        );
-        if (idx !== -1) setSelectedMonthIndex(idx);
-      }
-    } else if (route.params?.initialScope === 'category') {
-      setSelectedMonthIndex(0);
-    }
-
-    if (route.params?.cloneFromBudgetId) {
-      const found = budgets.find((b) => b.id === route.params.cloneFromBudgetId);
-      if (found) {
-        setActiveTemplateBudget(found);
-        applyBudgetTemplate(found);
-
-        // Find the intended next month for this cloned budget
-        let targetIdx = -1;
-        if (found.startDate) {
-          const nextM = addMonths(new Date(found.startDate), 1);
-          const nextMKey = format(nextM, 'MMMM yyyy').toLowerCase();
-          targetIdx = next6Months.findIndex((m) => m.fullLabel.toLowerCase() === nextMKey && !m.hasBudget);
-        }
-        if (targetIdx === -1) {
-          const firstAvailable = next6Months.find((m) => !m.hasBudget);
-          if (firstAvailable) targetIdx = firstAvailable.index;
-        }
-
-        if (targetIdx !== -1) {
-          setSelectedMonthIndex(targetIdx);
-          setStartDateStr(next6Months[targetIdx].startDateStr);
-          setEndDateStr(next6Months[targetIdx].endDateStr);
-        }
-      }
-    }
-  }, [route.params?.initialType, route.params?.parentBudgetId, route.params?.period, route.params?.initialScope, route.params?.cloneFromBudgetId, budgets, next6Months]);
-
-  // Custom Category Creation Modal
-  const [customCatModalVisible, setCustomCatModalVisible] = useState(false);
+  // Category picker and custom category sheets
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const [customOpen, setCustomOpen] = useState(false);
   const [newCatName, setNewCatName] = useState('');
   const [newCatIcon, setNewCatIcon] = useState('gift-outline');
-  const [newCatColor, setNewCatColor] = useState('#2dba4e');
+  const [newCatColor, setNewCatColor] = useState(CUSTOM_COLORS[0]);
 
-  const [saving, setSaving] = useState(false);
-  const [categorySearch, setCategorySearch] = useState('');
-  const [categoryPickerModalVisible, setCategoryPickerModalVisible] = useState(false);
+  /* ---------------- Parent budget (split mode) ---------------- */
 
-  // Built-in Top 30 Categories + User Custom
-  const allCategories = useMemo(() => {
-    const builtIn = BUDGET_DEBIT_CATEGORIES.filter((c) => !c.isOverall);
-    const userCustom = customCategories.map((c) => ({
-      id: c.id,
-      label: c.label,
-      icon: c.icon,
-      color: c.color,
-      isOverall: false,
-      isCustom: true,
-    }));
-    return [...userCustom, ...builtIn];
-  }, [customCategories]);
-
-  // Filtered Categories
-  const filteredCategories = useMemo(() => {
-    if (!categorySearch.trim()) return allCategories;
-    const q = categorySearch.toLowerCase().trim();
-    return allCategories.filter((c) => c.label.toLowerCase().includes(q));
-  }, [allCategories, categorySearch]);
-
-  // Find existing overall budget to link sub-budgets to
-  const existingOverallBudget = useMemo(() => {
-    // 1. Explicit parentBudgetId from navigation params
-    if (route.params?.parentBudgetId) {
-      const byId = budgets.find((b) => b.id === route.params.parentBudgetId);
-      if (byId) return byId;
+  const parentBudget = useMemo(() => {
+    const p = route.params || {};
+    if (p.parentBudgetId) {
+      const b = budgets.find((x) => x.id === p.parentBudgetId);
+      if (b) return b;
     }
-
-    // 2. Explicit period from navigation params
-    if (route.params?.period) {
-      const byPeriod = budgets.find(
-        (b) => b.isOverall && (!b.periodType || b.periodType === 'monthly') && b.period === route.params.period
+    if (p.period) {
+      const b = budgets.find((x) => x.isOverall && (!x.periodType || x.periodType === 'monthly') && x.period === p.period);
+      if (b) return b;
+    }
+    const sel = months[monthIdx];
+    if (sel) {
+      const b = budgets.find(
+        (x) =>
+          x.isOverall &&
+          (!x.periodType || x.periodType === 'monthly') &&
+          (x.period?.toLowerCase().includes(sel.fullLabel.toLowerCase()) || sel.fullLabel.toLowerCase().includes(x.period?.toLowerCase() || ''))
       );
-      if (byPeriod) return byPeriod;
+      if (b) return b;
     }
-
-    // 3. Match against the currently selected month in next6Months[selectedMonthIndex]
-    const selectedMonthObj = next6Months[selectedMonthIndex];
-    if (selectedMonthObj) {
-      const bySelectedMonth = budgets.find(
-        (b) =>
-          b.isOverall &&
-          (!b.periodType || b.periodType === 'monthly') &&
-          (b.period?.toLowerCase().includes(selectedMonthObj.fullLabel.toLowerCase()) ||
-            selectedMonthObj.fullLabel.toLowerCase().includes(b.period?.toLowerCase() || ''))
-      );
-      if (bySelectedMonth) return bySelectedMonth;
-    }
-
-    // 4. Currently active in-progress budget (current calendar month)
     const now = Date.now();
     const active = budgets.find((b) => {
       if (!b.isOverall || (b.periodType && b.periodType !== 'monthly')) return false;
@@ -382,153 +161,118 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
       return now >= s && now <= e;
     });
     if (active) return active;
+    return budgets.filter((b) => b.isOverall && (!b.periodType || b.periodType === 'monthly')).sort((a, b) => (Number(a.startDate) || 0) - (Number(b.startDate) || 0))[0] || null;
+  }, [budgets, route.params?.parentBudgetId, route.params?.period, monthIdx, months]);
 
-    // 5. Fallback: chronological earliest overall monthly budget
-    return (
-      budgets
-        .filter((b) => b.isOverall && (!b.periodType || b.periodType === 'monthly'))
-        .sort((a, b) => (Number(a.startDate) || 0) - (Number(b.startDate) || 0))[0] || null
-    );
-  }, [budgets, route.params?.parentBudgetId, route.params?.period, selectedMonthIndex, next6Months]);
-
-  const existingCategoryBudgets = useMemo(() => {
-    if (!existingOverallBudget) return [];
+  const existingCats = useMemo(() => {
+    if (!parentBudget) return [];
     return budgets.filter(
-      (b) =>
-        !b.isOverall &&
-        (!b.periodType || b.periodType === 'monthly') &&
-        (b.parentBudgetId === existingOverallBudget.id ||
-          (!b.parentBudgetId && b.period === existingOverallBudget.period))
+      (b) => !b.isOverall && (!b.periodType || b.periodType === 'monthly') && (b.parentBudgetId === parentBudget.id || (!b.parentBudgetId && b.period === parentBudget.period))
     );
-  }, [budgets, existingOverallBudget]);
+  }, [budgets, parentBudget]);
 
-  const allocatedAmount = useMemo(() => {
-    return existingCategoryBudgets.reduce((sum, b) => sum + (b.limitAmount || 0), 0);
-  }, [existingCategoryBudgets]);
+  const parentLimit = parentBudget?.limitAmount || 0;
 
-  const parentTotalLimit = existingOverallBudget?.limitAmount || 0;
-  const unallocatedBuffer = Math.max(0, parentTotalLimit - allocatedAmount);
+  const defaultAmountFor = (current: Record<string, { amountStr: string }>) => {
+    const used = Object.values(current).reduce((s, it) => s + (parseFloat(it.amountStr) || 0), 0);
+    const rem = Math.max(500, parentLimit - used);
+    return String(rem >= 1000 ? 1000 : rem);
+  };
 
-  // Multi-Category Allocation State (categoryId -> { id?: string; amountStr: string })
   const [allocations, setAllocations] = useState<Record<string, { id?: string; amountStr: string }>>(() => {
-    const initial: Record<string, { id?: string; amountStr: string }> = {};
-    if (existingCategoryBudgets.length > 0) {
-      existingCategoryBudgets.forEach((b) => {
-        initial[b.category] = {
-          id: b.id,
-          amountStr: String(b.limitAmount || 0),
-        };
-      });
-      if (route.params?.initialCategory && !initial[route.params.initialCategory]) {
-        const catId = route.params.initialCategory;
-        const curAllocated = Object.values(initial).reduce((sum, item) => sum + (parseFloat(item.amountStr) || 0), 0);
-        const rem = Math.max(500, parentTotalLimit - curAllocated);
-        const defaultAmt = rem > 0 ? (rem >= 1000 ? 1000 : rem) : 1000;
-        initial[catId] = { amountStr: String(defaultAmt) };
-      }
-    } else if (route.params?.initialScope === 'category') {
-      const catId = route.params?.initialCategory || 'food';
-      const defaultAmt = parentTotalLimit > 0 ? String(Math.min(3000, Math.round(parentTotalLimit * 0.3))) : '3000';
-      initial[catId] = { amountStr: defaultAmt };
+    const init: Record<string, { id?: string; amountStr: string }> = {};
+    if (existingCats.length > 0) {
+      existingCats.forEach((b) => (init[b.category] = { id: b.id, amountStr: String(b.limitAmount || 0) }));
+      if (route.params?.initialCategory && !init[route.params.initialCategory]) init[route.params.initialCategory] = { amountStr: defaultAmountFor(init) };
+    } else if (isCategoryMode) {
+      init[route.params?.initialCategory || 'food'] = { amountStr: parentLimit > 0 ? String(Math.min(3000, Math.round(parentLimit * 0.3))) : '3000' };
     }
-    return initial;
+    return init;
   });
 
-  // Keep allocations synced to the targeted parent budget's categories
+  // Keep split in sync with the parent's existing categories once they load
   useEffect(() => {
-    if (isCategoryMode && existingCategoryBudgets.length > 0) {
-      setAllocations((prev) => {
-        const hasExistingKeys = existingCategoryBudgets.some((b) => !!prev[b.category]);
-        if (!hasExistingKeys) {
-          const next: Record<string, { id?: string; amountStr: string }> = {};
-          existingCategoryBudgets.forEach((b) => {
-            next[b.category] = {
-              id: b.id,
-              amountStr: String(b.limitAmount || 0),
-            };
-          });
-          if (route.params?.initialCategory && !next[route.params.initialCategory]) {
-            const catId = route.params.initialCategory;
-            const curAllocated = Object.values(next).reduce((sum, item) => sum + (parseFloat(item.amountStr) || 0), 0);
-            const rem = Math.max(500, parentTotalLimit - curAllocated);
-            const defaultAmt = rem > 0 ? (rem >= 1000 ? 1000 : rem) : 1000;
-            next[catId] = { amountStr: String(defaultAmt) };
-          }
-          return next;
-        }
-        return prev;
-      });
-    }
-  }, [isCategoryMode, existingCategoryBudgets, parentTotalLimit, route.params?.initialCategory]);
-
-  const allocationEntries = useMemo(() => Object.entries(allocations), [allocations]);
-  const totalAllocatedCount = allocationEntries.length;
-
-  const totalAllocatedSum = useMemo(() => {
-    return allocationEntries.reduce((sum, [, item]) => {
-      const v = parseFloat(item.amountStr);
-      return sum + (isNaN(v) ? 0 : v);
-    }, 0);
-  }, [allocationEntries]);
-
-  const freeBufferRemaining = parentTotalLimit - totalAllocatedSum;
-  const isBufferExceeded = freeBufferRemaining < 0;
-  const allocationPct = parentTotalLimit > 0 ? Math.min(100, Math.round((totalAllocatedSum / parentTotalLimit) * 100)) : 0;
-
-  // Unallocated categories for quick add and dropdown
-  const unallocatedCategories = useMemo(() => {
-    return allCategories.filter((c) => !allocations[c.id]);
-  }, [allCategories, allocations]);
-
-  const handleToggleCategory = (catId: string) => {
+    if (!isCategoryMode || existingCats.length === 0) return;
     setAllocations((prev) => {
-      const next = { ...prev };
-      if (next[catId]) {
-        delete next[catId];
-      } else {
-        const curAllocated = Object.values(next).reduce((sum, item) => sum + (parseFloat(item.amountStr) || 0), 0);
-        const remaining = Math.max(500, parentTotalLimit - curAllocated);
-        const defaultAmt = remaining > 0 ? (remaining >= 1000 ? 1000 : remaining) : 1000;
-        next[catId] = { amountStr: String(defaultAmt) };
+      if (existingCats.some((b) => !!prev[b.category])) return prev;
+      const next: Record<string, { id?: string; amountStr: string }> = {};
+      existingCats.forEach((b) => (next[b.category] = { id: b.id, amountStr: String(b.limitAmount || 0) }));
+      if (route.params?.initialCategory && !next[route.params.initialCategory]) next[route.params.initialCategory] = { amountStr: defaultAmountFor(next) };
+      return next;
+    });
+  }, [isCategoryMode, existingCats, parentLimit, route.params?.initialCategory]);
+
+  /* ---------------- Templates ---------------- */
+
+  const applyTemplate = (source: any) => {
+    const tpl = getBudgetTemplateData(source, budgets);
+    if (tpl.periodType === 'custom_event' || !source.isOverall) {
+      setBudgetType('custom_event');
+      setBudgetName(tpl.name || 'Event');
+      setAmountStr(String(tpl.amount || ''));
+    } else {
+      setBudgetType('monthly');
+      setAmountStr(String(tpl.amount || ''));
+      if (tpl.subCategories?.length) {
+        const a: Record<string, { amountStr: string }> = {};
+        tpl.subCategories.forEach((sc: any) => (a[sc.category] = { amountStr: String(sc.limitAmount || 0) }));
+        setAllocations(a);
       }
-      return next;
-    });
+    }
   };
 
-  const handleUpdateCategoryAmount = (catId: string, val: string) => {
-    const cleanVal = val.replace(/[^0-9]/g, '');
-    setAllocations((prev) => ({
-      ...prev,
-      [catId]: {
-        ...prev[catId],
-        amountStr: cleanVal,
-      },
-    }));
+  const clearTemplate = () => {
+    setTemplate(null);
+    setAmountStr('');
+    setBudgetName('');
+    setAllocations({});
   };
 
-  const handleAddCategoryAmount = (catId: string, delta: number) => {
-    setAllocations((prev) => {
-      const cur = parseFloat(prev[catId]?.amountStr || '0') || 0;
-      return {
-        ...prev,
-        [catId]: {
-          ...prev[catId],
-          amountStr: String(Math.max(0, cur + delta)),
-        },
-      };
-    });
-  };
+  // Apply route params once on mount
+  const initialized = useRef(false);
+  useEffect(() => {
+    if (initialized.current) return;
+    initialized.current = true;
+    if (route.params?.initialType === 'custom_event' && !budgetName) setBudgetName('Goa trip');
+    if (route.params?.cloneFromBudgetId) {
+      const found = budgets.find((b) => b.id === route.params.cloneFromBudgetId);
+      if (found) {
+        setTemplate(found);
+        applyTemplate(found);
+        let idx = -1;
+        if (found.startDate) {
+          const next = format(addMonths(new Date(found.startDate), 1), 'MMMM yyyy').toLowerCase();
+          idx = months.findIndex((m) => m.fullLabel.toLowerCase() === next && !m.hasBudget);
+        }
+        if (idx === -1) idx = months.find((m) => !m.hasBudget)?.index ?? -1;
+        if (idx !== -1) {
+          setMonthIdx(idx);
+          setStartDateStr(months[idx].startDateStr);
+          setEndDateStr(months[idx].endDateStr);
+        }
+      }
+    }
+  }, []);
 
-  const handleRemoveCategory = (catId: string) => {
-    setAllocations((prev) => {
-      const next = { ...prev };
-      delete next[catId];
-      return next;
-    });
-  };
+  /* ---------------- Derived ---------------- */
 
-  // Date Range Computation
-  const calculatedRange = useMemo(() => {
+  const allCategories = useMemo(() => {
+    const builtIn = BUDGET_DEBIT_CATEGORIES.filter((c: any) => !c.isOverall);
+    const custom = customCategories.map((c) => ({ id: c.id, label: c.label, icon: c.icon, color: c.color, isOverall: false, isCustom: true }));
+    return [...custom, ...builtIn];
+  }, [customCategories]);
+
+  const filteredCategories = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return q ? allCategories.filter((c: any) => c.label.toLowerCase().includes(q)) : allCategories;
+  }, [allCategories, search]);
+
+  const entries = useMemo(() => Object.entries(allocations), [allocations]);
+  const allocSum = entries.reduce((s, [, it]) => s + (parseFloat(it.amountStr) || 0), 0);
+  const leftToPlan = parentLimit - allocSum;
+  const overPlan = leftToPlan < 0;
+
+  const range = useMemo(() => {
     if (budgetType === 'custom_event') {
       const s = parseISO(startDateStr);
       const e = parseISO(endDateStr);
@@ -536,114 +280,86 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
       const end = isValid(e) && e >= start ? e : addDays(start, 5);
       return getBudgetPeriodRange('custom_event', new Date(), { start, end });
     }
-
-    // Monthly Budget
     if (monthlyDateMode === 'custom_dates') {
       const s = parseISO(startDateStr);
       const e = parseISO(endDateStr);
-      if (isValid(s) && isValid(e) && e >= s) {
-        return getBudgetPeriodRange('monthly', s, { start: s, end: e });
-      }
+      if (isValid(s) && isValid(e) && e >= s) return getBudgetPeriodRange('monthly', s, { start: s, end: e });
     }
-    const sel = next6Months[selectedMonthIndex] || next6Months[0];
-    return getBudgetPeriodRange('monthly', sel.date);
-  }, [budgetType, monthlyDateMode, selectedMonthIndex, next6Months, startDateStr, endDateStr]);
+    return getBudgetPeriodRange('monthly', (months[monthIdx] || months[0]).date);
+  }, [budgetType, monthlyDateMode, monthIdx, months, startDateStr, endDateStr]);
 
-  // Quick Amount Helpers
-  const handleAddAmount = (add: number) => {
-    const current = parseFloat(amountStr.replace(/[^0-9.]/g, '')) || 0;
-    setAmountStr(String(current + add));
+  const amount = parseFloat(amountStr.replace(/[^0-9.]/g, '')) || 0;
+  const perDay = amount > 0 && range.totalDays > 0 ? amount / range.totalDays : 0;
+  const selectedMonth = months[monthIdx];
+  const monthTaken = budgetType === 'monthly' && monthlyDateMode === 'calendar' && !!selectedMonth?.hasBudget;
+
+  const metaFor = (catId: string) => getCategoryMeta(catId, false, customCategories.find((c) => c.id === catId));
+  const colorFor = (catId: string) => {
+    const custom = customCategories.find((c) => c.id === catId);
+    return custom?.color || getCategoryColor(catId) || metaFor(catId).color || FOREST;
   };
 
-  // Handle Event Preset Selection
-  const handleSelectEventPreset = (preset: typeof EVENT_PRESETS[0]) => {
-    setSelectedEventPreset(preset.id);
-    if (!budgetName.trim() || EVENT_PRESETS.some((p) => p.defaultName === budgetName)) {
-      setBudgetName(preset.defaultName);
-    }
-  };
+  /* ---------------- Actions ---------------- */
 
-  // Create Custom Category Handler
-  const handleSaveCustomCategory = () => {
-    if (!newCatName.trim()) {
-      Alert.alert('Category Name Required', 'Please enter a name for your custom category.');
-      return;
-    }
+  const setAlloc = (catId: string, v: string) => {
+    setAllocations((p) => ({ ...p, [catId]: { ...p[catId], amountStr: v.replace(/[^0-9]/g, '') } }));
+    if (errorText) setErrorText('');
+  };
+  const toggleCat = (catId: string) =>
+    setAllocations((p) => {
+      const n = { ...p };
+      if (n[catId]) delete n[catId];
+      else n[catId] = { amountStr: defaultAmountFor(n) };
+      return n;
+    });
+  const removeCat = (catId: string) =>
+    setAllocations((p) => {
+      const n = { ...p };
+      delete n[catId];
+      return n;
+    });
+
+  const saveCustomCategory = () => {
+    if (!newCatName.trim()) return;
     const id = 'custom_' + newCatName.toLowerCase().replace(/[^a-z0-9]/g, '_') + '_' + Date.now().toString(36);
-    const newCat: BudgetCustomCategory = {
-      id,
-      label: newCatName.trim(),
-      icon: newCatIcon,
-      color: newCatColor,
-    };
-    addCustomCategory(newCat);
-    setAllocations((prev) => ({
-      ...prev,
-      [id]: { amountStr: '1000' },
-    }));
+    const cat: BudgetCustomCategory = { id, label: newCatName.trim(), icon: newCatIcon, color: newCatColor };
+    addCustomCategory(cat);
+    setAllocations((p) => ({ ...p, [id]: { amountStr: '1000' } }));
     setNewCatName('');
-    setCustomCatModalVisible(false);
+    setCustomOpen(false);
   };
 
-  // Batch Save Category Sub-Budgets Handler (All in Single Tap)
-  const handleSaveAllCategoryBudgets = async () => {
-    const entries = Object.entries(allocations);
-    if (entries.length === 0) {
-      Alert.alert('No Categories Selected', 'Please tap at least one category to allocate budget.');
-      return;
-    }
+  const goBack = (params?: any) => {
+    if (navigation.canGoBack()) navigation.goBack();
+    else navigation.navigate('Main', { screen: 'Budgets', params });
+  };
 
-    for (const [catId, item] of entries) {
-      const amt = parseFloat(item.amountStr);
-      if (!amt || isNaN(amt) || amt <= 0) {
-        const customDef = customCategories.find((c) => c.id === catId);
-        const meta = getCategoryMeta(catId, false, customDef);
-        Alert.alert('Invalid Amount', `Please enter a valid amount for ${meta.label}.`);
-        return;
-      }
+  const saveSplit = async () => {
+    if (entries.length === 0) return setErrorText('Add at least one category.');
+    for (const [catId, it] of entries) {
+      if (!(parseFloat(it.amountStr) > 0)) return setErrorText(`Give ${metaFor(catId).label} an amount.`);
     }
+    if (parentLimit > 0 && allocSum > parentLimit) return setErrorText(`That’s ${inr(allocSum - parentLimit)} more than your ${inr(parentLimit)} budget.`);
 
-    // Strict Validation: Sub-categories must not exceed parent budget limit!
-    const totalAllocated = entries.reduce((sum, [, item]) => sum + (parseFloat(item.amountStr) || 0), 0);
-    if (parentTotalLimit > 0 && totalAllocated > parentTotalLimit) {
-      Alert.alert(
-        'Allocation Exceeds Total Budget',
-        `Total allocated to categories (₹${totalAllocated.toLocaleString('en-IN')}) cannot exceed your main budget ceiling of ₹${parentTotalLimit.toLocaleString('en-IN')}. Please reduce category amounts to stay within budget.`
-      );
-      return;
-    }
-
+    setSaving(true);
+    setErrorText('');
     try {
-      setSaving(true);
-      const parentBudget = existingOverallBudget;
-      const startDate = parentBudget?.startDate
-        ? typeof parentBudget.startDate === 'number'
-          ? parentBudget.startDate
-          : new Date(parentBudget.startDate).getTime()
-        : calculatedRange.startDate;
-      const endDate = parentBudget?.endDate
-        ? typeof parentBudget.endDate === 'number'
-          ? parentBudget.endDate
-          : new Date(parentBudget.endDate).getTime()
-        : calculatedRange.endDate;
+      const toTime = (v: any) => (typeof v === 'number' ? v : new Date(v).getTime());
+      const startDate = parentBudget?.startDate ? toTime(parentBudget.startDate) : range.startDate;
+      const endDate = parentBudget?.endDate ? toTime(parentBudget.endDate) : range.endDate;
       const period = parentBudget?.period || format(startDate, 'MMMM yyyy');
+      const kept = new Set<string>();
 
-      const updatedBudgetIds = new Set<string>();
-
-      for (const [catId, item] of entries) {
-        const amt = parseFloat(item.amountStr);
+      for (const [catId, it] of entries) {
+        const amt = parseFloat(it.amountStr);
         const customDef = customCategories.find((c) => c.id === catId);
-        const catLabel = getCategoryMeta(catId, false, customDef).label;
-
-        if (item.id) {
-          await budgetService.updateBudget(item.id, {
-            limitAmount: amt,
-            name: catLabel,
-          });
-          updatedBudgetIds.add(item.id);
+        const label = metaFor(catId).label;
+        if (it.id) {
+          await budgetService.updateBudget(it.id, { limitAmount: amt, name: label });
+          kept.add(it.id);
         } else {
           const created = await budgetService.createBudget({
-            name: catLabel,
+            name: label,
             category: catId,
             limitAmount: amt,
             period,
@@ -654,1837 +370,658 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
             parentBudgetId: parentBudget ? parentBudget.id : undefined,
             customCategoryDef: customDef,
           });
-          if (created?.id) updatedBudgetIds.add(created.id);
+          if (created?.id) kept.add(created.id);
         }
       }
-
-      // Delete removed sub-budgets and duplicates
-      for (const existing of existingCategoryBudgets) {
-        if (!updatedBudgetIds.has(existing.id)) {
-          await budgetService.deleteBudget(existing.id);
-        }
-      }
-
-      if (navigation.canGoBack()) {
-        navigation.goBack();
-      } else {
-        (navigation as any).navigate('Main', { screen: 'Budgets', params: { openTab: 'monthly' } });
-      }
-    } catch (err: any) {
-      Alert.alert('Error', err.message || 'Could not save sub-budgets.');
+      for (const b of existingCats) if (!kept.has(b.id)) await budgetService.deleteBudget(b.id);
+      goBack({ openTab: 'monthly' });
+    } catch (e: any) {
+      setErrorText(e?.message || 'Couldn’t save. Try again.');
     } finally {
       setSaving(false);
     }
   };
 
-  // Submit Handler for Overall Monthly / Special Event
-  const handleSaveBudget = async () => {
-    const amount = parseFloat(amountStr.replace(/[^0-9.]/g, ''));
-    if (!amount || isNaN(amount) || amount <= 0) {
-      Alert.alert('Invalid Amount', 'Please enter a valid budget amount.');
-      return;
-    }
-
+  const saveBudget = async () => {
+    if (!(amount > 0)) return setErrorText('Enter how much you can spend.');
+    setSaving(true);
+    setErrorText('');
     try {
-      setSaving(true);
-
       if (budgetType === 'monthly') {
-        const targetPeriod = format(calculatedRange.startDate, 'MMMM yyyy');
-
-        // Strict Validation: Prevent duplicate overall budget for the same month!
-        const existingForMonth = budgets.find(
+        const period = format(range.startDate, 'MMMM yyyy');
+        const exists = budgets.find(
           (b) =>
             b.isOverall &&
             (!b.periodType || b.periodType === 'monthly') &&
-            (b.period?.toLowerCase().trim() === targetPeriod.toLowerCase().trim() ||
-              (b.startDate && format(new Date(b.startDate), 'MMMM yyyy').toLowerCase() === targetPeriod.toLowerCase()))
+            (b.period?.toLowerCase().trim() === period.toLowerCase() || (b.startDate && format(new Date(b.startDate), 'MMMM yyyy').toLowerCase() === period.toLowerCase()))
         );
-
-        if (existingForMonth) {
-          Alert.alert(
-            'Budget Already Exists',
-            `A monthly budget for ${targetPeriod} is already present. Duplicate budgets for the same month are not allowed. You can edit the existing budget instead.`
-          );
-          return;
-        }
-
-        // Validate that sub-category allocations do not exceed the main budget limit
-        const allocEntries = Object.entries(allocations);
-        const totalSubAlloc = allocEntries.reduce((sum, [, item]) => sum + (parseFloat(item.amountStr) || 0), 0);
-        if (amount > 0 && totalSubAlloc > amount) {
-          Alert.alert(
-            'Allocation Exceeds Total Budget',
-            `Total allocated to sub-categories (₹${totalSubAlloc.toLocaleString('en-IN')}) cannot exceed your main budget ceiling of ₹${amount.toLocaleString('en-IN')}. Please reduce category amounts.`
-          );
-          return;
-        }
-
-        const name = budgetName.trim() || `Monthly Budget (${targetPeriod})`;
+        if (exists) throw new Error(`${period} already has a budget. Pick another month, or change it from Budgets.`);
+        if (allocSum > amount) throw new Error(`The copied categories add up to ${inr(allocSum)}, more than ${inr(amount)}. Raise the amount or remove some.`);
 
         const created = await budgetService.createBudget({
-          name,
+          name: budgetName.trim() || `Monthly budget (${period})`,
           category: 'all',
           limitAmount: amount,
-          period: format(calculatedRange.startDate, 'MMMM yyyy'),
+          period,
           periodType: 'monthly',
-          startDate: calculatedRange.startDate,
-          endDate: calculatedRange.endDate,
+          startDate: range.startDate,
+          endDate: range.endDate,
           isOverall: true,
           customCategoryDef: undefined,
         });
 
-        // Batch create cloned or pre-configured sub-category allocations linked to this newly created monthly budget!
-        if (allocEntries.length > 0 && created?.id) {
-          const subPayloads = [];
-          for (const [catId, item] of allocEntries) {
-            const subAmt = parseFloat(item.amountStr);
-            if (subAmt > 0) {
-              const customDef = customCategories.find((c) => c.id === catId);
-              const catLabel = getCategoryMeta(catId, false, customDef).label;
-              subPayloads.push({
-                name: catLabel,
-                category: catId,
-                limitAmount: subAmt,
-                period: format(calculatedRange.startDate, 'MMMM yyyy'),
-                periodType: 'monthly' as const,
-                startDate: calculatedRange.startDate,
-                endDate: calculatedRange.endDate,
-                isOverall: false,
-                parentBudgetId: created.id,
-                customCategoryDef: customDef,
-              });
-            }
-          }
-          if (subPayloads.length > 0) {
-            await budgetService.createBudgetsBatch(subPayloads);
-          }
+        if (entries.length > 0 && created?.id) {
+          const subs = entries
+            .filter(([, it]) => parseFloat(it.amountStr) > 0)
+            .map(([catId, it]) => ({
+              name: metaFor(catId).label,
+              category: catId,
+              limitAmount: parseFloat(it.amountStr),
+              period,
+              periodType: 'monthly' as const,
+              startDate: range.startDate,
+              endDate: range.endDate,
+              isOverall: false,
+              parentBudgetId: created.id,
+              customCategoryDef: customCategories.find((c) => c.id === catId),
+            }));
+          if (subs.length) await budgetService.createBudgetsBatch(subs);
         }
-
-        if (navigation.canGoBack()) {
-          navigation.goBack();
-        } else {
-          (navigation as any).navigate('Main', { screen: 'Budgets', params: { openTab: 'monthly', selectedBudgetId: created.id } });
-        }
+        goBack({ openTab: 'monthly', selectedBudgetId: created?.id });
       } else {
-        const eventName = budgetName.trim() || 'Special Event Budget';
-        const chosenPreset = EVENT_PRESETS.find((p) => p.id === selectedEventPreset);
-
+        const name = budgetName.trim() || 'Event budget';
+        const preset = EVENT_PRESETS.find((p) => p.id === eventPreset);
         await budgetService.createBudget({
-          name: eventName,
+          name,
           category: 'other_expense',
           limitAmount: amount,
-          period: calculatedRange.label,
+          period: range.label,
           periodType: 'custom_event',
-          startDate: calculatedRange.startDate,
-          endDate: calculatedRange.endDate,
+          startDate: range.startDate,
+          endDate: range.endDate,
           isOverall: false,
-          customCategoryDef: {
-            id: 'event_' + (chosenPreset?.id || 'trip'),
-            label: eventName,
-            icon: chosenPreset?.icon || 'airplane-outline',
-            color: '#2dba4e',
-          },
+          customCategoryDef: { id: 'event_' + (preset?.id || 'trip'), label: name, icon: preset?.icon || 'airplane-outline', color: FOREST },
         });
-
-        if (navigation.canGoBack()) {
-          navigation.goBack();
-        } else {
-          (navigation as any).navigate('Main', { screen: 'Budgets', params: { openTab: 'events' } });
-        }
+        goBack({ openTab: 'events' });
       }
-    } catch (err: any) {
-      Alert.alert('Error', err.message || 'Could not save budget.');
+    } catch (e: any) {
+      setErrorText(e?.message || 'Couldn’t create the budget. Try again.');
     } finally {
       setSaving(false);
     }
   };
 
-  const selectedCategoryMeta = useMemo(() => {
-    const customDef = customCategories.find((c) => c.id === selectedCategory);
-    return getCategoryMeta(selectedCategory, false, customDef);
-  }, [selectedCategory, customCategories]);
+  /* ---------------- Theme ---------------- */
 
-  return (
-    <KeyboardAvoidingView
-      style={[styles.container, { backgroundColor: colors.background }]}
-      behavior="padding"
-    >
-      {AppTopBarComponent && <AppTopBarComponent />}
+  const ink = colors.text;
+  const muted = colors.textSecondary;
+  const pageBg = isDark ? colors.background : '#F3F6F4';
+  const surface = colors.card;
+  const line = isDark ? colors.border : '#E1E9E4';
+  const field = isDark ? colors.border : '#DCE5E0';
+  const accent = isDark ? LIME : FOREST;
+  const accentFg = isDark ? FOREST : LIME;
+  const accentInk = isDark ? FOREST : '#FFFFFF';
+  const green = isDark ? LIME : '#0B6B3A';
+  const red = isDark ? '#FFA8A8' : '#C92A2A';
+  const soft = isDark ? 'rgba(184,243,107,0.12)' : '#E3F2E8';
 
-      {/* Header */}
-      <View style={[styles.header, { paddingTop: AppTopBarComponent ? 10 : insets.top + 10 }]}>
-        <TouchableOpacity
-          onPress={() => navigation.goBack()}
-          style={[styles.backBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="arrow-back" size={20} color={colors.text} />
-        </TouchableOpacity>
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.headerTitle, { color: colors.text }]}>
-            {isCategoryMode ? 'Add Category Sub-Budget' : 'New Budget'}
-          </Text>
+  /* ---------------- Pieces (called as functions so inputs keep focus) ---------------- */
+
+  const catTile = (catId: string, size = 40) => {
+    const custom = customCategories.find((c) => c.id === catId);
+    if (custom) {
+      return (
+        <View style={{ width: size, height: size, borderRadius: size / 3, backgroundColor: `${custom.color}22`, alignItems: 'center', justifyContent: 'center' }}>
+          <Ionicons name={custom.icon as any} size={size * 0.45} color={custom.color} />
         </View>
+      );
+    }
+    return <CategoryIcon category={catId} variant="soft" size={size} />;
+  };
+
+  const label = (t: string) => <Text style={[s.label, { color: muted }]}>{t}</Text>;
+
+  const amountField = (placeholder: string) => (
+    <>
+      <View style={[s.amountBox, { backgroundColor: surface, borderColor: amount > 0 ? accent : field, borderWidth: amount > 0 ? 2 : 1 }]}>
+        <Text style={[s.rupee, { color: muted }, heading]}>₹</Text>
+        <TextInput
+          value={amountStr ? Number(amountStr.replace(/[^0-9]/g, '') || 0).toLocaleString('en-IN') : ''}
+          onChangeText={(t) => {
+            setAmountStr(t.replace(/[^0-9]/g, ''));
+            if (errorText) setErrorText('');
+          }}
+          placeholder={placeholder}
+          placeholderTextColor={muted}
+          keyboardType="number-pad"
+          style={[s.amountInput, { color: ink }, heading]}
+          accessibilityLabel="Budget amount"
+        />
+      </View>
+      <View style={s.chipRow}>
+        {(budgetType === 'monthly' ? [1000, 5000, 10000] : [2000, 5000, 20000]).map((n) => (
+          <Pressable key={n} onPress={() => setAmountStr(String(amount + n))} style={[s.smallChip, { backgroundColor: surface, borderColor: field }]}>
+            <Text style={[s.smallChipText, { color: ink }]}>+{inr(n)}</Text>
+          </Pressable>
+        ))}
+      </View>
+    </>
+  );
+
+  const dateRow = (which: 'start' | 'end') => {
+    const v = parseISO(which === 'start' ? startDateStr : endDateStr);
+    return (
+      <Pressable onPress={() => setDatePicker(which)} style={[s.dateBox, { backgroundColor: surface, borderColor: field }]} accessibilityLabel={which === 'start' ? 'Start date' : 'End date'}>
+        <Text style={[s.dateLabel, { color: muted }]}>{which === 'start' ? 'From' : 'To'}</Text>
+        <Text style={[s.dateValue, { color: ink }]}>{isValid(v) ? format(v, 'd MMM yyyy') : 'Pick'}</Text>
+      </Pressable>
+    );
+  };
+
+  /* ---------------- Split flow ---------------- */
+
+  const renderSplit = () => (
+    <>
+      <Animated.View entering={FadeInDown.duration(380)} style={s.hero}>
+        <View pointerEvents="none" style={s.heroRing} />
+        <Text style={s.heroLabel}>{parentBudget?.period || format(range.startDate, 'MMMM yyyy')} budget</Text>
+        <Text style={[s.heroAmount, heading]}>{inr(parentLimit)}</Text>
+        <View style={s.barTrack}>
+          {entries.map(([catId, it]) => {
+            const v = parseFloat(it.amountStr) || 0;
+            const pct = parentLimit > 0 ? (v / Math.max(parentLimit, allocSum)) * 100 : 0;
+            return pct > 0 ? <Animated.View key={catId} layout={LinearTransition.duration(250)} style={{ width: `${pct}%`, backgroundColor: colorFor(catId) }} /> : null;
+          })}
+        </View>
+        <View style={s.heroStats}>
+          <View style={{ flex: 1 }}>
+            <Text style={s.statLabel}>Planned</Text>
+            <Text style={s.statValue}>{inr(allocSum)}</Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={s.statLabel}>{overPlan ? 'Over by' : 'Left to plan'}</Text>
+            <Text style={[s.statValue, { color: overPlan ? '#FFB4A2' : LIME }]}>{inr(leftToPlan)}</Text>
+          </View>
+        </View>
+      </Animated.View>
+
+      <View style={s.sectionHead}>
+        <Text style={[s.sectionTitle, { color: ink }]}>Categories</Text>
+        <Pressable onPress={() => setPickerOpen(true)} hitSlop={10}>
+          <Text style={[s.link, { color: green }]}>Add</Text>
+        </Pressable>
       </View>
 
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 140 }]}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-        automaticallyAdjustKeyboardInsets={true}
-      >
-        {/* ==================== 1. NEW MAIN BUDGET FLOW ==================== */}
-        {!isCategoryMode ? (
-          <>
-            {/* COPY FROM PREVIOUS BUDGET (DROPDOWN PICKER) */}
-            {allOverallAndEventBudgets.length > 0 && (
-              <View style={{ marginBottom: 14 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <Text style={[styles.inputLabel, { color: colors.textSecondary, marginBottom: 0 }]}>
-                    COPY FROM PREVIOUS BUDGET
-                  </Text>
-                  {activeTemplateBudget && (
-                    <TouchableOpacity
-                      onPress={() => {
-                        setActiveTemplateBudget(null);
-                        setAmountStr('');
-                        setBudgetName('');
-                        setAllocations({});
-                      }}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    >
-                      <Text style={{ fontSize: 11, color: colors.danger, fontWeight: '700' }}>Clear</Text>
-                    </TouchableOpacity>
-                  )}
+      {entries.length > 0 && (
+        <View style={[s.group, { backgroundColor: surface, borderColor: line }]}>
+          {entries.map(([catId, it], i) => {
+            const v = parseFloat(it.amountStr) || 0;
+            const share = parentLimit > 0 ? Math.round((v / parentLimit) * 100) : 0;
+            return (
+              <Animated.View key={catId} entering={FadeIn.duration(220)} layout={LinearTransition.duration(220)} style={[s.catRow, i < entries.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line }]}>
+                {catTile(catId)}
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={[s.catName, { color: ink }]} numberOfLines={1}>{metaFor(catId).label}</Text>
+                  <Text style={[s.catSub, { color: muted }]}>{share}% of budget</Text>
                 </View>
+                <View style={[s.catAmount, { borderColor: !(v > 0) ? red : field }]}>
+                  <Text style={[s.catRupee, { color: muted }]}>₹</Text>
+                  <TextInput
+                    value={it.amountStr}
+                    onChangeText={(t) => setAlloc(catId, t)}
+                    keyboardType="number-pad"
+                    placeholder="0"
+                    placeholderTextColor={muted}
+                    style={[s.catInput, { color: ink }, heading]}
+                    accessibilityLabel={`${metaFor(catId).label} amount`}
+                  />
+                </View>
+                <Pressable onPress={() => removeCat(catId)} hitSlop={10} accessibilityLabel={`Remove ${metaFor(catId).label}`}>
+                  <Feather name="x" size={16} color={muted} />
+                </Pressable>
+              </Animated.View>
+            );
+          })}
+        </View>
+      )}
 
-                {/* Dropdown Trigger */}
-                <TouchableOpacity
-                  style={[
-                    styles.monthDropdownTrigger,
-                    {
-                      backgroundColor: colors.inputBackground,
-                      borderColor: activeTemplateBudget ? colors.accent : colors.border,
-                    },
-                  ]}
-                  onPress={() => {
-                    setTemplateDropdownOpen(!templateDropdownOpen);
-                    setMonthDropdownOpen(false);
-                  }}
-                  activeOpacity={0.8}
-                >
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
-                    <Ionicons
-                      name={activeTemplateBudget ? 'flash' : 'copy-outline'}
-                      size={17}
-                      color={activeTemplateBudget ? colors.accent : colors.textSecondary}
-                    />
-                    <Text
-                      style={[
-                        styles.monthDropdownTitle,
-                        { color: activeTemplateBudget ? colors.text : colors.textSecondary, flex: 1 },
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {activeTemplateBudget
-                        ? `${activeTemplateBudget.name || activeTemplateBudget.period || 'Previous Budget'} (₹${Number(activeTemplateBudget.limitAmount || 0).toLocaleString('en-IN')})`
-                        : 'Select previous budget to copy (Optional)'}
-                    </Text>
-                  </View>
-                  <Ionicons name={templateDropdownOpen ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textSecondary} />
-                </TouchableOpacity>
+      <Pressable onPress={() => setPickerOpen(true)} style={[s.addRow, { borderColor: field, marginTop: entries.length ? 12 : 0 }]}>
+        <Feather name="plus" size={16} color={ink} />
+        <Text style={[s.addRowText, { color: ink }]}>{entries.length ? 'Add a category' : 'Choose categories to plan'}</Text>
+      </Pressable>
 
-                {/* Dropdown Menu */}
-                {templateDropdownOpen && (
-                  <View style={[styles.monthDropdownMenu, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                    {/* None / Start from scratch */}
-                    <TouchableOpacity
-                      style={[
-                        styles.monthMenuItem,
-                        { borderBottomColor: colors.border },
-                        !activeTemplateBudget && { backgroundColor: isDark ? 'rgba(45, 186, 78, 0.12)' : 'rgba(22, 163, 74, 0.08)' },
-                      ]}
-                      onPress={() => {
-                        setActiveTemplateBudget(null);
-                        setAmountStr('');
-                        setBudgetName('');
-                        setAllocations({});
-                        setTemplateDropdownOpen(false);
-                      }}
-                    >
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                        <Ionicons
-                          name={!activeTemplateBudget ? 'radio-button-on' : 'radio-button-off'}
-                          size={18}
-                          color={!activeTemplateBudget ? colors.accent : colors.textSecondary}
-                        />
-                        <Text
-                          style={[
-                            styles.monthMenuItemText,
-                            { color: !activeTemplateBudget ? colors.accent : colors.text, fontWeight: !activeTemplateBudget ? '700' : '500' },
-                          ]}
-                        >
-                          None (Start from scratch)
-                        </Text>
-                      </View>
-                    </TouchableOpacity>
+      {leftToPlan > 0 && entries.length > 0 && (
+        <Text style={[s.hint, { color: muted }]}>Anything you don’t plan stays free for spending on other things.</Text>
+      )}
+    </>
+  );
 
-                    {allOverallAndEventBudgets.map((b) => {
-                      const isSelected = activeTemplateBudget?.id === b.id;
-                      const bName = b.name || (b.isOverall ? b.period || 'Monthly Budget' : 'Event Budget');
-                      return (
-                        <TouchableOpacity
-                          key={b.id}
-                          style={[
-                            styles.monthMenuItem,
-                            { borderBottomColor: colors.border },
-                            isSelected && { backgroundColor: isDark ? 'rgba(45, 186, 78, 0.12)' : 'rgba(22, 163, 74, 0.08)' },
-                          ]}
-                          onPress={() => {
-                            setActiveTemplateBudget(b);
-                            applyBudgetTemplate(b);
-                            setTemplateDropdownOpen(false);
-                          }}
-                        >
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
-                            <Ionicons
-                              name={isSelected ? 'radio-button-on' : 'radio-button-off'}
-                              size={18}
-                              color={isSelected ? colors.accent : colors.textSecondary}
-                            />
-                            <Text
-                              style={[
-                                styles.monthMenuItemText,
-                                { color: isSelected ? colors.accent : colors.text, fontWeight: isSelected ? '700' : '500', flex: 1 },
-                              ]}
-                              numberOfLines={1}
-                            >
-                              {bName}
-                            </Text>
-                          </View>
-                          <Text style={{ fontSize: 13, fontWeight: '800', color: colors.accent, marginLeft: 8 }}>
-                            ₹{Number(b.limitAmount || 0).toLocaleString('en-IN')}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                )}
-              </View>
-            )}
+  /* ---------------- New budget flow ---------------- */
 
-            {/* DURATION SELECTOR */}
-            <View style={[styles.sectionHeader, { marginBottom: 8 }]}>
-              <Text style={[styles.sectionTitle, { color: colors.text }]}>Select Budget Type</Text>
-            </View>
-
-            <View style={[styles.durationTabsRow, { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#e2e8f0' }]}>
-              <TouchableOpacity
-                style={[
-                  styles.durationTab,
-                  budgetType === 'monthly' && [styles.durationTabActive, { backgroundColor: colors.accent }],
-                ]}
-                onPress={() => {
-                  setBudgetType('monthly');
-                  const sel = next6Months[selectedMonthIndex] || next6Months[0];
-                  setStartDateStr(sel.startDateStr);
-                  setEndDateStr(sel.endDateStr);
-                }}
-                activeOpacity={0.8}
-              >
-                <Ionicons
-                  name="calendar-outline"
-                  size={18}
-                  color={budgetType === 'monthly' ? '#ffffff' : colors.textSecondary}
-                  style={{ marginRight: 6 }}
-                />
-                <Text
-                  style={[
-                    styles.durationTabText,
-                    { color: budgetType === 'monthly' ? '#ffffff' : colors.textSecondary },
-                  ]}
-                >
-                  Monthly Budget
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[
-                  styles.durationTab,
-                  budgetType === 'custom_event' && [styles.durationTabActive, { backgroundColor: colors.accent }],
-                ]}
-                onPress={() => {
-                  setBudgetType('custom_event');
-                  if (!budgetName.trim()) setBudgetName('Goa Trip');
+  const renderNew = () => (
+    <>
+      <View style={[s.segment, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#E9EFEB' }]}>
+        {(['monthly', 'custom_event'] as const).map((t) => {
+          const on = budgetType === t;
+          return (
+            <Pressable
+              key={t}
+              onPress={() => {
+                setBudgetType(t);
+                setErrorText('');
+                if (t === 'monthly') {
+                  setStartDateStr(selectedMonth.startDateStr);
+                  setEndDateStr(selectedMonth.endDateStr);
+                } else {
+                  if (!budgetName.trim()) setBudgetName(EVENT_PRESETS[0].defaultName);
                   setStartDateStr(format(addDays(new Date(), 10), 'yyyy-MM-dd'));
                   setEndDateStr(format(addDays(new Date(), 16), 'yyyy-MM-dd'));
-                }}
-                activeOpacity={0.8}
-              >
-                <Ionicons
-                  name="airplane-outline"
-                  size={18}
-                  color={budgetType === 'custom_event' ? '#ffffff' : colors.textSecondary}
-                  style={{ marginRight: 6 }}
-                />
-                <Text
-                  style={[
-                    styles.durationTabText,
-                    { color: budgetType === 'custom_event' ? '#ffffff' : colors.textSecondary },
-                  ]}
+                }
+              }}
+              style={[s.segBtn, on && { backgroundColor: isDark ? '#1E3329' : '#FFFFFF' }, on && !isDark && s.segShadow]}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: on }}
+            >
+              <Text style={[s.segText, { color: on ? ink : muted }, on && { fontWeight: '700' }]}>{t === 'monthly' ? 'Monthly' : 'Trip or event'}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {budgetType === 'monthly' ? (
+        <Animated.View key="monthly" entering={FadeIn.duration(220)}>
+          {label('Which month')}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.monthRow}>
+            {months.map((m) => {
+              const on = monthlyDateMode === 'calendar' && monthIdx === m.index;
+              return (
+                <Pressable
+                  key={m.fullLabel}
+                  onPress={() => {
+                    setMonthlyDateMode('calendar');
+                    setMonthIdx(m.index);
+                    setStartDateStr(m.startDateStr);
+                    setEndDateStr(m.endDateStr);
+                    setErrorText('');
+                  }}
+                  style={[s.monthChip, on ? { backgroundColor: accent } : { backgroundColor: surface, borderColor: field, borderWidth: 1 }]}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: on }}
                 >
-                  Special Event
-                </Text>
-              </TouchableOpacity>
+                  <Text style={[s.monthName, { color: on ? accentInk : ink }]}>{m.short}</Text>
+                  <Text style={[s.monthSub, { color: on ? (isDark ? FOREST : LIME) : m.hasBudget ? red : muted }]}>{m.hasBudget ? 'Has budget' : `${m.days} days`}</Text>
+                </Pressable>
+              );
+            })}
+            <Pressable
+              onPress={() => setMonthlyDateMode('custom_dates')}
+              style={[s.monthChip, monthlyDateMode === 'custom_dates' ? { backgroundColor: accent } : { backgroundColor: surface, borderColor: field, borderWidth: 1 }]}
+            >
+              <Text style={[s.monthName, { color: monthlyDateMode === 'custom_dates' ? accentInk : ink }]}>Custom</Text>
+              <Text style={[s.monthSub, { color: monthlyDateMode === 'custom_dates' ? (isDark ? FOREST : LIME) : muted }]}>Pick dates</Text>
+            </Pressable>
+          </ScrollView>
+
+          {monthlyDateMode === 'custom_dates' && (
+            <Animated.View entering={FadeIn.duration(200)} style={s.dateRow}>
+              {dateRow('start')}
+              {dateRow('end')}
+            </Animated.View>
+          )}
+
+          {monthTaken && (
+            <View style={[s.notice, { backgroundColor: isDark ? 'rgba(224,49,49,0.14)' : '#FFF0F0' }]}>
+              <Text style={[s.noticeText, { color: ink }]}>
+                <Text style={{ fontWeight: '700' }}>{selectedMonth.short} already has a budget.</Text> Pick another month, or change it from Budgets.
+              </Text>
             </View>
+          )}
 
-            {budgetType === 'monthly' ? (
-              /* MONTHLY BUDGET SETUP (CLEAR & SIMPLE: CYCLE + TOTAL LIMIT) */
-              <>
-                {/* 1. Month & Cycle Dates */}
-                <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                  <Text style={[styles.cardTitle, { color: colors.text, marginBottom: 10 }]}>1. Month & Cycle Dates</Text>
+          {label('How much can you spend')}
+          {amountField('0')}
 
-                  <View style={styles.subTabRow}>
-                    <TouchableOpacity
-                      style={[
-                        styles.subTabBtn,
-                        monthlyDateMode === 'calendar' && [styles.subTabBtnActive, { backgroundColor: colors.accent }],
-                      ]}
-                      onPress={() => {
-                        setMonthlyDateMode('calendar');
-                        const sel = next6Months[selectedMonthIndex] || next6Months[0];
-                        setStartDateStr(sel.startDateStr);
-                        setEndDateStr(sel.endDateStr);
-                      }}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={[styles.subTabText, { color: monthlyDateMode === 'calendar' ? '#ffffff' : colors.text }]}>
-                        Calendar Month
-                      </Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={[
-                        styles.subTabBtn,
-                        monthlyDateMode === 'custom_dates' && [styles.subTabBtnActive, { backgroundColor: colors.accent }],
-                      ]}
-                      onPress={() => setMonthlyDateMode('custom_dates')}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={[styles.subTabText, { color: monthlyDateMode === 'custom_dates' ? '#ffffff' : colors.text }]}>
-                        Custom Dates
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-
-                  {/* CALENDAR MONTH MODE: 6-MONTH DROPDOWN */}
-                  {monthlyDateMode === 'calendar' ? (
-                    <View style={{ marginBottom: 10 }}>
-                      <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>SELECT MONTH (NEXT 6 MONTHS)</Text>
-                      <TouchableOpacity
-                        style={[styles.monthDropdownTrigger, { backgroundColor: colors.inputBackground, borderColor: colors.border }]}
-                        onPress={() => {
-                          setMonthDropdownOpen(!monthDropdownOpen);
-                          setTemplateDropdownOpen(false);
-                        }}
-                        activeOpacity={0.8}
-                      >
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
-                          <Ionicons name="calendar" size={18} color={colors.accent} />
-                          <Text style={[styles.monthDropdownTitle, { color: colors.text }]}>
-                            {next6Months[selectedMonthIndex]?.fullLabel}
-                          </Text>
-                          {next6Months[selectedMonthIndex]?.hasBudget && (
-                            <View style={[styles.hasBudgetBadge, { backgroundColor: isDark ? 'rgba(45, 186, 78, 0.15)' : 'rgba(22, 163, 74, 0.12)' }]}>
-                              <Text style={[styles.hasBudgetBadgeText, { color: colors.accent }]}>Budget Active</Text>
-                            </View>
-                          )}
-                        </View>
-                        <Ionicons name={monthDropdownOpen ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textSecondary} />
-                      </TouchableOpacity>
-
-                      {/* Dropdown Menu */}
-                      {monthDropdownOpen && (
-                        <View style={[styles.monthDropdownMenu, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                          {next6Months.map((m) => {
-                            const isSelected = selectedMonthIndex === m.index;
-                            return (
-                              <TouchableOpacity
-                                key={m.fullLabel}
-                                style={[
-                                  styles.monthMenuItem,
-                                  { borderBottomColor: colors.border },
-                                  isSelected && { backgroundColor: isDark ? 'rgba(45, 186, 78, 0.12)' : 'rgba(22, 163, 74, 0.08)' },
-                                ]}
-                                onPress={() => {
-                                  setSelectedMonthIndex(m.index);
-                                  setStartDateStr(m.startDateStr);
-                                  setEndDateStr(m.endDateStr);
-                                  setMonthDropdownOpen(false);
-                                }}
-                              >
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                                  <Ionicons
-                                    name={isSelected ? 'radio-button-on' : 'radio-button-off'}
-                                    size={18}
-                                    color={isSelected ? colors.accent : colors.textSecondary}
-                                  />
-                                  <Text
-                                    style={[
-                                      styles.monthMenuItemText,
-                                      { color: isSelected ? colors.accent : colors.text, fontWeight: isSelected ? '700' : '500' },
-                                    ]}
-                                  >
-                                    {m.fullLabel}
-                                  </Text>
-                                </View>
-                                {m.hasBudget && (
-                                  <View style={[styles.hasBudgetBadge, { backgroundColor: isDark ? 'rgba(45, 186, 78, 0.15)' : 'rgba(22, 163, 74, 0.12)' }]}>
-                                    <Text style={[styles.hasBudgetBadgeText, { color: colors.accent }]}>Budget Active</Text>
-                                  </View>
-                                )}
-                              </TouchableOpacity>
-                            );
-                          })}
-                        </View>
-                      )}
-                    </View>
-                  ) : (
-                    /* CUSTOM DATES MODE: INTERACTIVE CALENDAR DATE PICKERS */
-                    <View style={styles.dateInputsRow}>
-                      <TouchableOpacity
-                        style={[styles.datePickerField, { backgroundColor: colors.inputBackground, borderColor: colors.border }]}
-                        onPress={() => setCalendarPickerTarget('start')}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>START DATE</Text>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
-                          <Ionicons name="calendar-outline" size={16} color={colors.accent} />
-                          <Text style={[styles.datePickerValueText, { color: colors.text }]}>
-                            {format(parseISO(startDateStr), 'dd MMM yyyy')}
-                          </Text>
-                        </View>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={[styles.datePickerField, { backgroundColor: colors.inputBackground, borderColor: colors.border }]}
-                        onPress={() => setCalendarPickerTarget('end')}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>END DATE</Text>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
-                          <Ionicons name="calendar-outline" size={16} color={colors.accent} />
-                          <Text style={[styles.datePickerValueText, { color: colors.text }]}>
-                            {format(parseISO(endDateStr), 'dd MMM yyyy')}
-                          </Text>
-                        </View>
-                      </TouchableOpacity>
-                    </View>
-                  )}
-
-                  <View style={[styles.cycleBadge, { backgroundColor: isDark ? 'rgba(255,255,255,0.03)' : '#f8fafc', borderColor: colors.border, marginTop: 10 }]}>
-                    <Ionicons name="time-outline" size={16} color={colors.accent} style={{ marginRight: 6 }} />
-                    <Text style={[styles.cycleBadgeText, { color: colors.textSecondary }]}>
-                      Active period: <Text style={{ color: colors.text, fontWeight: '700' }}>{calculatedRange.label}</Text> ({calculatedRange.totalDays} days)
-                    </Text>
-                  </View>
-                </View>
-
-                {/* 2. Total Monthly Spending Limit */}
-                <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                  <Text style={[styles.cardTitle, { color: colors.text, marginBottom: 10 }]}>2. Total Monthly Spending Limit</Text>
-
-                  <View style={[styles.amountInputRow, { borderColor: colors.border, backgroundColor: colors.inputBackground }]}>
-                    <Text style={[styles.currencySymbol, { color: colors.accent }]}>₹</Text>
-                    <TextInput
-                      style={[styles.amountInput, { color: colors.text }]}
-                      value={amountStr}
-                      onChangeText={setAmountStr}
-                      placeholder="9,000"
-                      placeholderTextColor={colors.textSecondary}
-                      keyboardType="number-pad"
-                      inputMode="numeric"
-                    />
-                  </View>
-
-                  {/* Quick Increment Chips */}
-                  <View style={styles.quickAddRow}>
-                    {[1000, 2000, 5000, 10000].map((add) => (
-                      <TouchableOpacity
-                        key={add}
-                        style={[styles.quickAddBtn, { backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : '#f1f5f9', borderColor: colors.border }]}
-                        onPress={() => handleAddAmount(add)}
-                        activeOpacity={0.7}
-                      >
-                        <Text style={[styles.quickAddBtnText, { color: colors.text }]}>+₹{add.toLocaleString('en-IN')}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                </View>
-
-                {/* 3. CLONED CATEGORY ALLOCATIONS PREVIEW */}
-                {Object.keys(allocations).length > 0 && (
-                  <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                      <Text style={[styles.cardTitle, { color: colors.text }]}>
-                        3. Category Allocations ({Object.keys(allocations).length})
-                      </Text>
-                      <Text style={{ fontSize: 11, color: colors.accent, fontWeight: '700' }}>
-                        Auto-created on save
-                      </Text>
-                    </View>
-
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
-                      {Object.entries(allocations).map(([catId, item]) => {
-                        const customDef = customCategories.find((c) => c.id === catId);
-                        const meta = getCategoryMeta(catId, false, customDef);
-                        return (
-                          <View
-                            key={catId}
-                            style={[
-                              styles.allocPreviewChip,
-                              { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#f1f5f9', borderColor: colors.border },
-                            ]}
-                          >
-                            <Ionicons name={meta.icon as any} size={13} color={meta.color || colors.accent} />
-                            <Text style={[styles.allocPreviewChipText, { color: colors.text }]}>
-                              {meta.label}: <Text style={{ fontWeight: '800' }}>₹{Number(item.amountStr || 0).toLocaleString('en-IN')}</Text>
-                            </Text>
-                            <TouchableOpacity
-                              onPress={() => {
-                                setAllocations((prev) => {
-                                  const next = { ...prev };
-                                  delete next[catId];
-                                  return next;
-                                });
-                              }}
-                              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                            >
-                              <Ionicons name="close-circle" size={14} color={colors.textSecondary} style={{ marginLeft: 3 }} />
-                            </TouchableOpacity>
-                          </View>
-                        );
-                      })}
-                    </View>
-                  </View>
-                )}
-              </>
-            ) : (
-              /* SPECIAL EVENT BUDGET SETUP */
-              <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <Text style={[styles.cardTitle, { color: colors.text }]}>Special Event Information</Text>
-                <Text style={[styles.cardSubtitle, { color: colors.textSecondary }]}>
-                  Dedicated budget for a specific event or trip (separate from monthly limits)
-                </Text>
-
-                {/* Quick Event Presets */}
-                <Text style={[styles.inputLabel, { color: colors.textSecondary, marginBottom: 8 }]}>EVENT TYPE</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 14 }}>
-                  {EVENT_PRESETS.map((p) => {
-                    const isSelected = selectedEventPreset === p.id;
-                    return (
-                      <TouchableOpacity
-                        key={p.id}
-                        style={[
-                          styles.eventPresetChip,
-                          {
-                            backgroundColor: isSelected ? colors.accent : isDark ? 'rgba(255,255,255,0.04)' : '#f1f5f9',
-                            borderColor: isSelected ? colors.accent : colors.border,
-                          },
-                        ]}
-                        onPress={() => handleSelectEventPreset(p)}
-                        activeOpacity={0.8}
-                      >
-                        <Ionicons
-                          name={p.icon as any}
-                          size={16}
-                          color={isSelected ? '#ffffff' : colors.text}
-                          style={{ marginRight: 6 }}
-                        />
-                        <Text
-                          style={[
-                            styles.eventPresetText,
-                            { color: isSelected ? '#ffffff' : colors.text, fontWeight: isSelected ? '700' : '500' },
-                          ]}
-                        >
-                          {p.label}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-
-                {/* Event Name Input */}
-                <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>EVENT / TRIP NAME</Text>
-                <TextInput
-                  style={[styles.textInput, { backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.text, marginBottom: 14 }]}
-                  value={budgetName}
-                  onChangeText={setBudgetName}
-                  placeholder="e.g. Goa Trip 2026, Sister's Wedding"
-                  placeholderTextColor={colors.textSecondary}
-                />
-
-                {/* Event Start and End Dates with INTERACTIVE CALENDAR */}
-                <View style={styles.dateInputsRow}>
-                  <TouchableOpacity
-                    style={[styles.datePickerField, { backgroundColor: colors.inputBackground, borderColor: colors.border }]}
-                    onPress={() => setCalendarPickerTarget('start')}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>START DATE</Text>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
-                      <Ionicons name="calendar-outline" size={16} color={colors.accent} />
-                      <Text style={[styles.datePickerValueText, { color: colors.text }]}>
-                        {format(parseISO(startDateStr), 'dd MMM yyyy')}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[styles.datePickerField, { backgroundColor: colors.inputBackground, borderColor: colors.border }]}
-                    onPress={() => setCalendarPickerTarget('end')}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>END DATE</Text>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
-                      <Ionicons name="calendar-outline" size={16} color={colors.accent} />
-                      <Text style={[styles.datePickerValueText, { color: colors.text }]}>
-                        {format(parseISO(endDateStr), 'dd MMM yyyy')}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                </View>
-
-                <View style={[styles.cycleBadge, { backgroundColor: isDark ? 'rgba(255,255,255,0.03)' : '#f8fafc', borderColor: colors.border, marginTop: 12 }]}>
-                  <Ionicons name="sparkles-outline" size={16} color={colors.accent} style={{ marginRight: 6 }} />
-                  <Text style={[styles.cycleBadgeText, { color: colors.textSecondary }]}>
-                    Tracking window: <Text style={{ color: colors.text, fontWeight: '700' }}>{calculatedRange.label}</Text> ({calculatedRange.totalDays} days)
-                  </Text>
-                </View>
-
-                {/* Event Amount Input */}
-                <View style={{ marginTop: 14 }}>
-                  <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>EVENT BUDGET TARGET</Text>
-                  <View style={[styles.amountInputRow, { borderColor: colors.border, backgroundColor: colors.inputBackground }]}>
-                    <Text style={[styles.currencySymbol, { color: colors.accent }]}>₹</Text>
-                    <TextInput
-                      style={[styles.amountInput, { color: colors.text }]}
-                      value={amountStr}
-                      onChangeText={setAmountStr}
-                      placeholder="25,000"
-                      placeholderTextColor={colors.textSecondary}
-                      keyboardType="number-pad"
-                      inputMode="numeric"
-                    />
-                  </View>
-
-                  <View style={styles.quickAddRow}>
-                    {[2000, 5000, 10000, 20000].map((add) => (
-                      <TouchableOpacity
-                        key={add}
-                        style={[styles.quickAddBtn, { backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : '#f1f5f9', borderColor: colors.border }]}
-                        onPress={() => handleAddAmount(add)}
-                        activeOpacity={0.7}
-                      >
-                        <Text style={[styles.quickAddBtnText, { color: colors.text }]}>+₹{add.toLocaleString('en-IN')}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                </View>
-              </View>
-            )}
-          </>
-        ) : (
-          /* ==================== 2. MULTI-CATEGORY SUB-BUDGET ALLOCATION STUDIO ==================== */
-          <>
-            {/* Compact Parent Monthly Budget Live Allocation Meter */}
-            <View style={[styles.parentBudgetBanner, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, marginRight: 8 }}>
-                  <View style={[styles.parentBadgeIconBox, { backgroundColor: isDark ? 'rgba(45, 186, 78, 0.15)' : 'rgba(22, 163, 74, 0.1)' }]}>
-                    <Ionicons name="wallet" size={15} color={colors.accent} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.parentBudgetName, { color: colors.text, fontSize: 13 }]} numberOfLines={1}>
-                      {existingOverallBudget?.name || 'Overall Monthly Budget'}
-                    </Text>
-                    <Text style={[styles.parentBudgetSub, { color: colors.textSecondary, fontSize: 10 }]}>
-                      {existingOverallBudget?.period || format(calculatedRange.startDate, 'MMMM yyyy')}
-                    </Text>
-                  </View>
-                </View>
-                <View style={[styles.hasBudgetBadge, { backgroundColor: isDark ? 'rgba(45, 186, 78, 0.15)' : 'rgba(22, 163, 74, 0.1)' }]}>
-                  <Text style={[styles.hasBudgetBadgeText, { color: colors.accent, fontSize: 10 }]}>Main Budget</Text>
-                </View>
-              </View>
-
-              {/* 3 Metric Columns */}
-              <View style={[styles.parentMetricsRow, { borderTopColor: colors.border }]}>
-                <View style={styles.parentMetricCol}>
-                  <Text style={[styles.parentMetricLabel, { color: colors.textSecondary }]}>MAIN BUDGET</Text>
-                  <Text style={[styles.parentMetricValue, { color: colors.text }]}>
-                    ₹{parentTotalLimit.toLocaleString('en-IN')}
-                  </Text>
-                </View>
-                <View style={[styles.parentMetricDivider, { backgroundColor: colors.border }]} />
-                <View style={styles.parentMetricCol}>
-                  <Text style={[styles.parentMetricLabel, { color: colors.textSecondary }]}>
-                    ALLOCATED ({totalAllocatedCount})
-                  </Text>
-                  <Text style={[styles.parentMetricValue, { color: '#3b82f6' }]}>
-                    ₹{totalAllocatedSum.toLocaleString('en-IN')}
-                  </Text>
-                </View>
-                <View style={[styles.parentMetricDivider, { backgroundColor: colors.border }]} />
-                <View style={styles.parentMetricCol}>
-                  <Text style={[styles.parentMetricLabel, { color: colors.textSecondary }]}>
-                    {isBufferExceeded ? 'EXCEEDED' : 'FREE BUFFER'}
-                  </Text>
-                  <Text style={[styles.parentMetricValue, { color: isBufferExceeded ? '#ef4444' : colors.accent }]}>
-                    ₹{Math.abs(freeBufferRemaining).toLocaleString('en-IN')}
-                  </Text>
-                </View>
-              </View>
-
-              {/* Progress Bar Visualizer */}
-              <View style={[styles.progressBarBg, { backgroundColor: colors.inputBackground }]}>
-                <View
-                  style={[
-                    styles.progressBarFill,
-                    {
-                      width: `${Math.min(100, allocationPct)}%`,
-                      backgroundColor: isBufferExceeded ? '#ef4444' : colors.accent,
-                    },
-                  ]}
-                />
-              </View>
-
-              {/* Status Hint */}
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}>
-                <Ionicons
-                  name={isBufferExceeded ? 'alert-circle' : 'shield-checkmark'}
-                  size={12}
-                  color={isBufferExceeded ? '#ef4444' : colors.accent}
-                  style={{ marginRight: 5 }}
-                />
-                <Text style={{ fontSize: 11, color: isBufferExceeded ? '#ef4444' : colors.textSecondary }}>
-                  {isBufferExceeded
-                    ? `Allocations exceed limit by ₹${Math.abs(freeBufferRemaining).toLocaleString('en-IN')}`
-                    : freeBufferRemaining === 0
-                    ? '100% allocated across sub-budgets'
-                    : `₹${freeBufferRemaining.toLocaleString('en-IN')} free buffer remaining`}
-                </Text>
-              </View>
-            </View>
-
-            {/* Configured Sub-Budgets & Streamlined Category Studio */}
-            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border, padding: 12 }]}>
-              {/* Header */}
-              <View style={styles.configuredHeaderRow}>
-                <View style={{ flex: 1, marginRight: 8 }}>
-                  <Text style={[styles.cardTitle, { color: colors.text, fontSize: 13.5, marginBottom: 1 }]}>
-                    Configured Sub-Budgets ({totalAllocatedCount})
-                  </Text>
-                  <Text style={[styles.cardSubtitle, { color: colors.textSecondary, fontSize: 11, marginBottom: 0 }]}>
-                    All categories save together in one tap
-                  </Text>
-                </View>
-                {totalAllocatedCount > 0 && (
-                  <View style={[styles.summaryPill, { backgroundColor: isBufferExceeded ? 'rgba(239, 68, 68, 0.15)' : 'rgba(45, 186, 78, 0.15)' }]}>
-                    <Text style={[styles.summaryPillText, { color: isBufferExceeded ? '#ef4444' : colors.accent, fontSize: 11.5 }]}>
-                      ₹{totalAllocatedSum.toLocaleString('en-IN')}
-                    </Text>
-                  </View>
-                )}
-              </View>
-
-              {/* Action Button: Add Category (Clean, simple, no count, no duplicate Custom button) */}
-              <TouchableOpacity
-                style={[
-                  styles.openPickerBtn,
-                  {
-                    backgroundColor: isDark ? 'rgba(45, 186, 78, 0.12)' : 'rgba(22, 163, 74, 0.08)',
-                    borderColor: colors.accent,
-                    marginTop: 6,
-                    marginBottom: 8,
-                  },
-                ]}
-                onPress={() => {
-                  setCategorySearch('');
-                  setCategoryPickerModalVisible(true);
-                }}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="add-circle" size={16} color={colors.accent} style={{ marginRight: 6 }} />
-                <Text style={[styles.openPickerBtnText, { color: colors.accent }]}>
-                  Add Category
-                </Text>
-                <Ionicons name="chevron-down" size={14} color={colors.accent} style={{ marginLeft: 6 }} />
-              </TouchableOpacity>
-
-              {/* Single-Line Configured Category List */}
-              {totalAllocatedCount === 0 ? (
-                <TouchableOpacity
-                  style={[styles.emptyAllocationBox, { borderColor: colors.border, marginTop: 4 }]}
-                  onPress={() => setCategoryPickerModalVisible(true)}
-                  activeOpacity={0.7}
+          {perDay > 0 && (
+            <Animated.View entering={FadeIn.duration(200)} style={[s.perDay, { backgroundColor: soft }]}>
+              <Text style={[s.perDayText, { color: ink }]}>
+                That’s about <Text style={{ fontWeight: '700' }}>{inr(perDay)} a day</Text> for {monthlyDateMode === 'calendar' ? selectedMonth.short : range.label}.
+              </Text>
+            </Animated.View>
+          )}
+        </Animated.View>
+      ) : (
+        <Animated.View key="event" entering={FadeIn.duration(220)}>
+          {label('What for')}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.chipRow}>
+            {EVENT_PRESETS.map((p) => {
+              const on = eventPreset === p.id;
+              return (
+                <Pressable
+                  key={p.id}
+                  onPress={() => {
+                    setEventPreset(p.id);
+                    if (!budgetName.trim() || EVENT_PRESETS.some((x) => x.defaultName === budgetName)) setBudgetName(p.defaultName);
+                  }}
+                  style={[s.presetChip, on ? { backgroundColor: accent, borderColor: accent } : { backgroundColor: surface, borderColor: field }]}
                 >
-                  <Ionicons name="add-circle-outline" size={26} color={colors.accent} style={{ marginBottom: 4 }} />
-                  <Text style={[styles.emptyAllocationTitle, { color: colors.text, fontSize: 13 }]}>No categories added yet</Text>
-                  <Text style={[styles.emptyAllocationSub, { color: colors.textSecondary, fontSize: 11 }]}>
-                    Tap "Add Category" above to allocate
+                  <Ionicons name={p.icon as any} size={16} color={on ? accentInk : ink} />
+                  <Text style={[s.presetText, { color: on ? accentInk : ink }, on && { fontWeight: '700' }]}>{p.label}</Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+
+          {label('Name')}
+          <View style={[s.textBox, { backgroundColor: surface, borderColor: field }]}>
+            <TextInput value={budgetName} onChangeText={setBudgetName} placeholder="Like Goa trip" placeholderTextColor={muted} style={[s.textInput, { color: ink }]} />
+          </View>
+
+          {label('When')}
+          <View style={s.dateRow}>
+            {dateRow('start')}
+            {dateRow('end')}
+          </View>
+
+          {label('Budget')}
+          {amountField('0')}
+
+          {perDay > 0 && (
+            <Animated.View entering={FadeIn.duration(200)} style={[s.perDay, { backgroundColor: soft }]}>
+              <Text style={[s.perDayText, { color: ink }]}>
+                <Text style={{ fontWeight: '700' }}>{inr(perDay)} a day</Text> over {range.totalDays} day{range.totalDays === 1 ? '' : 's'}.
+              </Text>
+            </Animated.View>
+          )}
+        </Animated.View>
+      )}
+
+      {/* Start from a past budget */}
+      {pastBudgets.length > 0 && (
+        <>
+          {label('Start from')}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.chipRow}>
+            <Pressable onPress={clearTemplate} style={[s.tplChip, !template ? { borderColor: accent, borderWidth: 2 } : { borderColor: field }, { backgroundColor: surface }]}>
+              {!template && <Feather name="check" size={14} color={accent} />}
+              <Text style={[s.tplText, { color: ink }, !template && { fontWeight: '700' }]}>Scratch</Text>
+            </Pressable>
+            {pastBudgets.map((b) => {
+              const on = template?.id === b.id;
+              return (
+                <Pressable
+                  key={b.id}
+                  onPress={() => {
+                    setTemplate(b);
+                    applyTemplate(b);
+                  }}
+                  style={[s.tplChip, on ? { borderColor: accent, borderWidth: 2 } : { borderColor: field }, { backgroundColor: surface }]}
+                >
+                  {on && <Feather name="check" size={14} color={accent} />}
+                  <Text style={[s.tplText, { color: ink }, on && { fontWeight: '700' }]} numberOfLines={1}>
+                    {(b.isOverall ? (b.period || '').split(' ')[0] : b.name) || 'Budget'}, {inr(b.limitAmount || 0)}
                   </Text>
-                </TouchableOpacity>
-              ) : (
-                <View style={{ gap: 6, marginTop: 4 }}>
-                  {allocationEntries.map(([catId, item]) => {
-                    const customDef = customCategories.find((c) => c.id === catId);
-                    const meta = getCategoryMeta(catId, false, customDef);
-                    return (
-                      <View
-                        key={catId}
-                        style={[
-                          styles.singleLineCategoryRow,
-                          { backgroundColor: colors.inputBackground, borderColor: colors.border },
-                        ]}
-                      >
-                        {/* Left: Icon + Category Name */}
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, marginRight: 10 }}>
-                          <View style={[styles.compactIconBox, { backgroundColor: meta.color ? `${meta.color}20` : 'rgba(255,255,255,0.06)' }]}>
-                            <Ionicons name={meta.icon as any} size={14} color={meta.color || colors.accent} />
-                          </View>
-                          <Text style={[styles.singleLineCategoryTitle, { color: colors.text }]} numberOfLines={1}>
-                            {meta.label}
-                          </Text>
-                        </View>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+          {template && budgetType === 'monthly' && entries.length > 0 && (
+            <Text style={[s.hint, { color: muted, textAlign: 'left', paddingHorizontal: 4 }]}>
+              Copies {entries.length} categor{entries.length === 1 ? 'y' : 'ies'} too:{' '}
+              {entries.map(([c]) => metaFor(c).label).slice(0, 3).join(', ')}
+              {entries.length > 3 ? ` and ${entries.length - 3} more` : ''}.
+            </Text>
+          )}
+        </>
+      )}
+    </>
+  );
 
-                        {/* Right: Numeric Amount Box + Remove Button in One Line */}
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                          <View style={[styles.singleLineInputBox, { borderColor: colors.border, backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#ffffff' }]}>
-                            <Text style={[styles.compactCurrency, { color: colors.accent }]}>₹</Text>
-                            <TextInput
-                              style={[styles.singleLineAmountInput, { color: colors.text }]}
-                              value={item.amountStr}
-                              onChangeText={(val) => handleUpdateCategoryAmount(catId, val)}
-                              placeholder="1,000"
-                              placeholderTextColor={colors.textSecondary}
-                              keyboardType="number-pad"
-                              inputMode="numeric"
-                            />
-                          </View>
+  /* ---------------- Footer label ---------------- */
 
-                          <TouchableOpacity
-                            onPress={() => handleRemoveCategory(catId)}
-                            style={styles.compactRemoveBtn}
-                            activeOpacity={0.7}
-                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                          >
-                            <Ionicons name="close" size={16} color={colors.textSecondary} />
-                          </TouchableOpacity>
-                        </View>
-                      </View>
-                    );
-                  })}
-                </View>
-              )}
-            </View>
-          </>
-        )}
+  const ctaLabel = isCategoryMode
+    ? entries.length === 0
+      ? 'Add a category first'
+      : overPlan
+        ? `Over by ${inr(leftToPlan)}`
+        : `Save ${entries.length} categor${entries.length === 1 ? 'y' : 'ies'}`
+    : budgetType === 'monthly'
+      ? `Create ${monthlyDateMode === 'calendar' ? selectedMonth.short + ' ' : ''}budget`
+      : `Create ${budgetName.trim() || 'event'} budget`;
+  const ctaDisabled = saving || (isCategoryMode ? entries.length === 0 || overPlan : monthTaken || !(amount > 0));
+
+  /* ---------------- Render ---------------- */
+
+  return (
+    <KeyboardAvoidingView behavior="padding" style={{ flex: 1, backgroundColor: pageBg }}>
+      {AppTopBarComponent && <AppTopBarComponent />}
+
+      <View style={[s.header, { paddingTop: AppTopBarComponent ? 12 : insets.top + 8 }]}>
+        <Pressable onPress={() => navigation.goBack()} style={[s.roundBtn, { backgroundColor: surface }]} accessibilityLabel="Back">
+          <Feather name="arrow-left" size={20} color={ink} />
+        </Pressable>
+        <Text style={[s.headerTitle, { color: ink }]}>
+          {isCategoryMode ? `Split ${(parentBudget?.period || format(range.startDate, 'MMMM yyyy')).split(' ')[0]}` : 'New budget'}
+        </Text>
+        <View style={{ width: 44 }} />
+      </View>
+
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 24 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        {isCategoryMode ? renderSplit() : renderNew()}
       </ScrollView>
 
-      {/* INTERACTIVE CALENDAR DATE PICKER MODAL */}
-      <CalendarDatePickerModal
-        visible={calendarPickerTarget !== null}
-        title={calendarPickerTarget === 'start' ? 'Select Start Date' : 'Select End Date'}
-        initialDate={calendarPickerTarget === 'start' ? startDateStr : endDateStr}
-        minDate={calendarPickerTarget === 'end' ? parseISO(startDateStr) : undefined}
-        onClose={() => setCalendarPickerTarget(null)}
-        onSelectDate={(date, dateStr) => {
-          if (calendarPickerTarget === 'start') {
-            setStartDateStr(dateStr);
-            const currentEnd = parseISO(endDateStr);
-            if (isValid(currentEnd) && currentEnd < date) {
-              setEndDateStr(format(addDays(date, 5), 'yyyy-MM-dd'));
-            }
-          } else if (calendarPickerTarget === 'end') {
-            setEndDateStr(dateStr);
-          }
-          setCalendarPickerTarget(null);
+      <View style={[s.footer, { borderTopColor: line, paddingBottom: Math.max(insets.bottom, 12) + 8 }]}>
+        {errorText ? (
+          <Animated.View entering={FadeIn.duration(200)} style={s.errorRow}>
+            <Feather name="alert-circle" size={14} color={red} />
+            <Text style={[s.errorText, { color: red }]}>{errorText}</Text>
+          </Animated.View>
+        ) : null}
+        <Pressable
+          onPress={isCategoryMode ? saveSplit : saveBudget}
+          disabled={ctaDisabled}
+          style={({ pressed }) => [s.cta, { backgroundColor: overPlan && isCategoryMode ? '#E03131' : accent, opacity: ctaDisabled && !saving ? 0.5 : 1 }, pressed && !ctaDisabled && { transform: [{ scale: 0.98 }] }]}
+          accessibilityRole="button"
+        >
+          {saving ? <ActivityIndicator color={accentFg} /> : <Text style={[s.ctaText, { color: overPlan && isCategoryMode ? '#FFFFFF' : accentFg }]}>{ctaLabel}</Text>}
+        </Pressable>
+      </View>
+
+      {/* Dates */}
+      <DateTimePickerSheet
+        visible={datePicker !== null}
+        mode="date"
+        title={datePicker === 'start' ? 'Start date' : 'End date'}
+        value={parseISO(datePicker === 'end' ? endDateStr : startDateStr)}
+        minimumDate={datePicker === 'end' ? parseISO(startDateStr) : undefined}
+        onClose={() => setDatePicker(null)}
+        onConfirm={(d) => {
+          const str = format(d, 'yyyy-MM-dd');
+          if (datePicker === 'start') {
+            setStartDateStr(str);
+            const end = parseISO(endDateStr);
+            if (isValid(end) && end < d) setEndDateStr(format(addDays(d, 5), 'yyyy-MM-dd'));
+          } else setEndDateStr(str);
+          setDatePicker(null);
         }}
       />
 
-      {/* SEARCHABLE CATEGORY PICKER DROPDOWN MODAL */}
-      <Modal visible={categoryPickerModalVisible} transparent animationType="slide" statusBarTranslucent navigationBarTranslucent>
-        <KeyboardAvoidingView
-          behavior="padding"
-          style={styles.modalOverlay}
-        >
-          <View style={[styles.pickerModalCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <View style={styles.modalHeader}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.modalTitle, { color: colors.text, fontSize: 16 }]}>Choose Categories</Text>
-                <Text style={[styles.modalSubtitle, { color: colors.textSecondary }]}>
-                  Select categories to include in this month's budget
-                </Text>
+      {/* Category picker */}
+      <Modal visible={pickerOpen} transparent animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={() => setPickerOpen(false)}>
+        <View style={s.backdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setPickerOpen(false)} accessibilityLabel="Close" />
+          <KeyboardAvoidingView behavior="padding" style={{ width: '100%' }}>
+            <View style={[s.sheet, { backgroundColor: surface, paddingBottom: Math.max(insets.bottom, 16) + 10 }]}>
+              <View style={[s.grabber, { backgroundColor: isDark ? 'rgba(255,255,255,0.18)' : '#D5DED9' }]} />
+              <Text style={[s.sheetTitle, { color: ink }, heading]}>Choose categories</Text>
+              <View style={[s.search, { backgroundColor: pageBg, borderColor: field }]}>
+                <Feather name="search" size={16} color={muted} />
+                <TextInput value={search} onChangeText={setSearch} placeholder="Search, like rent or gym" placeholderTextColor={muted} style={[s.searchInput, { color: ink }]} />
               </View>
-              <TouchableOpacity
-                onPress={() => setCategoryPickerModalVisible(false)}
-                style={styles.modalCloseBtn}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                <Ionicons name="close" size={22} color={colors.textSecondary} />
-              </TouchableOpacity>
+              <ScrollView style={{ maxHeight: 360 }} contentContainerStyle={s.grid} keyboardShouldPersistTaps="handled">
+                {filteredCategories.map((c: any) => {
+                  const on = !!allocations[c.id];
+                  return (
+                    <Pressable key={c.id} onPress={() => toggleCat(c.id)} style={s.gridItem} accessibilityRole="checkbox" accessibilityState={{ checked: on }} accessibilityLabel={c.label}>
+                      <View>
+                        {catTile(c.id, 52)}
+                        {on && (
+                          <View style={[s.gridCheck, { backgroundColor: LIME, borderColor: surface }]}>
+                            <Feather name="check" size={11} color={FOREST} />
+                          </View>
+                        )}
+                      </View>
+                      <Text style={[s.gridLabel, { color: ink }, on && { fontWeight: '700' }]} numberOfLines={1}>{c.label}</Text>
+                    </Pressable>
+                  );
+                })}
+                <Pressable
+                  onPress={() => {
+                    setPickerOpen(false);
+                    setCustomOpen(true);
+                  }}
+                  style={s.gridItem}
+                >
+                  <View style={[s.newTile, { borderColor: isDark ? 'rgba(255,255,255,0.3)' : '#9DB2A7' }]}>
+                    <Feather name="plus" size={20} color={accent} />
+                  </View>
+                  <Text style={[s.gridLabel, { color: ink }]}>New</Text>
+                </Pressable>
+              </ScrollView>
+              <Pressable onPress={() => setPickerOpen(false)} style={[s.cta, { backgroundColor: accent, marginTop: 12 }]}>
+                <Text style={[s.ctaText, { color: accentFg }]}>Done{entries.length ? `, ${entries.length} chosen` : ''}</Text>
+              </Pressable>
             </View>
-
-            {/* Instant Search Bar */}
-            <View style={[styles.searchBox, { borderColor: colors.border, backgroundColor: colors.inputBackground, marginVertical: 8 }]}>
-              <Ionicons name="search-outline" size={15} color={colors.textSecondary} style={{ marginRight: 6 }} />
-              <TextInput
-                style={[styles.searchInput, { color: colors.text, fontSize: 12.5 }]}
-                placeholder="Search categories (e.g. food, rent, gym)..."
-                placeholderTextColor={colors.textSecondary}
-                value={categorySearch}
-                onChangeText={setCategorySearch}
-              />
-              {categorySearch.length > 0 && (
-                <TouchableOpacity onPress={() => setCategorySearch('')}>
-                  <Ionicons name="close-circle" size={15} color={colors.textSecondary} />
-                </TouchableOpacity>
-              )}
-            </View>
-
-            {/* Scrollable Category Grid */}
-            <ScrollView
-              style={{ maxHeight: 320 }}
-              showsVerticalScrollIndicator={true}
-              contentContainerStyle={styles.pickerCategoryGrid}
-            >
-              {filteredCategories.map((cat) => {
-                const isSelected = !!allocations[cat.id];
-                return (
-                  <TouchableOpacity
-                    key={cat.id}
-                    style={[
-                      styles.pickerChip,
-                      {
-                        backgroundColor: isSelected
-                          ? isDark
-                            ? 'rgba(45, 186, 78, 0.2)'
-                            : 'rgba(22, 163, 74, 0.12)'
-                          : colors.inputBackground,
-                        borderColor: isSelected ? colors.accent : colors.border,
-                      },
-                    ]}
-                    onPress={() => handleToggleCategory(cat.id)}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons
-                      name={isSelected ? 'checkmark-circle' : (cat.icon as any)}
-                      size={15}
-                      color={isSelected ? colors.accent : cat.color || colors.text}
-                      style={{ marginRight: 6 }}
-                    />
-                    <Text
-                      style={[
-                        styles.pickerChipText,
-                        { color: isSelected ? colors.accent : colors.text, fontWeight: isSelected ? '700' : '500' },
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {cat.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-
-            {/* Footer with Done button and Quick Custom button */}
-            <View style={[styles.pickerFooterRow, { borderTopColor: colors.border }]}>
-              <TouchableOpacity
-                style={[styles.pickerAddCustomBtn, { borderColor: colors.border, backgroundColor: colors.inputBackground }]}
-                onPress={() => {
-                  setCategoryPickerModalVisible(false);
-                  setCustomCatModalVisible(true);
-                }}
-              >
-                <Ionicons name="add" size={15} color={colors.accent} style={{ marginRight: 4 }} />
-                <Text style={[styles.pickerAddCustomText, { color: colors.accent }]}>+ Custom</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.pickerDoneBtn, { backgroundColor: colors.accent }]}
-                onPress={() => setCategoryPickerModalVisible(false)}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.pickerDoneBtnText}>Done ({totalAllocatedCount} selected)</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
+          </KeyboardAvoidingView>
+        </View>
       </Modal>
 
-      {/* CREATE CUSTOM CATEGORY MODAL */}
-      <Modal visible={customCatModalVisible} transparent animationType="fade" statusBarTranslucent navigationBarTranslucent>
-        <KeyboardAvoidingView
-          behavior="padding"
-          style={styles.modalOverlay}
-        >
-          <View style={[styles.modalCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: colors.text }]}>Create Custom Category</Text>
-              <TouchableOpacity onPress={() => setCustomCatModalVisible(false)}>
-                <Ionicons name="close" size={22} color={colors.textSecondary} />
-              </TouchableOpacity>
+      {/* New category */}
+      <Modal visible={customOpen} transparent animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={() => setCustomOpen(false)}>
+        <View style={s.backdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setCustomOpen(false)} accessibilityLabel="Close" />
+          <KeyboardAvoidingView behavior="padding" style={{ width: '100%' }}>
+            <View style={[s.sheet, { backgroundColor: surface, paddingBottom: Math.max(insets.bottom, 16) + 10 }]}>
+              <View style={[s.grabber, { backgroundColor: isDark ? 'rgba(255,255,255,0.18)' : '#D5DED9' }]} />
+              <View style={s.newHead}>
+                <View style={{ width: 52, height: 52, borderRadius: 17, backgroundColor: `${newCatColor}22`, alignItems: 'center', justifyContent: 'center' }}>
+                  <Ionicons name={newCatIcon as any} size={24} color={newCatColor} />
+                </View>
+                <Text style={[s.sheetTitle, { color: ink, flex: 1 }, heading]} numberOfLines={1}>{newCatName.trim() || 'New category'}</Text>
+              </View>
+              <View style={[s.textBox, { backgroundColor: pageBg, borderColor: field, marginTop: 14 }]}>
+                <TextInput value={newCatName} onChangeText={setNewCatName} placeholder="Name, like Gym or Snacks" placeholderTextColor={muted} autoFocus style={[s.textInput, { color: ink }]} />
+              </View>
+              {label('Icon')}
+              <View style={s.iconGrid}>
+                {CUSTOM_ICONS.map((i) => {
+                  const on = newCatIcon === i;
+                  return (
+                    <Pressable key={i} onPress={() => setNewCatIcon(i)} style={[s.iconChoice, on ? { backgroundColor: newCatColor } : { backgroundColor: pageBg }]} accessibilityLabel={i.replace('-outline', '')}>
+                      <Ionicons name={i as any} size={20} color={on ? '#FFFFFF' : ink} />
+                    </Pressable>
+                  );
+                })}
+              </View>
+              {label('Colour')}
+              <View style={s.colorRow}>
+                {CUSTOM_COLORS.map((c) => (
+                  <Pressable key={c} onPress={() => setNewCatColor(c)} style={[s.colorDot, { backgroundColor: c }, newCatColor === c && { borderWidth: 3, borderColor: isDark ? '#FFFFFF' : FOREST }]} accessibilityLabel={`Colour ${c}`}>
+                    {newCatColor === c && <Feather name="check" size={16} color="#FFFFFF" />}
+                  </Pressable>
+                ))}
+              </View>
+              <Pressable onPress={saveCustomCategory} disabled={!newCatName.trim()} style={[s.cta, { backgroundColor: accent, marginTop: 18, opacity: newCatName.trim() ? 1 : 0.5 }]}>
+                <Text style={[s.ctaText, { color: accentFg }]}>Add category</Text>
+              </Pressable>
             </View>
-
-            <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>CATEGORY NAME</Text>
-            <TextInput
-              style={[styles.textInput, { backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.text, marginBottom: 14 }]}
-              value={newCatName}
-              onChangeText={setNewCatName}
-              placeholder="e.g. Snacks, Gym Diet, Car Maintenance"
-              placeholderTextColor={colors.textSecondary}
-            />
-
-            <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>SELECT ICON</Text>
-            <View style={styles.iconPickerGrid}>
-              {CUSTOM_ICONS.map((icon) => (
-                <TouchableOpacity
-                  key={icon}
-                  style={[
-                    styles.iconChoice,
-                    {
-                      backgroundColor: newCatIcon === icon ? colors.accent : isDark ? 'rgba(255,255,255,0.05)' : '#f1f5f9',
-                      borderColor: newCatIcon === icon ? colors.accent : colors.border,
-                    },
-                  ]}
-                  onPress={() => setNewCatIcon(icon)}
-                >
-                  <Ionicons name={icon as any} size={20} color={newCatIcon === icon ? '#ffffff' : colors.text} />
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <Text style={[styles.inputLabel, { color: colors.textSecondary, marginTop: 14 }]}>SELECT COLOR</Text>
-            <View style={styles.colorPickerRow}>
-              {CUSTOM_COLORS.map((col) => (
-                <TouchableOpacity
-                  key={col}
-                  style={[
-                    styles.colorChoice,
-                    { backgroundColor: col },
-                    newCatColor === col && styles.colorChoiceActive,
-                  ]}
-                  onPress={() => setNewCatColor(col)}
-                >
-                  {newCatColor === col && <Ionicons name="checkmark" size={16} color="#ffffff" />}
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <TouchableOpacity
-              style={[styles.modalSubmitBtn, { backgroundColor: colors.accent, marginTop: 20 }]}
-              onPress={handleSaveCustomCategory}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.modalSubmitBtnText}>Save & Select Category</Text>
-            </TouchableOpacity>
-          </View>
-        </KeyboardAvoidingView>
+          </KeyboardAvoidingView>
+        </View>
       </Modal>
-
-      {/* Sticky Bottom Action Bar with Safe Insets */}
-      <View
-        style={[
-          styles.bottomActionBar,
-          {
-            backgroundColor: colors.card,
-            borderTopColor: colors.border,
-            paddingBottom: Math.max(insets.bottom, 14),
-          },
-        ]}
-      >
-        {isCategoryMode ? (
-          <TouchableOpacity
-            style={[
-              styles.saveBtn,
-              {
-                backgroundColor:
-                  totalAllocatedCount === 0 || isBufferExceeded
-                    ? isDark
-                      ? '#374151'
-                      : '#9ca3af'
-                    : colors.accent,
-                opacity: saving ? 0.7 : 1,
-              },
-            ]}
-            onPress={handleSaveAllCategoryBudgets}
-            disabled={saving || totalAllocatedCount === 0 || isBufferExceeded}
-            activeOpacity={0.8}
-          >
-            {saving ? (
-              <ActivityIndicator color="#ffffff" size="small" />
-            ) : (
-              <>
-                <Ionicons name="checkmark-circle" size={20} color="#ffffff" />
-                <Text style={styles.saveBtnText}>
-                  {totalAllocatedCount === 0
-                    ? 'Select Categories to Allocate'
-                    : isBufferExceeded
-                    ? `Cannot Save: Exceeded by ₹${Math.abs(freeBufferRemaining).toLocaleString('en-IN')}`
-                    : `Save ${totalAllocatedCount} Sub-Budget${totalAllocatedCount > 1 ? 's' : ''} (₹${totalAllocatedSum.toLocaleString('en-IN')})`}
-                </Text>
-              </>
-            )}
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity
-            style={[
-              styles.saveBtn,
-              { backgroundColor: colors.accent, opacity: saving ? 0.7 : 1 },
-            ]}
-            onPress={handleSaveBudget}
-            disabled={saving}
-            activeOpacity={0.8}
-          >
-            {saving ? (
-              <ActivityIndicator color="#ffffff" size="small" />
-            ) : (
-              <>
-                <Ionicons name="checkmark-circle" size={20} color="#ffffff" />
-                <Text style={styles.saveBtnText}>
-                  {budgetType === 'monthly' ? 'Create Monthly Budget' : 'Create Event Budget'}
-                </Text>
-              </>
-            )}
-          </TouchableOpacity>
-        )}
-      </View>
     </KeyboardAvoidingView>
   );
 };
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    gap: 12,
-  },
-  backBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: '800',
-  },
-  headerSubtitle: {
-    fontSize: 12,
-    marginTop: 2,
-  },
-  scroll: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 28,
-  },
-  sectionHeader: {
-    marginBottom: 10,
-  },
-  sectionTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  sectionDesc: {
-    fontSize: 12,
-    marginTop: 2,
-  },
-  durationTabsRow: {
-    flexDirection: 'row',
-    padding: 4,
-    borderRadius: 14,
-    marginBottom: 16,
-  },
-  durationTab: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    borderRadius: 11,
-  },
-  durationTabActive: {
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  durationTabText: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  card: {
-    borderWidth: 1,
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 14,
-  },
-  cardTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    marginBottom: 4,
-  },
-  cardSubtitle: {
-    fontSize: 12,
-    marginBottom: 12,
-  },
-  subTabRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 12,
-  },
-  subTabBtn: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 9,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-  },
-  subTabBtnActive: {
-    borderWidth: 0,
-  },
-  subTabText: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  monthDropdownTrigger: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    marginTop: 4,
-  },
-  monthDropdownTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  hasBudgetBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  hasBudgetBadgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  monthDropdownMenu: {
-    borderRadius: 12,
-    borderWidth: 1,
-    marginTop: 6,
-    overflow: 'hidden',
-  },
-  monthMenuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-  },
-  monthMenuItemText: {
-    fontSize: 13,
-  },
-  parentBudgetBanner: {
-    borderWidth: 1,
-    borderRadius: 14,
-    padding: 12,
-    marginBottom: 10,
-  },
-  parentBadgeIconBox: {
-    width: 30,
-    height: 30,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  parentBudgetName: {
-    fontSize: 13,
-    fontWeight: '800',
-  },
-  parentBudgetSub: {
-    fontSize: 10,
-    marginTop: 1,
-  },
-  parentMetricsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderTopWidth: 1,
-    paddingTop: 8,
-    marginTop: 8,
-  },
-  parentMetricCol: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  parentMetricLabel: {
-    fontSize: 8.5,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-    marginBottom: 1,
-  },
-  parentMetricValue: {
-    fontSize: 13,
-    fontWeight: '800',
-  },
-  parentMetricDivider: {
-    width: 1,
-    height: 20,
-  },
-  progressBarBg: {
-    height: 5,
-    borderRadius: 3,
-    overflow: 'hidden',
-    marginTop: 8,
-  },
-  progressBarFill: {
-    height: '100%',
-    borderRadius: 3,
-  },
-  configuredHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  summaryPill: {
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 7,
-  },
-  summaryPillText: {
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  actionRowContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 4,
-    marginBottom: 8,
-  },
-  openPickerBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 9,
-    borderWidth: 1,
-  },
-  openPickerBtnText: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  emptyAllocationBox: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 18,
-    paddingHorizontal: 14,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-  },
-  emptyAllocationTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    marginBottom: 2,
-  },
-  emptyAllocationSub: {
-    fontSize: 11,
-    textAlign: 'center',
-  },
-  singleLineCategoryRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderRadius: 10,
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-  },
-  singleLineCategoryTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  singleLineInputBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    width: 95,
-  },
-  singleLineAmountInput: {
-    flex: 1,
-    fontSize: 13.5,
-    fontWeight: '800',
-    padding: 0,
-  },
-  compactIconBox: {
-    width: 24,
-    height: 24,
-    borderRadius: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  compactRemoveBtn: {
-    padding: 3,
-  },
-  compactCurrency: {
-    fontSize: 13,
-    fontWeight: '800',
-    marginRight: 4,
-  },
-  pickerModalCard: {
-    width: '100%',
-    maxWidth: 440,
-    maxHeight: '85%',
-    borderRadius: 18,
-    borderWidth: 1,
-    padding: 16,
-  },
-  modalSubtitle: {
-    fontSize: 11.5,
-    marginTop: 2,
-  },
-  modalCloseBtn: {
-    padding: 4,
-  },
-  pickerCategoryGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 7,
-    paddingVertical: 6,
-  },
-  pickerChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 8,
-    borderWidth: 1,
-  },
-  pickerChipText: {
-    fontSize: 11.5,
-  },
-  pickerFooterRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
-    marginTop: 12,
-    borderTopWidth: 1,
-    paddingTop: 10,
-  },
-  pickerAddCustomBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 9,
-    paddingHorizontal: 12,
-    borderRadius: 9,
-    borderWidth: 1,
-  },
-  pickerAddCustomText: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  pickerDoneBtn: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 10,
-    borderRadius: 9,
-  },
-  pickerDoneBtnText: {
-    color: '#ffffff',
-    fontSize: 12.5,
-    fontWeight: '800',
-  },
-  bottomActionBar: {
-    borderTopWidth: 1,
-    paddingHorizontal: 16,
-    paddingTop: 12,
-  },
-  cycleBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
-    borderWidth: 1,
-  },
-  cycleBadgeText: {
-    fontSize: 12,
-  },
-  textInput: {
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    fontSize: 14,
-  },
-  dateInputsRow: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  datePickerField: {
-    flex: 1,
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  datePickerValueText: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  inputLabel: {
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 1,
-    marginBottom: 4,
-  },
-  eventPresetChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
-    borderWidth: 1,
-    marginRight: 8,
-  },
-  eventPresetText: {
-    fontSize: 12,
-  },
-  categoryHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 10,
-  },
-  addCustomCatBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 8,
-    borderWidth: 1,
-    flexShrink: 0,
-  },
-  addCustomCatBtnText: {
-    fontSize: 11.5,
-    fontWeight: '700',
-  },
-  searchBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    marginBottom: 12,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 13,
-    padding: 0,
-  },
-  categoryChipsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  categoryChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 11,
-    paddingVertical: 8,
-    borderRadius: 10,
-    borderWidth: 1,
-  },
-  categoryChipText: {
-    fontSize: 12,
-  },
-  amountInputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    marginBottom: 12,
-  },
-  currencySymbol: {
-    fontSize: 24,
-    fontWeight: '800',
-    marginRight: 8,
-  },
-  amountInput: {
-    flex: 1,
-    fontSize: 24,
-    fontWeight: '800',
-    padding: 0,
-  },
-  quickAddRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  quickAddBtn: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 8,
-    borderRadius: 8,
-    borderWidth: 1,
-  },
-  quickAddBtnText: {
-    fontSize: 11.5,
-    fontWeight: '700',
-  },
-  saveBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 14,
-    borderRadius: 14,
-    gap: 8,
-    marginTop: 8,
-  },
-  saveBtnText: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.65)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  modalCard: {
-    width: '100%',
-    maxWidth: 400,
-    borderRadius: 18,
-    borderWidth: 1,
-    padding: 20,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 14,
-  },
-  modalTitle: {
-    fontSize: 17,
-    fontWeight: '800',
-  },
-  iconPickerGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  iconChoice: {
-    width: 40,
-    height: 40,
-    borderRadius: 10,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  colorPickerRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  colorChoice: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  colorChoiceActive: {
-    borderWidth: 2,
-    borderColor: '#ffffff',
-  },
-  modalSubmitBtn: {
-    paddingVertical: 12,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalSubmitBtnText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  templateCard: {
-    borderRadius: 14,
-    borderWidth: 1,
-    padding: 12,
-    marginBottom: 14,
-  },
-  templateCardTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  templateCardDesc: {
-    fontSize: 11,
-    lineHeight: 15,
-  },
-  templateChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
-  },
-  templateChipText: {
-    fontSize: 11.5,
-    fontWeight: '600',
-  },
-  allocPreviewChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: 8,
-    borderWidth: 1,
-  },
-  allocPreviewChipText: {
-    fontSize: 11,
-  },
+const s = StyleSheet.create({
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 6 },
+  roundBtn: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { fontSize: 16, fontWeight: '700' },
+
+  label: { fontSize: 13, fontWeight: '700', paddingHorizontal: 4, paddingTop: 20, paddingBottom: 10 },
+  segment: { flexDirection: 'row', borderRadius: 14, padding: 4, marginTop: 12 },
+  segBtn: { flex: 1, height: 40, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  segShadow: { shadowColor: '#0B1F17', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.12, shadowRadius: 3, elevation: 1 },
+  segText: { fontSize: 14, fontWeight: '600' },
+
+  monthRow: { gap: 8 },
+  monthChip: { height: 54, paddingHorizontal: 16, borderRadius: 16, justifyContent: 'center' },
+  monthName: { fontSize: 14, fontWeight: '700' },
+  monthSub: { fontSize: 11, marginTop: 1 },
+  dateRow: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  dateBox: { flex: 1, borderWidth: 1, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 10 },
+  dateLabel: { fontSize: 12 },
+  dateValue: { fontSize: 15, fontWeight: '700', marginTop: 2 },
+  notice: { borderRadius: 16, padding: 12, marginTop: 12 },
+  noticeText: { fontSize: 13, lineHeight: 18 },
+
+  amountBox: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 76, borderRadius: 20, paddingHorizontal: 18 },
+  rupee: { fontSize: 26 },
+  amountInput: { flex: 1, fontSize: 38, letterSpacing: -1, paddingVertical: 0, ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : {}) },
+  chipRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  smallChip: { height: 34, paddingHorizontal: 12, borderRadius: 17, borderWidth: 1, justifyContent: 'center' },
+  smallChipText: { fontSize: 13, fontWeight: '600' },
+  perDay: { borderRadius: 18, padding: 14, marginTop: 14 },
+  perDayText: { fontSize: 14, lineHeight: 20 },
+
+  presetChip: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 40, paddingHorizontal: 14, borderRadius: 20, borderWidth: 1 },
+  presetText: { fontSize: 13, fontWeight: '600' },
+  textBox: { height: 52, borderRadius: 16, borderWidth: 1, paddingHorizontal: 14, justifyContent: 'center' },
+  textInput: { fontSize: 15, fontWeight: '600', paddingVertical: 0, ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : {}) },
+  tplChip: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 40, paddingHorizontal: 14, borderRadius: 20, borderWidth: 1, maxWidth: 220 },
+  tplText: { fontSize: 13, fontWeight: '600' },
+  hint: { fontSize: 12, lineHeight: 17, textAlign: 'center', paddingTop: 10 },
+
+  hero: { marginTop: 10, borderRadius: 28, backgroundColor: FOREST, padding: 20, overflow: 'hidden' },
+  heroRing: { position: 'absolute', width: 220, height: 220, borderRadius: 110, borderWidth: 1, borderColor: 'rgba(184,243,107,0.16)', right: -80, top: -100 },
+  heroLabel: { color: '#B5CEC1', fontSize: 13 },
+  heroAmount: { color: '#FFFFFF', fontSize: 40, letterSpacing: -1.2, marginTop: 4, fontVariant: ['tabular-nums'] },
+  barTrack: { flexDirection: 'row', height: 12, borderRadius: 6, overflow: 'hidden', gap: 2, marginTop: 16, backgroundColor: 'rgba(255,255,255,0.12)' },
+  heroStats: { flexDirection: 'row', gap: 10, marginTop: 14 },
+  statLabel: { color: '#B5CEC1', fontSize: 12 },
+  statValue: { color: '#FFFFFF', fontSize: 17, fontWeight: '700', marginTop: 2, fontVariant: ['tabular-nums'] },
+
+  sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 4, paddingTop: 22, paddingBottom: 10 },
+  sectionTitle: { fontSize: 15, fontWeight: '700' },
+  link: { fontSize: 13, fontWeight: '600' },
+  group: { borderWidth: 1, borderRadius: 22, overflow: 'hidden' },
+  catRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 12 },
+  catName: { fontSize: 15, fontWeight: '600' },
+  catSub: { fontSize: 12, marginTop: 2 },
+  catAmount: { flexDirection: 'row', alignItems: 'center', gap: 4, width: 108, height: 44, borderRadius: 14, borderWidth: 1, paddingHorizontal: 12 },
+  catRupee: { fontSize: 14, fontWeight: '700' },
+  catInput: { flex: 1, fontSize: 17, paddingVertical: 0, ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : {}) },
+  addRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 52, borderRadius: 20, borderWidth: 1.5, borderStyle: 'dashed' },
+  addRowText: { fontSize: 14, fontWeight: '600' },
+
+  footer: { paddingHorizontal: 16, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth },
+  errorRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
+  errorText: { flex: 1, fontSize: 13, fontWeight: '600' },
+  cta: { height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center' },
+  ctaText: { fontSize: 16, fontWeight: '700' },
+
+  backdrop: { flex: 1, backgroundColor: 'rgba(7, 17, 13, 0.55)', justifyContent: 'flex-end' },
+  sheet: { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 10, width: '100%', maxWidth: 640, alignSelf: 'center' },
+  grabber: { width: 40, height: 5, borderRadius: 3, alignSelf: 'center', marginBottom: 16 },
+  sheetTitle: { fontSize: 22, letterSpacing: -0.4 },
+  search: { flexDirection: 'row', alignItems: 'center', gap: 8, height: 46, borderRadius: 16, borderWidth: 1, paddingHorizontal: 14, marginTop: 14, marginBottom: 6 },
+  searchInput: { flex: 1, fontSize: 15, paddingVertical: 0, ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : {}) },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', paddingVertical: 8 },
+  gridItem: { width: '25%', alignItems: 'center', gap: 6, paddingVertical: 8 },
+  gridCheck: { position: 'absolute', top: -5, right: -5, width: 20, height: 20, borderRadius: 10, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+  gridLabel: { fontSize: 12, fontWeight: '600', maxWidth: 76, textAlign: 'center' },
+  newTile: { width: 52, height: 52, borderRadius: 17, borderWidth: 1.5, borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center' },
+
+  newHead: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  iconGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  iconChoice: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  colorRow: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+  colorDot: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
 });

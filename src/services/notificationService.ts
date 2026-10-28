@@ -6,6 +6,7 @@ import { BACKEND_URL, getBackendUrl } from '../config/api';
 import { mmkvStorage } from '../db/mmkv';
 import { tokenStore } from './tokenStore';
 import { getDailyHumorMessage } from './humorousMessages';
+import { navigationRef } from '../navigation/navigationRef';
 
 const PROMPTED_KEY = 'notification_permission_prompted';
 const TOKEN_KEY = 'saved_expo_push_token';
@@ -373,6 +374,38 @@ export const notificationService = {
   },
 
   /**
+   * Tracks when a user opens a notification from device tray or notification center,
+   * recording analytics to core.notification_log and marking read in core.notifications.
+   */
+  async markAsOpened(id: string): Promise<void> {
+    if (!id) return;
+    const accessToken = getAuthToken();
+
+    // Optimistically update local store
+    useNotificationStore.getState().markAsReadState(id);
+
+    if (!accessToken) return;
+
+    try {
+      const response = await fetch(`${BACKEND_URL}/notifications/opened`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ notificationId: id }),
+      });
+
+      if (!response.ok) {
+        // Fallback to standard mark-as-read endpoint
+        await this.markAsRead(id);
+      }
+    } catch (err: any) {
+      console.warn('[NotificationService] Failed to record notification opened state:', err.message);
+    }
+  },
+
+  /**
    * Mark a notification as read.
    */
   async markAsRead(id: string): Promise<void> {
@@ -455,6 +488,89 @@ export const notificationService = {
     } catch (err: any) {
       console.warn('[NotificationService] Failed to delete notification on server:', err.message);
     }
+  },
+
+  /**
+   * Routes the user to the relevant screen when a deep link is received from a notification.
+   */
+  handleNotificationDeepLink(deepLink?: string | null): void {
+    if (!deepLink) return;
+
+    const route = deepLink.replace(/^regent:\/\//, '').toLowerCase().trim();
+
+    const navigateTo = () => {
+      if (!navigationRef.isReady()) {
+        setTimeout(navigateTo, 200);
+        return;
+      }
+
+      try {
+        if (route.startsWith('budget')) {
+          (navigationRef.navigate as any)('Main', { screen: 'Budgets' });
+        } else if (route.startsWith('goal')) {
+          (navigationRef.navigate as any)('Main', { screen: 'Goals' });
+        } else if (route.startsWith('bank')) {
+          (navigationRef.navigate as any)('Main', { screen: 'Banks' });
+        } else if (route.startsWith('chat') || route.startsWith('regent')) {
+          (navigationRef.navigate as any)('Main', { screen: 'Regent' });
+        } else if (route.startsWith('transaction') || route.startsWith('home')) {
+          (navigationRef.navigate as any)('Main', { screen: 'Home' });
+        } else if (route.startsWith('calendar')) {
+          (navigationRef.navigate as any)('FinancialCalendar');
+        } else {
+          (navigationRef.navigate as any)('Main', { screen: 'Home' });
+        }
+      } catch (err: any) {
+        console.warn('[NotificationService] Failed to navigate deep link:', err.message);
+      }
+    };
+
+    navigateTo();
+  },
+
+  /**
+   * Initializes automatic response listening and cold-start detection.
+   * Tracks open status to backend and navigates to deepLink destination.
+   */
+  initNotificationResponseHandler(): () => void {
+    if (Platform.OS === 'web') return () => {};
+
+    const handleResponse = (response: Notifications.NotificationResponse) => {
+      try {
+        const data = response?.notification?.request?.content?.data as any;
+        const notificationId =
+          data?.notificationId ||
+          (response.notification.request.identifier?.startsWith('notif_')
+            ? response.notification.request.identifier
+            : undefined);
+        const deepLink = data?.deepLink;
+
+        if (notificationId) {
+          this.markAsOpened(notificationId).catch(() => {});
+        }
+        if (deepLink) {
+          this.handleNotificationDeepLink(deepLink);
+        }
+      } catch (err: any) {
+        console.warn('[NotificationService] Error handling notification response:', err.message);
+      }
+    };
+
+    // 1. Listen for user taps when app is in background or foreground
+    const sub = Notifications.addNotificationResponseReceivedListener(handleResponse);
+
+    // 2. Check cold start (when app launched by clicking notification while killed)
+    Notifications.getLastNotificationResponseAsync()
+      .then((lastResponse) => {
+        if (lastResponse) {
+          handleResponse(lastResponse);
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      sub.remove();
+    };
   },
 
   /**

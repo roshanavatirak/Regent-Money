@@ -53,7 +53,7 @@ import {
   showGlobalConfirm,
 } from '../store';
 import { useSyncDb } from '../services/useSyncDb';
-import { askChatbot } from '../services/aiService';
+import { askChatbot, ChatMessage } from '../services/aiService';
 import { sanitizeTransactions } from '../services/sanitizer';
 import { FormattedChatMessage } from '../components/FormattedChatMessage';
 import { mmkvStorage } from '../db/mmkv';
@@ -127,6 +127,19 @@ const sentenceCase = (s: string) => {
   return t ? t.charAt(0).toUpperCase() + t.slice(1).toLowerCase() : t;
 };
 
+const formatMessageTime = (timestamp?: number) => {
+  if (!timestamp) return '';
+  const d = new Date(timestamp);
+  if (isNaN(d.getTime())) return '';
+  let hours = d.getHours();
+  const minutes = d.getMinutes();
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12;
+  hours = hours ? hours : 12;
+  const minStr = minutes < 10 ? '0' + minutes : String(minutes);
+  return `${hours}:${minStr} ${ampm}`;
+};
+
 /* ------------------------------------------------------------------ */
 /* Pieces                                                              */
 /* ------------------------------------------------------------------ */
@@ -181,15 +194,15 @@ const Orb: React.FC<{ P: Palette }> = ({ P }) => {
   useEffect(() => {
     float.value = withRepeat(withTiming(1, { duration: 3400, easing: Easing.inOut(Easing.sin) }), -1, true);
   }, []);
-  const coreStyle = useAnimatedStyle(() => ({ transform: [{ translateY: -3 + 6 * float.value }] }));
+  const coreStyle = useAnimatedStyle(() => ({ transform: [{ translateY: -2 + 4 * float.value }] }));
 
   return (
-    <View style={{ width: 128, height: 128, alignItems: 'center', justifyContent: 'center' }}>
-      <BreathingRing size={128} delay={0} strength={0.14} rgb={P.ringRgb} />
-      <BreathingRing size={96} delay={400} strength={0.24} rgb={P.ringRgb} />
-      <BreathingRing size={76} delay={800} fill strength={P.glow} rgb={P.ringRgb} />
+    <View style={{ width: 136, height: 136, alignItems: 'center', justifyContent: 'center' }}>
+      <BreathingRing size={136} delay={0} strength={0.14} rgb={P.ringRgb} />
+      <BreathingRing size={106} delay={400} strength={0.24} rgb={P.ringRgb} />
+      <BreathingRing size={84} delay={800} fill strength={P.glow} rgb={P.ringRgb} />
       <Animated.View style={coreStyle}>
-        <TreeCoin size={56} />
+        <TreeCoin size={98} />
       </Animated.View>
     </View>
   );
@@ -280,6 +293,7 @@ const SwipeDeck: React.FC<{
 }> = ({ P, cards, topic, onAsk, onNextTopic }) => {
   const [index, setIndex] = useState(0);
   const pan = useRef(new RNAnimated.Value(0)).current;
+  const isDraggingRef = useRef(false);
   const count = cards.length;
 
   useEffect(() => {
@@ -287,31 +301,56 @@ const SwipeDeck: React.FC<{
     pan.setValue(0);
   }, [cards]);
 
-  const step = (dir: 1 | -1) => {
-    setIndex((i) => (i + dir + count) % count);
-    pan.setValue(0);
-  };
-
   const fling = (dir: 1 | -1) => {
     RNAnimated.timing(pan, {
-      toValue: dir === 1 ? -440 : 440,
-      duration: 200,
+      toValue: dir === 1 ? -420 : 420,
+      duration: 170,
       useNativeDriver: false,
-    }).start(() => step(dir));
+    }).start(() => {
+      setIndex((i) => (i + dir + count) % count);
+      pan.setValue(dir === 1 ? 420 : -420);
+      RNAnimated.spring(pan, {
+        toValue: 0,
+        friction: 7,
+        tension: 65,
+        useNativeDriver: false,
+      }).start(() => {
+        isDraggingRef.current = false;
+      });
+    });
   };
 
   const responder = useMemo(
     () =>
       PanResponder.create({
-        onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 8 && Math.abs(g.dx) > Math.abs(g.dy),
-        onPanResponderMove: (_, g) => pan.setValue(g.dx),
-        onPanResponderRelease: (_, g) => {
-          if (g.dx < -60) fling(1);
-          else if (g.dx > 60) fling(-1);
-          else RNAnimated.spring(pan, { toValue: 0, friction: 6, useNativeDriver: false }).start();
+        onStartShouldSetPanResponder: () => false,
+        onStartShouldSetPanResponderCapture: () => false,
+        onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 6 && Math.abs(g.dx) > Math.abs(g.dy),
+        onMoveShouldSetPanResponderCapture: (_, g) => Math.abs(g.dx) > 6 && Math.abs(g.dx) > Math.abs(g.dy),
+        onPanResponderGrant: () => {
+          isDraggingRef.current = false;
         },
-        onPanResponderTerminate: () =>
-          RNAnimated.spring(pan, { toValue: 0, friction: 6, useNativeDriver: false }).start(),
+        onPanResponderMove: (_, g) => {
+          if (Math.abs(g.dx) > 6) {
+            isDraggingRef.current = true;
+          }
+          pan.setValue(g.dx);
+        },
+        onPanResponderRelease: (_, g) => {
+          if (g.dx < -36 || g.vx < -0.2) fling(1);
+          else if (g.dx > 36 || g.vx > 0.2) fling(-1);
+          else {
+            RNAnimated.spring(pan, { toValue: 0, friction: 6, useNativeDriver: false }).start(() => {
+              isDraggingRef.current = false;
+            });
+          }
+        },
+        onPanResponderTerminationRequest: () => false,
+        onPanResponderTerminate: () => {
+          RNAnimated.spring(pan, { toValue: 0, friction: 6, useNativeDriver: false }).start(() => {
+            isDraggingRef.current = false;
+          });
+        },
       }),
     [count]
   );
@@ -354,7 +393,10 @@ const SwipeDeck: React.FC<{
           ]}
         >
           <Pressable
-            onPress={() => onAsk(card.query)}
+            onPress={() => {
+              if (isDraggingRef.current) return;
+              onAsk(card.query);
+            }}
             style={{ flex: 1, padding: 18, justifyContent: 'space-between' }}
             accessibilityRole="button"
             accessibilityLabel={`Ask: ${card.query}`}
@@ -401,14 +443,21 @@ const SwipeDeck: React.FC<{
         </RNAnimated.View>
       </View>
 
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
           <View style={{ flexDirection: 'row', gap: 4 }}>
             {cards.slice(0, Math.min(count, 11)).map((_, i) => (
-              <View
+              <Pressable
                 key={i}
+                onPress={() => {
+                  setIndex(i);
+                  pan.setValue(0);
+                }}
+                hitSlop={6}
+                accessibilityRole="button"
+                accessibilityLabel={`Go to card ${i + 1}`}
                 style={{
-                  width: i === index ? 14 : 5,
+                  width: i === index ? 16 : 5,
                   height: 5,
                   borderRadius: 3,
                   backgroundColor: i === index ? P.dot : P.line,
@@ -416,7 +465,44 @@ const SwipeDeck: React.FC<{
               />
             ))}
           </View>
-          <Text style={{ color: P.faint, fontSize: 12 }}>Swipe for more</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <Pressable
+              onPress={() => fling(-1)}
+              hitSlop={8}
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: 14,
+                borderWidth: 1,
+                borderColor: P.line,
+                backgroundColor: P.surface,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Previous idea"
+            >
+              <Feather name="chevron-left" size={15} color={P.muted} />
+            </Pressable>
+            <Pressable
+              onPress={() => fling(1)}
+              hitSlop={8}
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: 14,
+                borderWidth: 1,
+                borderColor: P.line,
+                backgroundColor: P.surface,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Next idea"
+            >
+              <Feather name="chevron-right" size={15} color={P.muted} />
+            </Pressable>
+          </View>
         </View>
         <Pressable
           onPress={onNextTopic}
@@ -449,6 +535,8 @@ export const RegentChatScreen: React.FC = () => {
 
   const chatHistory = useAIStore((s) => s.chatHistory);
   const addChatMessage = useAIStore((s) => s.addChatMessage);
+  const setChatHistory = useAIStore((s) => s.setChatHistory);
+  const updateChatMessage = useAIStore((s) => s.updateChatMessage);
   const clearChatHistory = useAIStore((s) => s.clearChatHistory);
   const isThinking = useAIStore((s) => s.isThinking);
   const setThinking = useAIStore((s) => s.setThinking);
@@ -460,8 +548,10 @@ export const RegentChatScreen: React.FC = () => {
   const budgets = useBudgetStore((s) => s.budgets);
 
   const [input, setInput] = useState('');
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const inputRef = useRef<TextInput>(null);
   const [greeting, setGreeting] = useState(() => getSessionGreeting(user?.name));
   const [setIndex, setSetIndex] = useState<number>(() => {
     const saved = mmkvStorage.getNumber(SET_KEY);
@@ -538,13 +628,67 @@ export const RegentChatScreen: React.FC = () => {
     [bankProfiles]
   );
 
+  const startEdit = useCallback((index: number, content: string) => {
+    setEditingIndex(index);
+    setInput(content);
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 80);
+  }, []);
+
+  const cancelEdit = useCallback(() => {
+    setEditingIndex(null);
+    setInput('');
+    Keyboard.dismiss();
+  }, []);
+
+  const saveInPlace = useCallback(() => {
+    if (editingIndex === null || !input.trim()) return;
+    updateChatMessage(editingIndex, input.trim());
+    setEditingIndex(null);
+    setInput('');
+    Keyboard.dismiss();
+  }, [editingIndex, input, updateChatMessage]);
+
   const send = async (text?: string) => {
     const query = (text ?? input).trim();
     if (!query || isThinking) return;
 
+    const isEditing = editingIndex !== null && editingIndex >= 0 && editingIndex < chatHistory.length;
+    const targetEditIdx = isEditing ? editingIndex : null;
+    const targetMsg = targetEditIdx !== null ? chatHistory[targetEditIdx] : null;
+
+    if (targetMsg && targetMsg.role === 'assistant') {
+      saveInPlace();
+      return;
+    }
+
     setInput('');
+    setEditingIndex(null);
     Keyboard.dismiss();
-    addChatMessage({ role: 'user', content: query });
+
+    let queryHistory: ChatMessage[];
+
+    if (targetEditIdx !== null) {
+      const base = chatHistory.slice(0, targetEditIdx);
+      const editedUserMsg: ChatMessage = {
+        role: 'user',
+        content: query,
+        timestamp: Date.now(),
+        isEdited: true,
+      };
+      setChatHistory([...base, editedUserMsg]);
+      queryHistory = base;
+    } else {
+      const userMsg: ChatMessage = {
+        role: 'user',
+        content: query,
+        timestamp: Date.now(),
+      };
+      queryHistory = chatHistory;
+      addChatMessage(userMsg);
+    }
+
     setThinking(true);
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
 
@@ -588,13 +732,14 @@ export const RegentChatScreen: React.FC = () => {
         ),
       };
 
-      const response = await askChatbot(query, chatHistory, context);
-      addChatMessage({ role: 'assistant', content: response });
+      const response = await askChatbot(query, queryHistory, context);
+      addChatMessage({ role: 'assistant', content: response, timestamp: Date.now() });
     } catch (e) {
       console.error(e);
       addChatMessage({
         role: 'assistant',
         content: "I couldn't reach the server just now. Check your connection and ask again.",
+        timestamp: Date.now(),
       });
     } finally {
       setThinking(false);
@@ -612,6 +757,8 @@ export const RegentChatScreen: React.FC = () => {
       icon: 'edit-3',
       onConfirm: () => {
         clearChatHistory();
+        setEditingIndex(null);
+        setInput('');
         initialCountRef.current = 0;
       },
     });
@@ -698,6 +845,7 @@ export const RegentChatScreen: React.FC = () => {
             contentContainerStyle={{ flexGrow: 1, paddingBottom: 12 }}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
+            nestedScrollEnabled={true}
           >
             <Animated.View entering={FadeIn.duration(500)} style={styles.hero}>
               <Orb P={P} />
@@ -733,11 +881,55 @@ export const RegentChatScreen: React.FC = () => {
                 : typeof item.content === 'object' && item.content != null
                   ? ((item.content as any).answer || (item.content as any).message || (item.content as any).text || JSON.stringify(item.content))
                   : String(item.content || '');
+              const timeStr = formatMessageTime(item.timestamp);
+              const isBeingEdited = editingIndex === index;
 
               if (isUser) {
                 return (
-                  <Animated.View entering={entering} style={styles.userBubble}>
-                    <Text style={styles.userText}>{textContent}</Text>
+                  <Animated.View entering={entering} style={styles.userBubbleWrap}>
+                    <Pressable
+                      onLongPress={() => startEdit(index, textContent)}
+                      delayLongPress={280}
+                      style={[
+                        styles.userBubble,
+                        isBeingEdited && styles.userBubbleEditing,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Your message: ${textContent}`}
+                      accessibilityHint="Long press to edit"
+                    >
+                      <Text style={styles.userText}>{textContent}</Text>
+                    </Pressable>
+                    <View style={styles.userMetaRow}>
+                      {timeStr ? (
+                        <Text style={styles.userTimeText}>
+                          {timeStr}
+                          {item.isEdited ? ' • edited' : ''}
+                        </Text>
+                      ) : null}
+                      <Pressable
+                        onPress={() => startEdit(index, textContent)}
+                        style={styles.iconActionBtn}
+                        hitSlop={8}
+                        accessibilityRole="button"
+                        accessibilityLabel="Edit message"
+                      >
+                        <Feather name="edit-2" size={13} color={isBeingEdited ? P.link : P.muted} />
+                      </Pressable>
+                      <Pressable
+                        onPress={() => copy(textContent, index)}
+                        style={styles.iconActionBtn}
+                        hitSlop={8}
+                        accessibilityRole="button"
+                        accessibilityLabel="Copy message"
+                      >
+                        <Feather
+                          name={copiedIndex === index ? 'check' : 'copy'}
+                          size={13}
+                          color={copiedIndex === index ? P.link : P.muted}
+                        />
+                      </Pressable>
+                    </View>
                   </Animated.View>
                 );
               }
@@ -746,23 +938,39 @@ export const RegentChatScreen: React.FC = () => {
                 <Animated.View entering={entering} style={styles.assistantRow}>
                   <TreeCoin size={28} ring={P.line} />
                   <View style={{ flex: 1, minWidth: 0 }}>
-                    <FormattedChatMessage content={textContent} isUser={false} colors={mdColors} isDark={P.dark} />
-                    <Pressable
-                      onPress={() => copy(textContent, index)}
-                      style={styles.copyBtn}
-                      hitSlop={8}
-                      accessibilityRole="button"
-                      accessibilityLabel="Copy answer"
-                    >
-                      <Feather
-                        name={copiedIndex === index ? 'check' : 'copy'}
-                        size={13}
-                        color={copiedIndex === index ? P.link : P.muted}
-                      />
-                      <Text style={[styles.copyText, copiedIndex === index && { color: P.link }]}>
-                        {copiedIndex === index ? 'Copied' : 'Copy'}
-                      </Text>
-                    </Pressable>
+                    <View style={isBeingEdited ? styles.assistantBubbleEditing : undefined}>
+                      <FormattedChatMessage content={textContent} isUser={false} colors={mdColors} isDark={P.dark} />
+                    </View>
+                    <View style={styles.assistantMetaRow}>
+                      {timeStr ? (
+                        <Text style={styles.assistantTimeText}>
+                          {timeStr}
+                          {item.isEdited ? ' • edited' : ''}
+                        </Text>
+                      ) : null}
+                      <Pressable
+                        onPress={() => startEdit(index, textContent)}
+                        style={styles.iconActionBtn}
+                        hitSlop={8}
+                        accessibilityRole="button"
+                        accessibilityLabel="Edit answer"
+                      >
+                        <Feather name="edit-2" size={13} color={isBeingEdited ? P.link : P.muted} />
+                      </Pressable>
+                      <Pressable
+                        onPress={() => copy(textContent, index)}
+                        style={styles.iconActionBtn}
+                        hitSlop={8}
+                        accessibilityRole="button"
+                        accessibilityLabel="Copy answer"
+                      >
+                        <Feather
+                          name={copiedIndex === index ? 'check' : 'copy'}
+                          size={13}
+                          color={copiedIndex === index ? P.link : P.muted}
+                        />
+                      </Pressable>
+                    </View>
                   </View>
                 </Animated.View>
               );
@@ -788,11 +996,62 @@ export const RegentChatScreen: React.FC = () => {
 
         {/* Composer */}
         <View style={[styles.composerWrap, { paddingBottom: bottomPad }]}>
-          <View style={[styles.composer, input.length > 0 && { borderColor: P.lineStrong }]}>
+          {editingIndex !== null && (
+            <Animated.View entering={FadeInDown.duration(200)} style={styles.editingBanner}>
+              <View style={styles.editingBannerLeft}>
+                <View style={styles.editingIconBadge}>
+                  <Feather name="edit-2" size={12} color={P.sendFg} />
+                </View>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={styles.editingBannerTitle} numberOfLines={1}>
+                    {chatHistory[editingIndex]?.role === 'assistant'
+                      ? "Editing Regent's response"
+                      : 'Editing message'}
+                  </Text>
+                  <Text style={styles.editingBannerSub} numberOfLines={1}>
+                    {chatHistory[editingIndex]?.role === 'assistant'
+                      ? 'Tap Save to update text in place'
+                      : 'Tap Save to update, or Send to re-ask'}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.editingBannerRight}>
+                <Pressable
+                  onPress={saveInPlace}
+                  disabled={!input.trim()}
+                  style={[styles.saveInPlaceBtn, !input.trim() && { opacity: 0.5 }]}
+                  hitSlop={6}
+                  accessibilityRole="button"
+                  accessibilityLabel="Save message"
+                >
+                  <Feather name="check" size={12} color={P.sendFg} />
+                  <Text style={styles.saveInPlaceText}>Save</Text>
+                </Pressable>
+                <Pressable
+                  onPress={cancelEdit}
+                  style={styles.cancelEditBtn}
+                  hitSlop={6}
+                  accessibilityRole="button"
+                  accessibilityLabel="Cancel editing"
+                >
+                  <Feather name="x" size={14} color={P.muted} />
+                </Pressable>
+              </View>
+            </Animated.View>
+          )}
+
+          <View
+            style={[
+              styles.composer,
+              input.length > 0 && { borderColor: P.lineStrong },
+              editingIndex !== null && { borderColor: P.dot, borderWidth: 1.5 },
+            ]}
+          >
             <TextInput
+              ref={inputRef}
               value={input}
               onChangeText={setInput}
-              placeholder="Ask Regent anything"
+              placeholder={editingIndex !== null ? 'Edit message...' : 'Ask Regent anything'}
               placeholderTextColor={P.faint}
               style={styles.input}
               editable={!isThinking}
@@ -807,7 +1066,7 @@ export const RegentChatScreen: React.FC = () => {
                 disabled={!canSend}
                 style={[styles.sendBtn, canSend && styles.sendBtnActive]}
                 accessibilityRole="button"
-                accessibilityLabel="Send"
+                accessibilityLabel={editingIndex !== null ? 'Save and re-ask' : 'Send'}
               >
                 <Feather name="arrow-up" size={19} color={canSend ? P.sendFg : P.idleFg} />
               </Pressable>
@@ -886,20 +1145,119 @@ const makeStyles = (P: Palette) =>
     },
     suggestions: { gap: 8, paddingLeft: 72, paddingRight: 16, paddingBottom: 8 },
 
-    chatList: { paddingHorizontal: 16, paddingTop: 20, paddingBottom: 12, gap: 22 },
-    userBubble: {
+    chatList: { paddingHorizontal: 16, paddingTop: 20, paddingBottom: 12, gap: 20 },
+    userBubbleWrap: {
       alignSelf: 'flex-end',
-      maxWidth: '78%',
+      maxWidth: '82%',
+      alignItems: 'flex-end',
+    },
+    userBubble: {
       backgroundColor: P.userBg,
       borderRadius: 22,
       borderBottomRightRadius: 6,
       paddingHorizontal: 16,
       paddingVertical: 12,
     },
+    userBubbleEditing: {
+      borderWidth: 1.5,
+      borderColor: P.dot,
+    },
     userText: { color: P.userFg, fontSize: 15, lineHeight: 21, fontWeight: '500' },
-    assistantRow: { flexDirection: 'row', gap: 10, maxWidth: '90%' },
-    copyBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', paddingVertical: 6, marginTop: 2 },
-    copyText: { color: P.muted, fontSize: 12, fontWeight: '600' },
+    userMetaRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      marginTop: 4,
+      marginRight: 4,
+    },
+    userTimeText: { color: P.faint, fontSize: 11, fontWeight: '500' },
+    iconActionBtn: {
+      padding: 3,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+
+    assistantRow: { flexDirection: 'row', gap: 10, maxWidth: '92%' },
+    assistantBubbleEditing: {
+      borderWidth: 1.5,
+      borderColor: P.dot,
+      borderRadius: 16,
+      padding: 8,
+    },
+    assistantMetaRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      marginTop: 4,
+    },
+    assistantTimeText: { color: P.faint, fontSize: 11, fontWeight: '500' },
+
+    editingBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 8,
+      backgroundColor: P.surface,
+      borderWidth: 1,
+      borderColor: P.lineStrong,
+      borderRadius: 16,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      marginBottom: 8,
+    },
+    editingBannerLeft: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      flex: 1,
+      minWidth: 0,
+    },
+    editingIconBadge: {
+      width: 24,
+      height: 24,
+      borderRadius: 12,
+      backgroundColor: P.sendBg,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    editingBannerTitle: {
+      color: P.text,
+      fontSize: 13,
+      fontWeight: '700',
+    },
+    editingBannerSub: {
+      color: P.faint,
+      fontSize: 11,
+    },
+    editingBannerRight: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+    },
+    saveInPlaceBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      backgroundColor: P.sendBg,
+      borderRadius: 14,
+      paddingHorizontal: 10,
+      paddingVertical: 5,
+    },
+    saveInPlaceText: {
+      color: P.sendFg,
+      fontSize: 12,
+      fontWeight: '700',
+    },
+    cancelEditBtn: {
+      width: 26,
+      height: 26,
+      borderRadius: 13,
+      borderWidth: 1,
+      borderColor: P.line,
+      backgroundColor: P.bg,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
 
     composerWrap: { paddingHorizontal: 16, paddingTop: 8, backgroundColor: P.bg },
     composer: {

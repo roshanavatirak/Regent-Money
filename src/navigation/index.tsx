@@ -3432,6 +3432,14 @@ export default function AppNavigator() {
   const isReadOnlyTerms = !showMandatoryTerms;
 
   useEffect(() => {
+    if (Platform.OS === 'web') return;
+    const cleanup = notificationService.initNotificationResponseHandler();
+    return () => {
+      cleanup?.();
+    };
+  }, []);
+
+  useEffect(() => {
     if (!splashFinished || isLoading || !user || !user.termsAccepted || Platform.OS === 'web' || user.role === 'admin' || user.role === 'superadmin') return;
 
     const syncGrantedPermissions = async () => {

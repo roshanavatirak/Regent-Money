@@ -1,16 +1,16 @@
 {
   "notes": [
     {
-      "title": "Native Intro Fix for Physical Devices",
-      "detail": "Fixed intro overlay stability across asynchronous release-mode startup, ensuring seamless intro animation on real phones."
+      "title": "Smart Notifications",
+      "detail": "Autonomous budget pace, runway & milestone updates."
     },
     {
-      "title": "Enhanced Transaction Review Modal",
-      "detail": "Updated statement and screenshot review interface with compact rows, duplicate detection, and live balance previews."
+      "title": "Chat Upgrades",
+      "detail": "Message timestamps, edit option & smooth swipe navigation."
     },
     {
-      "title": "Performance & Build Optimization",
-      "detail": "Upgraded release ProGuard optimization rules and native window attachment for faster, flicker-free launches."
+      "title": "Fixes & Polish",
+      "detail": "Download progress layout fix & launch performance boost."
     }
   ]
 }

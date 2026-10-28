@@ -3,6 +3,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, Not } from 'typeorm';
 import { Cron } from '@nestjs/schedule';
 import { Notification } from './entities/notification.entity';
+import { NotificationLog } from './entities/notification-log.entity';
+import { SignalsService } from './signals.service';
 import { User } from '../users/entities/user.entity';
 import { getDailyHumorMessage, HumorousMessage } from './humorous-messages';
 import * as crypto from 'crypto';
@@ -14,8 +16,11 @@ export class NotificationsService implements OnModuleInit {
   constructor(
     @InjectRepository(Notification)
     private readonly notificationRepository: Repository<Notification>,
+    @InjectRepository(NotificationLog)
+    private readonly logRepository: Repository<NotificationLog>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    private readonly signalsService: SignalsService,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -44,12 +49,47 @@ export class NotificationsService implements OnModuleInit {
         );
       `);
 
-      // 3. Enable RLS and setup policies safely
+      // 3. Create core.notification_log table if missing
       await this.dataSource.query(`
-        ALTER TABLE core.notifications ENABLE ROW LEVEL SECURITY;
+        CREATE TABLE IF NOT EXISTS core.notification_log (
+          id TEXT PRIMARY KEY,
+          user_id TEXT REFERENCES core.users(id) NOT NULL,
+          signal_type TEXT NOT NULL,
+          numbers_used JSONB,
+          title TEXT NOT NULL,
+          body TEXT NOT NULL,
+          tone TEXT NOT NULL DEFAULT 'straight',
+          deep_link TEXT,
+          sent_at BIGINT NOT NULL,
+          opened_at BIGINT,
+          is_opened BOOLEAN DEFAULT FALSE
+        );
       `);
 
-      // Create policy if not exists
+      // 4. Create core.user_signals table if missing
+      await this.dataSource.query(`
+        CREATE TABLE IF NOT EXISTS core.user_signals (
+          id TEXT PRIMARY KEY,
+          user_id TEXT REFERENCES core.users(id) NOT NULL,
+          signals JSONB NOT NULL,
+          computed_at BIGINT NOT NULL
+        );
+      `);
+
+      // 5. Ensure indexes
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_notification_log_user_sent ON core.notification_log (user_id, sent_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_user_signals_user_computed ON core.user_signals (user_id, computed_at DESC);
+      `);
+
+      // 6. Enable RLS and setup policies safely
+      await this.dataSource.query(`
+        ALTER TABLE core.notifications ENABLE ROW LEVEL SECURITY;
+        ALTER TABLE core.notification_log ENABLE ROW LEVEL SECURITY;
+        ALTER TABLE core.user_signals ENABLE ROW LEVEL SECURITY;
+      `);
+
+      // Create policies if not exists
       await this.dataSource.query(`
         DO $$
         BEGIN
@@ -59,11 +99,25 @@ export class NotificationsService implements OnModuleInit {
           ) THEN
             CREATE POLICY "Users can manage their own notifications" ON core.notifications FOR ALL USING (auth.uid()::text = user_id);
           END IF;
+
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE schemaname = 'core' AND tablename = 'notification_log' AND policyname = 'Users can view their own notification logs'
+          ) THEN
+            CREATE POLICY "Users can view their own notification logs" ON core.notification_log FOR ALL USING (auth.uid()::text = user_id);
+          END IF;
+
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_policies 
+            WHERE schemaname = 'core' AND tablename = 'user_signals' AND policyname = 'Users can view their own signals'
+          ) THEN
+            CREATE POLICY "Users can view their own signals" ON core.user_signals FOR ALL USING (auth.uid()::text = user_id);
+          END IF;
         END
         $$;
       `);
 
-      this.logger.log('Notifications schema and policies verified successfully.');
+      this.logger.log('Notifications, notification_log, and user_signals schema verified successfully.');
     } catch (err: any) {
       this.logger.error(`Database initialization error: ${err.message}`, err.stack);
     }
@@ -198,30 +252,71 @@ export class NotificationsService implements OnModuleInit {
   }
 
   /**
-   * Built-in 9:00 AM IST Cron (03:30 UTC)
-   * Dispatches the daily morning humorous check-in notification to all active users.
+   * Tracks when a user opens a notification from device tray or in-app inbox.
    */
-  @Cron('30 3 * * *')
-  async handleMorningDailyHumorCron() {
-    this.logger.log('[DailyCron] Triggering 9:00 AM Morning Humorous Notification broadcast...');
+  async markNotificationOpened(
+    notificationId: string,
+    userId?: string,
+  ): Promise<{ success: boolean; notificationId: string }> {
+    this.logger.log(`Marking notification ${notificationId} as opened (User: ${userId || 'unknown'})`);
+    const now = Date.now();
+
+    // 1. Update NotificationLog open status
     try {
-      await this.broadcastDailyHumor('morning');
+      const logWhere: any = { id: notificationId };
+      if (userId) logWhere.userId = userId;
+      const logEntry = await this.logRepository.findOne({ where: logWhere });
+      if (logEntry) {
+        logEntry.isOpened = true;
+        logEntry.openedAt = now;
+        await this.logRepository.save(logEntry);
+      }
+    } catch (err: any) {
+      this.logger.warn(`Failed to update notification log open state: ${err.message}`);
+    }
+
+    // 2. Synchronize readStatus on core.notifications
+    try {
+      const notifWhere: any = { id: notificationId, isDeleted: false };
+      if (userId) notifWhere.userId = userId;
+      const notif = await this.notificationRepository.findOne({ where: notifWhere });
+      if (notif) {
+        notif.readStatus = true;
+        notif.updatedAt = now;
+        await this.notificationRepository.save(notif);
+      }
+    } catch (err: any) {
+      this.logger.warn(`Failed to update core notification read state: ${err.message}`);
+    }
+
+    return { success: true, notificationId };
+  }
+
+  /**
+   * Autonomous 9:30 AM IST Cron (04:00 UTC)
+   * Detects high-priority financial signals and dispatches personalized updates.
+   */
+  @Cron('0 4 * * *')
+  async handleMorningSignalsCron() {
+    this.logger.log('[SignalsCron] Running 9:30 AM IST morning autonomous signal dispatch...');
+    try {
+      await this.signalsService.runSignalsDispatchJob();
     } catch (e: any) {
-      this.logger.error(`[DailyCron] Morning broadcast error: ${e.message}`, e.stack);
+      this.logger.error(`[SignalsCron] Morning dispatch error: ${e.message}`, e.stack);
     }
   }
 
   /**
-   * Built-in 9:00 PM IST Cron (15:30 UTC)
-   * Dispatches the daily evening humorous check-in notification to all active users.
+   * Autonomous 8:30 PM IST Cron (15:00 UTC)
+   * Detects high-priority financial signals and dispatches evening personalized updates.
    */
-  @Cron('30 15 * * *')
-  async handleEveningDailyHumorCron() {
-    this.logger.log('[DailyCron] Triggering 9:00 PM Evening Humorous Notification broadcast...');
+  @Cron('0 15 * * *')
+  async handleEveningSignalsCron() {
+    this.logger.log('[SignalsCron] Running 8:30 PM IST evening autonomous signal dispatch...');
     try {
-      await this.broadcastDailyHumor('evening');
+      await this.signalsService.runSignalsDispatchJob();
     } catch (e: any) {
-      this.logger.error(`[DailyCron] Evening broadcast error: ${e.message}`, e.stack);
+      this.logger.error(`[SignalsCron] Evening dispatch error: ${e.message}`, e.stack);
     }
   }
 

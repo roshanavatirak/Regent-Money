@@ -48,8 +48,11 @@ export const generateWeeklyBriefing = async (
 
 // 2. Chatbot Interface
 export interface ChatMessage {
+  id?: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
+  timestamp?: number;
+  isEdited?: boolean;
 }
 
 export interface ChatContext {
@@ -98,7 +101,10 @@ export const askChatbot = async (
       },
       body: JSON.stringify({
         question,
-        history,
+        history: history.map((m) => ({
+          role: m.role,
+          content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+        })),
         context: currentContext,
       }),
       signal: controller.signal,

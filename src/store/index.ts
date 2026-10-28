@@ -452,6 +452,8 @@ export interface AIState {
   setGeneratingBriefing: (val: boolean) => void;
   setThinking: (val: boolean) => void;
   addChatMessage: (msg: ChatMessage) => void;
+  setChatHistory: (history: ChatMessage[]) => void;
+  updateChatMessage: (index: number, newContent: string) => void;
   clearChatHistory: () => void;
 }
 
@@ -464,7 +466,30 @@ export const useAIStore = create<AIState>((set) => ({
   setGeneratingBriefing: (isGeneratingBriefing) => set({ isGeneratingBriefing }),
   setThinking: (isThinking) => set({ isThinking }),
   addChatMessage: (msg) =>
-    set((state) => ({ chatHistory: [...state.chatHistory, msg] })),
+    set((state) => ({
+      chatHistory: [
+        ...state.chatHistory,
+        {
+          ...msg,
+          id: msg.id || `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          timestamp: msg.timestamp || Date.now(),
+        },
+      ],
+    })),
+  setChatHistory: (chatHistory) => set({ chatHistory }),
+  updateChatMessage: (index, newContent) =>
+    set((state) => {
+      const updated = [...state.chatHistory];
+      if (updated[index]) {
+        updated[index] = {
+          ...updated[index],
+          content: newContent,
+          timestamp: Date.now(),
+          isEdited: true,
+        };
+      }
+      return { chatHistory: updated };
+    }),
   clearChatHistory: () => set({ chatHistory: [] }),
 }));
 
