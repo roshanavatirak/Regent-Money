@@ -277,7 +277,7 @@ export class SyncService implements OnModuleInit {
 
     this.logger.log(`Performing data synchronization for user: ${userId}`);
 
-    const [rawTransactions, budgets, goals, bankProfiles, incomeRecords, exclusions] = await Promise.all([
+    const [rawTransactions, budgets, goals, bankProfiles, rawIncomeRecords, exclusions] = await Promise.all([
       this.transactionRepository.find({ where: { userId, isDeleted: false }, order: { timestamp: 'DESC' } }),
       this.budgetDeclarationRepository.find({ where: { userId, isDeleted: false } }),
       this.savingsGoalRepository.find({ where: { userId, isDeleted: false } }),
@@ -285,6 +285,11 @@ export class SyncService implements OnModuleInit {
       this.incomeRecordRepository.find({ where: { userId, isDeleted: false }, order: { timestamp: 'DESC' } }),
       this.budgetExclusionRepository.find({ where: { userId, isDeleted: false } }),
     ]);
+
+    // Purge any legacy synthetic mock income records
+    const incomeRecords = (rawIncomeRecords || []).filter(
+      (inc) => !(inc.amount === 95000 && /^income_\d+_/.test(inc.id)),
+    );
 
     const excludedTransactionIds = (exclusions || []).map((e) => e.transactionId);
 
@@ -453,9 +458,12 @@ export class SyncService implements OnModuleInit {
 
   async getIncomeRecords(userId: string) {
     this.logger.log(`Fetching income records for user: ${userId}`);
-    return this.incomeRecordRepository.find({
+    const records = await this.incomeRecordRepository.find({
       where: { userId, isDeleted: false },
     });
+    return (records || []).filter(
+      (inc) => !(inc.amount === 95000 && /^income_\d+_/.test(inc.id)),
+    );
   }
 
   async injectMockData(userId: string) {
@@ -570,7 +578,7 @@ export class SyncService implements OnModuleInit {
     await this.netWorthSnapshotRepository.save(snapshots);
 
     // 6. Insert Historical Income Records
-    const salaryAmounts = [95000, 95000, 95000];
+    const salaryAmounts = [50000, 50000, 50000];
     const incomeRecords: IncomeRecord[] = [];
     for (let i = 2; i >= 0; i--) {
       const date = new Date();
@@ -1042,6 +1050,7 @@ export class SyncService implements OnModuleInit {
               userId,
               amount,
               source: item.merchant || 'Direct Credit',
+              category: item.category ? item.category.toLowerCase() : 'money_received',
               timestamp: exactTimestamp,
               bankProfileId: isUnassigned ? null : data.bankProfileId,
               updatedAt: Date.now(),
@@ -2620,7 +2629,7 @@ export class SyncService implements OnModuleInit {
           userId,
           amount,
           source: txData.merchant || 'Direct Credit',
-          category: 'Other Income',
+          category: txData.category ? txData.category.toLowerCase() : 'money_received',
           timestamp: incTime,
           bankProfileId: bank ? bank.id : null,
           updatedAt: Date.now(),

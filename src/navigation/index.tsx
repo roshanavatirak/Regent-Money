@@ -58,7 +58,7 @@ import { Canvas, LinearGradient, vec, Group, Path, Skia } from '@shopify/react-n
 import { mmkvStorage } from '../db/mmkv';
 import { useSyncDb } from '../services/useSyncDb';
 import { CategoryIcon } from '../components/CategoryIcon';
-import { getCategoryColor } from '../constants/categories';
+import { getCategory, getCategoryColor } from '../constants/categories';
 import { GoalsScreen } from './GoalsScreen';
 import { RegentChatScreen } from './RegentChatScreen';
 import { UpdateModal } from './UpdateModal';
@@ -95,6 +95,7 @@ import {
   useTheme,
   useNotificationStore,
   useAnalyticsStore,
+  useIncomeStore,
   useConfirmStore,
   showGlobalConfirm,
   showGlobalAlert,
@@ -134,6 +135,8 @@ import { ReportBugScreen } from './ReportBugScreen';
 import { BudgetScreen } from './BudgetScreen';
 import { CreateBudgetScreen } from './CreateBudgetScreen';
 import { HomeDashboard, DashboardCategory } from './HomeDashboard';
+import { AllTransactionsScreen } from './AllTransactionsScreen';
+import { useActivityFeed } from '../hooks/useActivityFeed';
 import { smsCatchupService } from '../services/smsCatchupService';
 import * as Clipboard from 'expo-clipboard';
 import { FormattedChatMessage } from '../components/FormattedChatMessage';
@@ -1839,7 +1842,7 @@ const TransactionRowItem = React.memo(({ tx, styles }: { tx: any; styles: any })
   const isCredit = tx.type === 'credit';
   const amountVal = Math.abs(parseFloat(tx.amount || 0));
   const formattedAmount = `${isCredit ? '+' : '-'}₹${amountVal.toLocaleString('en-IN')}`;
-  const catKey = isCredit ? 'money_received' : (tx.category || 'miscellaneous');
+  const catKey = tx.category ? getCategory(tx.category).id : (isCredit ? 'money_received' : 'miscellaneous');
 
   return (
     <View style={styles.txItem}>
@@ -1886,8 +1889,10 @@ const DashboardScreen = () => {
   const unreadCount = useNotificationStore((state) => state.unreadCount);
   const bankProfiles = useBankStore((state) => state.bankProfiles);
   const transactions = useTransactionStore((state) => state.transactions);
+  const incomeRecords = useIncomeStore((state) => state.incomeRecords);
   const snapshots = useAnalyticsStore((state) => state.snapshots);
-  const incomeCurrentMonth = useAnalyticsStore((state) => state.incomeCurrentMonth);
+  const incomeFromAnalytics = useAnalyticsStore((state) => state.incomeCurrentMonth);
+  const { items: activity, banks: activityBanks } = useActivityFeed();
 
   const [refreshing, setRefreshing] = useState(false);
   const [addBankModalVisible, setAddBankModalVisible] = useState(false);
@@ -1955,13 +1960,47 @@ const DashboardScreen = () => {
       .reduce((sum, tx) => sum + Math.abs(parseFloat(tx.amount) || 0), 0);
   }, [transactions, monthStart]);
 
+  const incomeCurrentMonth = useMemo(() => {
+    const activeBankIds = new Set(bankProfiles.map((b) => b.id));
+    if (incomeRecords && incomeRecords.length > 0) {
+      return incomeRecords
+        .filter((inc) => {
+          if ((inc as any).isDeleted) return false;
+          if (inc.amount === 95000 && /^income_\d+_/.test(inc.id)) return false;
+          if (activeBankIds.size > 0 && inc.bankProfileId && !activeBankIds.has(inc.bankProfileId)) {
+            return false;
+          }
+          return Number(inc.timestamp) >= monthStart;
+        })
+        .reduce((sum, inc) => sum + (parseFloat(String(inc.amount)) || 0), 0);
+    }
+    const fallback = incomeFromAnalytics === 95000 ? 0 : (incomeFromAnalytics || 0);
+    return fallback;
+  }, [incomeRecords, monthStart, incomeFromAnalytics, bankProfiles]);
+
   // Top 4 categories this month, the rest grouped as "Others"
   const categories: DashboardCategory[] = useMemo(() => {
     const map: Record<string, number> = {};
+    const now = new Date();
+    const currentDay = now.getDate();
+    // During the first 3 days of a new month, pacing comparisons are statistically noisy
+    // and trigger false alerts (e.g. comparing a few hours on the 1st vs 1st of last month).
+    const isEarlyMonth = currentDay <= 3;
+
+    const prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0).getTime();
+    const prevEnd = new Date(now.getFullYear(), now.getMonth() - 1, currentDay, 23, 59, 59, 999).getTime();
+    const prevMap: Record<string, number> = {};
+
     transactions.forEach((tx) => {
-      if (tx.timestamp < monthStart || tx.type === 'credit' || isExcludedFromBudget(tx)) return;
+      if (tx.type === 'credit' || isExcludedFromBudget(tx)) return;
+      const ts = Number(tx.timestamp);
       const key = (tx.category || 'other').toLowerCase().trim();
-      map[key] = (map[key] || 0) + Math.abs(parseFloat(tx.amount) || 0);
+      const amt = Math.abs(parseFloat(tx.amount) || 0);
+      if (ts >= monthStart) {
+        map[key] = (map[key] || 0) + amt;
+      } else if (!isEarlyMonth && ts >= prevStart && ts <= prevEnd) {
+        prevMap[key] = (prevMap[key] || 0) + amt;
+      }
     });
 
     const entries = Object.entries(map)
@@ -1971,26 +2010,50 @@ const DashboardScreen = () => {
     const toLabel = (key: string) =>
       key === 'miscellaneous'
         ? 'Misc'
-        : key.replace(/_/g, ' ').replace(/w/g, (c) => c.toUpperCase());
+        : key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
-    const top = entries.slice(0, 4).map(([key, value], index) => ({
+    const top: DashboardCategory[] = entries.slice(0, 4).map(([key, value], index) => ({
       key,
       label: toLabel(key),
       value,
+      previousValue: isEarlyMonth ? undefined : (prevMap[key] || 0),
       color: getSpendingCategoryColor(key, isDark, index),
     }));
 
     const rest = entries.slice(4);
     if (rest.length > 0) {
+      const topKeys = new Set(top.map((c) => c.key));
       top.push({
         key: 'others',
         label: 'Others',
         value: rest.reduce((s, [, v]) => s + v, 0),
+        previousValue: isEarlyMonth
+          ? undefined
+          : Object.entries(prevMap)
+              .filter(([k]) => !topKeys.has(k))
+              .reduce((s, [, v]) => s + v, 0),
         color: getSpendingCategoryColor('other', isDark, 4),
       });
     }
     return top;
   }, [transactions, monthStart, isDark]);
+
+  // Spend in the same elapsed window last month, for the "vs last month" badge.
+  const previousSpentSamePeriod = useMemo(() => {
+    const now = new Date();
+    const currentDay = now.getDate();
+    // Suppress comparison during the first 3 days of the month to prevent false spike alerts
+    if (currentDay <= 3) return undefined;
+
+    const prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0).getTime();
+    const prevEnd = new Date(now.getFullYear(), now.getMonth() - 1, currentDay, 23, 59, 59, 999).getTime();
+    return transactions
+      .filter((tx) => {
+        const ts = Number(tx.timestamp);
+        return ts >= prevStart && ts <= prevEnd && tx.type !== 'credit' && !isExcludedFromBudget(tx);
+      })
+      .reduce((sum, tx) => sum + Math.abs(parseFloat(tx.amount) || 0), 0);
+  }, [transactions, monthStart]);
 
   const handleAddExpense = () => {
     if (bankProfiles.length > 0) {
@@ -2016,7 +2079,10 @@ const DashboardScreen = () => {
         income={incomeCurrentMonth}
         spent={currentMonthExpenses}
         transactions={transactions}
+        activity={activity}
+        banks={activityBanks}
         categories={categories}
+        previousSpentSamePeriod={previousSpentSamePeriod}
         hasBanks={bankProfiles.length > 0}
         smsTrackingOn={isSmsPermissionActive}
         refreshing={refreshing}
@@ -2033,6 +2099,7 @@ const DashboardScreen = () => {
         onOpenRegent={() => navigation.navigate('Regent')}
         onSetupTracking={() => navigation.navigate('AutoTrackingSetup')}
         onOpenTransaction={(tx) => navigation.navigate('TransactionDetail', { transaction: tx })}
+        onSeeAllTransactions={() => navigation.navigate('AllTransactions')}
       />
 
       <NotificationsModal
@@ -3691,6 +3758,15 @@ export default function AppNavigator() {
                     options={{
                       presentation: 'card',
                       animation: 'slide_from_bottom',
+                      headerShown: false,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="AllTransactions"
+                    component={AllTransactionsScreen}
+                    options={{
+                      presentation: 'card',
+                      animation: 'slide_from_right',
                       headerShown: false,
                     }}
                   />

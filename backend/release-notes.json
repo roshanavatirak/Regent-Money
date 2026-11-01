@@ -1,16 +1,16 @@
 {
   "notes": [
     {
-      "title": "Smart Notifications",
-      "detail": "Autonomous budget pace, runway & milestone updates."
+      "title": "Real-Time Income & Calibrated Analytics",
+      "detail": "Money in now dynamically calculates real monthly credits (or ₹0). Month-over-month spending comparisons are calibrated to prevent early-month false alarms."
     },
     {
-      "title": "Chat Upgrades",
-      "detail": "Message timestamps, edit option & smooth swipe navigation."
+      "title": "Category & Tagging Consistency",
+      "detail": "Synchronized credit categorization across bank transaction lists and detail views with refined auto-tagging."
     },
     {
-      "title": "Fixes & Polish",
-      "detail": "Download progress layout fix & launch performance boost."
+      "title": "Navigation & Push Notification Polish",
+      "detail": "Seamless native back navigation in bank modal sheets and Firebase Cloud Messaging integration."
     }
   ]
 }

@@ -148,7 +148,12 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
     props.accountNumberSuffix || route?.params?.accountNumberSuffix || matchedBank?.accountNumberSuffix;
 
   const originalAmount = Number(transaction?.amount || 0);
-  const originalCategory = (transaction?.category || (transaction?.type === 'credit' ? 'money_received' : 'miscellaneous')).toLowerCase();
+  const rawCat = (transaction?.category || '').toLowerCase();
+  const originalCategory = getCategory(
+    (rawCat && rawCat !== 'income')
+      ? rawCat
+      : (transaction?.type === 'credit' ? 'money_received' : 'miscellaneous')
+  ).id;
   const originalNote = transaction?.merchant || '';
   const originalTimestamp = Number(transaction?.timestamp) || Date.now();
 
@@ -427,7 +432,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
           </View>
 
           <Animated.View entering={ZoomIn.springify().damping(14)} style={{ marginTop: 12 }}>
-            <CategoryIcon category={isCredit && category === 'money_received' ? 'money_received' : category} size={60} />
+            <CategoryIcon category={category} size={60} />
           </Animated.View>
 
           <Text style={[styles.payee, { color: ink }]} numberOfLines={1}>

@@ -12,6 +12,7 @@ import * as Font from 'expo-font';
 import { useCalendarAnalytics } from '../hooks/useCalendarAnalytics';
 import { useTheme } from '../store';
 import { CategoryIcon } from '../components/CategoryIcon';
+import { getCategory } from '../constants/categories';
 
 const FOREST = '#0B3D2C';
 const LIME = '#B8F36B';
@@ -304,7 +305,7 @@ export const FinancialCalendarScreen: React.FC<FinancialCalendarScreenProps> = (
               const excluded = isTxExcluded(tx.id);
               return (
                 <View key={tx.id || i} style={[s.txRow, i < selected.txs.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line }]}>
-                  <CategoryIcon category={isCredit ? 'money_received' : tx.category || 'miscellaneous'} variant="soft" size={38} />
+                  <CategoryIcon category={tx.category ? getCategory(tx.category).id : (isCredit ? 'money_received' : 'miscellaneous')} variant="soft" size={38} />
                   <View style={{ flex: 1, minWidth: 0 }}>
                     <Text style={[s.txName, { color: ink }]} numberOfLines={1}>{tx.merchant || (isCredit ? 'Money received' : 'Payment')}</Text>
                     {!isCredit && (

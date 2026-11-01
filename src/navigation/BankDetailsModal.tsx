@@ -173,7 +173,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
       const mapped = (data || []).map((inc: any) => ({
         id: inc.id,
         amount: parseFloat(inc.amount || 0),
-        category: inc.category || 'income',
+        category: inc.category && inc.category !== 'income' ? inc.category : 'money_received',
         merchant: inc.source || inc.merchant || 'Income',
         source: inc.source || inc.merchant || 'Income',
         timestamp: Number(inc.timestamp || Date.now()),
@@ -615,9 +615,49 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
     </View>
   );
 
+  const handleModalRequestClose = () => {
+    if (selectedTx) {
+      setSelectedTx(null);
+      return;
+    }
+    if (isEditingBank) {
+      setIsEditingBank(false);
+      return;
+    }
+    if (manualTxType) {
+      setManualTxType(null);
+      return;
+    }
+    if (optionsSheet) {
+      setOptionsSheet(false);
+      return;
+    }
+    if (reviewVisible) {
+      setReviewVisible(false);
+      return;
+    }
+    if (passwordSheet) {
+      setPasswordSheet(false);
+      return;
+    }
+    if (consentSheet) {
+      setConsentSheet(false);
+      return;
+    }
+    if (confirmRemove) {
+      setConfirmRemove(false);
+      return;
+    }
+    if (errorSheet) {
+      setErrorSheet(null);
+      return;
+    }
+    onClose();
+  };
+
   return (
     <>
-      <Modal visible={visible} transparent animationType="slide" statusBarTranslucent onRequestClose={onClose}>
+      <Modal visible={visible} transparent animationType="slide" statusBarTranslucent onRequestClose={handleModalRequestClose}>
         <View style={s.overlay}>
           <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close account" />
           <View style={[s.container, { backgroundColor: pageBg }]}>
@@ -666,7 +706,8 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
               )}
               renderItem={({ item, index, section }) => {
                 const isCredit = item.type === 'credit';
-                const catKey = isCredit && (!item.category || item.category === 'income') ? 'money_received' : item.category;
+                const resolvedCat = getCategory(item.category || (isCredit ? 'money_received' : 'miscellaneous'));
+                const catKey = resolvedCat.id;
                 const first = index === 0;
                 const last = index === section.data.length - 1;
                 const ts = Number(item.timestamp);
@@ -701,7 +742,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
                         <Text style={[s.rowAmt, { color: isCredit ? (isDark ? LIME : '#0B6B3A') : ink }]}>
                           {isCredit ? '+' : '−'}{inr(Number(item.amount) || 0)}
                         </Text>
-                        <Text style={[s.rowSub, { color: muted }]} numberOfLines={1}>{getCategory(catKey).label}</Text>
+                        <Text style={[s.rowSub, { color: muted }]} numberOfLines={1}>{resolvedCat.label}</Text>
                       </View>
                     </View>
                   </Pressable>

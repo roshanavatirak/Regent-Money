@@ -323,6 +323,45 @@ export class SignalsService {
           });
         }
       }
+
+      /* ------------------------------------------------------------------ */
+      /* 7. SUMMARY SIGNAL: Weekly spend pulse when no strong alerts fire   */
+      /* ------------------------------------------------------------------ */
+      if (candidates.length === 0 && recentTx && recentTx.length > 0) {
+        const totalRecentSpend = recentTx.reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0);
+        if (totalRecentSpend > 0) {
+          const categoryTotals = new Map<string, number>();
+          for (const tx of recentTx) {
+            const cat = (tx.category || 'General').trim();
+            categoryTotals.set(cat, (categoryTotals.get(cat) || 0) + (Number(tx.amount) || 0));
+          }
+          let topCategory = 'daily expenses';
+          let maxCatAmount = 0;
+          for (const [cat, amt] of categoryTotals.entries()) {
+            if (amt > maxCatAmount) {
+              maxCatAmount = amt;
+              topCategory = cat;
+            }
+          }
+
+          candidates.push({
+            type: 'summary',
+            score: 20, // Clears threshold >= 18
+            urgency: 4,
+            moneyImpact: 5,
+            freshness: 7,
+            confidence: 8,
+            tone: 'playful',
+            deepLink: 'transactions',
+            facts: {
+              name: userName,
+              amount: totalRecentSpend,
+              category: topCategory,
+              count: recentTx.length,
+            },
+          });
+        }
+      }
     } catch (err: any) {
       this.logger.error(`Error computing signals for user ${user.id}: ${err.message}`, err.stack);
     }
@@ -340,18 +379,18 @@ export class SignalsService {
   ): Promise<SignalCandidate | null> {
     if (!candidates || candidates.length === 0) return null;
 
-    // 1. Guardrail: Quiet Hours (10:00 PM to 8:00 AM IST)
-    const istTimeStr = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
-    const istHour = new Date(istTimeStr).getHours();
+    // 1. Guardrail: Quiet Hours (10:00 PM to 8:00 AM IST) - Timezone-safe UTC offset
+    const istOffsetMs = 5.5 * 60 * 60 * 1000;
+    const nowUtc = Date.now();
+    const istNow = new Date(nowUtc + istOffsetMs);
+    const istHour = istNow.getUTCHours();
     if (istHour >= 22 || istHour < 8) {
       this.logger.log(`[Delivery] Suppressing notification for user ${userId}: quiet hours (${istHour}:00 IST).`);
       return null;
     }
 
     // 2. Guardrail: Max 2 notifications per user per day (00:00 IST today)
-    const istToday = new Date(istTimeStr);
-    istToday.setHours(0, 0, 0, 0);
-    const startOfTodayMs = istToday.getTime();
+    const startOfTodayMs = Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), istNow.getUTCDate()) - istOffsetMs;
 
     const todayCount = await this.logRepository.count({
       where: {
@@ -378,8 +417,8 @@ export class SignalsService {
     const recentNumbers = recentLogs.map((l) => JSON.stringify(l.numbersUsed || {}));
 
     const validCandidates = candidates.filter((c) => {
-      // Cooldown: No pace or habit within 3 days
-      if ((c.type === 'pace' || c.type === 'habit') && recentTypes.has(c.type)) {
+      // Cooldown: No pace, habit, or summary within 3 days
+      if ((c.type === 'pace' || c.type === 'habit' || c.type === 'summary') && recentTypes.has(c.type)) {
         return false;
       }
       // Never send the exact same numbers twice

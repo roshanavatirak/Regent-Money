@@ -40,7 +40,9 @@ import {
 import { useTheme } from '../store';
 import { isExcludedFromBudget } from '../services/budgetService';
 import { CategoryIcon } from '../components/CategoryIcon';
-import { getCategory } from '../constants/categories';
+import { ActivityFilterChips, ActivityRow } from '../components/ActivityFeed';
+import { SpendingPetalCard } from '../components/SpendingPetalCard';
+import { ActivityBank, ActivityFilter, ActivityItem, filterActivity } from '../hooks/useActivityFeed';
 
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
@@ -50,6 +52,8 @@ export interface DashboardCategory {
   key: string;
   label: string;
   value: number;
+  /** Spend in this category over the same elapsed days last month. */
+  previousValue?: number;
   color: string;
 }
 
@@ -73,7 +77,13 @@ export interface HomeDashboardProps {
   income: number;
   spent: number;
   transactions: DashboardTx[];
+  /** Credits + debits, newest first, for the Recent card. */
+  activity: ActivityItem[];
+  /** Linked accounts shown as bank-wise filter chips (logo + masked number). */
+  banks: ActivityBank[];
   categories: DashboardCategory[];
+  /** Total spend over the same elapsed days last month. */
+  previousSpentSamePeriod?: number;
   hasBanks: boolean;
   smsTrackingOn: boolean;
   refreshing: boolean;
@@ -90,6 +100,7 @@ export interface HomeDashboardProps {
   onOpenRegent: () => void;
   onSetupTracking: () => void;
   onOpenTransaction?: (tx: DashboardTx) => void;
+  onSeeAllTransactions?: () => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -172,16 +183,6 @@ const CATEGORY_ICONS: Record<string, keyof typeof Feather.glyphMap> = {
 
 const iconForCategory = (key?: string): keyof typeof Feather.glyphMap =>
   CATEGORY_ICONS[(key || '').toLowerCase().trim()] || 'tag';
-
-const relativeDay = (ts: number) => {
-  const d = new Date(ts);
-  const now = new Date();
-  const yesterday = new Date(now);
-  yesterday.setDate(now.getDate() - 1);
-  if (d.toDateString() === now.toDateString()) return 'Today';
-  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
-  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
-};
 
 /** Smooth count-up for headline numbers. */
 const useCountUp = (target: number, duration = 800) => {
@@ -277,42 +278,6 @@ const GrowBar: React.FC<{ height: number; color: string; delay: number }> = ({ h
   );
 };
 
-const RevealBar: React.FC<{ segments: DashboardCategory[]; total: number; trackColor: string }> = ({
-  segments,
-  total,
-  trackColor,
-}) => {
-  const [fullWidth, setFullWidth] = useState(0);
-  const w = useSharedValue(0);
-
-  useEffect(() => {
-    if (fullWidth > 0) {
-      w.value = 0;
-      w.value = withDelay(200, withTiming(fullWidth, { duration: 700, easing: Easing.out(Easing.cubic) }));
-    }
-  }, [fullWidth, total]);
-
-  const animated = useAnimatedStyle(() => ({ width: w.value }));
-
-  return (
-    <View
-      style={{ height: 14, borderRadius: 7, backgroundColor: trackColor, overflow: 'hidden' }}
-      onLayout={(e) => setFullWidth(e.nativeEvent.layout.width)}
-    >
-      <Animated.View style={[{ height: 14, overflow: 'hidden' }, animated]}>
-        <View style={{ flexDirection: 'row', width: fullWidth, height: 14, gap: 2 }}>
-          {segments.map((s) => (
-            <View
-              key={s.key}
-              style={{ width: total > 0 ? (s.value / total) * fullWidth : 0, backgroundColor: s.color }}
-            />
-          ))}
-        </View>
-      </Animated.View>
-    </View>
-  );
-};
-
 /** Smooth sparkline path through points. */
 const buildSparkPath = (values: number[], width: number, height: number, pad = 8) => {
   if (values.length < 2 || width <= 0) return { d: '', lastX: 0, lastY: 0 };
@@ -357,6 +322,8 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
     income,
     spent,
     transactions,
+    activity = [],
+    banks = [],
     categories,
     hasBanks,
     smsTrackingOn,
@@ -397,6 +364,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
   const [chartWidth, setChartWidth] = useState(0);
   const [heroWidth, setHeroWidth] = useState(0);
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
+  const [activityFilter, setActivityFilter] = useState<ActivityFilter>('all');
 
   useEffect(() => {
     if (Platform.OS === 'android') {
@@ -493,23 +461,25 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
 
   /* ---------------- Categories ---------------- */
 
-  const categoryTotal = useMemo(() => categories.reduce((s, c) => s + c.value, 0), [categories]);
-  const tileCategories = categories.slice(0, 4);
-  const extraCategories = categories.slice(4);
 
   /* ---------------- Recent ---------------- */
 
+  const RECENT_LIMIT = 6;
+  const bankById = useMemo(() => new Map(banks.map((b) => [b.id, b])), [banks]);
+  // A bank chip already names the account, so rows skip the per-row bank badge.
+  const isBankFilter = typeof activityFilter !== 'string';
   const recent = useMemo(() => {
     const topKeys = new Set(categories.filter((c) => c.key !== 'others').map((c) => c.key));
-    return transactions
+    return filterActivity(activity, activityFilter)
       .filter((tx) => {
         if (!categoryFilter) return true;
+        if (tx.type === 'credit') return false;
         const key = (tx.category || 'other').toLowerCase().trim();
-        if (categoryFilter === 'others') return !topKeys.has(key) && tx.type !== 'credit';
+        if (categoryFilter === 'others') return !topKeys.has(key);
         return key === categoryFilter;
       })
-      .slice(0, 5);
-  }, [transactions, categoryFilter, categories]);
+      .slice(0, RECENT_LIMIT);
+  }, [activity, activityFilter, categoryFilter, categories]);
 
   const filterLabel = categoryFilter ? categories.find((c) => c.key === categoryFilter)?.label : null;
 
@@ -609,7 +579,6 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
   const money = (v: number, decimals = 0) => (hidden ? '₹ •••••' : formatINR(v, decimals));
   const firstName = (userName || '').trim().split(' ')[0];
 
-  const tileBg = (color: string) => hexToRgba(color, isDark ? 0.16 : 0.12);
 
   return (
     <ScrollView
@@ -923,61 +892,22 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
       {categories.length > 0 && (
         <Animated.View
           entering={FadeInDown.delay(300).duration(450)}
-          style={styles.card}
+          style={[styles.card, styles.petalCard]}
           onLayout={(e) => {
             breakdownY.current = e.nativeEvent.layout.y;
           }}
         >
-          <View style={styles.cardHeaderRow}>
-            <Text style={styles.cardTitle}>Where it went</Text>
-            <Pressable onPress={props.onOpenBudgets} hitSlop={10} accessibilityRole="button">
-              <Text style={styles.linkText}>Budgets</Text>
-            </Pressable>
-          </View>
-
-          <View style={{ marginTop: 14 }}>
-            <RevealBar
-              segments={categories}
-              total={categoryTotal}
-              trackColor={isDark ? 'rgba(255,255,255,0.06)' : '#EEF3F0'}
-            />
-          </View>
-
-          <View style={styles.tileGrid}>
-            {tileCategories.map((c) => {
-              const pct = categoryTotal > 0 ? Math.round((c.value / categoryTotal) * 100) : 0;
-              const selected = categoryFilter === c.key;
-              return (
-                <PressableScale
-                  key={c.key}
-                  onPress={() => setCategoryFilter(selected ? null : c.key)}
-                  style={[
-                    styles.tile,
-                    { backgroundColor: tileBg(c.color) },
-                    selected && { borderColor: c.color, borderWidth: 2 },
-                  ]}
-                  accessibilityLabel={`${c.label}, ${formatINR(c.value)}, ${pct} percent. Show transactions`}
-                >
-                  <CategoryIcon category={c.key} size={36} style={{ marginBottom: 10 }} />
-                  <Text style={styles.tileLabel} numberOfLines={1}>
-                    {c.label}
-                  </Text>
-                  <View style={styles.tileValueRow}>
-                    <Text style={styles.tileValue} numberOfLines={1}>
-                      {money(c.value)}
-                    </Text>
-                    <Text style={styles.tilePct}>{pct}%</Text>
-                  </View>
-                </PressableScale>
-              );
-            })}
-          </View>
-
-          {extraCategories.length > 0 && (
-            <Text style={styles.extraText}>
-              Plus {extraCategories.map((c) => `${c.label} ${hidden ? '' : formatINR(c.value)}`.trim()).join(', ')}
-            </Text>
-          )}
+          <SpendingPetalCard
+            categories={categories}
+            selectedKey={categoryFilter}
+            onSelect={setCategoryFilter}
+            onOpenBudgets={props.onOpenBudgets}
+            hidden={hidden}
+            monthLabel={new Date().toLocaleDateString('en-IN', { month: 'long' })}
+            previousMonthShort={new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1).toLocaleDateString('en-IN', { month: 'short' })}
+            previousTotal={props.previousSpentSamePeriod}
+            font={font}
+          />
         </Animated.View>
       )}
 
@@ -989,46 +919,42 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
             <Pressable onPress={() => setCategoryFilter(null)} hitSlop={10} accessibilityRole="button">
               <Text style={styles.linkText}>Show all</Text>
             </Pressable>
+          ) : props.onSeeAllTransactions && activity.length > 0 ? (
+            <Pressable onPress={props.onSeeAllTransactions} hitSlop={10} accessibilityRole="button">
+              <Text style={styles.linkText}>See all</Text>
+            </Pressable>
           ) : null}
         </View>
 
+        {activity.length > 0 && (
+          <View style={{ marginHorizontal: -18 }}>
+            <ActivityFilterChips
+              value={activityFilter}
+              onChange={setActivityFilter}
+              banks={banks}
+              font={font}
+              inset={18}
+              style={{ paddingTop: 12, paddingBottom: 4 }}
+            />
+          </View>
+        )}
+
         {recent.length === 0 ? (
-          <Text style={[styles.emptyText, { marginBottom: 14 }]}>No transactions yet.</Text>
+          <Text style={[styles.emptyText, { marginBottom: 14 }]}>
+            {activity.length === 0 ? 'No transactions yet.' : 'No transactions match this filter.'}
+          </Text>
         ) : (
-          recent.map((tx, i) => {
-            const isCredit = tx.type === 'credit';
-            const catKey = isCredit ? 'money_received' : (tx.category || 'miscellaneous');
-            const cat = getCategory(catKey);
-            const label = isCredit ? 'Money received' : cat.label;
-            const row = (
-              <View style={[styles.txRow, i < recent.length - 1 && styles.txDivider]}>
-                <CategoryIcon
-                  category={catKey}
-                  variant="soft"
-                  size={42}
-                  style={{ marginRight: 12 }}
-                />
-                <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={styles.txName} numberOfLines={1}>
-                    {tx.merchant || 'Unknown merchant'}
-                  </Text>
-                  <Text style={styles.txMeta} numberOfLines={1}>
-                    {label}, {relativeDay(Number(tx.timestamp))}
-                  </Text>
-                </View>
-                <Text style={[styles.txAmount, isCredit && { color: isDark ? '#4ADE80' : '#0B7A3E' }]}>
-                  {hidden ? '•••' : `${isCredit ? '+' : '−'}${formatINR(toNumber(tx.amount))}`}
-                </Text>
-              </View>
-            );
-            return props.onOpenTransaction ? (
-              <Pressable key={tx.id} onPress={() => props.onOpenTransaction?.(tx)} accessibilityRole="button">
-                {row}
-              </Pressable>
-            ) : (
-              <View key={tx.id}>{row}</View>
-            );
-          })
+          recent.map((tx, i) => (
+            <ActivityRow
+              key={tx.id}
+              tx={tx}
+              bank={!isBankFilter && tx.bankProfileId ? bankById.get(tx.bankProfileId) : undefined}
+              hidden={hidden}
+              divider={i < recent.length - 1}
+              font={font}
+              onPress={props.onOpenTransaction}
+            />
+          ))
         )}
       </Animated.View>
     </ScrollView>
@@ -1109,6 +1035,14 @@ const getStyles = (
       backgroundColor: '#FF5A36',
       borderWidth: 2,
       borderColor: colors.card,
+    },
+
+    // Where it went (petal chart on the forest card)
+    petalCard: {
+      backgroundColor: FOREST,
+      borderWidth: 0,
+      borderRadius: 28,
+      overflow: 'hidden',
     },
 
     // Hero
@@ -1440,62 +1374,6 @@ const getStyles = (
       color: isDark ? LIME : '#0B6B3A',
       fontFamily: font.bodyBold,
       fontWeight: font.bodyBold ? undefined : '700',
-    },
-
-    // Category tiles
-    tileGrid: {
-      flexDirection: 'row',
-      flexWrap: 'wrap',
-      justifyContent: 'space-between',
-      rowGap: 10,
-      marginTop: 14,
-    },
-    tile: {
-      width: '48.5%',
-      borderRadius: 18,
-      padding: 14,
-      borderWidth: 2,
-      borderColor: 'transparent',
-    },
-    tileIcon: {
-      width: 34,
-      height: 34,
-      borderRadius: 11,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    tileLabel: {
-      fontSize: 13,
-      color: colors.textSecondary,
-      marginTop: 10,
-      fontFamily: font.bodySemi,
-      fontWeight: font.bodySemi ? undefined : '600',
-    },
-    tileValueRow: {
-      flexDirection: 'row',
-      alignItems: 'baseline',
-      justifyContent: 'space-between',
-      marginTop: 2,
-    },
-    tileValue: {
-      fontSize: 18,
-      color: colors.text,
-      flexShrink: 1,
-      fontFamily: font.displayBold,
-      fontWeight: font.displayBold ? undefined : '700',
-    },
-    tilePct: {
-      fontSize: 12,
-      color: colors.textSecondary,
-      marginLeft: 6,
-      fontFamily: font.bodyBold,
-      fontWeight: font.bodyBold ? undefined : '700',
-    },
-    extraText: {
-      fontSize: 12,
-      color: colors.textSecondary,
-      marginTop: 10,
-      fontFamily: font.body,
     },
 
     // Recent

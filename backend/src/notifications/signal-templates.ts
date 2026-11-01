@@ -3,7 +3,7 @@
 // Regent Money: The Witty Indian Friend Template Bank
 // Quick, a little cheeky, always on your side. Never hurtful.
 
-export type SignalType = 'pace' | 'spike' | 'habit' | 'runway' | 'win' | 'salary';
+export type SignalType = 'pace' | 'spike' | 'habit' | 'runway' | 'win' | 'salary' | 'summary';
 export type SignalTone = 'playful' | 'nudging' | 'straight';
 
 export interface TemplateDefinition {
@@ -581,6 +581,27 @@ export const TEMPLATE_BANK: Record<SignalType, TemplateDefinition[]> = {
       tone: 'straight',
       title: 'Deposit Notification',
       body: '{amount} received in account. Fixed obligation allocations available.',
+    },
+  ],
+
+  /* ------------------------------------------------------------------ */
+  /* 7. SUMMARY / PULSE (Weekly or low-activity pulse)                 */
+  /* ------------------------------------------------------------------ */
+  summary: [
+    {
+      tone: 'playful',
+      title: 'Weekly spend snapshot 📊',
+      body: 'You spent {amount} across this week, mostly on {category}. Tap to review your trends.',
+    },
+    {
+      tone: 'nudging',
+      title: 'Your finances at a glance 💡',
+      body: '{name}, your net spend this week is {amount}. All accounts are in sync.',
+    },
+    {
+      tone: 'straight',
+      title: 'Weekly Financial Summary',
+      body: 'Total recorded expenditure this week: {amount} ({count} transactions). Tap to inspect.',
     },
   ],
 };

@@ -84,7 +84,7 @@ class TagLearningService {
    * Checks learned user map first, then falls back to semantic prediction.
    */
   getPrimaryTag(merchant: string, type: 'debit' | 'credit' = 'debit'): string {
-    if (!merchant) return type === 'credit' ? 'salary' : 'food';
+    if (!merchant) return type === 'credit' ? 'money_received' : 'food';
     const learned = this.getLearnedTag(merchant);
     if (learned) return learned;
     return this.predict(merchant, undefined, type);

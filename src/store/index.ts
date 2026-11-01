@@ -116,17 +116,21 @@ export interface IncomeState {
 }
 
 export const useIncomeStore = create<IncomeState>((set) => ({
-  incomeRecords: loadCached<IncomeRecordType[]>('cache_income_records', []),
+  incomeRecords: (loadCached<IncomeRecordType[]>('cache_income_records', []) || []).filter(
+    (r) => !(r.amount === 95000 && /^income_\d+_/.test(r.id)),
+  ),
   isLoading: false,
   setIncomeRecords: (incomeRecords) => {
     const seen = new Set<string>();
     const deduplicated: IncomeRecordType[] = [];
     for (const r of incomeRecords) {
       if (!r || !r.id) continue;
+      if (r.amount === 95000 && /^income_\d+_/.test(r.id)) continue;
       if (seen.has(r.id)) continue;
       seen.add(r.id);
       deduplicated.push({
         ...r,
+        category: (r.category && r.category !== 'income') ? r.category : 'money_received',
         merchant: r.merchant || r.source || 'Income',
         source: r.source || r.merchant || 'Income',
         type: 'credit',
@@ -139,6 +143,7 @@ export const useIncomeStore = create<IncomeState>((set) => ({
     set((state) => {
       const normalized: IncomeRecordType = {
         ...rec,
+        category: (rec.category && rec.category !== 'income') ? rec.category : 'money_received',
         merchant: rec.merchant || rec.source || 'Income',
         source: rec.source || rec.merchant || 'Income',
         type: 'credit',
@@ -878,15 +883,19 @@ export interface AnalyticsState {
 
 export const useAnalyticsStore = create<AnalyticsState>((set) => ({
   snapshots: loadCached<NetWorthSnapshotType[]>('cache_net_worth_snapshots', []),
-  incomeCurrentMonth: mmkvStorage.getNumber('cache_monthly_income') || 95000,
+  incomeCurrentMonth: (() => {
+    const val = mmkvStorage.getNumber('cache_monthly_income');
+    return val === 95000 || !val || isNaN(val) ? 0 : val;
+  })(),
   lastFetchTime: 0,
   setSnapshots: (snapshots) => {
     mmkvStorage.setObject('cache_net_worth_snapshots', snapshots);
     set({ snapshots });
   },
   setIncomeCurrentMonth: (incomeCurrentMonth) => {
-    mmkvStorage.setNumber('cache_monthly_income', incomeCurrentMonth);
-    set({ incomeCurrentMonth });
+    const safe = incomeCurrentMonth === 95000 || !incomeCurrentMonth || isNaN(incomeCurrentMonth) ? 0 : incomeCurrentMonth;
+    mmkvStorage.setNumber('cache_monthly_income', safe);
+    set({ incomeCurrentMonth: safe });
   },
   setLastFetchTime: (lastFetchTime) => set({ lastFetchTime }),
 }));
@@ -913,7 +922,12 @@ export const rehydrateAllStores = async () => {
     if (snaps && snaps.length > 0) useAnalyticsStore.getState().setSnapshots(snaps);
 
     const inc = mmkvStorage.getNumber('cache_monthly_income');
-    if (inc) useAnalyticsStore.getState().setIncomeCurrentMonth(inc);
+    if (inc === 95000) {
+      mmkvStorage.delete('cache_monthly_income');
+      useAnalyticsStore.getState().setIncomeCurrentMonth(0);
+    } else if (typeof inc === 'number' && !isNaN(inc)) {
+      useAnalyticsStore.getState().setIncomeCurrentMonth(inc);
+    }
 
     const notifs = mmkvStorage.getObject<NotificationType[]>('cache_notifications');
     if (notifs && Array.isArray(notifs) && notifs.length > 0) {

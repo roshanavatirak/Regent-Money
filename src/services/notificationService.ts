@@ -112,77 +112,28 @@ export const notificationService = {
   },
 
   /**
-   * Schedules recurring 9:00 AM and 9:00 PM native device notifications directly with Android OS.
-   * This guarantees status-bar / heads-up banners even if backend is sleeping or device is offline.
+   * Deprecated: Hardcoded daily humor alarms are discontinued in favor of
+   * personalized backend signals. Calling this cleans up any residual local alarms.
    */
   async scheduleDailyHumorNotifications(): Promise<void> {
+    await this.cancelDailyScheduledNotifications();
+  },
+
+  /**
+   * Cancels scheduled native daily notifications (including legacy humor alarms).
+   */
+  async cancelDailyScheduledNotifications(): Promise<void> {
     if (Platform.OS === 'web') return;
-
     try {
-      const granted = await this.isPermissionGranted();
-      if (!granted) {
-        console.log('[NotificationService] Permission not granted. Skipping daily notification schedule.');
-        return;
-      }
-
-      await this.setupChannels();
-
-      // Cancel previous scheduled daily humor notifications to prevent duplicates
       const scheduled = await Notifications.getAllScheduledNotificationsAsync();
       for (const item of scheduled) {
         if (item.identifier.startsWith('daily_humor_')) {
           await Notifications.cancelScheduledNotificationAsync(item.identifier);
         }
       }
-
-      const morningMsg = getDailyHumorMessage('morning');
-      const eveningMsg = getDailyHumorMessage('evening');
-
-      // 1. Schedule 9:00 AM Morning Notification (Local device time)
-      await this.postNotification({
-        identifier: 'daily_humor_morning',
-        title: morningMsg.title,
-        body: morningMsg.body,
-        channelId: 'daily_alerts',
-        data: { slot: 'morning', type: 'daily_humor' },
-        trigger: {
-          type: Notifications.SchedulableTriggerInputTypes.DAILY,
-          channelId: 'daily_alerts',
-          hour: 9,
-          minute: 0,
-        },
-      });
-
-      // 2. Schedule 9:00 PM Evening Notification (21:00 Local device time)
-      await this.postNotification({
-        identifier: 'daily_humor_evening',
-        title: eveningMsg.title,
-        body: eveningMsg.body,
-        channelId: 'daily_alerts',
-        data: { slot: 'evening', type: 'daily_humor' },
-        trigger: {
-          type: Notifications.SchedulableTriggerInputTypes.DAILY,
-          channelId: 'daily_alerts',
-          hour: 21,
-          minute: 0,
-        },
-      });
-
-      console.log('[NotificationService] Successfully scheduled native 9:00 AM & 9:00 PM daily notifications.');
-    } catch (err: any) {
-      console.warn('[NotificationService] Failed to schedule native daily notifications:', err.message);
-    }
-  },
-
-  /**
-   * Cancels scheduled native daily notifications
-   */
-  async cancelDailyScheduledNotifications(): Promise<void> {
-    if (Platform.OS === 'web') return;
-    try {
       await Notifications.cancelScheduledNotificationAsync('daily_humor_morning');
       await Notifications.cancelScheduledNotificationAsync('daily_humor_evening');
-      console.log('[NotificationService] Daily scheduled notifications cancelled.');
+      console.log('[NotificationService] Legacy daily scheduled notifications cancelled.');
     } catch (e: any) {
       console.warn('[NotificationService] Error cancelling scheduled notifications:', e.message);
     }
@@ -245,14 +196,14 @@ export const notificationService = {
         return null;
       }
 
-      // Configure Android Channels and schedule direct 9 AM & 9 PM local alarms
+      // Configure Android Channels and clear legacy local alarms
       await this.setupChannels();
-      await this.scheduleDailyHumorNotifications();
+      await this.cancelDailyScheduledNotifications();
 
-      // In Expo Go on Android, remote push tokens are not supported (SDK 53+). Local scheduled notifications remain fully active.
+      // In Expo Go on Android, remote push tokens are not supported (SDK 53+).
       if (Platform.OS === 'android' && isRunningInExpoGo()) {
-        console.log('[NotificationService] Running in Expo Go on Android. Skipping remote push token registration; local notifications active.');
-        return 'expo_go_local_active';
+        console.log('[NotificationService] Running in Expo Go on Android. Skipping remote push token registration.');
+        return 'expo_go_active';
       }
 
       // Retrieve Expo Push token for remote backend broadcasts
@@ -268,11 +219,11 @@ export const notificationService = {
         await this.registerTokenOnBackend(token);
         return token;
       } catch (tokenErr: any) {
-        console.warn(
-          '[NotificationService] Remote push token unavailable in this build (standalone FCM not attached). Native scheduled alarms are active:',
+        console.error(
+          '[NotificationService] Remote push token unavailable (standalone FCM not attached or misconfigured):',
           tokenErr.message,
         );
-        return 'local_scheduled_active';
+        return null;
       }
     } catch (error: any) {
       console.warn('[NotificationService] Error in registerForPushNotifications:', error.message);

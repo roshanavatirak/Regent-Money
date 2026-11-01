@@ -76,9 +76,13 @@ export const syncService = {
         const nowTime = new Date();
         const startOfMonth = new Date(nowTime.getFullYear(), nowTime.getMonth(), 1).getTime();
         const currentMonthIncome = (data || [])
-          .filter((inc: any) => Number(inc.timestamp) >= startOfMonth)
+          .filter((inc: any) => {
+            if ((inc as any).isDeleted) return false;
+            if (inc.amount === 95000 && /^income_\d+_/.test(inc.id)) return false;
+            return Number(inc.timestamp) >= startOfMonth;
+          })
           .reduce((sum: number, inc: any) => sum + parseFloat(inc.amount || 0), 0);
-        useAnalyticsStore.getState().setIncomeCurrentMonth(currentMonthIncome || 95000);
+        useAnalyticsStore.getState().setIncomeCurrentMonth(currentMonthIncome ?? 0);
       }
 
       useAnalyticsStore.getState().setLastFetchTime(now);
@@ -233,11 +237,13 @@ export const syncService = {
       useBankStore.getState().setBankProfiles(mappedBanks);
 
       // 5. Map Income Records (Credits)
-      const rawIncome = data.incomeRecords || [];
+      const rawIncome = (data.incomeRecords || []).filter(
+        (inc: any) => !(inc.amount === 95000 && /^income_\d+_/.test(inc.id)),
+      );
       const mappedIncome = rawIncome.map((inc: any) => ({
         id: inc.id,
         amount: parseFloat(inc.amount || 0),
-        category: inc.category || 'income',
+        category: inc.category && inc.category !== 'income' ? inc.category : 'money_received',
         merchant: inc.source || inc.merchant || 'Income',
         source: inc.source || inc.merchant || 'Income',
         timestamp: Number(inc.timestamp || Date.now()),

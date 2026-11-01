@@ -131,8 +131,8 @@ export const CATEGORIES: CategoryDef[] = [
   { id: 'donation', label: 'Donation', family: 'care', group: 'billsCare', icon: 'hand-heart-outline', aliases: ['charity', 'gift', 'gifts'] },
 
   // Money
-  { id: 'salary', label: 'Salary', family: 'money', group: 'money', icon: 'briefcase-outline', aliases: ['income', 'payroll'] },
-  { id: 'money_received', label: 'Money in', family: 'money', group: 'money', icon: 'arrow-collapse-down', aliases: ['money', 'received', 'credit'] },
+  { id: 'salary', label: 'Salary', family: 'money', group: 'money', icon: 'briefcase-outline', aliases: ['payroll', 'salaries'] },
+  { id: 'money_received', label: 'Money in', family: 'money', group: 'money', icon: 'arrow-collapse-down', aliases: ['income', 'money', 'received', 'credit', 'inward', 'direct_credit', 'other_income'] },
   { id: 'money_transfer', label: 'Sent', family: 'money', group: 'money', icon: 'arrow-right', aliases: ['transfer', 'sent', 'p2p'] },
   { id: 'self_transfer', label: 'Self transfer', family: 'money', group: 'money', icon: 'swap-horizontal', aliases: ['own_account'] },
   { id: 'investment', label: 'Investment', family: 'money', group: 'money', icon: 'chart-line', aliases: ['investments', 'mutual_funds', 'stocks', 'sip'] },
