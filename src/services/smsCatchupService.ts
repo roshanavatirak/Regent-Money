@@ -4,7 +4,7 @@ import { authService } from './authService';
 import { getBackendUrl } from '../config/api';
 import { useBankStore, useAuthStore, useTransactionStore } from '../store';
 import { syncService } from './syncService';
-import { matchesSmsSender } from '../constants/bankSmsSenders';
+import { matchesSmsSender, isBankSmsSender } from '../constants/bankSmsSenders';
 import { tagLearningService } from './tagLearningService';
 import { checkAndDispatchBudgetAlert } from './budgetService';
 
@@ -191,11 +191,14 @@ export const smsCatchupService = {
 
       // Group candidate transactions by matched bankProfileId
       const bankTxsMap = new Map<string, any[]>();
+      const configuredSenderIds = bankProfiles.map((b: any) => b.smsSenderId || b.sms_sender_id);
 
       for (const msg of rawMessages) {
         const sender = msg.address || '';
         const body = msg.body || '';
         if (!body) continue;
+        // Second layer behind the native filter: only bank senders are ever parsed
+        if (!isBankSmsSender(sender, configuredSenderIds)) continue;
 
         const parsed = parseSMS(sender, body);
         if (!parsed) continue;
@@ -264,11 +267,11 @@ export const smsCatchupService = {
           bodyHash = ((bodyHash << 5) - bodyHash) + cleanBody.charCodeAt(i);
           bodyHash |= 0;
         }
-        const candidateSmsId = parsed.referenceId
-          ? `ref_${parsed.referenceId}`
-          : `sms_${Math.abs(bodyHash)}`;
+        // contentId depends only on the text, so a re-scan is recognised even after parser changes
+        const contentId = `sms_${Math.abs(bodyHash)}`;
+        const candidateSmsId = parsed.referenceId ? `ref_${parsed.referenceId}` : contentId;
 
-        bankTxsMap.get(matchedBank.id)!.push({
+        bankTxsMap.get(targetGroupKey)!.push({
           amount: parsed.amount,
           type: parsed.type,
           merchant: parsed.merchant,
@@ -278,6 +281,7 @@ export const smsCatchupService = {
           availableBalance: parsed.availableBalance,
           referenceId: parsed.referenceId,
           smsId: candidateSmsId,
+          contentId,
         });
 
         // Check if this transaction already exists in our local store
@@ -289,7 +293,7 @@ export const smsCatchupService = {
             return true;
           }
           // 2. Deterministic content hash match (unified with direct native worker) or legacy inbox ID
-          if (candidateSmsId && tx.smsId && (tx.smsId === candidateSmsId || tx.smsId === `sms_${msg.id}`)) {
+          if (tx.smsId && (tx.smsId === candidateSmsId || tx.smsId === contentId || tx.smsId === `sms_${msg.id}`)) {
             return true;
           }
           if (parsed.referenceId && tx.smsId && tx.smsId.startsWith('ref_') && tx.smsId !== `ref_${parsed.referenceId}`) {

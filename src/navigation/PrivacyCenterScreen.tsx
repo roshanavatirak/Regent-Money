@@ -38,7 +38,13 @@ const HOW_IT_WORKS: { icon: keyof typeof Feather.glyphMap; tone: Tone; title: st
     icon: 'message-square',
     tone: 'green',
     title: 'Only bank messages',
-    detail: 'Regent reads SMS only from the bank senders you add. Never personal chats or OTPs.',
+    detail: 'Regent reads SMS only from known bank senders and any you add. Never personal chats or OTPs.',
+  },
+  {
+    icon: 'smartphone',
+    tone: 'neutral',
+    title: 'Message text stays on your phone',
+    detail: 'Bank alerts are read on your phone. Only the amount, merchant, date, account digits and balance are saved to your account.',
   },
   {
     icon: 'cloud',

@@ -1,6 +1,6 @@
 import { Injectable, Logger, BadRequestException, UnauthorizedException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, In } from 'typeorm';
+import { Repository, DataSource, In, EntityManager } from 'typeorm';
 import { BankProfile } from './entities/bank-profile.entity';
 import { Transaction } from './entities/transaction.entity';
 import { BudgetDeclaration } from './entities/budget-declaration.entity';
@@ -16,9 +16,47 @@ import { ManualTransactionDto } from './dto/manual-transaction.dto';
 import { ConfirmDuplicateDto } from './dto/confirm-duplicate.dto';
 import { PDFExtract, PDFExtractOptions } from 'pdf.js-extract';
 import { AiService } from '../ai/ai.service';
-import { parseSMS, detectBankFromSender } from './sms-parser.util';
+import { parseSMS, detectBankFromSender, isBankSmsSender, ParsedTransaction } from './sms-parser.util';
+import { DirectSmsDto } from './dto/direct-sms.dto';
 import { RedisService } from '../redis/redis.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { FieldCipherService } from '../crypto/field-cipher.service';
+
+export class RejectOp extends Error {}
+
+export type OpResult = {
+  idemKey: string;
+  status: 'applied' | 'duplicate' | 'rejected' | 'retry';
+  reason?: string;
+};
+
+const ENTITIES = {
+  transaction: {
+    table: 'finance.transactions',
+    prefix: 'tx_manual_',
+    textField: 'merchant',
+    cols: {
+      amount: 'amount',
+      category: 'category',
+      merchant: 'merchant',
+      timestamp: 'timestamp',
+      bankProfileId: 'bank_profile_id',
+      status: 'status',
+    },
+  },
+  income: {
+    table: 'finance.income_records',
+    prefix: 'inc_manual_',
+    textField: 'source',
+    cols: {
+      amount: 'amount',
+      category: 'category',
+      source: 'source',
+      timestamp: 'timestamp',
+      bankProfileId: 'bank_profile_id',
+    },
+  },
+} as const;
 
 @Injectable()
 export class SyncService implements OnModuleInit {
@@ -49,6 +87,7 @@ export class SyncService implements OnModuleInit {
     private readonly aiService: AiService,
     private readonly redisService: RedisService,
     private readonly notificationsService: NotificationsService,
+    private readonly fieldCipherService: FieldCipherService,
   ) {}
 
   async onModuleInit() {
@@ -226,7 +265,17 @@ export class SyncService implements OnModuleInit {
       await this.dataSource.query(`
         CREATE INDEX IF NOT EXISTS idx_budget_exclusions_user ON finance.budget_transaction_exclusions(user_id, is_deleted);
       `);
-      this.logger.log('BankProfile, SavingsGoal, Budget & Exclusion schema checks completed successfully.');
+      await this.dataSource.query(`
+        CREATE TABLE IF NOT EXISTS finance.applied_ops (
+          idem_key   TEXT PRIMARY KEY,
+          user_id    UUID NOT NULL,
+          applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+      `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_applied_ops_applied_at ON finance.applied_ops (applied_at);
+      `);
+      this.logger.log('BankProfile, SavingsGoal, Budget, Exclusion & AppliedOps schema checks completed successfully.');
     } catch (e: any) {
       this.logger.error(`Error checking/updating schema: ${e.message}`, e.stack);
     }
@@ -917,6 +966,9 @@ export class SyncService implements OnModuleInit {
         const itemRef = item.referenceId ? String(item.referenceId).trim() : undefined;
         const itemSmsId = item.smsId || (itemRef ? `ref_${itemRef}` : undefined);
         const normItemMerchant = (item.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const isSameSms = (storedSmsId?: string | null): boolean =>
+          !!storedSmsId &&
+          ((!!item.smsId && storedSmsId === item.smsId) || (!!item.contentId && storedSmsId === item.contentId));
 
         const itemDate = new Date(exactTimestamp);
         const hasExplicitItemTime = !!(item.time && item.time.trim());
@@ -924,6 +976,8 @@ export class SyncService implements OnModuleInit {
         if (item.type === 'debit') {
           const checkDebitDuplicate = (tx: Transaction, isBatchCheck = false): boolean => {
             // 1. If both transactions have reference IDs / UTRs:
+            // Same SMS seen before (also after parser changes alter merchant or reference detection)
+            if (!isBatchCheck && isSameSms(tx.smsId)) return true;
             if (itemRef && (tx.smsId === `ref_${itemRef}` || tx.smsId === itemRef)) return true;
             if (itemRef && tx.smsId && tx.smsId.startsWith('ref_') && tx.smsId !== `ref_${itemRef}`) return false;
 
@@ -1009,6 +1063,7 @@ export class SyncService implements OnModuleInit {
           }
         } else if (item.type === 'credit') {
           const checkCreditDuplicate = (inc: IncomeRecord, isBatchCheck = false): boolean => {
+            if (!isBatchCheck && isSameSms((inc as any).smsId)) return true;
             if (itemRef && ((inc as any).smsId === `ref_${itemRef}` || (inc as any).referenceId === itemRef)) return true;
             if (itemRef && (inc as any).smsId && (inc as any).smsId.startsWith('ref_') && (inc as any).smsId !== `ref_${itemRef}`) return false;
 
@@ -2195,20 +2250,29 @@ export class SyncService implements OnModuleInit {
   /**
    * Directly ingests SMS from native Android receiver without React Native overhead.
    */
-  async ingestDirectSms(userId: string, data: { sender: string; body: string; timestamp?: number }) {
+  async ingestDirectSms(userId: string, data: DirectSmsDto) {
     return this.withUserLock(userId, async () => {
     this.logger.log(`Direct native SMS ingestion for user ${userId} from ${data.sender}`);
-    const parsed = parseSMS(data.sender, data.body);
+    const bankProfiles = await this.bankProfileRepository.find({
+      where: { userId, isDeleted: false },
+    });
+
+    // Only bank alerts may be processed; personal or unknown senders are dropped unparsed
+    if (!isBankSmsSender(data.sender, bankProfiles.map((b) => b.smsSenderId))) {
+      this.logger.log(`Direct SMS ignored: sender is not a bank`);
+      return { success: false, reason: 'not_bank_sender' };
+    }
+
+    // Current apps parse on the phone and send only the extracted fields; legacy apps send the text
+    const parsed: ParsedTransaction | null = data.parsed
+      ? { ...data.parsed }
+      : parseSMS(data.sender, data.body || '');
     if (!parsed) {
       this.logger.log(`Direct SMS ignored: Not a financial transaction pattern`);
       return { success: false, reason: 'not_transaction_pattern' };
     }
 
     const parsedSuffix = (parsed.accountSuffix || '').replace(/\D/g, '').slice(-4);
-
-    const bankProfiles = await this.bankProfileRepository.find({
-      where: { userId, isDeleted: false },
-    });
 
     const senderBank = detectBankFromSender(data.sender) || (parsed.bankName !== 'Bank' ? parsed.bankName : null);
 
@@ -2241,13 +2305,21 @@ export class SyncService implements OnModuleInit {
     const endOfDay = new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate(), 23, 59, 59, 999).getTime();
 
     const incomingRef = parsed.referenceId;
-    const cleanBody = (data.body || '').replace(/\s+/g, ' ').trim();
-    let bodyHash = 0;
-    for (let i = 0; i < cleanBody.length; i++) {
-      bodyHash = ((bodyHash << 5) - bodyHash) + cleanBody.charCodeAt(i);
-      bodyHash |= 0;
+    let directSmsId: string;
+    if (incomingRef) {
+      directSmsId = `ref_${incomingRef}`;
+    } else if (data.smsId) {
+      // Phone-computed hash of the message text (same algorithm as below), so the text itself is never sent
+      directSmsId = data.smsId;
+    } else {
+      const cleanBody = (data.body || '').replace(/\s+/g, ' ').trim();
+      let bodyHash = 0;
+      for (let i = 0; i < cleanBody.length; i++) {
+        bodyHash = ((bodyHash << 5) - bodyHash) + cleanBody.charCodeAt(i);
+        bodyHash |= 0;
+      }
+      directSmsId = `sms_${Math.abs(bodyHash)}`;
     }
-    const directSmsId = incomingRef ? `ref_${incomingRef}` : `sms_${Math.abs(bodyHash)}`;
 
     if (!matchedBank) {
       // Record transaction into Review Queue (bankProfileId: null) without modifying any bank balances
@@ -2304,7 +2376,7 @@ export class SyncService implements OnModuleInit {
         if (incomingRef && (tx.smsId === `ref_${incomingRef}` || (tx as any).referenceId === incomingRef)) {
           return true;
         }
-        if (tx.smsId && tx.smsId === directSmsId) {
+        if (tx.smsId && (tx.smsId === directSmsId || tx.smsId === data.contentId)) {
           return true;
         }
         if (incomingRef && tx.smsId && tx.smsId.startsWith('ref_') && tx.smsId !== `ref_${incomingRef}`) {
@@ -2383,7 +2455,7 @@ export class SyncService implements OnModuleInit {
         if (incomingRef && ((inc as any).smsId === `ref_${incomingRef}` || (inc as any).referenceId === incomingRef)) {
           return true;
         }
-        if ((inc as any).smsId && (inc as any).smsId === directSmsId) {
+        if ((inc as any).smsId && ((inc as any).smsId === directSmsId || (inc as any).smsId === data.contentId)) {
           return true;
         }
         if (incomingRef && (inc as any).smsId && (inc as any).smsId.startsWith('ref_') && (inc as any).smsId !== `ref_${incomingRef}`) {
@@ -2661,5 +2733,268 @@ export class SyncService implements OnModuleInit {
       decision: dto.decision,
       message: dto.decision === 'add' ? 'Transaction added successfully!' : 'Duplicate dismissed.',
     };
+  }
+
+  async applyOutbox(userId: string, ops: any[]) {
+    if (!Array.isArray(ops) || ops.length > 100) throw new BadRequestException();
+    const results: OpResult[] = [];
+    let stopped = false;
+    let touched = false;
+
+    for (const op of ops) {
+      const idemKey = typeof op?.idemKey === 'string' ? op.idemKey : '';
+      if (stopped) {
+        results.push({ idemKey, status: 'retry' });
+        continue; // preserve order
+      }
+      try {
+        const r = await this.dataSource.transaction((m) => this.applyOne(m, userId, op));
+        if (r.status === 'applied') touched = true;
+        results.push(r);
+      } catch (e: any) {
+        if (e instanceof RejectOp) {
+          results.push({ idemKey, status: 'rejected', reason: e.message });
+        } else {
+          this.logger.error(`outbox op failed: ${e?.message || e}`, e?.stack);
+          results.push({ idemKey, status: 'retry' });
+          stopped = true;
+        }
+      }
+    }
+    if (touched) await this.invalidateUserSyncCache(userId).catch(() => undefined); // after commit, never inside
+    return { results };
+  }
+
+  private async applyOne(m: EntityManager, userId: string, op: any): Promise<OpResult> {
+    if (typeof op?.idemKey !== 'string' || op.idemKey.length < 8 || op.idemKey.length > 64) {
+      throw new RejectOp('bad_key');
+    }
+    const spec = ENTITIES[op.entity as keyof typeof ENTITIES];
+    if (!spec) throw new RejectOp('bad_entity');
+    if (op.op !== 'upsert' && op.op !== 'delete') throw new RejectOp('bad_op');
+    if (typeof op.entityId !== 'string' || op.entityId.length < 1 || op.entityId.length > 80) {
+      throw new RejectOp('bad_id');
+    }
+
+    // 1. Idempotency. A concurrent duplicate blocks on the PK until the first commits, then hits DO NOTHING.
+    const fresh = await m.query(
+      `INSERT INTO finance.applied_ops (idem_key, user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING RETURNING 1`,
+      [op.idemKey, userId],
+    );
+    if (!fresh.length) return { idemKey: op.idemKey, status: 'duplicate' };
+
+    // 2. Lock the row so two devices editing it are serialized, then check ownership.
+    const [row] = await m.query(
+      `SELECT user_id, updated_at, row_version, amount, ${spec.textField} as text_field FROM ${spec.table} WHERE id=$1 FOR UPDATE`,
+      [op.entityId],
+    );
+    if (row && row.user_id !== userId) throw new RejectOp('forbidden');
+
+    // 3. Clamp only the upper bound. Offline edits are legitimately old.
+    const now = Date.now();
+    const claimed = Number(op.payload?.updatedAt);
+    const updatedAt = Number.isFinite(claimed) && claimed > 0 ? Math.min(Math.floor(claimed), now + 30_000) : now;
+
+    // 4. Last-write-wins. A stale op is a no-op, but still "applied" so the client drops it.
+    if (row && Number(row.updated_at ?? 0) > updatedAt) return { idemKey: op.idemKey, status: 'applied' };
+
+    const textCol = op.entity === 'transaction' ? 'enc_merchant' : 'enc_source';
+    const idxCol = op.entity === 'transaction' ? 'merchant_idx' : 'source_idx';
+
+    if (op.op === 'delete') {
+      if (row) {
+        const expectedRowVersion = BigInt(row.row_version ?? 1);
+        const nextRowVersion = expectedRowVersion + 1n;
+        let encAmount: Buffer;
+        let encText: Buffer | null = null;
+        let textIdx: Buffer | null = null;
+
+        if (op.entity === 'transaction') {
+          const enc = await this.fieldCipherService.encryptTransactionFields(
+            userId,
+            op.entityId,
+            { amount: Number(row.amount ?? 0), merchant: row.text_field },
+            expectedRowVersion,
+          );
+          encAmount = enc.encAmount;
+          encText = enc.encMerchant;
+          textIdx = enc.merchantIdx;
+        } else {
+          const enc = await this.fieldCipherService.encryptIncomeFields(
+            userId,
+            op.entityId,
+            { amount: Number(row.amount ?? 0), source: row.text_field },
+            expectedRowVersion,
+          );
+          encAmount = enc.encAmount;
+          encText = enc.encSource;
+          textIdx = enc.sourceIdx;
+        }
+
+        const res = await m.query(
+          `UPDATE ${spec.table}
+           SET is_deleted=true, updated_at=$3, row_version=$4, enc_amount=$5, ${textCol}=$6, ${idxCol}=$7
+           WHERE id=$1 AND user_id=$2 AND row_version=$8 RETURNING 1`,
+          [op.entityId, userId, updatedAt, nextRowVersion.toString(), encAmount, encText, textIdx, expectedRowVersion.toString()],
+        );
+        if (Array.isArray(res) && res.length === 0) throw new Error('delete_concurrency_race');
+      }
+      return { idemKey: op.idemKey, status: 'applied' }; // unknown id: nothing to tombstone
+    }
+
+    const isInsert = !row;
+    if (isInsert && !op.entityId.startsWith(spec.prefix)) throw new RejectOp('bad_id_prefix'); // can't claim SMS-style IDs
+    const f = this.validateOutboxPayload(spec, op.payload, isInsert, now);
+
+    if (f.bankProfileId) {
+      const ok = await m.query(
+        `SELECT 1 FROM core.bank_profiles WHERE id=$1 AND user_id=$2`,
+        [f.bankProfileId, userId],
+      );
+      if (!ok.length) throw new RejectOp('bad_bank_profile');
+    }
+
+    const cols = Object.keys(f); // keys come from the whitelist, never from the client
+    const dbCols = cols.map((c) => (spec.cols as any)[c]);
+    const vals = cols.map((c) => f[c]);
+
+    if (isInsert) {
+      let encAmount: Buffer;
+      let encText: Buffer | null = null;
+      let textIdx: Buffer | null = null;
+
+      if (op.entity === 'transaction') {
+        const enc = await this.fieldCipherService.encryptTransactionFields(
+          userId,
+          op.entityId,
+          { amount: f.amount, merchant: f.merchant },
+          undefined, // row_version = 1
+        );
+        encAmount = enc.encAmount;
+        encText = enc.encMerchant;
+        textIdx = enc.merchantIdx;
+      } else {
+        const enc = await this.fieldCipherService.encryptIncomeFields(
+          userId,
+          op.entityId,
+          { amount: f.amount, source: f.source },
+          undefined, // row_version = 1
+        );
+        encAmount = enc.encAmount;
+        encText = enc.encSource;
+        textIdx = enc.sourceIdx;
+      }
+
+      const ph = vals.map((_, i) => `$${i + 7}`).join(',');
+      const ins = await m.query(
+        `INSERT INTO ${spec.table} (
+           id, user_id, updated_at, row_version, enc_amount, ${textCol}, ${idxCol},
+           ${dbCols.join(',')}, is_deleted${op.entity === 'transaction' ? ', sms_id' : ''}
+         )
+         VALUES ($1,$2,$3,1,$4,$5,$6,${ph}, false${op.entity === 'transaction' ? `, 'manual_entry'` : ''})
+         ON CONFLICT (id) DO NOTHING RETURNING 1`,
+        [op.entityId, userId, updatedAt, encAmount, encText, textIdx, ...vals],
+      );
+      if (!ins.length) throw new Error('insert_race'); // another writer took the id: retry, next pass rejects as forbidden
+    } else {
+      const expectedRowVersion = BigInt(row.row_version ?? 1);
+      const targetAmount = f.amount != null ? f.amount : Number(row.amount ?? 0);
+      const targetText = f[spec.textField] != null ? f[spec.textField] : row.text_field;
+
+      let encAmount: Buffer;
+      let encText: Buffer | null = null;
+      let textIdx: Buffer | null = null;
+      let nextRowVersion: bigint;
+
+      if (op.entity === 'transaction') {
+        const enc = await this.fieldCipherService.encryptTransactionFields(
+          userId,
+          op.entityId,
+          { amount: targetAmount, merchant: targetText },
+          expectedRowVersion,
+        );
+        encAmount = enc.encAmount;
+        encText = enc.encMerchant;
+        textIdx = enc.merchantIdx;
+        nextRowVersion = enc.rowVersion;
+      } else {
+        const enc = await this.fieldCipherService.encryptIncomeFields(
+          userId,
+          op.entityId,
+          { amount: targetAmount, source: targetText },
+          expectedRowVersion,
+        );
+        encAmount = enc.encAmount;
+        encText = enc.encSource;
+        textIdx = enc.sourceIdx;
+        nextRowVersion = enc.rowVersion;
+      }
+
+      const set = dbCols.map((c, i) => `${c}=$${i + 8}`).join(',');
+      const expectedVerParam = vals.length + 8;
+      const upd = await m.query(
+        `UPDATE ${spec.table}
+         SET ${set ? set + ',' : ''} updated_at=$3, row_version=$4, enc_amount=$5, ${textCol}=$6, ${idxCol}=$7, is_deleted=false
+         WHERE id=$1 AND user_id=$2 AND row_version=$${expectedVerParam} RETURNING 1`,
+        [op.entityId, userId, updatedAt, nextRowVersion.toString(), encAmount, encText, textIdx, ...vals, expectedRowVersion.toString()],
+      );
+      if (Array.isArray(upd) && upd.length === 0) throw new Error('update_concurrency_race');
+    }
+    return { idemKey: op.idemKey, status: 'applied' };
+  }
+
+  private validateOutboxPayload(
+    spec: (typeof ENTITIES)[keyof typeof ENTITIES],
+    p: any,
+    isInsert: boolean,
+    now: number,
+  ) {
+    if (!p || typeof p !== 'object') throw new RejectOp('bad_payload');
+    const out: Record<string, any> = {};
+    const str = (k: string, max: number, required: boolean) => {
+      const v = p[k];
+      if (v == null || v === '') {
+        if (required) throw new RejectOp(`missing_${k}`);
+        return;
+      }
+      if (typeof v !== 'string' || v.length > max) throw new RejectOp(`bad_${k}`);
+      out[k] = v.trim();
+    };
+
+    if (p.amount != null || isInsert) {
+      const a = p.amount;
+      if (
+        typeof a !== 'number' ||
+        !Number.isFinite(a) ||
+        Math.abs(a) > 1e9 ||
+        Math.abs(a * 100 - Math.round(a * 100)) > 1e-6
+      ) {
+        throw new RejectOp('bad_amount');
+      }
+      out.amount = a;
+    }
+    if (p.timestamp != null || isInsert) {
+      const t = Number(p.timestamp);
+      if (!Number.isInteger(t) || t < 946_684_800_000 || t > now + 86_400_000) {
+        throw new RejectOp('bad_timestamp');
+      }
+      out.timestamp = t;
+    }
+    str('category', 40, isInsert);
+    str(spec.textField, 120, isInsert);
+    if (spec.table === 'finance.transactions' && p.status != null) {
+      if (!['cleared', 'pending'].includes(p.status)) throw new RejectOp('bad_status');
+      out.status = p.status;
+    }
+    if ('bankProfileId' in p) {
+      if (
+        p.bankProfileId !== null &&
+        (typeof p.bankProfileId !== 'string' || p.bankProfileId.length > 80)
+      ) {
+        throw new RejectOp('bad_bank_profile');
+      }
+      out.bankProfileId = p.bankProfileId;
+    }
+    return out;
   }
 }

@@ -114,7 +114,7 @@ export const SmsPermissionModal: React.FC<SmsPermissionModalProps> = ({
               <View style={styles.featureTextWrap}>
                 <Text style={styles.featureTitle}>How it's used</Text>
                 <Text style={styles.featureDesc}>
-                  Bank transaction messages are sent securely to Regent Money's servers to extract the amount, merchant and account. The message text is not stored; only the resulting transaction is saved to your account.
+                  Bank transaction messages are read on your phone, including in the background as they arrive. Only the amount, merchant, date, account digits and balance are sent securely to your Regent account; the message text never leaves your phone. We also check this phone's SIM number matches your account; the number never leaves your phone.
                 </Text>
               </View>
             </View>

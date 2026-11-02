@@ -28,6 +28,8 @@ import { RedisModule } from './redis/redis.module';
 import { AdminModule } from './admin/admin.module';
 import { AdminAuditLog } from './admin/entities/admin-audit-log.entity';
 import { FeedbackModule } from './feedback/feedback.module';
+import { UserKey } from './crypto/entities/user-key.entity';
+import { CryptoModule } from './crypto/crypto.module';
 import * as dns from 'dns';
 
 // Helper to resolve host to IPv4 address programmatically
@@ -97,6 +99,7 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
             NotificationLog,
             UserSignals,
             AdminAuditLog,
+            UserKey,
           ],
           synchronize: false, // Set to false to avoid altering tables automatically, schemas exist
           ssl: getSslConfig(),
@@ -125,6 +128,7 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
     AiModule,
     RedisModule,
     FeedbackModule,
+    CryptoModule,
     ScheduleModule.forRoot(),
     ThrottlerModule.forRoot([
       {

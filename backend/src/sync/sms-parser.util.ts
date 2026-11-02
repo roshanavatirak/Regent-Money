@@ -1,3 +1,6 @@
+// Server copy of src/services/smsParser.ts (keep identical; sms-parity-cases.json checks both).
+// Server-only additions are at the end of the file.
+
 export interface ParsedTransaction {
   amount: number;
   type: 'debit' | 'credit';
@@ -9,7 +12,73 @@ export interface ParsedTransaction {
   referenceId?: string;
 }
 
-export function parseSMS(sender: string, body: string): ParsedTransaction | null {
+// OTP rule, kept identical in src/services/smsParser.ts and android SmsParser.kt.
+const OTP_FUTURE_TX = /\bwill\s*be\s*(?:debited|credited|refunded)\b/g;
+const OTP_COMPLETED_TX = /\b(?:debited|credited|withdrawn|deposited|refunded|spent)\b/;
+const OTP_DISCLAIMER = /\b(?:never|do\s*not|don't|not\s*to|will\s*never)\s+(?:share|disclose|tell|ask|asks|call)\b[^.]*/g;
+const OTP_PHRASE = /\b(?:is\s*your\s*otp|your\s*otp\s*is|use\s*otp|enter\s*otp|otp\s*to\s*verify|otp\s*for|secret\s*(?:otp|code)|verification\s*code\s*is|is\s*the\s*verification\s*code|one\s*time\s*password\s*is)\b/;
+const OTP_CODE_AFTER = /\b(?:otp|one\s*time\s*password|verification\s*code|security\s*code|authentication\s*code)\b[^.]{0,30}?\b\d{4,8}\b/;
+const OTP_CODE_BEFORE = /\b\d{4,8}\b[^.]{0,20}?\b(?:otp|one\s*time\s*password|verification\s*code)\b/;
+
+/**
+ * True when the SMS carries a one-time password. A completed debit/credit alert that only
+ * warns "never share your OTP" is not an OTP; a bank OTP mentioning "txn of Rs 500" is.
+ */
+export function isOtpMessage(body: string): boolean {
+  if (!body) return false;
+  const lower = body.replace(/\s+/g, ' ').trim().toLowerCase().replace(OTP_FUTURE_TX, ' ');
+  if (OTP_COMPLETED_TX.test(lower)) return false;
+  const text = lower.replace(OTP_DISCLAIMER, ' ');
+  return OTP_PHRASE.test(text) || OTP_CODE_AFTER.test(text) || OTP_CODE_BEFORE.test(text);
+}
+
+const STRONG_CREDIT = /\b(?:credited|received|deposited|refunded)\b/;
+const STRONG_DEBIT = /\b(?:debited|withdrawn|spent|deducted|sent|paid|charged|auto-debited)\b/;
+const REVERSAL = /\b(?:refund|refunded|reversed|reversal)\b/;
+const VPA_TO = /\bto\s+(?:vpa\s+)?([a-z0-9][a-z0-9._-]{1,40})@[a-z0-9.-]{2,}/i;
+const VPA_FROM = /\b(?:from|by)\s+(?:vpa\s+)?([a-z0-9][a-z0-9._-]{1,40})@[a-z0-9.-]{2,}/i;
+const PAYEE_CREDITED = /;\s*([A-Za-z][A-Za-z0-9\s&.*-]{1,40}?)\s+credited\b/i;
+// Bare 12-digit UPI RRN: "UPI:432198765432", "(UPI 433398765432)"
+const UPI_RRN = /\bupi\s*[:\-]?\s*(\d{12})\b/i;
+const TO_ACCOUNT =/\bto\s+(?:a\/c|acct|account|ac)\s*(?:no\.?\s*)?[x*.]*(\d{3,18})\b/i;
+const ON_MERCHANT =/\bon\s+([A-Za-z][A-Za-z0-9\s&*-]{1,40}?)(?=\s*[.,;]|\s+on\b|\s+avl|\s+avail|\s+if\b|$)/i;
+
+const firstIndex = (rx: RegExp, text: string): number => {
+  const m = rx.exec(text);
+  return m ? m.index : -1;
+};
+
+/** Cleans a merchant candidate, or returns null for dates, amounts, payment rails and account words. */
+function usableMerchant(raw: string): string | null {
+  const r = raw.trim().replace(/^(?:mr|mrs|ms|dr)\.?\s+/i, '');
+  if (
+    r.length < 2 ||
+    /^\d{1,2}:\d{2}/.test(r) ||
+    /^\d{1,2}[-/.]\d{1,2}/.test(r) ||
+    /^(?:rs\.?|inr|₹)?\s*[\d,]+(?:\.\d+)?$/i.test(r) ||
+    /^(?:rs\.?|inr|₹)(?:[\s\d.]|$)/i.test(r) ||
+    /^(?:neft|imps|rtgs|upi|nach|ach|vpa)$/i.test(r) ||
+    /^vpa\b/i.test(r) ||
+    /^(?:kotak\s*bank|sbi|hdfc|icici|axis|pnb|a\/c|account)$/i.test(r) ||
+    /\b(?:card|bank|a\/c|acct|account)\b/i.test(r)
+  ) {
+    return null;
+  }
+  return r;
+}
+
+/**
+ * Highly resilient, production-grade semantic financial SMS parser.
+ * Addresses critical real-world edge cases:
+ * 1. "Credit Card" spends classified as DEBIT (not false credit).
+ * 2. Balance vs. Amount disambiguation (ignores "Avl Bal Rs X" before the debit/credit).
+ * 3. Future, conditional, and promised transactions ("will be credited") are filtered.
+ * 4. Failed, declined, bounced, and reversed transactions are filtered.
+ * 5. Time expressions ("debited at 10:00 AM") are excluded from merchant names.
+ * 6. Word-boundary bank detection (prevents false matches like "reply YES" -> Yes Bank).
+ * 7. Supports bare colon amounts ("debited: 500.00").
+ */
+export const parseSMS = (sender: string, body: string): ParsedTransaction | null => {
   if (!body) return null;
 
   const clean = body.replace(/\s+/g, ' ').trim();
@@ -24,30 +93,32 @@ export function parseSMS(sender: string, body: string): ParsedTransaction | null
     return null;
   }
 
-  // 2. Exclude genuine OTP requests and marketing spam
-  // NOTE: If message contains financial transaction indicators (debited, credited, spent, etc.),
-  // any mention of OTP is merely a security disclaimer ("never share OTP") and must NOT be rejected.
-  const hasTxIndicator = /\b(?:debited|credited|withdrawn|spent|paid|sent|deposited|refunded|done\s*at|purchase\s*of|txn\s*of|transaction\s*of|transfer\s*to|transfer\s*from|trf\s*to|trf\s*from|avl\s*bal|available\s*balance)\b/i.test(lower);
-  if (!hasTxIndicator) {
-    const isSecurityDisclaimer = /\b(?:never\s*share|do\s*not\s*share|don't\s*share|never\s*ask|not\s*ask|never\s*call|disclose|beware\s*of)\b.*?\b(?:otp|password|pin|cvv)\b/i.test(lower);
-    if (
-      !isSecurityDisclaimer &&
-      /\b(?:is\s*your\s*otp|your\s*otp\s*is|use\s*otp|enter\s*otp|otp\s*to\s*verify|otp\s*for\s*(?:txn|transaction|login)|secret\s*(?:otp|code)|verification\s*code\s*is|is\s*the\s*verification\s*code|one\s*time\s*password\s*is)\b/i.test(
-        lower,
-      )
-    ) {
-      return null;
-    }
+  // 2. Exclude OTP messages and marketing spam
+  if (isOtpMessage(clean)) {
+    return null;
   }
   if (/\b(?:pre-approved\s*loan|apply\s*now|claim\s*your\s*reward|congratulations!?\s*you\s*are\s*eligible)\b/i.test(lower)) {
     return null;
   }
 
   // 3. Detect Transaction Type (Debit vs Credit)
+  // Mask 'credit card' / 'debit card' so "credit card" does not falsely trigger credit type
   const textWithoutCard = lower.replace(/\b(?:credit|debit)\s*card\b/g, 'card');
   let type: 'debit' | 'credit' | null = null;
 
-  if (
+  // Strong verbs decide first. When both appear, the earlier one describes the user's account:
+  // "Acct XX6090 debited for Rs 89; NETFLIX credited" is a debit. Refunds/reversals are credits.
+  const creditAt = firstIndex(STRONG_CREDIT, textWithoutCard);
+  const debitAt = firstIndex(STRONG_DEBIT, textWithoutCard);
+  if (creditAt !== -1 && REVERSAL.test(textWithoutCard)) {
+    type = 'credit';
+  } else if (creditAt !== -1 && debitAt !== -1) {
+    type = debitAt < creditAt ? 'debit' : 'credit';
+  } else if (creditAt !== -1) {
+    type = 'credit';
+  } else if (debitAt !== -1) {
+    type = 'debit';
+  } else if (
     /\b(?:credited|received|refunded|deposited|transferred\s*from|trf\s*from|\bcr\b|inward\s*remittance|cashback\s*received|money\s*received|added\s*to\s*(?:your\s*)?(?:a\/c|account))\b/i.test(
       textWithoutCard,
     )
@@ -61,6 +132,7 @@ export function parseSMS(sender: string, body: string): ParsedTransaction | null
     type = 'debit';
   }
 
+  // If no debit or credit action detected, not a completed financial transaction SMS
   if (!type) {
     return null;
   }
@@ -118,8 +190,9 @@ export function parseSMS(sender: string, body: string): ParsedTransaction | null
 
   // 6. Extract Merchant / Beneficiary / Counterparty
   let merchant = '';
+  // Lookahead boundary stops before trailing references, dates, URLs, or support info
   const boundaryLookahead =
-    '(?=(?:[,.]|\\s+from|\\s+to|\\s+ref|\\s+refno|\\s+upi|\\s+on|\\s+dated|\\s+if|\\s+avail|\\s+bal|\\s+not|\\s*[-–]|https?:|\\.\\s*|\\binfo:|$))';
+    '(?=(?:[,.]|\\s+from|\\s+to|\\s+ref|\\s+refno|\\s+upi|\\s+on|\\s+dated|\\s+if|\\s+avail|\\s+bal|\\s+not|\\s+has\\b|\\s+was\\b|\\s+credited\\b|\\s+debited\\b|\\s*[-–]|https?:|\\.\\s*|\\binfo:|$))';
 
   const merchantDebitRegexes = [
     new RegExp(
@@ -129,15 +202,32 @@ export function parseSMS(sender: string, body: string): ParsedTransaction | null
     ),
   ];
 
+  // Explicit "from" wins over "by", which often precedes the amount or rail ("by Rs.500", "by NEFT")
   const merchantCreditRegexes = [
     new RegExp(
-      `(?:transfer\\s*from|trf\\s*from|transferred\\s*from|received\\s*from|\\bfrom\\b|\\bby\\b)\\s+([A-Za-z0-9\\s&.*-]{2,40}?)` +
+      `(?:transfer\\s*from|trf\\s*from|transferred\\s*from|received\\s*from|\\bfrom\\b)\\s+([A-Za-z0-9\\s&.*-]{2,40}?)` +
       boundaryLookahead,
       'i',
     ),
+    new RegExp(`\\bby\\b\\s+([A-Za-z0-9\\s&.*-]{2,40}?)` + boundaryLookahead, 'i'),
   ];
 
-  const candidateRegexes = type === 'debit' ? merchantDebitRegexes : merchantCreditRegexes;
+  // A refund/reversal names the original merchant the way a debit does ("refund ... at MYNTRA")
+  const isReversal = type === 'credit' && REVERSAL.test(textWithoutCard);
+  const candidateRegexes =
+    type === 'debit'
+      ? merchantDebitRegexes
+      : isReversal
+        ? [...merchantDebitRegexes, ...merchantCreditRegexes]
+        : merchantCreditRegexes;
+
+  // A UPI handle is the most precise counterparty: "to VPA swiggy@icici", "from priya.k@ybl"
+  const vpa = clean.match(type === 'debit' ? VPA_TO : VPA_FROM);
+  if (vpa) merchant = usableMerchant(vpa[1].replace(/[._-]+/g, ' ')) || '';
+
+  // Search scope order:
+  // 1. Text AFTER the transaction amount (prevents capturing preamble text like "Reply YES to confirm your subscription")
+  // 2. Full text as fallback (for messages where merchant precedes amount, e.g. "Swiggy was paid Rs. 300")
   const searchScopes: string[] = [];
   if (amountMatchIndex !== -1 && amountMatchIndex < clean.length) {
     searchScopes.push(clean.slice(amountMatchIndex));
@@ -145,30 +235,40 @@ export function parseSMS(sender: string, body: string): ParsedTransaction | null
   searchScopes.push(clean);
 
   for (const scope of searchScopes) {
+    if (merchant) break;
     for (const rx of candidateRegexes) {
       const match = scope.match(rx);
-      if (match && match[1]) {
-        let raw = match[1].trim();
-        raw = raw.replace(/^(?:mr|mrs|ms|dr)\.?\s+/i, '');
-
-        if (
-          /^\d{1,2}:\d{2}/.test(raw) ||
-          /^\d{1,2}[-/.]\d{1,2}/.test(raw) ||
-          /^(?:rs\.?|inr|₹)?\s*[\d,]+(?:\.\d+)?$/i.test(raw)
-        ) {
-          continue;
-        }
-
-        if (!/^(?:kotak\s*bank|sbi|hdfc|icici|axis|pnb|a\/c|account)$/i.test(raw)) {
-          merchant = raw;
-          break;
-        }
+      const usable = match && match[1] ? usableMerchant(match[1]) : null;
+      if (usable) {
+        merchant = usable;
+        break;
       }
     }
     if (merchant) break;
   }
 
+  // Fallbacks for formats without a "to/at/from" phrase
+  if (!merchant && type === 'debit') {
+    // ICICI: "Acct XX6090 debited for Rs 89.00 on 02-Nov-26; NETFLIX credited"
+    const payee = clean.match(PAYEE_CREDITED);
+    if (payee) merchant = usableMerchant(payee[1]) || '';
+  }
+  if (!merchant && type === 'debit') {
+    // Card spends: "spent using Card XX6090 on 02-Nov-26 on AMAZON PAY IN."
+    const onRx = new RegExp(ON_MERCHANT.source, 'gi');
+    let m: RegExpExecArray | null;
+    while (!merchant && (m = onRx.exec(clean)) !== null) {
+      merchant = usableMerchant(m[1]) || '';
+    }
+  }
+
+  // Sanitize merchant string
   merchant = sanitizeMerchantName(merchant);
+  if ((!merchant || merchant.length < 2) && type === 'debit') {
+    // Account-to-account transfer: "to A/c **9988" -> "Transfer XX9988"
+    const toAccount = clean.match(TO_ACCOUNT);
+    if (toAccount) merchant = `Transfer XX${toAccount[1].slice(-4)}`;
+  }
   if (!merchant || merchant.length < 2) {
     merchant = type === 'debit' ? 'Spends' : 'Credits';
   }
@@ -218,11 +318,12 @@ export function parseSMS(sender: string, body: string): ParsedTransaction | null
   // 7.5 Extract UPI Reference / RRN / Bank Ref Number
   let referenceId: string | undefined;
   const refRx = /(?:upi\s*ref(?:\s*no\.?)?|rrn|ref\s*no\.?|reference(?:\s*no\.?)?|txn\s*(?:id|no)|imps\s*ref)\s*[:\-]?\s*([A-Za-z0-9]{8,22})/i;
-  const refMatch = clean.match(refRx);
+  const refMatch = clean.match(refRx) || clean.match(UPI_RRN);
   if (refMatch && refMatch[1]) {
     referenceId = refMatch[1].trim();
   }
 
+  // 8. Heuristic for Salary credit detection
   const isSalary =
     type === 'credit' &&
     (lower.includes('salary') ||
@@ -240,14 +341,19 @@ export function parseSMS(sender: string, body: string): ParsedTransaction | null
     availableBalance,
     referenceId,
   };
-}
+};
 
+/**
+ * Normalizes and cleans merchant names:
+ * Strips reference codes, URLs, and punctuation while preserving recognizable brands.
+ */
 function sanitizeMerchantName(name: string): string {
   if (!name) return '';
 
-  const cleaned = name
-    .replace(/(?:ref|refno|upi\s*ref|upi|rrn|val|info|trf|ft)\b.*$/i, '')
+  let cleaned = name
+    .replace(/\b(?:ref|refno|upi\s*ref|upi|rrn|val|info|trf|ft)\b.*$/i, '')
     .replace(/on\s+\d{2}[-/.]\d{2}[-/.]\d{2,4}.*$/i, '')
+    .replace(/\s+(?:thru|through|via)\s+.*$/i, '')
     .replace(/[^\w\s\-\*]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -296,6 +402,10 @@ export function detectBankFromSender(sender: string): string | null {
   if (clean.includes('RBL') || clean.includes('RATN')) return 'RBL Bank';
   if (clean.includes('YESB') || clean.includes('YESBNK')) return 'Yes Bank';
   if (clean.includes('BOI') || clean.includes('BOIND') || clean.includes('BKID')) return 'Bank of India';
+  if (clean.includes('UCOBNK') || clean.includes('UCBA')) return 'UCO Bank';
+  if (clean.includes('IOB')) return 'Indian Overseas Bank';
+  if (clean.includes('CENTBK') || clean.includes('CBIN')) return 'Central Bank of India';
+  if (clean.includes('INDIBK') || clean.includes('IDIB')) return 'Indian Bank';
   return null;
 }
 
@@ -331,4 +441,47 @@ export function extractAccountSuffix(cleanText: string): string {
   // Prefer the match with a mask (e.g. X6090, **1234, ...4020) over bare numbers
   const maskedCandidate = candidates.find((c) => c.hasMask);
   return maskedCandidate ? maskedCandidate.suffix : candidates[0].suffix;
+}
+
+// Mirrors DEFAULT_BANK_SENDERS in the Android SmsReceiver.
+const KNOWN_BANK_SENDER_IDS = new Set([
+  'HDFCBK', 'HDFCBN', 'HDFCLT', 'HDFCAL', 'HDFCCC', 'HDFCSM',
+  'SBIPSG', 'SBIBNK', 'SBIUPI', 'SBIINB', 'ATMSBI', 'SBISMS', 'CBSSBI',
+  'ICICIB', 'ICICIT', 'ICICIS', 'ICICAC', 'ICICIC',
+  'AXISBK', 'AXISBC', 'AXISIN', 'AXISAL', 'AXISMS',
+  'KOTAKB', 'KOTAKS', 'KOTAKN', 'KMBLTD',
+  'BOBTXN', 'BOBSMS', 'BOBALT', 'BARB',
+  'PNBSMS', 'PNBALT', 'PUNBNK', 'PNBTXN',
+  'CNRBK', 'CANBNK', 'CANARA', 'CNRSMS',
+  'UBININ', 'UBISMS', 'UNIONB',
+  'IDFCFB', 'IDFCBK', 'IDFCBN',
+  'INDBNK', 'INDUSB', 'INDUSI',
+  'YESBNK', 'YESB', 'YESALT',
+  'FEDBNK', 'FEDRAL', 'INDIBK', 'INDIAN',
+  'BOIND', 'BOISMS', 'BOIALT', 'CBIN', 'CENTBK',
+  'IOBCHN', 'IOBBNK', 'UCOBNK', 'RBLBNK', 'RBLSMS',
+  'PAYTM', 'PAYTMB', 'AIRTEL', 'AIRBNK',
+]);
+
+/**
+ * True only for bank DLT headers: a known default sender ID, a recognised bank header,
+ * or one of the user's configured sender tags. Phone-number senders (personal SMS) never pass.
+ */
+export function isBankSmsSender(sender: string, configuredSenderIds: (string | null | undefined)[] = []): boolean {
+  if (!sender) return false;
+  const upper = sender.toUpperCase().trim();
+  if (/^\+?[\d\s-]+$/.test(upper)) return false;
+
+  // "AX-HDFCBK" / "VM-HDFCBK-S" -> "HDFCBK"
+  const parts = upper.split('-');
+  const core = (parts.length >= 2 ? parts[1] : parts[0]).replace(/[^A-Z0-9]/g, '');
+  if (KNOWN_BANK_SENDER_IDS.has(core) || detectBankFromSender(sender)) return true;
+
+  return configuredSenderIds.some((ids) => {
+    const tags = (ids || '')
+      .split(/[,;\s]+/)
+      .map((t) => t.replace(/[^A-Za-z0-9]/g, '').toUpperCase())
+      .filter((t) => t.length >= 3);
+    return tags.some((tag) => core === tag || core.includes(tag));
+  });
 }

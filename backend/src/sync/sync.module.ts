@@ -16,6 +16,7 @@ import { User } from '../users/entities/user.entity';
 import { AiModule } from '../ai/ai.module';
 import { RedisModule } from '../redis/redis.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { CryptoModule } from '../crypto/crypto.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     AiModule,
     RedisModule,
     NotificationsModule,
+    CryptoModule,
   ],
   providers: [SyncService],
   controllers: [SyncController],

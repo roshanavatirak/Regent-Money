@@ -211,6 +211,25 @@ export function getAllDefaultBankSenderIds(): string[] {
 }
 
 /**
+ * True only for bank DLT headers: a known default sender ID, or a tag the user configured on a bank.
+ * Phone-number senders (personal messages) are never treated as bank senders.
+ */
+export function isBankSmsSender(incomingSender: string, configuredSenderIds: (string | null | undefined)[] = []): boolean {
+  if (!incomingSender) return false;
+  const upper = incomingSender.toUpperCase().trim();
+  if (/^\+?[\d\s-]+$/.test(upper)) return false;
+
+  // "AX-HDFCBK" / "VM-HDFCBK-S" -> "HDFCBK"
+  const parts = upper.split('-');
+  const core = (parts.length >= 2 ? parts[1] : parts[0]).replace(/[^A-Z0-9]/g, '');
+  if (getAllDefaultBankSenderIds().includes(core)) return true;
+
+  return configuredSenderIds.some(
+    (ids) => parseSmsSenderTags(ids).length > 0 && matchesSmsSender(incomingSender, ids)
+  );
+}
+
+/**
  * Pushes the union of default bank sender IDs and user custom tags to native SharedPreferences
  * so Android's SmsReceiver can filter incoming messages on-device before any processing.
  */

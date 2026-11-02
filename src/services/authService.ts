@@ -1,7 +1,20 @@
 import { Platform, NativeModules } from 'react-native';
 import { isRunningInExpoGo } from 'expo';
 import { mmkvStorage } from '../db/mmkv';
-import { useAuthStore, UserProfile, useSecurityStore, AutoLockTimeout, showGlobalAlert } from '../store';
+import {
+  useAuthStore,
+  UserProfile,
+  useSecurityStore,
+  AutoLockTimeout,
+  showGlobalAlert,
+  useTransactionStore,
+  useIncomeStore,
+  useBankStore,
+  useBudgetStore,
+  useGoalsStore,
+  useAnalyticsStore,
+  useNotificationStore,
+} from '../store';
 import { getGoogleWebClientId } from '../config/auth';
 import { BACKEND_URL, getBackendUrl } from '../config/api';
 import { tokenStore } from './tokenStore';
@@ -579,19 +592,76 @@ export const authService = {
     }
 
     try {
+      // 1. Wipe Authentication & Session Tokens
       mmkvStorage.delete(SESSION_KEY);
       mmkvStorage.delete(USER_PROFILE_KEY);
       mmkvStorage.delete('user_profile');
       tokenStore.clearAccessToken();
       mmkvStorage.delete('auth_remember_me');
-      mmkvStorage.delete('cache_income_records');
+      mmkvStorage.delete('auth_user_profile');
+
+      // 2. Wipe All Local Financial Records to prevent cross-user data leakage
+      const financialKeys = [
+        'cache_transactions',
+        'cache_income_records',
+        'cache_bank_profiles',
+        'cache_budgets',
+        'cache_budget_custom_categories',
+        'cache_budget_excluded_tx_ids',
+        'cache_goals',
+        'cache_monthly_income',
+        'cache_net_worth_snapshots',
+        'cache_notifications',
+        'cache_peer_allocations',
+        'cache_peer_contacts',
+        'cache_peer_entries',
+        'cache_peer_pending_settlements',
+        'security_last_bg_time',
+      ];
+      for (const k of financialKeys) {
+        mmkvStorage.delete(k);
+      }
+
+      // Wipe dynamic outbox items and sharded transaction/income partitions
+      const allKeys = mmkvStorage.getAllKeys();
+      for (const k of allKeys) {
+        if (k.startsWith('outbox') || k.startsWith('tx:') || k.startsWith('inc:')) {
+          mmkvStorage.delete(k);
+        }
+      }
     } catch (e: any) {
       console.error('[Auth] Failed to delete MMKV session keys:', e.message);
     }
 
     syncNativeAuthCredentials(null);
 
-    useAuthStore.getState().setUser(null);
+    // 3. Reset In-Memory Zustand Stores
+    try {
+      useTransactionStore.getState().setTransactions([]);
+      useIncomeStore.getState().setIncomeRecords([]);
+      useBankStore.getState().setBankProfiles([]);
+      useBudgetStore.getState().setBudgets([]);
+      useGoalsStore.getState().setGoals([]);
+      useAnalyticsStore.getState().setSnapshots([]);
+      useAnalyticsStore.getState().setIncomeCurrentMonth(0);
+      useNotificationStore.getState().setNotifications([]);
+      useAuthStore.getState().setUser(null);
+
+      // Lazily reset peer store if loaded
+      try {
+        const { usePeerStore } = require('../store/peerStore');
+        usePeerStore?.setState?.({
+          contacts: [],
+          entries: [],
+          storedAllocations: [],
+          pendingSettlements: [],
+        });
+      } catch {
+        // Peer store optional
+      }
+    } catch (e: any) {
+      console.warn('[Auth] Error clearing in-memory stores:', e.message);
+    }
   },
 
   /**

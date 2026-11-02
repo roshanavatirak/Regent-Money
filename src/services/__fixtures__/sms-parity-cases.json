@@ -1,0 +1,346 @@
+{
+  "note": "Parity cases: the Kotlin SmsParser, src/services/smsParser.ts and the backend parser must all produce exactly these results. Regenerate from smsParser.ts when parsing rules change.",
+  "cases": [
+    {
+      "sender": "AX-HDFCBK",
+      "body": "Rs.500.00 debited from A/c XX1234 on 02-11-26 to VPA swiggy@icici (UPI Ref No 432112345678). Not you? Call 18002586161",
+      "otp": false,
+      "expected": {
+        "amount": 500,
+        "type": "debit",
+        "merchant": "Swiggy",
+        "accountSuffix": "1234",
+        "bankName": "HDFC",
+        "isSalary": false,
+        "referenceId": "432112345678"
+      },
+      "smsId": "ref_432112345678",
+      "contentId": "sms_1500625970"
+    },
+    {
+      "sender": "VM-SBIINB",
+      "body": "Dear Customer, Your A/c XX5039 is credited by Rs.25,000.00 on 01Nov26 transfer from ACME PAYROLL Ref No 987654321012 -SBI",
+      "otp": false,
+      "expected": {
+        "amount": 25000,
+        "type": "credit",
+        "merchant": "ACME PAYROLL",
+        "accountSuffix": "5039",
+        "bankName": "SBI",
+        "isSalary": true,
+        "referenceId": "987654321012"
+      },
+      "smsId": "ref_987654321012",
+      "contentId": "sms_1906428468"
+    },
+    {
+      "sender": "JD-ICICIB",
+      "body": "INR 1,249.00 spent using ICICI Bank Card XX6090 on 02-Nov-26 on AMAZON PAY IN. Avl Limit: INR 48,751.00. If not done by you, call 18002662.",
+      "otp": false,
+      "expected": {
+        "amount": 1249,
+        "type": "debit",
+        "merchant": "Amazon",
+        "accountSuffix": "6090",
+        "bankName": "ICICI",
+        "isSalary": false
+      },
+      "smsId": "sms_1242674780",
+      "contentId": "sms_1242674780"
+    },
+    {
+      "sender": "VK-KOTAKB",
+      "body": "Sent Rs.120.00 from Kotak Bank AC X4020 to zepto.payu@hdfcbank on 02-11-26.UPI Ref 312345678901. Not you, https://kotak.com/fraud",
+      "otp": false,
+      "expected": {
+        "amount": 120,
+        "type": "debit",
+        "merchant": "Zepto",
+        "accountSuffix": "4020",
+        "bankName": "Kotak",
+        "isSalary": false,
+        "referenceId": "312345678901"
+      },
+      "smsId": "ref_312345678901",
+      "contentId": "sms_554694475"
+    },
+    {
+      "sender": "AD-AXISBK",
+      "body": "INR 2000.00 credited to A/c no. XX7788 on 02-11-2026 by NEFT from RAHUL SHARMA. Avl Bal INR 15230.50 - Axis Bank",
+      "otp": false,
+      "expected": {
+        "amount": 2000,
+        "type": "credit",
+        "merchant": "RAHUL SHARMA",
+        "accountSuffix": "7788",
+        "bankName": "Axis",
+        "isSalary": false,
+        "availableBalance": 15230.5
+      },
+      "smsId": "sms_1543365944",
+      "contentId": "sms_1543365944"
+    },
+    {
+      "sender": "BW-HDFCBK",
+      "body": "Rs 3000.00 withdrawn from A/c XX1234 at ATM MUMBAI on 02-11-26. Avl bal: Rs 12,000.00. Never share OTP/PIN with anyone.",
+      "otp": false,
+      "expected": {
+        "amount": 3000,
+        "type": "debit",
+        "merchant": "ATM MUMBAI",
+        "accountSuffix": "1234",
+        "bankName": "HDFC",
+        "isSalary": false,
+        "availableBalance": 12000
+      },
+      "smsId": "sms_1358488698",
+      "contentId": "sms_1358488698"
+    },
+    {
+      "sender": "VM-UCOBNK-S",
+      "body": "A/c XX9911 debited INR 450.00 on 02/11/26 towards UBER INDIA. Bal INR 2,345.67 UCO Bank",
+      "otp": false,
+      "expected": {
+        "amount": 450,
+        "type": "debit",
+        "merchant": "Uber",
+        "accountSuffix": "9911",
+        "bankName": "UCO Bank",
+        "isSalary": false,
+        "availableBalance": 2345.67
+      },
+      "smsId": "sms_661117884",
+      "contentId": "sms_661117884"
+    },
+    {
+      "sender": "AX-HDFCBK",
+      "body": "123456 is your OTP for txn of INR 500.00 at AMAZON on HDFC Bank card XX1234. Valid for 5 mins. Do not share it with anyone.",
+      "otp": true,
+      "expected": null,
+      "smsId": null,
+      "contentId": null
+    },
+    {
+      "sender": "VM-SBIINB",
+      "body": "OTP is 482913 for transaction of Rs.2,500.00 at FLIPKART on SBI Card ending 4455. Do not share.",
+      "otp": true,
+      "expected": null,
+      "smsId": null,
+      "contentId": null
+    },
+    {
+      "sender": "JD-ICICIB",
+      "body": "Dear Customer, 734512 is the One Time Password for login to ICICI Bank iMobile. Never share it with anyone.",
+      "otp": true,
+      "expected": null,
+      "smsId": null,
+      "contentId": null
+    },
+    {
+      "sender": "VK-KOTAKB",
+      "body": "Use OTP 991122 to verify your Kotak 811 account. Kotak never asks for OTP.",
+      "otp": true,
+      "expected": null,
+      "smsId": null,
+      "contentId": null
+    },
+    {
+      "sender": "AD-AXISBK",
+      "body": "Rs.1000.00 will be debited from your A/c XX7788 on 05-11-26 towards SIP. Ensure sufficient balance.",
+      "otp": false,
+      "expected": null,
+      "smsId": null,
+      "contentId": null
+    },
+    {
+      "sender": "AX-HDFCBK",
+      "body": "Your transaction of Rs.700.00 at DOMINOS has been declined due to insufficient funds.",
+      "otp": false,
+      "expected": null,
+      "smsId": null,
+      "contentId": null
+    },
+    {
+      "sender": "VM-SBIINB",
+      "body": "Congratulations! You are eligible for a pre-approved loan of Rs 5,00,000. Apply now.",
+      "otp": false,
+      "expected": null,
+      "smsId": null,
+      "contentId": null
+    },
+    {
+      "sender": "AX-HDFCBK",
+      "body": "Update: Rs.15,000.00 debited from HDFC Bank A/c **1234 on 02-11-26 to A/c **9988 (IMPS Ref 431234567890). Avl bal Rs 4,560.00",
+      "otp": false,
+      "expected": {
+        "amount": 15000,
+        "type": "debit",
+        "merchant": "Transfer XX9988",
+        "accountSuffix": "1234",
+        "bankName": "HDFC",
+        "isSalary": false,
+        "availableBalance": 4560,
+        "referenceId": "431234567890"
+      },
+      "smsId": "ref_431234567890",
+      "contentId": "sms_114167917"
+    },
+    {
+      "sender": "JD-ICICIB",
+      "body": "ICICI Bank Acct XX6090 debited for Rs 89.00 on 02-Nov-26; NETFLIX credited. UPI:432198765432. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766",
+      "otp": false,
+      "expected": {
+        "amount": 89,
+        "type": "debit",
+        "merchant": "Netflix",
+        "accountSuffix": "6090",
+        "bankName": "ICICI",
+        "isSalary": false,
+        "referenceId": "432198765432"
+      },
+      "smsId": "ref_432198765432",
+      "contentId": "sms_1838583601"
+    },
+    {
+      "sender": "AD-PAYTMB",
+      "body": "Paid Rs.60 to Chai Point from Paytm Payments Bank a/c XX3344. UPI Ref: 433312341234",
+      "otp": false,
+      "expected": {
+        "amount": 60,
+        "type": "debit",
+        "merchant": "Chai Point",
+        "accountSuffix": "3344",
+        "bankName": "Paytm Payments Bank",
+        "isSalary": false,
+        "referenceId": "433312341234"
+      },
+      "smsId": "ref_433312341234",
+      "contentId": "sms_1515078862"
+    },
+    {
+      "sender": "VM-SBIINB",
+      "body": "Rs 500 spent on SBI Card XX4455 at BIGBASKET on 02/11/26. Not you? Never share OTP, call 1800 1234 to block.",
+      "otp": false,
+      "expected": {
+        "amount": 500,
+        "type": "debit",
+        "merchant": "BIGBASKET",
+        "accountSuffix": "4455",
+        "bankName": "SBI",
+        "isSalary": false
+      },
+      "smsId": "sms_153123773",
+      "contentId": "sms_153123773"
+    },
+    {
+      "sender": "AX-HDFCBK",
+      "body": "Rs.1500.00 credited to HDFC Bank A/c XX1234 on 02-11-26 from VPA rahul.sharma@okaxis (UPI 433398765432)",
+      "otp": false,
+      "expected": {
+        "amount": 1500,
+        "type": "credit",
+        "merchant": "rahul sharma",
+        "accountSuffix": "1234",
+        "bankName": "HDFC",
+        "isSalary": false,
+        "referenceId": "433398765432"
+      },
+      "smsId": "ref_433398765432",
+      "contentId": "sms_1242639023"
+    },
+    {
+      "sender": "JD-ICICIB",
+      "body": "Dear Customer, Acct XX6090 is credited with Rs 250.00 on 02-Nov-26 from priya.k@ybl. UPI:433311112222-ICICI Bank.",
+      "otp": false,
+      "expected": {
+        "amount": 250,
+        "type": "credit",
+        "merchant": "priya k",
+        "accountSuffix": "6090",
+        "bankName": "ICICI",
+        "isSalary": false,
+        "referenceId": "433311112222"
+      },
+      "smsId": "ref_433311112222",
+      "contentId": "sms_448297668"
+    },
+    {
+      "sender": "VM-SBIINB",
+      "body": "Refund of Rs 799.00 for your transaction at MYNTRA has been credited to your A/c XX5039 on 02Nov26.",
+      "otp": false,
+      "expected": {
+        "amount": 799,
+        "type": "credit",
+        "merchant": "MYNTRA",
+        "accountSuffix": "5039",
+        "bankName": "SBI",
+        "isSalary": false
+      },
+      "smsId": "sms_494042853",
+      "contentId": "sms_494042853"
+    },
+    {
+      "sender": "AD-AXISBK",
+      "body": "Your txn of INR 1,100.00 at MICROSOFT on Axis Bank Card XX7788 has been reversed and credited.",
+      "otp": false,
+      "expected": {
+        "amount": 1100,
+        "type": "credit",
+        "merchant": "MICROSOFT",
+        "accountSuffix": "7788",
+        "bankName": "Axis",
+        "isSalary": false
+      },
+      "smsId": "sms_2112802199",
+      "contentId": "sms_2112802199"
+    },
+    {
+      "sender": "VK-KOTAKB",
+      "body": "Received Rs.100.00 in your Kotak Bank AC X4020 from ankit@okhdfcbank on 02-11-26.UPI Ref:312312312312.",
+      "otp": false,
+      "expected": {
+        "amount": 100,
+        "type": "credit",
+        "merchant": "ankit",
+        "accountSuffix": "4020",
+        "bankName": "Kotak",
+        "isSalary": false,
+        "referenceId": "312312312312"
+      },
+      "smsId": "ref_312312312312",
+      "contentId": "sms_622799753"
+    },
+    {
+      "sender": "VM-SBIINB",
+      "body": "Dear UPI user A/C X5039 debited by 349.0 on date 02Nov26 trf to GIFT SHOP Refno 433355556666. If not u? call 1800111109. -SBI",
+      "otp": false,
+      "expected": {
+        "amount": 349,
+        "type": "debit",
+        "merchant": "GIFT SHOP",
+        "accountSuffix": "5039",
+        "bankName": "SBI",
+        "isSalary": false,
+        "referenceId": "433355556666"
+      },
+      "smsId": "ref_433355556666",
+      "contentId": "sms_232385612"
+    },
+    {
+      "sender": "AX-HDFCBK",
+      "body": "Your salary of Rs.85,000.00 has been credited to A/c XX1234 on 01-11-26 by ACME TECHNOLOGIES PVT LTD. Avl bal: Rs 92,450.00",
+      "otp": false,
+      "expected": {
+        "amount": 85000,
+        "type": "credit",
+        "merchant": "ACME TECHNOLOGIES PVT LTD",
+        "accountSuffix": "1234",
+        "bankName": "HDFC",
+        "isSalary": true,
+        "availableBalance": 92450
+      },
+      "smsId": "sms_1938631032",
+      "contentId": "sms_1938631032"
+    }
+  ]
+}

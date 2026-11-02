@@ -24,9 +24,18 @@ class SmsDirectSyncWorker(context: Context, workerParams: WorkerParameters) : Wo
         private const val ALERT_CHANNEL_ID = "regent_transaction_alerts"
         const val TAG_SMS_SYNC = "sms-sync"
         const val KEY_SENDER = "sender"
-        const val KEY_BODY = "body"
         const val KEY_TIMESTAMP = "timestamp"
         const val KEY_USER_ID = "user_id"
+        const val KEY_SMS_ID = "sms_id"
+        const val KEY_CONTENT_ID = "content_id"
+        const val KEY_AMOUNT = "amount"
+        const val KEY_TYPE = "type"
+        const val KEY_MERCHANT = "merchant"
+        const val KEY_ACCOUNT_SUFFIX = "account_suffix"
+        const val KEY_BANK_NAME = "bank_name"
+        const val KEY_IS_SALARY = "is_salary"
+        const val KEY_AVAILABLE_BALANCE = "available_balance"
+        const val KEY_REFERENCE_ID = "reference_id"
 
         private val httpClient: OkHttpClient by lazy {
             OkHttpClient.Builder()
@@ -36,7 +45,7 @@ class SmsDirectSyncWorker(context: Context, workerParams: WorkerParameters) : Wo
                 .build()
         }
 
-        fun enqueue(context: Context, sender: String, body: String, timestamp: Long) {
+        fun enqueue(context: Context, sender: String, parsed: SmsParser.ParsedSms, smsId: String, contentId: String, timestamp: Long) {
             val prefs = context.getSharedPreferences("regent_native_prefs", Context.MODE_PRIVATE)
             val currentUserId = prefs.getString("user_id", null)
             if (currentUserId.isNullOrBlank()) {
@@ -44,11 +53,21 @@ class SmsDirectSyncWorker(context: Context, workerParams: WorkerParameters) : Wo
                 return
             }
 
+            // Only parsed fields are persisted in WorkManager's queue, never the SMS text
             val inputData = Data.Builder()
                 .putString(KEY_SENDER, sender)
-                .putString(KEY_BODY, body)
                 .putLong(KEY_TIMESTAMP, timestamp)
                 .putString(KEY_USER_ID, currentUserId)
+                .putString(KEY_SMS_ID, smsId)
+                .putString(KEY_CONTENT_ID, contentId)
+                .putDouble(KEY_AMOUNT, parsed.amount)
+                .putString(KEY_TYPE, parsed.type)
+                .putString(KEY_MERCHANT, parsed.merchant)
+                .putString(KEY_ACCOUNT_SUFFIX, parsed.accountSuffix)
+                .putString(KEY_BANK_NAME, parsed.bankName)
+                .putBoolean(KEY_IS_SALARY, parsed.isSalary)
+                .apply { parsed.availableBalance?.let { putDouble(KEY_AVAILABLE_BALANCE, it) } }
+                .putString(KEY_REFERENCE_ID, parsed.referenceId)
                 .build()
 
             val constraints = Constraints.Builder()
@@ -100,7 +119,10 @@ class SmsDirectSyncWorker(context: Context, workerParams: WorkerParameters) : Wo
         }
 
         val sender = inputData.getString(KEY_SENDER) ?: return Result.failure()
-        val body = inputData.getString(KEY_BODY) ?: return Result.failure()
+        val smsId = inputData.getString(KEY_SMS_ID) ?: return Result.failure()
+        val txType = inputData.getString(KEY_TYPE) ?: return Result.failure()
+        val txAmount = inputData.getDouble(KEY_AMOUNT, 0.0)
+        if (txAmount <= 0.0) return Result.failure()
         val timestamp = inputData.getLong(KEY_TIMESTAMP, System.currentTimeMillis())
 
         // Read token and active user at execution time
@@ -129,10 +151,25 @@ class SmsDirectSyncWorker(context: Context, workerParams: WorkerParameters) : Wo
         Log.d(TAG, "Executing direct native HTTP ingestion for SMS from $sender (attempt $runAttemptCount)...")
 
         try {
+            // Extracted transaction only; the SMS text never leaves the device
+            val parsedJson = JSONObject().apply {
+                put("amount", txAmount)
+                put("type", txType)
+                put("merchant", inputData.getString(KEY_MERCHANT) ?: "")
+                put("accountSuffix", inputData.getString(KEY_ACCOUNT_SUFFIX) ?: "XXXX")
+                put("bankName", inputData.getString(KEY_BANK_NAME) ?: "Bank")
+                put("isSalary", inputData.getBoolean(KEY_IS_SALARY, false))
+                if (inputData.keyValueMap.containsKey(KEY_AVAILABLE_BALANCE)) {
+                    put("availableBalance", inputData.getDouble(KEY_AVAILABLE_BALANCE, 0.0))
+                }
+                inputData.getString(KEY_REFERENCE_ID)?.let { put("referenceId", it) }
+            }
             val jsonPayload = JSONObject().apply {
                 put("sender", sender)
-                put("body", body)
                 put("timestamp", timestamp)
+                put("smsId", smsId)
+                inputData.getString(KEY_CONTENT_ID)?.let { put("contentId", it) }
+                put("parsed", parsedJson)
             }
 
             val mediaType = "application/json; charset=utf-8".toMediaType()

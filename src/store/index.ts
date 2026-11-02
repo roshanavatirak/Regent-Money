@@ -1,9 +1,13 @@
 import { create } from 'zustand';
 import { ChatMessage } from '../services/aiService';
 import { mmkvStorage } from '../db/mmkv';
+import { txShards, incShards, migrateBlobToShards } from '../db/shards';
 import { useColorScheme } from 'react-native';
 import { migrateGoalsV1toV2 } from '../features/goals/services/goalsMigration';
 import type { Goal, SavingsEntry } from '../features/goals/services/goalPacingService';
+
+// Ensure one-time partition of legacy single blobs into monthly shards
+migrateBlobToShards();
 
 function loadCached<T>(key: string, fallback: T): T {
   try {
@@ -28,7 +32,7 @@ export interface TransactionState {
 }
 
 export const useTransactionStore = create<TransactionState>((set) => ({
-  transactions: loadCached<any[]>('cache_transactions', []),
+  transactions: txShards.loadAll(),
   isLoading: false,
   filterCategory: null,
   setTransactions: (transactions) => {
@@ -65,27 +69,35 @@ export const useTransactionStore = create<TransactionState>((set) => ({
       seen.add(sig);
       deduplicated.push(t);
     }
-    mmkvStorage.setObject('cache_transactions', deduplicated);
+    txShards.saveAll(deduplicated);
     set({ transactions: deduplicated });
   },
   addTransactionState: (tx) =>
     set((state) => {
       const updated = [tx, ...state.transactions];
-      mmkvStorage.setObject('cache_transactions', updated);
+      txShards.upsert(tx);
       return { transactions: updated };
     }),
   updateTransactionState: (id, updatedFields) =>
     set((state) => {
-      const updated = state.transactions.map((tx) =>
-        tx.id === id ? { ...tx, ...updatedFields } : tx
-      );
-      mmkvStorage.setObject('cache_transactions', updated);
+      let targetTx: any = null;
+      const updated = state.transactions.map((tx) => {
+        if (tx.id === id) {
+          targetTx = { ...tx, ...updatedFields };
+          return targetTx;
+        }
+        return tx;
+      });
+      if (targetTx) {
+        txShards.upsert(targetTx);
+      }
       return { transactions: updated };
     }),
   removeTransactionState: (id) =>
     set((state) => {
+      const target = state.transactions.find((tx) => tx.id === id);
       const updated = state.transactions.filter((tx) => tx.id !== id);
-      mmkvStorage.setObject('cache_transactions', updated);
+      txShards.remove(id, target?.timestamp);
       return { transactions: updated };
     }),
   setLoading: (isLoading) => set({ isLoading }),
@@ -116,7 +128,7 @@ export interface IncomeState {
 }
 
 export const useIncomeStore = create<IncomeState>((set) => ({
-  incomeRecords: (loadCached<IncomeRecordType[]>('cache_income_records', []) || []).filter(
+  incomeRecords: (incShards.loadAll() || []).filter(
     (r) => !(r.amount === 95000 && /^income_\d+_/.test(r.id)),
   ),
   isLoading: false,
@@ -136,7 +148,7 @@ export const useIncomeStore = create<IncomeState>((set) => ({
         type: 'credit',
       });
     }
-    mmkvStorage.setObject('cache_income_records', deduplicated);
+    incShards.saveAll(deduplicated);
     set({ incomeRecords: deduplicated });
   },
   addIncomeRecordState: (rec) =>
@@ -149,21 +161,29 @@ export const useIncomeStore = create<IncomeState>((set) => ({
         type: 'credit',
       };
       const updated = [normalized, ...state.incomeRecords.filter((r) => r.id !== rec.id)];
-      mmkvStorage.setObject('cache_income_records', updated);
+      incShards.upsert(normalized);
       return { incomeRecords: updated };
     }),
   updateIncomeRecordState: (id, updatedFields) =>
     set((state) => {
-      const updated = state.incomeRecords.map((r) =>
-        r.id === id ? { ...r, ...updatedFields } : r
-      );
-      mmkvStorage.setObject('cache_income_records', updated);
+      let target: any = null;
+      const updated = state.incomeRecords.map((r) => {
+        if (r.id === id) {
+          target = { ...r, ...updatedFields };
+          return target;
+        }
+        return r;
+      });
+      if (target) {
+        incShards.upsert(target);
+      }
       return { incomeRecords: updated };
     }),
   removeIncomeRecordState: (id) =>
     set((state) => {
+      const target = state.incomeRecords.find((r) => r.id === id);
       const updated = state.incomeRecords.filter((r) => r.id !== id);
-      mmkvStorage.setObject('cache_income_records', updated);
+      incShards.remove(id, target?.timestamp);
       return { incomeRecords: updated };
     }),
   setLoading: (isLoading) => set({ isLoading }),

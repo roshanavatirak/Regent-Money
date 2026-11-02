@@ -109,9 +109,12 @@ class SmsModule(private val reactContext: ReactApplicationContext) : ReactContex
 
                 var count = 0
                 while (it.moveToNext() && count < maxCount) {
-                    val id = if (idIdx != -1) it.getString(idIdx) ?: "" else ""
                     val address = if (addressIdx != -1) it.getString(addressIdx) ?: "" else ""
+                    // Same on-device filter as SmsReceiver: personal, OTP and non-bank messages never reach JS
+                    if (!SmsReceiver.isAllowedBankSender(reactContext, address)) continue
                     val body = if (bodyIdx != -1) it.getString(bodyIdx) ?: "" else ""
+                    if (SmsParser.isOtpMessage(body)) continue
+                    val id = if (idIdx != -1) it.getString(idIdx) ?: "" else ""
                     val date = if (dateIdx != -1) it.getLong(dateIdx) else 0L
                     val dateSent = if (dateSentIdx != -1) it.getLong(dateSentIdx) else 0L
 
@@ -131,7 +134,7 @@ class SmsModule(private val reactContext: ReactApplicationContext) : ReactContex
                 }
             }
 
-            Log.d(TAG, "Queried ${smsList.length()} SMS messages from inbox.")
+            Log.d(TAG, "Queried ${smsList.length()} bank SMS messages from inbox.")
             successCallback.invoke(smsList.length(), smsList.toString())
         } catch (e: Exception) {
             Log.e(TAG, "Error querying SMS inbox", e)

@@ -7,6 +7,7 @@ import {
   IsNumber,
   IsBoolean,
   IsIn,
+  Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -46,6 +47,16 @@ export class OcrSyncTransactionDto {
   @IsOptional()
   @IsString()
   smsId?: string;
+
+  /** Balance stated in the SMS. Sent by the inbox scan; the batch-level updatedBalance is what's applied. */
+  @IsOptional()
+  @IsNumber()
+  availableBalance?: number;
+
+  /** Hash of the SMS text alone, stable across parser changes; used to recognise a re-scanned SMS. */
+  @IsOptional()
+  @Matches(/^sms_\d{1,12}$/)
+  contentId?: string;
 }
 
 export class OcrSyncDto {

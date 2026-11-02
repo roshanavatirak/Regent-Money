@@ -91,10 +91,10 @@ export const TERMS: LegalDocument = {
 
 export const PRIVACY: LegalDocument = {
   title: 'Privacy policy',
-  version: '2.1',
-  effective: 'October 2026',
+  version: '2.2',
+  effective: 'November 2026',
   summary: [
-    'We read only bank messages from senders you add.',
+    'We read only bank messages, on your phone. The message text never leaves it.',
     'Your accounts and transactions sync to your Regent account.',
     'We never sell your data or show ads.',
   ],
@@ -103,7 +103,11 @@ export const PRIVACY: LegalDocument = {
       heading: 'What we collect',
       points: [
         { title: 'Account details', text: 'Your name, email and, if you add it, your phone number.' },
-        { title: 'Bank messages', text: 'From bank senders you add: the amount, merchant, date and last digits of the account. We do not read personal messages or OTPs.' },
+        {
+          title: 'Bank messages',
+          text: 'With your permission, Regent reads SMS from known bank senders and any you add, including in the background as they arrive. Each message is read on your phone; only the amount, type, merchant, date, last digits of the account, available balance and bank reference number are sent to your account. The message text never leaves your phone. Personal messages and OTPs are skipped.',
+        },
+        { title: 'SIM number', text: 'We check that this phone’s SIM number matches your account before turning on SMS tracking. The number is checked on your phone and is not sent to us.' },
         { title: 'Files you import', text: 'Statements and screenshots you choose to upload, to find the transactions in them.' },
         { title: 'Profile details', text: 'Things you add yourself, like date of birth, occupation and income.' },
       ],
@@ -131,7 +135,7 @@ export const PRIVACY: LegalDocument = {
       points: [
         { title: 'SMS access', text: 'Turn it off any time in your phone’s settings.' },
         { title: 'Regent chat', text: 'Clear your conversation from Privacy in the app.' },
-        { title: 'Delete your account', text: `Email ${LEGAL_CONTACT} and we will delete your account and its data.` },
+        { title: 'Delete your account', text: `Go to Settings, then Delete account, or email ${LEGAL_CONTACT}. Your account and its data are permanently deleted after 7 days; signing back in before then cancels it.` },
       ],
     },
     {

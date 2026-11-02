@@ -31,8 +31,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import * as Font from 'expo-font';
 import { format } from 'date-fns';
-import { useTheme, showGlobalConfirm, useBankStore, useTransactionStore, useIncomeStore, usePeerStore } from '../store';
+import { useTheme, showGlobalConfirm, useBankStore, useTransactionStore, useIncomeStore, usePeerStore, useAuthStore } from '../store';
 import { authService } from '../services/authService';
+import { syncService } from '../services/syncService';
+import { outbox, isOutboxEnabled } from '../db/outbox';
 import { getBackendUrl } from '../config/api';
 import { TagPaymentModal } from '../components/TagPaymentModal';
 import { DateTimePickerSheet } from '../components/DateTimePickerSheet';
@@ -283,6 +285,84 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
     setSaving(true);
     setErrorText('');
     try {
+      if (isOutboxEnabled()) {
+        const user = useAuthStore.getState().user;
+        if (!user) throw new Error('Sign in again to edit transactions.');
+
+        const idemKey = `op_edit_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+        const label = note.trim() || category;
+
+        outbox.enqueue({
+          idemKey,
+          userId: user.id,
+          entity: isCredit ? 'income' : 'transaction',
+          op: 'upsert',
+          entityId: transaction.id,
+          payload: {
+            amount: parsedAmount,
+            category,
+            [isCredit ? 'source' : 'merchant']: label,
+            timestamp,
+            updatedAt: Date.now(),
+          },
+        });
+
+        // Update local state immediately
+        const isPeer = category.startsWith('peer_');
+        if (isCredit) {
+          if (isPeer) {
+            useIncomeStore.getState().removeIncomeRecordState(transaction.id);
+          } else {
+            useIncomeStore.getState().updateIncomeRecordState(transaction.id, {
+              amount: parsedAmount,
+              category,
+              merchant: label,
+              source: label,
+              timestamp,
+            });
+          }
+        } else {
+          useTransactionStore.getState().updateTransactionState(transaction.id, {
+            amount: parsedAmount,
+            category,
+            merchant: label,
+            timestamp,
+          });
+        }
+
+        const dateStr = format(new Date(timestamp), 'yyyy-MM-dd');
+        usePeerStore.getState().syncWithTransactionTag(
+          transaction.id,
+          category,
+          parsedAmount,
+          dateStr,
+          label,
+        );
+
+        if (label && rememberRule) {
+          tagLearningService.saveLearnedTag(label, category).catch(() => {});
+        } else if (label && initialHasActiveRule && !rememberRule) {
+          tagLearningService.removeLearnedTag(label).catch(() => {});
+        }
+
+        syncService.flushOutbox().catch(() => {});
+
+        const payload = {
+          id: transaction.id,
+          type: transaction.type,
+          newAmount: parsedAmount,
+          category,
+          merchant: label,
+          timestamp,
+        };
+        if (typeof props.onSuccess === 'function') props.onSuccess('updated', payload);
+        else if (typeof route?.params?.onSuccess === 'function') route.params.onSuccess('updated', payload);
+
+        setSaved(true);
+        setTimeout(handleGoBack, 800);
+        return;
+      }
+
       const token = authService.getAccessToken();
       if (!token) throw new Error('Sign in again to edit transactions.');
 
@@ -381,6 +461,32 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
       isDestructive: true,
       icon: 'trash-2',
       onConfirm: async () => {
+        if (isOutboxEnabled()) {
+          const user = useAuthStore.getState().user;
+          if (user) {
+            const idemKey = `op_del_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+            outbox.enqueue({
+              idemKey,
+              userId: user.id,
+              entity: isCredit ? 'income' : 'transaction',
+              op: 'delete',
+              entityId: transaction.id,
+              payload: { updatedAt: Date.now() },
+            });
+            syncService.flushOutbox().catch(() => {});
+          }
+
+          if (isCredit) useIncomeStore.getState().removeIncomeRecordState(transaction.id);
+          else useTransactionStore.getState().removeTransactionState(transaction.id);
+
+          const payload = { id: transaction.id, type: transaction.type, amount: originalAmount };
+          if (typeof props.onSuccess === 'function') props.onSuccess('deleted', payload);
+          else if (typeof route?.params?.onSuccess === 'function') route.params.onSuccess('deleted', payload);
+
+          handleGoBack();
+          return;
+        }
+
         const token = authService.getAccessToken();
         if (!token) throw new Error('Sign in again to delete transactions.');
         const response = await fetch(

@@ -4,7 +4,7 @@
 // transaction), says what is and isn't read, then asks for permission.
 
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, Platform, StatusBar } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Platform, StatusBar, ScrollView } from 'react-native';
 import Animated, {
   FadeIn,
   FadeInDown,
@@ -19,7 +19,7 @@ import Animated, {
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Font from 'expo-font';
-import { useTheme, useAuthStore } from '../store';
+import { useTheme, useAuthStore, usePrivacyModalStore } from '../store';
 import { mmkvStorage } from '../db/mmkv';
 import { smsPermissionService } from '../services/smsPermissionService';
 import { smsCatchupService } from '../services/smsCatchupService';
@@ -137,7 +137,7 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
 
       {phase === 'intro' && (
         <>
-          <View style={s.body}>
+          <ScrollView style={s.scroll} contentContainerStyle={s.body} showsVerticalScrollIndicator={false}>
             {/* What it does: a bank SMS becomes a transaction */}
             <Animated.View entering={FadeInDown.duration(450)} style={[s.demo, { backgroundColor: surface, borderColor: line }]}>
               <View style={s.senderRow}>
@@ -184,10 +184,36 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
                 <View style={[s.pointIcon, { backgroundColor: soft }]}>
                   <Feather name="rotate-ccw" size={16} color={accent} />
                 </View>
-                <Text style={[s.pointText, { color: ink }]}>Adds your last 30 days, then keeps up on its own.</Text>
+                <Text style={[s.pointText, { color: ink }]}>
+                  Adds bank alerts from the last 30 days, then keeps reading new ones in the background as they arrive.
+                </Text>
+              </View>
+              <View style={s.point}>
+                <View style={[s.pointIcon, { backgroundColor: soft }]}>
+                  <Feather name="upload-cloud" size={16} color={accent} />
+                </View>
+                <Text style={[s.pointText, { color: ink }]}>
+                  Alerts are read on your phone. Only the amount, merchant, date, account digits and balance are sent securely to your Regent account. The message text never leaves your phone.
+                </Text>
+              </View>
+              <View style={s.point}>
+                <View style={[s.pointIcon, { backgroundColor: soft }]}>
+                  <Feather name="smartphone" size={16} color={accent} />
+                </View>
+                <Text style={[s.pointText, { color: ink }]}>
+                  Checks this phone’s SIM number matches your account. The number never leaves your phone.
+                </Text>
               </View>
             </Animated.View>
-          </View>
+
+            <Pressable
+              onPress={() => usePrivacyModalStore.getState().openPrivacyModal()}
+              style={s.privacyLink}
+              accessibilityRole="link"
+            >
+              <Text style={[s.privacyLinkText, { color: accent }]}>Read our Privacy policy</Text>
+            </Pressable>
+          </ScrollView>
 
           <Animated.View entering={FadeInDown.delay(380).duration(450)}>
             <PrimaryButton label="Allow SMS access" onPress={allow} />
@@ -282,7 +308,8 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
 
 const s = StyleSheet.create({
   container: { flex: 1, paddingHorizontal: 24 },
-  body: { flex: 1, justifyContent: 'center' },
+  scroll: { flex: 1 },
+  body: { flexGrow: 1, justifyContent: 'center', paddingBottom: 12 },
 
   demo: { borderWidth: 1, borderRadius: 28, padding: 18 },
   senderRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
@@ -301,6 +328,8 @@ const s = StyleSheet.create({
   point: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   pointIcon: { width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
   pointText: { flex: 1, fontSize: 14, lineHeight: 20 },
+  privacyLink: { marginTop: 16, alignSelf: 'flex-start', paddingVertical: 6 },
+  privacyLinkText: { fontSize: 14, fontWeight: '600', textDecorationLine: 'underline' },
 
   primary: { height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center' },
   primaryText: { fontSize: 16, fontWeight: '700' },

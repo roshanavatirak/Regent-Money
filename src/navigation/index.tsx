@@ -83,6 +83,8 @@ import { PersonDetailScreen } from '../screens/PersonDetailScreen';
 import { ReviewTransactionsModal } from './ReviewTransactionsModal';
 import { AdminDashboardScreen } from '../features/admin/AdminDashboardScreen';
 import { AdminTabNavigator } from '../features/admin/AdminTabNavigator';
+import { useMonthStart } from '../hooks/useMonthStart';
+import { monthSummary } from '../utils/monthSummary';
 
 import {
   useTransactionStore,
@@ -1928,10 +1930,18 @@ const DashboardScreen = () => {
     }
   }, [sync]);
 
-  const monthStart = useMemo(() => {
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-  }, []);
+  const monthStart = useMonthStart();
+  const activeBankIds = useMemo(() => new Set(bankProfiles.map((b) => b.id)), [bankProfiles]);
+
+  const summary = useMemo(
+    () => monthSummary(transactions, incomeRecords, monthStart, activeBankIds, isDark, getSpendingCategoryColor),
+    [transactions, incomeRecords, monthStart, activeBankIds, isDark],
+  );
+
+  const currentMonthExpenses = summary.out;
+  const incomeCurrentMonth = summary.in;
+  const categories = summary.categories;
+  const previousSpentSamePeriod = summary.previousSpentSamePeriod;
 
   const liveNetWorth = useMemo(() => {
     if (bankProfiles.length > 0) {
@@ -1953,107 +1963,6 @@ const DashboardScreen = () => {
     () => [...snapshots.map((s: any) => Number(s.netWorth) || 0), liveNetWorth],
     [snapshots, liveNetWorth]
   );
-
-  const currentMonthExpenses = useMemo(() => {
-    return transactions
-      .filter((tx) => tx.timestamp >= monthStart && tx.type !== 'credit' && !isExcludedFromBudget(tx))
-      .reduce((sum, tx) => sum + Math.abs(parseFloat(tx.amount) || 0), 0);
-  }, [transactions, monthStart]);
-
-  const incomeCurrentMonth = useMemo(() => {
-    const activeBankIds = new Set(bankProfiles.map((b) => b.id));
-    if (incomeRecords && incomeRecords.length > 0) {
-      return incomeRecords
-        .filter((inc) => {
-          if ((inc as any).isDeleted) return false;
-          if (inc.amount === 95000 && /^income_\d+_/.test(inc.id)) return false;
-          if (activeBankIds.size > 0 && inc.bankProfileId && !activeBankIds.has(inc.bankProfileId)) {
-            return false;
-          }
-          return Number(inc.timestamp) >= monthStart;
-        })
-        .reduce((sum, inc) => sum + (parseFloat(String(inc.amount)) || 0), 0);
-    }
-    const fallback = incomeFromAnalytics === 95000 ? 0 : (incomeFromAnalytics || 0);
-    return fallback;
-  }, [incomeRecords, monthStart, incomeFromAnalytics, bankProfiles]);
-
-  // Top 4 categories this month, the rest grouped as "Others"
-  const categories: DashboardCategory[] = useMemo(() => {
-    const map: Record<string, number> = {};
-    const now = new Date();
-    const currentDay = now.getDate();
-    // During the first 3 days of a new month, pacing comparisons are statistically noisy
-    // and trigger false alerts (e.g. comparing a few hours on the 1st vs 1st of last month).
-    const isEarlyMonth = currentDay <= 3;
-
-    const prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0).getTime();
-    const prevEnd = new Date(now.getFullYear(), now.getMonth() - 1, currentDay, 23, 59, 59, 999).getTime();
-    const prevMap: Record<string, number> = {};
-
-    transactions.forEach((tx) => {
-      if (tx.type === 'credit' || isExcludedFromBudget(tx)) return;
-      const ts = Number(tx.timestamp);
-      const key = (tx.category || 'other').toLowerCase().trim();
-      const amt = Math.abs(parseFloat(tx.amount) || 0);
-      if (ts >= monthStart) {
-        map[key] = (map[key] || 0) + amt;
-      } else if (!isEarlyMonth && ts >= prevStart && ts <= prevEnd) {
-        prevMap[key] = (prevMap[key] || 0) + amt;
-      }
-    });
-
-    const entries = Object.entries(map)
-      .filter(([, v]) => v > 0)
-      .sort((a, b) => b[1] - a[1]);
-
-    const toLabel = (key: string) =>
-      key === 'miscellaneous'
-        ? 'Misc'
-        : key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-
-    const top: DashboardCategory[] = entries.slice(0, 4).map(([key, value], index) => ({
-      key,
-      label: toLabel(key),
-      value,
-      previousValue: isEarlyMonth ? undefined : (prevMap[key] || 0),
-      color: getSpendingCategoryColor(key, isDark, index),
-    }));
-
-    const rest = entries.slice(4);
-    if (rest.length > 0) {
-      const topKeys = new Set(top.map((c) => c.key));
-      top.push({
-        key: 'others',
-        label: 'Others',
-        value: rest.reduce((s, [, v]) => s + v, 0),
-        previousValue: isEarlyMonth
-          ? undefined
-          : Object.entries(prevMap)
-              .filter(([k]) => !topKeys.has(k))
-              .reduce((s, [, v]) => s + v, 0),
-        color: getSpendingCategoryColor('other', isDark, 4),
-      });
-    }
-    return top;
-  }, [transactions, monthStart, isDark]);
-
-  // Spend in the same elapsed window last month, for the "vs last month" badge.
-  const previousSpentSamePeriod = useMemo(() => {
-    const now = new Date();
-    const currentDay = now.getDate();
-    // Suppress comparison during the first 3 days of the month to prevent false spike alerts
-    if (currentDay <= 3) return undefined;
-
-    const prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0).getTime();
-    const prevEnd = new Date(now.getFullYear(), now.getMonth() - 1, currentDay, 23, 59, 59, 999).getTime();
-    return transactions
-      .filter((tx) => {
-        const ts = Number(tx.timestamp);
-        return ts >= prevStart && ts <= prevEnd && tx.type !== 'credit' && !isExcludedFromBudget(tx);
-      })
-      .reduce((sum, tx) => sum + Math.abs(parseFloat(tx.amount) || 0), 0);
-  }, [transactions, monthStart]);
 
   const handleAddExpense = () => {
     if (bankProfiles.length > 0) {

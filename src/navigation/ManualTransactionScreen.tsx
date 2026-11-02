@@ -27,8 +27,10 @@ import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import * as Font from 'expo-font';
-import { useTheme, useBankStore, useTransactionStore, useIncomeStore, usePeerStore } from '../store';
+import { useTheme, useBankStore, useTransactionStore, useIncomeStore, usePeerStore, useAuthStore } from '../store';
 import { authService } from '../services/authService';
+import { syncService } from '../services/syncService';
+import { outbox, isOutboxEnabled } from '../db/outbox';
 import { getBackendUrl } from '../config/api';
 import { CategoryIcon } from '../components/CategoryIcon';
 import { TagPaymentModal } from '../components/TagPaymentModal';
@@ -232,6 +234,78 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
           : when === 'yesterday'
             ? Date.now() - 24 * 60 * 60 * 1000
             : Date.now();
+
+      if (isOutboxEnabled()) {
+        const user = useAuthStore.getState().user;
+        if (!user) throw new Error('Sign in again to add transactions.');
+
+        const idemKey = `op_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+        const entityId = `${type === 'credit' ? 'inc_manual_' : 'tx_manual_'}${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+        const label = note.trim() || getCategory(category).label;
+
+        // 1. Enqueue to persistent outbox first (guarantees offline survival)
+        outbox.enqueue({
+          idemKey,
+          userId: user.id,
+          entity: type === 'credit' ? 'income' : 'transaction',
+          op: 'upsert',
+          entityId,
+          payload: {
+            amount: parsedAmount,
+            category,
+            [type === 'credit' ? 'source' : 'merchant']: label,
+            timestamp,
+            bankProfileId: bank.id,
+            status: 'cleared',
+            updatedAt: Date.now(),
+          },
+        });
+
+        // 2. Immediately update local state optimistically
+        useBankStore.getState().updateBankBalance(bank.id, newBal);
+
+        const record: any = {
+          id: entityId,
+          amount: parsedAmount,
+          category,
+          merchant: label,
+          source: label,
+          timestamp,
+          bankProfileId: bank.id,
+          type,
+          status: 'cleared',
+          updatedAt: Date.now(),
+        };
+
+        const isPeer = category.startsWith('peer_');
+        if (type === 'credit') {
+          if (!isPeer) {
+            useIncomeStore.getState().addIncomeRecordState(record);
+          }
+        } else {
+          useTransactionStore.getState().addTransactionState(record);
+        }
+
+        const dateStr = format(new Date(timestamp), 'yyyy-MM-dd');
+        usePeerStore.getState().syncWithTransactionTag(
+          entityId,
+          category,
+          parsedAmount,
+          dateStr,
+          note.trim() || undefined,
+        );
+
+        // 3. Background flush attempt (fire-and-forget; retries automatically if offline)
+        syncService.flushOutbox().catch(() => {});
+
+        const payload = { type, amount: parsedAmount, updatedBalance: newBal, record };
+        if (props.onSuccess) props.onSuccess(payload);
+        else if (typeof route?.params?.onSuccess === 'function') route.params.onSuccess(payload);
+
+        setSuccess({ amount: parsedAmount, type });
+        setTimeout(handleGoBack, 1100);
+        return;
+      }
       const response = await fetch(`${BACKEND_URL}/sync/manual-transaction`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },

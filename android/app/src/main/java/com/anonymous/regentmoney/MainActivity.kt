@@ -4,6 +4,7 @@ import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import com.anonymous.regentmoney.intro.IntroView
 import java.lang.ref.WeakReference
 
@@ -32,6 +33,12 @@ class MainActivity : ReactActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     currentActivity = WeakReference(this)
+    // Prevent screen captures, recordings, and app-switcher preview leaks of sensitive financial balances
+    window.setFlags(
+      WindowManager.LayoutParams.FLAG_SECURE,
+      WindowManager.LayoutParams.FLAG_SECURE
+    )
+
     // Set the theme to AppTheme BEFORE onCreate to support
     // coloring the background, status bar, and navigation bar.
     setTheme(R.style.AppTheme)

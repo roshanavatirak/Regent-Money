@@ -12,10 +12,12 @@ import { getBackendUrl } from '../config/api';
 import { notificationService } from './notificationService';
 import { tokenStore } from './tokenStore';
 import { apiFetch } from './apiClient';
+import { outbox, isOutboxEnabled } from '../db/outbox';
 
 const BACKEND_URL = getBackendUrl();
 
 let isSyncing = false;
+let isFlushingOutbox = false;
 
 export const syncService = {
   /**
@@ -95,6 +97,69 @@ export const syncService = {
   },
 
   /**
+   * Flushes pending offline outbox operations to the backend before pulling new state.
+   * Serialized with single-flight mutex to prevent concurrent flush interleaving.
+   */
+  async flushOutbox(): Promise<void> {
+    if (!isOutboxEnabled() || isFlushingOutbox) return;
+
+    const user = useAuthStore.getState().user;
+    const token = tokenStore.getAccessToken();
+    if (!user || !token || user.role === 'admin' || user.role === 'superadmin') return;
+
+    const pending = outbox.listPending(user.id, 100);
+    if (pending.length === 0) return;
+
+    isFlushingOutbox = true;
+    try {
+      const response = await apiFetch('/sync/outbox', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ops: pending.map((p) => p.op) }),
+      });
+
+      if (!response.ok) {
+        // HTTP-level network/server error: back off all ops in this batch
+        for (const item of pending) {
+          outbox.markFailed(item.key, item.op);
+        }
+        return;
+      }
+
+      const data = await response.json();
+      const results: {
+        idemKey: string;
+        status: 'applied' | 'duplicate' | 'rejected' | 'retry';
+        reason?: string;
+      }[] = data?.results || [];
+
+      const resultMap = new Map(results.map((r) => [r.idemKey, r]));
+
+      for (const item of pending) {
+        const r = resultMap.get(item.op.idemKey);
+        if (!r) {
+          outbox.markFailed(item.key, item.op);
+          continue;
+        }
+
+        if (r.status === 'applied' || r.status === 'duplicate') {
+          outbox.removeOp(item.key);
+        } else if (r.status === 'rejected') {
+          outbox.moveToDead(item.key, item.op, r.reason || 'rejected');
+        } else if (r.status === 'retry') {
+          outbox.markFailed(item.key, item.op);
+        }
+      }
+    } catch {
+      for (const item of pending) {
+        outbox.markFailed(item.key, item.op);
+      }
+    } finally {
+      isFlushingOutbox = false;
+    }
+  },
+
+  /**
    * Fetches all financial data directly from NestJS and updates the in-memory Zustand stores.
    * Uses Stale-While-Revalidate: only sets loading state if store has no cached data.
    */
@@ -110,6 +175,9 @@ export const syncService = {
     if (!token) {
       return;
     }
+
+    // 1. Drain offline outbox changes before pulling latest state
+    await this.flushOutbox().catch(() => {});
 
     isSyncing = true;
     const existingTxs = useTransactionStore.getState().transactions;
@@ -187,7 +255,17 @@ export const syncService = {
           status: t.status,
         });
       }
-      useTransactionStore.getState().setTransactions(mappedTxs);
+
+      // Preserve local pending offline transactions not yet reflected on the server
+      const pendingIds = outbox.pendingEntityIds(user.id);
+      const serverTxIds = new Set(mappedTxs.map((t) => t.id).filter(Boolean));
+      const localPendingTxs = existingTxs.filter(
+        (t) => t && t.id && pendingIds.has(t.id) && !serverTxIds.has(t.id),
+      );
+      const finalTxs = [...localPendingTxs, ...mappedTxs].sort(
+        (a, b) => Number(b.timestamp) - Number(a.timestamp),
+      );
+      useTransactionStore.getState().setTransactions(finalTxs);
 
       // 2. Map Budgets
       const mappedBudgets = (data.budgets || []).map((b: any) => ({
@@ -251,7 +329,17 @@ export const syncService = {
         updatedAt: inc.updatedAt ? Number(inc.updatedAt) : undefined,
         type: 'credit' as const,
       }));
-      useIncomeStore.getState().setIncomeRecords(mappedIncome);
+
+      // Preserve local pending offline income records not yet reflected on the server
+      const existingIncome = useIncomeStore.getState().incomeRecords;
+      const serverIncIds = new Set(mappedIncome.map((i: any) => i.id).filter(Boolean));
+      const localPendingIncome = (existingIncome || []).filter(
+        (i: any) => i && i.id && pendingIds.has(i.id) && !serverIncIds.has(i.id),
+      );
+      const finalIncome = [...localPendingIncome, ...mappedIncome].sort(
+        (a: any, b: any) => Number(b.timestamp) - Number(a.timestamp),
+      );
+      useIncomeStore.getState().setIncomeRecords(finalIncome);
     } catch (err: any) {
       clearTimeout(syncTimeoutId);
       if (err?.name !== 'AbortError' && !err?.message?.includes?.('abort')) {

@@ -2,6 +2,8 @@ import {
   parseSMS,
   extractAccountSuffix,
   detectBankFromSender,
+  isBankSmsSender,
+  isOtpMessage,
 } from './sms-parser.util';
 
 describe('Financial SMS Parser & Bank Attribution Engine', () => {
@@ -23,6 +25,23 @@ describe('Financial SMS Parser & Bank Attribution Engine', () => {
       expect(detectBankFromSender('')).toBeNull();
       expect(detectBankFromSender('AM-MYGATE')).toBeNull();
       expect(detectBankFromSender('9876543210')).toBeNull();
+    });
+  });
+
+  describe('isBankSmsSender', () => {
+    it('accepts bank DLT headers and user-configured tags', () => {
+      expect(isBankSmsSender('AX-HDFCBK')).toBe(true);
+      expect(isBankSmsSender('VM-UCOBNK-S')).toBe(true);
+      expect(isBankSmsSender('JD-SBIINB')).toBe(true);
+      expect(isBankSmsSender('VM-MYBANK', ['MYBANK'])).toBe(true);
+    });
+
+    it('rejects personal numbers and unknown senders', () => {
+      expect(isBankSmsSender('+919876543210')).toBe(false);
+      expect(isBankSmsSender('98765 43210')).toBe(false);
+      expect(isBankSmsSender('AM-MYGATE')).toBe(false);
+      expect(isBankSmsSender('AM-MYGATE', [null, ''])).toBe(false);
+      expect(isBankSmsSender('')).toBe(false);
     });
   });
 
@@ -98,5 +117,21 @@ describe('Financial SMS Parser & Bank Attribution Engine', () => {
       expect(parsed?.bankName).toBe('SBI');
       expect(parsed?.accountSuffix).toBe('XXXX');
     });
+  });
+});
+
+describe('Parity with the app and Android parsers', () => {
+  // Shared with android SmsParserTest and src/services/smsParser.test.ts
+  const { cases } = JSON.parse(
+    require('fs').readFileSync(
+      require('path').join(__dirname, '../../../src/services/__fixtures__/sms-parity-cases.json'),
+      'utf8',
+    ),
+  );
+
+  it.each(cases.map((c: any, i: number) => [i, c]))('case %i', (_i, c: any) => {
+    expect(isOtpMessage(c.body)).toBe(c.otp);
+    const parsed = parseSMS(c.sender, c.body);
+    expect(parsed === null ? null : JSON.parse(JSON.stringify(parsed))).toEqual(c.expected);
   });
 });

@@ -10,22 +10,6 @@ import android.util.Log
 class SmsReceiver : BroadcastReceiver() {
 
     companion object {
-        private val TRANSACTION_INDICATOR_PATTERN = Regex(
-            "(?i)\\b(debited|credited|withdrawn|spent|paid|sent|deposited|refunded|done at|purchase of|txn of|transaction of|transfer to|transfer from|trf to|trf from|avl bal|available balance)\\b"
-        )
-
-        private val TRUE_OTP_PATTERN = Regex(
-            "(?i)\\b(?:is\\s+(?:your\\s+)?otp|your\\s+otp\\s+is|use\\s+otp|enter\\s+otp|otp\\s+to\\s+verify|otp\\s+for\\s+(?:txn|transaction|login)|secret\\s+(?:otp|code)|verification\\s+code\\s+is|is\\s+the\\s+verification\\s+code|one\\s*time\\s*password\\s*is)\\b"
-        )
-
-        private fun isOtpPrompt(body: String): Boolean {
-            // Never drop alerts that indicate actual financial balance or money movement
-            if (TRANSACTION_INDICATOR_PATTERN.containsMatchIn(body)) {
-                return false
-            }
-            return TRUE_OTP_PATTERN.containsMatchIn(body)
-        }
-
         private val DEFAULT_BANK_SENDERS = setOf(
             "HDFCBK", "HDFCBN", "HDFCLT", "HDFCAL", "HDFCCC", "HDFCSM",
             "SBIPSG", "SBIBNK", "SBIUPI", "SBIINB", "ATMSBI", "SBISMS", "CBSSBI",
@@ -45,7 +29,7 @@ class SmsReceiver : BroadcastReceiver() {
             "PAYTM", "PAYTMB", "AIRTEL", "AIRBNK"
         )
 
-        private fun isAllowedBankSender(context: Context, sender: String): Boolean {
+        internal fun isAllowedBankSender(context: Context, sender: String): Boolean {
             val prefs = context.getSharedPreferences("regent_native_prefs", Context.MODE_PRIVATE)
             val allowed = prefs.getStringSet("bank_sender_ids", null) ?: DEFAULT_BANK_SENDERS
             val upperSender = sender.trim().uppercase()
@@ -69,8 +53,8 @@ class SmsReceiver : BroadcastReceiver() {
                     val body = msgList.joinToString(separator = "") { it.displayMessageBody ?: "" }
                     val timestamp = msgList.firstOrNull()?.timestampMillis ?: System.currentTimeMillis()
 
-                    // Strict on-device filtering: drop OTP prompts and non-bank messages before anything leaves the device
-                    if (!isAllowedBankSender(context, sender) || isOtpPrompt(body)) {
+                    // Strict on-device filtering: drop non-bank senders before the text is even parsed
+                    if (!isAllowedBankSender(context, sender)) {
                         continue
                     }
 
@@ -89,7 +73,13 @@ class SmsReceiver : BroadcastReceiver() {
                     val userId = prefs.getString("user_id", null)
 
                     if (!token.isNullOrBlank() && !userId.isNullOrBlank()) {
-                        SmsDirectSyncWorker.enqueue(context, sender, body, timestamp)
+                        // Parsed on the phone: OTPs and non-transactions stop here, and only the
+                        // extracted fields are queued and sent. The message text never leaves the device.
+                        val parsed = SmsParser.parse(sender, body) ?: continue
+                        SmsDirectSyncWorker.enqueue(
+                            context, sender, parsed,
+                            SmsParser.smsId(body, parsed.referenceId), SmsParser.contentId(body), timestamp
+                        )
                     } else {
                         Log.d("SmsReceiver", "No active user session in native storage; skipping background sync. Catch-up will handle upon login.")
                     }

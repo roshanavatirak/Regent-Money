@@ -1,16 +1,16 @@
 {
   "notes": [
     {
-      "title": "Real-Time Income & Calibrated Analytics",
-      "detail": "Money in now dynamically calculates real monthly credits (or ₹0). Month-over-month spending comparisons are calibrated to prevent early-month false alarms."
+      "title": "Enterprise Encryption-at-Rest & Dual-Write Architecture",
+      "detail": "Financial records (amounts, merchants, and notes) are protected with AES-256-GCM authenticated payload encryption, HMAC-SHA-256 blind indexing, exact paise precision, and AWS KMS envelope protection in ap-south-1."
     },
     {
-      "title": "Category & Tagging Consistency",
-      "detail": "Synchronized credit categorization across bank transaction lists and detail views with refined auto-tagging."
+      "title": "Hardware-Backed Security & Biometric Hardening",
+      "detail": "Android KeyStore master keys backed by StrongBox and TEE with biometric authentication lock, automatic permanent invalidation recovery, and strict OS cloud backup exclusions."
     },
     {
-      "title": "Navigation & Push Notification Polish",
-      "detail": "Seamless native back navigation in bank modal sheets and Firebase Cloud Messaging integration."
+      "title": "Offline Outbox & Fast Monthly Sharding",
+      "detail": "Guaranteed offline transaction queue with monotonic synchronization, fast monthly local database partitioning, and background SMS catch-up."
     }
   ]
 }

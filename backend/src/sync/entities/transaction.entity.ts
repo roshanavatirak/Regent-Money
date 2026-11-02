@@ -49,4 +49,22 @@ export class Transaction {
 
   @Column({ name: 'is_deleted', type: 'boolean', default: false })
   isDeleted: boolean;
+
+  @Column({ name: 'enc_amount', type: 'bytea', nullable: true })
+  encAmount?: Buffer | null;
+
+  @Column({ name: 'enc_merchant', type: 'bytea', nullable: true })
+  encMerchant?: Buffer | null;
+
+  @Column({ name: 'enc_note', type: 'bytea', nullable: true })
+  encNote?: Buffer | null;
+
+  @Column({ name: 'merchant_idx', type: 'bytea', nullable: true })
+  merchantIdx?: Buffer | null;
+
+  @Column({ name: 'row_version', type: 'bigint', default: 1, transformer: {
+    to: (value: bigint | number) => value != null ? String(value) : '1',
+    from: (value: string | number) => value != null ? BigInt(value) : 1n
+  }})
+  rowVersion: bigint;
 }

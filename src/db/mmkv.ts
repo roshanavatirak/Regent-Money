@@ -74,13 +74,10 @@ if (Platform.OS === 'web') {
   }
 
   if (!storage) {
-    console.log('[SessionStorage] Session cache initialized with AsyncStorage write-through.');
+    console.warn('[SessionStorage] Native MMKV unavailable. Using secure volatile in-memory session cache (zero plaintext disk writes).');
     storage = {
       set: (key: string, value: any) => {
         fallbackMap.set(key, String(value));
-        AsyncStorage.setItem(key, String(value)).catch((err) => {
-          console.error('[mmkvStorage] Error writing to AsyncStorage:', err.message);
-        });
       },
       getString: (key: string) => fallbackMap.get(key),
       getNumber: (key: string) => {
@@ -93,52 +90,36 @@ if (Platform.OS === 'web') {
       },
       delete: (key: string) => {
         fallbackMap.delete(key);
-        AsyncStorage.removeItem(key).catch((err) => {
-          console.error('[mmkvStorage] Error deleting from AsyncStorage:', err.message);
-        });
       },
       remove: (key: string) => {
         fallbackMap.delete(key);
-        AsyncStorage.removeItem(key).catch((err) => {
-          console.error('[mmkvStorage] Error deleting from AsyncStorage:', err.message);
-        });
       },
       clearAll: () => {
         fallbackMap.clear();
-        AsyncStorage.clear().catch((err) => {
-          console.error('[mmkvStorage] Error clearing AsyncStorage:', err.message);
-        });
       },
+      getAllKeys: () => Array.from(fallbackMap.keys()),
     };
   }
 }
 
 export const mmkvStorage = {
   isNative: (): boolean => isNativeMMKV,
+  getAllKeys: (): string[] => {
+    if (!storage) return [];
+    if (typeof storage.getAllKeys === 'function') {
+      return storage.getAllKeys();
+    }
+    return Array.from(fallbackMap.keys());
+  },
   initialize: async (): Promise<void> => {
     if (Platform.OS === 'web') {
       return;
     }
+    // Scrub any legacy unencrypted AsyncStorage leftovers from previous app versions
     try {
-      const keys = await AsyncStorage.getAllKeys();
-      if (keys.length > 0) {
-        const pairs = await AsyncStorage.multiGet(keys);
-        for (const [key, value] of pairs) {
-          if (value !== null) {
-            fallbackMap.set(key, value);
-            // Migrate any existing AsyncStorage data into native MMKV so previous logins/flags are preserved
-            if (isNativeMMKV && storage) {
-              const currentVal = storage.getString(key);
-              if (currentVal === undefined) {
-                storage.set(key, value);
-              }
-            }
-          }
-        }
-        console.log(`[mmkvStorage] Synced ${keys.length} keys from AsyncStorage storage.`);
-      }
-    } catch (err: any) {
-      console.error('[mmkvStorage] Failed to initialize storage:', err.message);
+      await AsyncStorage.clear();
+    } catch {
+      // ignore
     }
   },
   setString: (key: string, value: string) => {

@@ -4,6 +4,8 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { OcrSyncDto } from './dto/ocr-sync.dto';
 import { ManualTransactionDto } from './dto/manual-transaction.dto';
 import { ConfirmDuplicateDto } from './dto/confirm-duplicate.dto';
+import { OutboxBatchDto } from './dto/outbox-batch.dto';
+import { DirectSmsDto } from './dto/direct-sms.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 
 @Controller('sync')
@@ -132,7 +134,7 @@ export class SyncController {
   @HttpCode(HttpStatus.OK)
   async ingestDirectSms(
     @Req() req: any,
-    @Body() body: { sender: string; body: string; timestamp?: number },
+    @Body() body: DirectSmsDto,
   ) {
     const userId = req.user.id;
     return this.syncService.ingestDirectSms(userId, body);
@@ -146,6 +148,12 @@ export class SyncController {
   ) {
     const userId = req.user.id;
     return this.syncService.confirmDuplicateTransaction(userId, body);
+  }
+
+  @Post('outbox')
+  @HttpCode(HttpStatus.OK)
+  async outbox(@Req() req: any, @Body() body: OutboxBatchDto) {
+    return this.syncService.applyOutbox(req.user.id, body?.ops || []);
   }
 
   @Post('manual-transaction')
