@@ -37,7 +37,7 @@ import {
   Figtree_600SemiBold,
   Figtree_700Bold,
 } from '@expo-google-fonts/figtree';
-import { useTheme } from '../store';
+import { useTheme, useSyncStatusStore } from '../store';
 import { isExcludedFromBudget } from '../services/budgetService';
 import { CategoryIcon } from '../components/CategoryIcon';
 import { ActivityFilterChips, ActivityRow } from '../components/ActivityFeed';
@@ -332,6 +332,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
   } = props;
 
   const { colors, isDark } = useTheme();
+  const syncStatus = useSyncStatusStore((s) => s.status);
   const { width: screenWidth } = useWindowDimensions();
 
   const [fontsLoaded] = useFonts({
@@ -941,7 +942,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
 
         {recent.length === 0 ? (
           <Text style={[styles.emptyText, { marginBottom: 14 }]}>
-            {activity.length === 0 ? 'No transactions yet.' : 'No transactions match this filter.'}
+            {syncStatus === 'error' && activity.length === 0 ? 'Unable to connect to server. Pull down to retry.' : activity.length === 0 ? 'No transactions yet.' : 'No transactions match this filter.'}
           </Text>
         ) : (
           recent.map((tx, i) => (

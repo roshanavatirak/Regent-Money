@@ -13,6 +13,7 @@ import javax.crypto.spec.GCMParameterSpec
 
 object KeystoreHelper {
     private const val ANDROID_KEYSTORE = "AndroidKeyStore"
+    private const val LEGACY_KEY_ALIAS = "regent_hardware_master_key"
     private const val KEK_ALIAS_PREFIX = "regent_hardware_master_key_v"
     private const val KEK_VERSION = 1
     const val CURRENT_KEY_ALIAS = "$KEK_ALIAS_PREFIX$KEK_VERSION"
@@ -46,22 +47,28 @@ object KeystoreHelper {
             if (useStrongBox) {
                 builder.setIsStrongBoxBacked(true)
             }
+            // Device unlock requirement: keys are only accessible when the device itself is unlocked
             builder.setUnlockedDeviceRequired(true)
         }
 
-        // Bind device KEK to user authentication (Biometric Strong or Device PIN/Pattern)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            builder.setUserAuthenticationParameters(
-                300,
-                KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL
-            )
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            builder.setUserAuthenticationRequired(true)
-            builder.setUserAuthenticationValidityDurationSeconds(300)
-        }
+        // Storage master key MUST NOT require interactive biometric authentication at cold boot.
+        // Screen-level biometric lock is handled safely by BiometricLockOverlay.
 
         keyGenerator.init(builder.build())
         return keyGenerator.generateKey()
+    }
+
+    private fun getExistingSecretKey(alias: String): SecretKey? {
+        return try {
+            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+            if (keyStore.containsAlias(alias)) {
+                (keyStore.getEntry(alias, null) as? KeyStore.SecretKeyEntry)?.secretKey
+            } else {
+                null
+            }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun getOrCreateSecretKey(): SecretKey {
@@ -115,27 +122,60 @@ object KeystoreHelper {
         if (!encryptedText.startsWith(PREFIX_V1)) {
             return null
         }
-        return try {
-            val rawBase64 = encryptedText.removePrefix(PREFIX_V1)
-            val combined = Base64.decode(rawBase64, Base64.NO_WRAP)
-            if (combined.size <= GCM_IV_LENGTH) return null
-            val iv = ByteArray(GCM_IV_LENGTH)
-            val cipherBytes = ByteArray(combined.size - GCM_IV_LENGTH)
-            System.arraycopy(combined, 0, iv, 0, GCM_IV_LENGTH)
-            System.arraycopy(combined, GCM_IV_LENGTH, cipherBytes, 0, cipherBytes.size)
+        val rawBase64 = encryptedText.removePrefix(PREFIX_V1)
+        val combined = try {
+            Base64.decode(rawBase64, Base64.NO_WRAP)
+        } catch (_: Exception) {
+            return null
+        }
+        if (combined.size <= GCM_IV_LENGTH) return null
+        val iv = ByteArray(GCM_IV_LENGTH)
+        val cipherBytes = ByteArray(combined.size - GCM_IV_LENGTH)
+        System.arraycopy(combined, 0, iv, 0, GCM_IV_LENGTH)
+        System.arraycopy(combined, GCM_IV_LENGTH, cipherBytes, 0, cipherBytes.size)
+        val spec = GCMParameterSpec(GCM_TAG_LENGTH, iv)
 
+        // 1. Try decrypting with CURRENT_KEY_ALIAS
+        try {
             val key = getOrCreateSecretKey()
             val cipher = Cipher.getInstance(AES_GCM_NO_PADDING)
-            val spec = GCMParameterSpec(GCM_TAG_LENGTH, iv)
             cipher.init(Cipher.DECRYPT_MODE, key, spec)
             val plainBytes = cipher.doFinal(cipherBytes)
-            String(plainBytes, Charsets.UTF_8)
+            return String(plainBytes, Charsets.UTF_8)
         } catch (e: KeyPermanentlyInvalidatedException) {
             handleKeyInvalidated()
-            null
-        } catch (e: Exception) {
-            null
+            return null
+        } catch (_: Exception) {
+            // Attempt fallback to legacy key alias below
         }
+
+        // 2. Try decrypting with LEGACY_KEY_ALIAS (for users upgrading from 1.0.53)
+        try {
+            val legacyKey = getExistingSecretKey(LEGACY_KEY_ALIAS)
+            if (legacyKey != null) {
+                val cipher = Cipher.getInstance(AES_GCM_NO_PADDING)
+                cipher.init(Cipher.DECRYPT_MODE, legacyKey, spec)
+                val plainBytes = cipher.doFinal(cipherBytes)
+                val decrypted = String(plainBytes, Charsets.UTF_8)
+                // Successfully decrypted with legacy key; re-encrypt under current alias for future boots
+                try {
+                    val reEncrypted = encrypt(decrypted)
+                    if (!reEncrypted.isNullOrBlank()) {
+                        appContext?.let { ctx ->
+                            ctx.getSharedPreferences("regent_native_prefs", android.content.Context.MODE_PRIVATE)
+                                .edit()
+                                .putString("mmkv_keystore_enc_key", reEncrypted)
+                                .apply()
+                        }
+                    }
+                } catch (_: Exception) {}
+                return decrypted
+            }
+        } catch (_: Exception) {
+            // Legacy decryption also failed
+        }
+
+        return null
     }
 
     private fun handleKeyInvalidated() {
@@ -146,17 +186,15 @@ object KeystoreHelper {
             }
         } catch (_: Exception) {}
 
-        // Complete Invalidation Recovery:
-        // Delete the wrapped device DEK and local database file so no orphaned, unopenable encrypted store remains.
+        // Invalidation Recovery:
+        // Clear stored tokens so the user is safely prompted to sign in and re-download fresh state
         appContext?.let { ctx ->
             try {
                 ctx.getSharedPreferences("regent_native_prefs", android.content.Context.MODE_PRIVATE)
                     .edit()
                     .remove("device_wrapped_dek")
-                    .remove("mmkv_keystore_enc_key")
                     .remove("auth_access_token")
                     .apply()
-                // Wipe local SQLCipher database file
                 ctx.deleteDatabase("regent_vault.db")
             } catch (_: Exception) {}
         }
@@ -179,7 +217,9 @@ object KeystoreHelper {
             val hexKey = randomBytes.joinToString("") { "%02x".format(it) }
 
             val newEncrypted = encrypt(hexKey)
-            prefs.edit().putString("mmkv_keystore_enc_key", newEncrypted).apply()
+            if (!newEncrypted.isNullOrBlank()) {
+                prefs.edit().putString("mmkv_keystore_enc_key", newEncrypted).apply()
+            }
             hexKey
         } catch (e: Exception) {
             // Safe fallback if hardware keystore error occurs

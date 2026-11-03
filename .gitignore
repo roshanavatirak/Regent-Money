@@ -49,3 +49,6 @@ website/
 
 # scratch
 scratch/
+.claude/
+marketing/
+

@@ -1140,3 +1140,23 @@ export const usePrivacyModalStore = create<PrivacyModalState>((set) => ({
 
 // 15. Peer Ledger (Borrow & Lend) Store
 export { usePeerStore, PeerState } from './peerStore';
+
+// 16. Sync Status Store
+export interface SyncStatusState {
+  status: 'idle' | 'loading' | 'success' | 'error';
+  lastError: string | null;
+  lastSyncedAt: number | null;
+  setSyncStatus: (status: 'idle' | 'loading' | 'success' | 'error', error?: string | null) => void;
+}
+
+export const useSyncStatusStore = create<SyncStatusState>((set) => ({
+  status: 'idle',
+  lastError: null,
+  lastSyncedAt: null,
+  setSyncStatus: (status, error = null) =>
+    set({
+      status,
+      lastError: error,
+      ...(status === 'success' ? { lastSyncedAt: Date.now() } : {}),
+    }),
+}));

@@ -112,15 +112,8 @@ export const mmkvStorage = {
     return Array.from(fallbackMap.keys());
   },
   initialize: async (): Promise<void> => {
-    if (Platform.OS === 'web') {
-      return;
-    }
-    // Scrub any legacy unencrypted AsyncStorage leftovers from previous app versions
-    try {
-      await AsyncStorage.clear();
-    } catch {
-      // ignore
-    }
+    // Non-destructive initialization: no plain-text AsyncStorage writes or destructive clears
+    return;
   },
   setString: (key: string, value: string) => {
     storage.set(key, value);

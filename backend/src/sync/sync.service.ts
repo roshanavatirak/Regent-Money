@@ -275,7 +275,51 @@ export class SyncService implements OnModuleInit {
       await this.dataSource.query(`
         CREATE INDEX IF NOT EXISTS idx_applied_ops_applied_at ON finance.applied_ops (applied_at);
       `);
-      this.logger.log('BankProfile, SavingsGoal, Budget, Exclusion & AppliedOps schema checks completed successfully.');
+
+      // Encryption-at-Rest schema additions (idempotent hotfix)
+      await this.dataSource.query(`
+        CREATE TABLE IF NOT EXISTS core.user_keys (
+          user_id      UUID NOT NULL REFERENCES core.users(id) ON DELETE CASCADE,
+          key_version  INTEGER NOT NULL,
+          status       VARCHAR(32) NOT NULL DEFAULT 'active',
+          edek         BYTEA NOT NULL,
+          kms_key_arn  TEXT NOT NULL,
+          created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+          rotated_at   TIMESTAMPTZ,
+          PRIMARY KEY (user_id, key_version)
+        );
+      `);
+      await this.dataSource.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_user_keys_active
+        ON core.user_keys (user_id)
+        WHERE status = 'active';
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE finance.transactions
+          ADD COLUMN IF NOT EXISTS enc_amount    BYTEA,
+          ADD COLUMN IF NOT EXISTS enc_merchant  BYTEA,
+          ADD COLUMN IF NOT EXISTS enc_note      BYTEA,
+          ADD COLUMN IF NOT EXISTS merchant_idx  BYTEA,
+          ADD COLUMN IF NOT EXISTS row_version   BIGINT NOT NULL DEFAULT 1;
+      `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_transactions_user_merchant_idx
+        ON finance.transactions (user_id, merchant_idx);
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE finance.income_records
+          ADD COLUMN IF NOT EXISTS enc_amount   BYTEA,
+          ADD COLUMN IF NOT EXISTS enc_source   BYTEA,
+          ADD COLUMN IF NOT EXISTS enc_note     BYTEA,
+          ADD COLUMN IF NOT EXISTS source_idx   BYTEA,
+          ADD COLUMN IF NOT EXISTS row_version  BIGINT NOT NULL DEFAULT 1;
+      `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_income_records_user_source_idx
+        ON finance.income_records (user_id, source_idx);
+      `);
+
+      this.logger.log('BankProfile, SavingsGoal, Budget, Exclusion, AppliedOps & EncryptionAtRest schema checks completed successfully.');
     } catch (e: any) {
       this.logger.error(`Error checking/updating schema: ${e.message}`, e.stack);
     }

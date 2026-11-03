@@ -27,7 +27,7 @@ import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import * as Font from 'expo-font';
-import { useTheme, useBankStore, showGlobalConfirm } from '../store';
+import { useTheme, useBankStore, showGlobalConfirm, useSyncStatusStore } from '../store';
 import { useSyncDb } from '../services/useSyncDb';
 import { smsCatchupService } from '../services/smsCatchupService';
 import { authService } from '../services/authService';
@@ -237,6 +237,7 @@ export const BanksScreen: React.FC<BanksScreenProps> = ({ AppTopBarComponent, Ad
   const bankProfiles = useBankStore((s) => s.bankProfiles);
   const activeBankModalId = useBankStore((s) => s.activeBankModalId);
   const setActiveBankModalId = useBankStore((s) => s.setActiveBankModalId);
+  const syncStatus = useSyncStatusStore((s) => s.status);
 
   const [addBankVisible, setAddBankVisible] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -339,7 +340,31 @@ export const BanksScreen: React.FC<BanksScreenProps> = ({ AppTopBarComponent, Ad
         </View>
 
         {sorted.length === 0 ? (
-          /* ---------------- Empty ---------------- */
+          syncStatus === 'error' ? (
+            /* ---------------- Sync Error State ---------------- */
+            <Animated.View entering={FadeInDown.duration(400)} style={styles.emptyWrap}>
+              <View style={[styles.emptyCard, { borderColor: isDark ? '#B45309' : '#F59E0B' }]}>
+                <View style={[styles.emptyIcon, { backgroundColor: isDark ? 'rgba(245,158,11,0.14)' : '#FEF3C7' }]}>
+                  <Feather name="cloud-off" size={24} color={isDark ? '#FBBF24' : '#D97706'} />
+                </View>
+                <Text style={[styles.emptyTitle, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}>
+                  Couldn't load accounts
+                </Text>
+                <Text style={[styles.emptyText, { color: muted }]}>
+                  Your data is safe in your cloud vault. We couldn't refresh from the server. Tap below to retry.
+                </Text>
+                <Pressable
+                  onPress={() => sync()}
+                  style={({ pressed }) => [styles.emptyBtn, { backgroundColor: isDark ? LIME : FOREST }, pressed && { transform: [{ scale: 0.98 }] }]}
+                  accessibilityRole="button"
+                >
+                  <Feather name="refresh-cw" size={16} color={isDark ? FOREST : LIME} />
+                  <Text style={[styles.emptyBtnText, { color: isDark ? FOREST : LIME }]}>Retry Connection</Text>
+                </Pressable>
+              </View>
+            </Animated.View>
+          ) : (
+            /* ---------------- Empty ---------------- */
           <Animated.View entering={FadeInDown.duration(400)} style={styles.emptyWrap}>
             <View style={[styles.emptyCard, { borderColor: isDark ? '#2B4A3B' : '#9DB2A7' }]}>
               <View style={[styles.emptyIcon, { backgroundColor: isDark ? 'rgba(184,243,107,0.14)' : '#E3F2E8' }]}>
@@ -361,6 +386,7 @@ export const BanksScreen: React.FC<BanksScreenProps> = ({ AppTopBarComponent, Ad
               </Pressable>
             </View>
           </Animated.View>
+          )
         ) : (
           <>
             {/* ---------------- Total ---------------- */}

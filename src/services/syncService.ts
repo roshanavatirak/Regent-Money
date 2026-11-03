@@ -6,6 +6,7 @@ import {
   useBankStore,
   useAnalyticsStore,
   useIncomeStore,
+  useSyncStatusStore,
 } from '../store';
 import { mmkvStorage } from '../db/mmkv';
 import { getBackendUrl } from '../config/api';
@@ -180,6 +181,7 @@ export const syncService = {
     await this.flushOutbox().catch(() => {});
 
     isSyncing = true;
+    useSyncStatusStore.getState().setSyncStatus('loading', null);
     const existingTxs = useTransactionStore.getState().transactions;
     const shouldShowLoader = existingTxs.length === 0;
 
@@ -340,8 +342,10 @@ export const syncService = {
         (a: any, b: any) => Number(b.timestamp) - Number(a.timestamp),
       );
       useIncomeStore.getState().setIncomeRecords(finalIncome);
+      useSyncStatusStore.getState().setSyncStatus('success', null);
     } catch (err: any) {
       clearTimeout(syncTimeoutId);
+      useSyncStatusStore.getState().setSyncStatus('error', err?.message || 'Server currently unreachable');
       if (err?.name !== 'AbortError' && !err?.message?.includes?.('abort')) {
         console.warn('[Sync] Server currently unreachable, keeping offline cache active:', err?.message || err);
       }
