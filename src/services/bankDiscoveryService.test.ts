@@ -59,3 +59,4 @@ test('extractDiscoveredBanksFromMessages discovers distinct bank accounts with l
   assert.equal(sbi1234.bankCode, 'SBIN');
   assert.equal(sbi1234.currentBalance, '4500');
 });
+
