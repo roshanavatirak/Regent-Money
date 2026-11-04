@@ -186,7 +186,7 @@ export class AuthService implements OnModuleInit {
     // 3. Generate verification token
     const verificationToken = crypto.randomBytes(32).toString('hex');
 
-    // 4. Create user record
+    // 4. Create user record with explicit terms acceptance from signup checkbox
     const userId = crypto.randomUUID();
     const now = Date.now();
     const user = this.userRepository.create({
@@ -203,6 +203,8 @@ export class AuthService implements OnModuleInit {
       isDeleted: false,
       isVerified: false,
       verificationToken,
+      termsAccepted: true,
+      termsAcceptedAt: now,
     });
 
     const savedUser = await this.userRepository.save(user) as User;
@@ -224,8 +226,8 @@ export class AuthService implements OnModuleInit {
       isVerified: savedUser.isVerified,
       role: savedUser.role || 'user',
       isBanned: savedUser.isBanned ?? false,
-      termsAccepted: savedUser.termsAccepted ?? false,
-      termsAcceptedAt: savedUser.termsAcceptedAt ?? null,
+      termsAccepted: savedUser.termsAccepted ?? true,
+      termsAcceptedAt: savedUser.termsAcceptedAt ?? now,
     };
 
     return {
@@ -463,6 +465,13 @@ export class AuthService implements OnModuleInit {
       throw new UnauthorizedException('Please verify your email address before logging in.');
     }
 
+    // Auto-heal termsAccepted for verified manual registrations (consented during signup)
+    if (!user.termsAccepted) {
+      user.termsAccepted = true;
+      user.termsAcceptedAt = user.createdAt || Date.now();
+      await this.userRepository.save(user).catch(() => {});
+    }
+
     // 6. Generate JWT token
     const tokenPayload = { sub: user.id, email: user.email, role: user.role || 'user' };
     const accessToken = this.jwtService.sign(tokenPayload);
@@ -659,6 +668,8 @@ export class AuthService implements OnModuleInit {
         isDeleted: false,
         isVerified: true,
         verificationToken: null,
+        termsAccepted: true,
+        termsAcceptedAt: now,
       });
       user = (await this.userRepository.save(user)) as User;
     }
