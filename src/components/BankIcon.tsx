@@ -21,35 +21,7 @@ export const LOCAL_SVG_MAP: { [key: string]: any } = {
   'YESB': require('../../assets/Banks logo/yesb.svg'),
 };
 
-export const resolveBankCode = (bankName?: string, senderId?: string, explicitCode?: string): string => {
-  if (explicitCode && LOCAL_SVG_MAP[explicitCode.toUpperCase()]) {
-    return explicitCode.toUpperCase();
-  }
-  const cleanSender = (senderId || '').toUpperCase();
-  const cleanName = (bankName || '').toLowerCase();
-
-  for (const code of Object.keys(LOCAL_SVG_MAP)) {
-    if (cleanSender.includes(code)) return code;
-  }
-
-  if (cleanName.includes('state bank') || cleanName.includes('sbi')) return 'SBIN';
-  if (cleanName.includes('hdfc')) return 'HDFC';
-  if (cleanName.includes('icici')) return 'ICIC';
-  if (cleanName.includes('kotak')) return 'KKBK';
-  if (cleanName.includes('axis')) return 'UTIB';
-  if (cleanName.includes('baroda') || cleanName.includes('bob')) return 'BARB';
-  if (cleanName.includes('punjab') || cleanName.includes('pnb')) return 'PUNB';
-  if (cleanName.includes('union')) return 'UBIN';
-  if (cleanName.includes('idfc')) return 'IDFB';
-  if (cleanName.includes('canara')) return 'CNRB';
-  if (cleanName.includes('indian bank')) return 'IDIB';
-  if (cleanName.includes('bank of india') || cleanName.includes('boi')) return 'BKID';
-  if (cleanName.includes('maharashtra')) return 'MAHB';
-  if (cleanName.includes('yes bank') || cleanName.includes('yesb')) return 'YESB';
-  if (cleanName.includes('jio')) return 'JIOP';
-
-  return explicitCode || '';
-};
+export { resolveBankCode } from '../constants/bankBrand';
 
 const NativeSvgIcon = ({ source, size }: { source: any; size: number }) => {
   const svg = useSVG(source);

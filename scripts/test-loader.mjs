@@ -8,6 +8,14 @@ export async function resolve(specifier, context, nextResolve) {
     };
   }
 
+  if (specifier.endsWith('.json')) {
+    const res = await nextResolve(specifier, context);
+    return {
+      ...res,
+      importAttributes: { ...context.importAttributes, type: 'json' },
+    };
+  }
+
   if (specifier.startsWith('./') || specifier.startsWith('../')) {
     if (!specifier.endsWith('.ts') && !specifier.endsWith('.js') && !specifier.endsWith('.json')) {
       try {
@@ -18,4 +26,11 @@ export async function resolve(specifier, context, nextResolve) {
     }
   }
   return nextResolve(specifier, context);
+}
+
+export async function load(url, context, nextLoad) {
+  if (url.endsWith('.json')) {
+    return nextLoad(url, { ...context, format: 'json' });
+  }
+  return nextLoad(url, context);
 }

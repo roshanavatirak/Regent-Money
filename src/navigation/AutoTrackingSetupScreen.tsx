@@ -2,9 +2,20 @@
 //
 // First-run SMS setup. Shows what auto-tracking does (a bank SMS becoming a
 // transaction), says what is and isn't read, then asks for permission.
+// On grant, discovers accounts from SMS and lets the user review/edit/remove them.
 
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, Platform, StatusBar, ScrollView } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Pressable,
+  Platform,
+  StatusBar,
+  ScrollView,
+  TextInput,
+  ActivityIndicator,
+} from 'react-native';
 import Animated, {
   FadeIn,
   FadeInDown,
@@ -19,18 +30,23 @@ import Animated, {
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Font from 'expo-font';
-import { useTheme, useAuthStore, usePrivacyModalStore } from '../store';
+import { useTheme, useAuthStore, usePrivacyModalStore, useBankStore } from '../store';
 import { mmkvStorage } from '../db/mmkv';
 import { smsPermissionService } from '../services/smsPermissionService';
 import { smsCatchupService } from '../services/smsCatchupService';
+import { bankDiscoveryService, DiscoveredBank } from '../services/bankDiscoveryService';
+import { BankIcon } from '../components/BankIcon';
 import { CategoryIcon } from '../components/CategoryIcon';
+import { authService } from '../services/authService';
+import { getBackendUrl } from '../config/api';
 
 export const TRACKING_SETUP_KEY = 'has_setup_tracking_v1';
 
+const BACKEND_URL = getBackendUrl();
 const FOREST = '#0B3D2C';
 const LIME = '#B8F36B';
 
-type Phase = 'intro' | 'scanning' | 'done' | 'sim_mismatch';
+type Phase = 'intro' | 'scanning' | 'review_banks' | 'done' | 'sim_mismatch';
 
 interface AutoTrackingSetupScreenProps {
   navigation: any;
@@ -64,6 +80,11 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
   const [phase, setPhase] = useState<Phase>('intro');
   const [found, setFound] = useState(0);
   const shown = useCountUp(found, phase === 'done');
+
+  // Discovered accounts state
+  const [discoveredBanks, setDiscoveredBanks] = useState<DiscoveredBank[]>([]);
+  const [isSaving, setIsSaving] = useState(false);
+  const [errorText, setErrorText] = useState('');
 
   // Pulse for the scanning state
   const pulse = useSharedValue(0);
@@ -107,12 +128,99 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
       }
 
       setPhase('scanning');
-      const result = await smsCatchupService.reconcile(false, 720); // last 30 days
-      setFound(result?.syncedCount ?? 0);
-      setPhase('done');
+      // Discover bank accounts from SMS on-device
+      const discovered = await bankDiscoveryService.discoverBanksFromSms(720);
+      if (discovered && discovered.length > 0) {
+        setDiscoveredBanks(discovered);
+        setPhase('review_banks');
+      } else {
+        // No bank accounts found; run standard catch-up
+        const result = await smsCatchupService.reconcile(false, 720);
+        setFound(result?.syncedCount ?? 0);
+        setPhase('done');
+      }
     } catch (e) {
       console.warn('[AutoTrackingSetup] Scan error:', e);
       finish();
+    }
+  };
+
+  const updateBankSuffix = (tempId: string, val: string) => {
+    const clean = val.replace(/\D/g, '').slice(0, 4);
+    setDiscoveredBanks((prev) =>
+      prev.map((b) => (b.tempId === tempId ? { ...b, accountNumberSuffix: clean } : b))
+    );
+    if (errorText) setErrorText('');
+  };
+
+  const updateBankBalance = (tempId: string, val: string) => {
+    const clean = val.replace(/[^0-9.]/g, '');
+    setDiscoveredBanks((prev) =>
+      prev.map((b) => (b.tempId === tempId ? { ...b, currentBalance: clean } : b))
+    );
+    if (errorText) setErrorText('');
+  };
+
+  const removeBank = (tempId: string) => {
+    setDiscoveredBanks((prev) => prev.filter((b) => b.tempId !== tempId));
+  };
+
+  const confirmDiscoveredBanks = async () => {
+    for (const bank of discoveredBanks) {
+      if (!/^\d{4}$/.test(bank.accountNumberSuffix.trim())) {
+        setErrorText(`Please enter a valid 4-digit number for ${bank.bankName}.`);
+        return;
+      }
+    }
+
+    setErrorText('');
+    setIsSaving(true);
+
+    try {
+      const token = authService.getAccessToken();
+      if (!token) throw new Error('Authentication required.');
+
+      // 1. Create bank profiles in backend
+      for (const bank of discoveredBanks) {
+        const profileId = 'bank_' + Math.random().toString(36).slice(2, 11);
+        const bal = parseFloat(bank.currentBalance) || 0;
+        const res = await fetch(`${BACKEND_URL}/sync/bank-profile`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: profileId,
+            bankName: bank.bankName.trim(),
+            accountType: bank.accountType || 'Savings',
+            accountNumberSuffix: bank.accountNumberSuffix.trim(),
+            currentBalance: Math.round(bal * 100) / 100,
+            smsSenderId: bank.smsSenderId || undefined,
+            smsConsent: true,
+          }),
+        });
+
+        if (res.ok) {
+          useBankStore.getState().addBankProfileState({
+            id: profileId,
+            bankName: bank.bankName.trim(),
+            accountType: bank.accountType || 'Savings',
+            accountNumberSuffix: bank.accountNumberSuffix.trim(),
+            currentBalance: Math.round(bal * 100) / 100,
+            lastSyncTimestamp: Date.now(),
+            smsSenderId: bank.smsSenderId || undefined,
+            smsConsent: true,
+          });
+        }
+      }
+
+      // 2. Strict catch-up reconciliation: only import transactions matching confirmed banks & suffixes!
+      const catchup = await smsCatchupService.reconcile(true, 720, undefined, true);
+      setFound(catchup?.syncedCount ?? 0);
+      setPhase('done');
+    } catch (e: any) {
+      console.warn('[AutoTrackingSetup] Error saving discovered banks:', e);
+      setErrorText(e?.message || 'Could not link accounts. Please try again.');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -233,10 +341,132 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
             </View>
           </View>
           <Text style={[s.stateTitle, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}>
-            Finding your transactions
+            Finding your bank accounts
           </Text>
-          <Text style={[s.stateSub, { color: muted }]}>Looking through bank alerts from the last 30 days.</Text>
+          <Text style={[s.stateSub, { color: muted }]}>Scanning financial alerts securely on your phone.</Text>
         </Animated.View>
+      )}
+
+      {phase === 'review_banks' && (
+        <View style={{ flex: 1 }}>
+          <Animated.View entering={FadeInDown.duration(350)}>
+            <Text style={[s.title, { color: ink, marginTop: 12, fontFamily: display, fontWeight: display ? undefined : '800' }]}>
+              {discoveredBanks.length > 0
+                ? `Found ${discoveredBanks.length} account${discoveredBanks.length === 1 ? '' : 's'}`
+                : 'No accounts selected'}
+            </Text>
+            <Text style={[s.sub, { color: muted, marginBottom: 16 }]}>
+              {discoveredBanks.length > 0
+                ? 'Review detected accounts. You can edit the balance, account digits, or remove any you don’t want to track.'
+                : 'You removed all detected accounts. You can add your accounts manually anytime from the Banks tab.'}
+            </Text>
+          </Animated.View>
+
+          <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 16 }}>
+            {discoveredBanks.map((b) => (
+              <Animated.View
+                key={b.tempId}
+                entering={FadeInDown.duration(300)}
+                style={[s.bankCard, { backgroundColor: surface, borderColor: line }]}
+              >
+                <View style={s.bankCardHead}>
+                  <View style={[s.logoWrap, { borderColor: line }]}>
+                    <BankIcon code={b.bankCode} name={b.bankName} size={38} />
+                  </View>
+                  <View style={{ flex: 1, marginLeft: 12 }}>
+                    <Text style={[s.bankCardName, { color: ink }]} numberOfLines={1}>
+                      {b.bankName}
+                    </Text>
+                    <Text style={[s.bankCardType, { color: muted }]}>
+                      {b.accountType}
+                    </Text>
+                  </View>
+                  <Pressable
+                    onPress={() => removeBank(b.tempId)}
+                    hitSlop={12}
+                    style={({ pressed }) => [s.trashBtn, pressed && { opacity: 0.6 }]}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Remove ${b.bankName} account`}
+                  >
+                    <Feather name="trash-2" size={18} color={isDark ? '#F87171' : '#DC2626'} />
+                  </Pressable>
+                </View>
+
+                <View style={s.bankCardInputs}>
+                  {/* Account number suffix */}
+                  <View style={{ flex: 1, marginRight: 10 }}>
+                    <Text style={[s.fieldLabel, { color: muted }]}>Last 4 digits</Text>
+                    <View style={[s.fieldBox, { backgroundColor: pageBg, borderColor: line }]}>
+                      <Text style={[s.fieldPrefix, { color: muted, fontFamily: display }]}>••</Text>
+                      <TextInput
+                        value={b.accountNumberSuffix}
+                        onChangeText={(t) => updateBankSuffix(b.tempId, t)}
+                        keyboardType="number-pad"
+                        maxLength={4}
+                        style={[s.fieldInput, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}
+                        accessibilityLabel="Account last 4 digits"
+                      />
+                    </View>
+                  </View>
+
+                  {/* Current balance */}
+                  <View style={{ flex: 1.3 }}>
+                    <Text style={[s.fieldLabel, { color: muted }]}>Balance</Text>
+                    <View style={[s.fieldBox, { backgroundColor: pageBg, borderColor: line }]}>
+                      <Text style={[s.fieldPrefix, { color: muted, fontFamily: display }]}>₹</Text>
+                      <TextInput
+                        value={b.currentBalance}
+                        onChangeText={(t) => updateBankBalance(b.tempId, t)}
+                        placeholder="0"
+                        placeholderTextColor={muted}
+                        keyboardType="decimal-pad"
+                        style={[s.fieldInput, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}
+                        accessibilityLabel="Current balance"
+                      />
+                    </View>
+                  </View>
+                </View>
+              </Animated.View>
+            ))}
+
+            {errorText ? (
+              <View style={s.errorRow}>
+                <Feather name="alert-circle" size={14} color={isDark ? '#FFA8A8' : '#C92A2A'} />
+                <Text style={[s.errorText, { color: isDark ? '#FFA8A8' : '#C92A2A' }]}>{errorText}</Text>
+              </View>
+            ) : null}
+          </ScrollView>
+
+          <Animated.View entering={FadeInDown.delay(200).duration(350)} style={{ paddingTop: 8 }}>
+            {discoveredBanks.length > 0 ? (
+              <>
+                <Pressable
+                  onPress={confirmDiscoveredBanks}
+                  disabled={isSaving}
+                  style={({ pressed }) => [
+                    s.primary,
+                    { backgroundColor: accent },
+                    pressed && { transform: [{ scale: 0.98 }] },
+                  ]}
+                  accessibilityRole="button"
+                >
+                  {isSaving ? (
+                    <ActivityIndicator color={accentFg} />
+                  ) : (
+                    <Text style={[s.primaryText, { color: accentFg }]}>
+                      Confirm {discoveredBanks.length} account{discoveredBanks.length === 1 ? '' : 's'}
+                    </Text>
+                  )}
+                </Pressable>
+                <Pressable onPress={finish} disabled={isSaving} style={s.secondary} accessibilityRole="button">
+                  <Text style={[s.secondaryText, { color: muted }]}>Skip and add manually</Text>
+                </Pressable>
+              </>
+            ) : (
+              <PrimaryButton label="Continue to dashboard" onPress={finish} />
+            )}
+          </Animated.View>
+        </View>
       )}
 
       {phase === 'done' && (
@@ -344,4 +574,76 @@ const s = StyleSheet.create({
   bigNumber: { fontSize: 64, letterSpacing: -2.4, lineHeight: 70, marginTop: 22, fontVariant: ['tabular-nums'] },
   stateTitle: { fontSize: 24, letterSpacing: -0.4, marginTop: 24, textAlign: 'center' },
   stateSub: { fontSize: 15, lineHeight: 22, marginTop: 8, textAlign: 'center', maxWidth: 300 },
+
+  bankCard: {
+    borderWidth: 1,
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 12,
+  },
+  bankCardHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  logoWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+  },
+  bankCardName: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  bankCardType: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  trashBtn: {
+    padding: 8,
+    borderRadius: 10,
+  },
+  bankCardInputs: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  fieldLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginBottom: 6,
+  },
+  fieldBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    height: 44,
+  },
+  fieldPrefix: {
+    fontSize: 14,
+    fontWeight: '700',
+    marginRight: 4,
+  },
+  fieldInput: {
+    flex: 1,
+    fontSize: 15,
+    paddingVertical: 0,
+  },
+  errorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+  },
+  errorText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
 });

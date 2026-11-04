@@ -69,7 +69,8 @@ export const smsCatchupService = {
   async reconcile(
     force = false,
     lookbackHours = 168,
-    targetBankId?: string
+    targetBankId?: string,
+    strictProfilesOnly = false
   ): Promise<{ syncedCount: number; matchedCandidateCount: number } | null> {
     if (Platform.OS !== 'android') {
       return null;
@@ -235,6 +236,10 @@ export const smsCatchupService = {
         }
 
         // If not 100% confident, group under 'unassigned' (Review Queue)
+        if (strictProfilesOnly && !matchedBank) {
+          continue;
+        }
+
         const targetGroupKey = matchedBank ? matchedBank.id : 'unassigned';
 
         if (targetBankId && targetGroupKey !== targetBankId) {
@@ -248,7 +253,15 @@ export const smsCatchupService = {
         }
 
         const msgTimestamp = Number(msg.date) || now;
-        const dateStr = new Date(msgTimestamp).toISOString().split('T')[0];
+        const d = new Date(msgTimestamp);
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        const dateStr = `${year}-${month}-${day}`;
+        const hours = String(d.getHours()).padStart(2, '0');
+        const minutes = String(d.getMinutes()).padStart(2, '0');
+        const seconds = String(d.getSeconds()).padStart(2, '0');
+        const timeStr = `${hours}:${minutes}:${seconds}`;
 
         if (!bankTxsMap.has(targetGroupKey)) {
           bankTxsMap.set(targetGroupKey, []);
@@ -277,6 +290,7 @@ export const smsCatchupService = {
           merchant: parsed.merchant,
           category: predictedCategory,
           date: dateStr,
+          time: timeStr,
           timestamp: msgTimestamp,
           availableBalance: parsed.availableBalance,
           referenceId: parsed.referenceId,
@@ -352,6 +366,9 @@ export const smsCatchupService = {
         const latestAvailableBalance = txsWithBal.length > 0 ? txsWithBal[0].availableBalance : undefined;
 
         const isUnassigned = bankProfileId === 'unassigned';
+        if (strictProfilesOnly && isUnassigned) {
+          continue;
+        }
         const bodyPayload: any = {
           bankProfileId: isUnassigned ? null : bankProfileId,
           transactions: txList,

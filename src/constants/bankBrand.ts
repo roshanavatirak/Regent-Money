@@ -56,6 +56,40 @@ export const POPULAR_BANKS = [
   { code: 'BKID', name: 'Bank of India', short: 'Bank of India' },
 ];
 
+export const KNOWN_SVG_CODES = new Set([
+  'BARB', 'BKID', 'CNRB', 'HDFC', 'ICIC', 'IDFB', 'IDIB', 'JIOP', 'KKBK', 'MAHB', 'PUNB', 'SBIN', 'UBIN', 'UTIB', 'YESB',
+]);
+
+export const resolveBankCode = (bankName?: string, senderId?: string, explicitCode?: string): string => {
+  if (explicitCode && KNOWN_SVG_CODES.has(explicitCode.toUpperCase())) {
+    return explicitCode.toUpperCase();
+  }
+  const cleanSender = (senderId || '').toUpperCase();
+  const cleanName = (bankName || '').toLowerCase();
+
+  for (const code of KNOWN_SVG_CODES) {
+    if (cleanSender.includes(code)) return code;
+  }
+
+  if (cleanName.includes('state bank') || cleanName.includes('sbi')) return 'SBIN';
+  if (cleanName.includes('hdfc')) return 'HDFC';
+  if (cleanName.includes('icici')) return 'ICIC';
+  if (cleanName.includes('kotak')) return 'KKBK';
+  if (cleanName.includes('axis')) return 'UTIB';
+  if (cleanName.includes('baroda') || cleanName.includes('bob')) return 'BARB';
+  if (cleanName.includes('punjab') || cleanName.includes('pnb')) return 'PUNB';
+  if (cleanName.includes('union')) return 'UBIN';
+  if (cleanName.includes('idfc')) return 'IDFB';
+  if (cleanName.includes('canara')) return 'CNRB';
+  if (cleanName.includes('indian bank')) return 'IDIB';
+  if (cleanName.includes('bank of india') || cleanName.includes('boi')) return 'BKID';
+  if (cleanName.includes('maharashtra')) return 'MAHB';
+  if (cleanName.includes('yes bank') || cleanName.includes('yesb')) return 'YESB';
+  if (cleanName.includes('jio')) return 'JIOP';
+
+  return explicitCode || '';
+};
+
 /** "UTTARAYAN PURE VEG R" → "Uttarayan Pure Veg R"; leaves mixed-case names alone. */
 export const niceName = (s?: string) => {
   const t = (s || '').trim();
