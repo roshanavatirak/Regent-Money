@@ -1059,13 +1059,10 @@ export const useSecurityStore = create<SecurityState>((set) => ({
     const timeout = ((mmkvStorage.getNumber('security_auto_lock_timeout') as AutoLockTimeout) || 1);
     const lastBg = mmkvStorage.getNumber('security_last_bg_time');
 
-    let shouldLock = false;
-    if (enabled && lastBg) {
-      const elapsed = Date.now() - lastBg;
-      if (elapsed >= timeout * 60 * 1000) {
-        shouldLock = true;
-      }
-    }
+    // Only called on cold start: always lock a signed-in session there. A crash or force-stop
+    // leaves no background timestamp, so the auto-lock timer alone could be skipped.
+    const hasSession = !!mmkvStorage.getString('auth_access_token');
+    const shouldLock = enabled && hasSession;
 
     set({
       biometricsEnabled: enabled,

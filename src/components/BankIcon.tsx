@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { View, Image, Platform, StyleProp, ViewStyle } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Canvas, ImageSVG, useSVG, Group } from '@shopify/react-native-skia';
+import { resolveBankCode } from '../constants/bankBrand';
 
 export const LOCAL_SVG_MAP: { [key: string]: any } = {
   'BARB': require('../../assets/Banks logo/bob.svg'),
@@ -21,7 +22,7 @@ export const LOCAL_SVG_MAP: { [key: string]: any } = {
   'YESB': require('../../assets/Banks logo/yesb.svg'),
 };
 
-export { resolveBankCode } from '../constants/bankBrand';
+export { resolveBankCode };
 
 const NativeSvgIcon = ({ source, size }: { source: any; size: number }) => {
   const svg = useSVG(source);

@@ -4,7 +4,7 @@
 // transaction), says what is and isn't read, then asks for permission.
 // On grant, discovers accounts from SMS and lets the user review/edit/remove them.
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -15,7 +15,9 @@ import {
   ScrollView,
   TextInput,
   ActivityIndicator,
+  Modal,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import Animated, {
   FadeIn,
   FadeInDown,
@@ -30,7 +32,7 @@ import Animated, {
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Font from 'expo-font';
-import { useTheme, useAuthStore, usePrivacyModalStore, useBankStore } from '../store';
+import { useTheme, usePrivacyModalStore, useBankStore } from '../store';
 import { mmkvStorage } from '../db/mmkv';
 import { smsPermissionService } from '../services/smsPermissionService';
 import { smsCatchupService } from '../services/smsCatchupService';
@@ -46,7 +48,7 @@ const BACKEND_URL = getBackendUrl();
 const FOREST = '#0B3D2C';
 const LIME = '#B8F36B';
 
-type Phase = 'intro' | 'scanning' | 'review_banks' | 'done' | 'sim_mismatch';
+type Phase = 'intro' | 'scanning' | 'review_banks' | 'done';
 
 interface AutoTrackingSetupScreenProps {
   navigation: any;
@@ -73,7 +75,6 @@ const useCountUp = (target: number, run: boolean) => {
 
 export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = ({ navigation }) => {
   const { colors, isDark } = useTheme();
-  const user = useAuthStore((s) => s.user);
   const insets = useSafeAreaInsets();
   const display = Font.isLoaded('BricolageGrotesque_800ExtraBold') ? 'BricolageGrotesque_800ExtraBold' : undefined;
 
@@ -85,6 +86,23 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
   const [discoveredBanks, setDiscoveredBanks] = useState<DiscoveredBank[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [errorText, setErrorText] = useState('');
+  // Accounts the user unchecked; kept in the list so they can be re-added
+  const [skippedIds, setSkippedIds] = useState<Set<string>>(new Set());
+  // Edit sheet for one account's digits and balance
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draftSuffix, setDraftSuffix] = useState('');
+  const [draftBalance, setDraftBalance] = useState('');
+  const [sheetError, setSheetError] = useState('');
+
+  const selectedBanks = useMemo(
+    () => discoveredBanks.filter((b) => !skippedIds.has(b.tempId)),
+    [discoveredBanks, skippedIds]
+  );
+  const selectedTotal = useMemo(
+    () => selectedBanks.reduce((sum, b) => sum + (parseFloat(b.currentBalance) || 0), 0),
+    [selectedBanks]
+  );
+  const editingBank = discoveredBanks.find((b) => b.tempId === editingId) || null;
 
   // Pulse for the scanning state
   const pulse = useSharedValue(0);
@@ -117,16 +135,6 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
         return;
       }
 
-      // Check if SIM card physically matches the user's account mobile number
-      if (user?.phone) {
-        const simCheck = await smsPermissionService.checkDeviceSimMatchesUser(user.phone);
-        if (!simCheck.matches) {
-          // Different SIM detected on this device (e.g. Papa's phone)
-          setPhase('sim_mismatch');
-          return;
-        }
-      }
-
       setPhase('scanning');
       // Discover bank accounts from SMS on-device
       const discovered = await bankDiscoveryService.discoverBanksFromSms(720);
@@ -145,32 +153,45 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
     }
   };
 
-  const updateBankSuffix = (tempId: string, val: string) => {
-    const clean = val.replace(/\D/g, '').slice(0, 4);
-    setDiscoveredBanks((prev) =>
-      prev.map((b) => (b.tempId === tempId ? { ...b, accountNumberSuffix: clean } : b))
-    );
+  const hasValidSuffix = (b: DiscoveredBank) => /^\d{4}$/.test(b.accountNumberSuffix.trim());
+
+  const toggleBank = (tempId: string) => {
+    setSkippedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(tempId)) next.delete(tempId);
+      else next.add(tempId);
+      return next;
+    });
     if (errorText) setErrorText('');
   };
 
-  const updateBankBalance = (tempId: string, val: string) => {
-    const clean = val.replace(/[^0-9.]/g, '');
-    setDiscoveredBanks((prev) =>
-      prev.map((b) => (b.tempId === tempId ? { ...b, currentBalance: clean } : b))
-    );
-    if (errorText) setErrorText('');
+  const openEditor = (b: DiscoveredBank, error = '') => {
+    setDraftSuffix(b.accountNumberSuffix);
+    setDraftBalance(b.currentBalance);
+    setSheetError(error);
+    setEditingId(b.tempId);
   };
 
-  const removeBank = (tempId: string) => {
-    setDiscoveredBanks((prev) => prev.filter((b) => b.tempId !== tempId));
+  const saveEditor = () => {
+    const suffix = draftSuffix.replace(/\D/g, '').slice(0, 4);
+    if (!/^\d{4}$/.test(suffix)) {
+      setSheetError('Enter the last 4 digits of this account.');
+      return;
+    }
+    const balance = draftBalance.replace(/[^0-9.]/g, '');
+    setDiscoveredBanks((prev) =>
+      prev.map((b) => (b.tempId === editingId ? { ...b, accountNumberSuffix: suffix, currentBalance: balance } : b))
+    );
+    setEditingId(null);
+    if (errorText) setErrorText('');
   };
 
   const confirmDiscoveredBanks = async () => {
-    for (const bank of discoveredBanks) {
-      if (!/^\d{4}$/.test(bank.accountNumberSuffix.trim())) {
-        setErrorText(`Please enter a valid 4-digit number for ${bank.bankName}.`);
-        return;
-      }
+    // An account missing its digits opens straight in the editor instead of failing at the bottom
+    const incomplete = selectedBanks.find((b) => !hasValidSuffix(b));
+    if (incomplete) {
+      openEditor(incomplete, 'Add the last 4 digits to link this account.');
+      return;
     }
 
     setErrorText('');
@@ -181,7 +202,7 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
       if (!token) throw new Error('Authentication required.');
 
       // 1. Create bank profiles in backend
-      for (const bank of discoveredBanks) {
+      for (const bank of selectedBanks) {
         const profileId = 'bank_' + Math.random().toString(36).slice(2, 11);
         const bal = parseFloat(bank.currentBalance) || 0;
         const res = await fetch(`${BACKEND_URL}/sync/bank-profile`, {
@@ -304,14 +325,6 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
                   Alerts are read on your phone. Only the amount, merchant, date, account digits and balance are sent securely to your Regent account. The message text never leaves your phone.
                 </Text>
               </View>
-              <View style={s.point}>
-                <View style={[s.pointIcon, { backgroundColor: soft }]}>
-                  <Feather name="smartphone" size={16} color={accent} />
-                </View>
-                <Text style={[s.pointText, { color: ink }]}>
-                  Checks this phone’s SIM number matches your account. The number never leaves your phone.
-                </Text>
-              </View>
             </Animated.View>
 
             <Pressable
@@ -350,84 +363,76 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
       {phase === 'review_banks' && (
         <View style={{ flex: 1 }}>
           <Animated.View entering={FadeInDown.duration(350)}>
-            <Text style={[s.title, { color: ink, marginTop: 12, fontFamily: display, fontWeight: display ? undefined : '800' }]}>
-              {discoveredBanks.length > 0
-                ? `Found ${discoveredBanks.length} account${discoveredBanks.length === 1 ? '' : 's'}`
-                : 'No accounts selected'}
+            <View style={[s.eyebrow, { backgroundColor: soft }]}>
+              <Feather name="message-square" size={12} color={accent} />
+              <Text style={[s.eyebrowText, { color: accent }]}>From your bank SMS</Text>
+            </View>
+            <Text style={[s.reviewTitle, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}>
+              {discoveredBanks.length} account{discoveredBanks.length === 1 ? '' : 's'} found
             </Text>
-            <Text style={[s.sub, { color: muted, marginBottom: 16 }]}>
-              {discoveredBanks.length > 0
-                ? 'Review detected accounts. You can edit the balance, account digits, or remove any you don’t want to track.'
-                : 'You removed all detected accounts. You can add your accounts manually anytime from the Banks tab.'}
-            </Text>
+            <Text style={[s.reviewSub, { color: muted }]}>Tap to edit. Uncheck to skip.</Text>
           </Animated.View>
 
           <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 16 }}>
-            {discoveredBanks.map((b) => (
-              <Animated.View
-                key={b.tempId}
-                entering={FadeInDown.duration(300)}
-                style={[s.bankCard, { backgroundColor: surface, borderColor: line }]}
-              >
-                <View style={s.bankCardHead}>
-                  <View style={[s.logoWrap, { borderColor: line }]}>
-                    <BankIcon code={b.bankCode} name={b.bankName} size={38} />
-                  </View>
-                  <View style={{ flex: 1, marginLeft: 12 }}>
-                    <Text style={[s.bankCardName, { color: ink }]} numberOfLines={1}>
-                      {b.bankName}
-                    </Text>
-                    <Text style={[s.bankCardType, { color: muted }]}>
-                      {b.accountType}
-                    </Text>
-                  </View>
+            <Animated.View entering={FadeInDown.delay(80).duration(350)} style={[s.totalCard, { backgroundColor: FOREST }]}>
+              <Text style={s.totalLabel}>Total balance · {selectedBanks.length} selected</Text>
+              <Text style={[s.totalValue, { fontFamily: display, fontWeight: display ? undefined : '800' }]}>
+                ₹{selectedTotal.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+              </Text>
+            </Animated.View>
+
+            <Animated.View entering={FadeInDown.delay(140).duration(350)} style={[s.listCard, { backgroundColor: surface, borderColor: line }]}>
+              {discoveredBanks.map((b, i) => {
+                const selected = !skippedIds.has(b.tempId);
+                const balance = parseFloat(b.currentBalance) || 0;
+                return (
                   <Pressable
-                    onPress={() => removeBank(b.tempId)}
-                    hitSlop={12}
-                    style={({ pressed }) => [s.trashBtn, pressed && { opacity: 0.6 }]}
+                    key={b.tempId}
+                    onPress={() => openEditor(b)}
+                    style={({ pressed }) => [
+                      s.bankRow,
+                      i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: line },
+                      pressed && { backgroundColor: soft },
+                    ]}
                     accessibilityRole="button"
-                    accessibilityLabel={`Remove ${b.bankName} account`}
+                    accessibilityLabel={`Edit ${b.bankName}`}
                   >
-                    <Feather name="trash-2" size={18} color={isDark ? '#F87171' : '#DC2626'} />
+                    <View style={[s.bankRowMain, !selected && { opacity: 0.4 }]}>
+                      <View style={[s.logoWrap, { borderColor: line }]}>
+                        <BankIcon code={b.bankCode} name={b.bankName} size={34} />
+                      </View>
+                      <View style={s.bankRowText}>
+                        <Text style={[s.bankRowName, { color: ink }]} numberOfLines={1}>
+                          {b.bankName}
+                        </Text>
+                        {hasValidSuffix(b) ? (
+                          <Text style={[s.bankRowMeta, { color: muted }]} numberOfLines={1}>
+                            {b.accountType} ··{b.accountNumberSuffix}
+                          </Text>
+                        ) : (
+                          <View style={[s.missingChip, { backgroundColor: isDark ? 'rgba(239,159,39,0.16)' : '#FAEEDA' }]}>
+                            <Text style={[s.missingChipText, { color: isDark ? '#FAC775' : '#633806' }]}>Add last 4 digits</Text>
+                          </View>
+                        )}
+                      </View>
+                      <Text style={[s.bankRowBalance, { color: ink }]}>
+                        ₹{balance.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                      </Text>
+                    </View>
+                    <Pressable
+                      onPress={() => toggleBank(b.tempId)}
+                      hitSlop={12}
+                      style={[s.check, selected ? { backgroundColor: accent, borderColor: accent } : { borderColor: line }]}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: selected }}
+                      accessibilityLabel={`Track ${b.bankName}`}
+                    >
+                      {selected && <Feather name="check" size={13} color={accentFg} />}
+                    </Pressable>
                   </Pressable>
-                </View>
-
-                <View style={s.bankCardInputs}>
-                  {/* Account number suffix */}
-                  <View style={{ flex: 1, marginRight: 10 }}>
-                    <Text style={[s.fieldLabel, { color: muted }]}>Last 4 digits</Text>
-                    <View style={[s.fieldBox, { backgroundColor: pageBg, borderColor: line }]}>
-                      <Text style={[s.fieldPrefix, { color: muted, fontFamily: display }]}>••</Text>
-                      <TextInput
-                        value={b.accountNumberSuffix}
-                        onChangeText={(t) => updateBankSuffix(b.tempId, t)}
-                        keyboardType="number-pad"
-                        maxLength={4}
-                        style={[s.fieldInput, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}
-                        accessibilityLabel="Account last 4 digits"
-                      />
-                    </View>
-                  </View>
-
-                  {/* Current balance */}
-                  <View style={{ flex: 1.3 }}>
-                    <Text style={[s.fieldLabel, { color: muted }]}>Balance</Text>
-                    <View style={[s.fieldBox, { backgroundColor: pageBg, borderColor: line }]}>
-                      <Text style={[s.fieldPrefix, { color: muted, fontFamily: display }]}>₹</Text>
-                      <TextInput
-                        value={b.currentBalance}
-                        onChangeText={(t) => updateBankBalance(b.tempId, t)}
-                        placeholder="0"
-                        placeholderTextColor={muted}
-                        keyboardType="decimal-pad"
-                        style={[s.fieldInput, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}
-                        accessibilityLabel="Current balance"
-                      />
-                    </View>
-                  </View>
-                </View>
-              </Animated.View>
-            ))}
+                );
+              })}
+            </Animated.View>
 
             {errorText ? (
               <View style={s.errorRow}>
@@ -438,34 +443,107 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
           </ScrollView>
 
           <Animated.View entering={FadeInDown.delay(200).duration(350)} style={{ paddingTop: 8 }}>
-            {discoveredBanks.length > 0 ? (
+            {selectedBanks.length > 0 ? (
               <>
                 <Pressable
                   onPress={confirmDiscoveredBanks}
                   disabled={isSaving}
-                  style={({ pressed }) => [
-                    s.primary,
-                    { backgroundColor: accent },
-                    pressed && { transform: [{ scale: 0.98 }] },
-                  ]}
+                  style={({ pressed }) => [s.primary, { backgroundColor: accent }, pressed && { transform: [{ scale: 0.98 }] }]}
                   accessibilityRole="button"
                 >
                   {isSaving ? (
                     <ActivityIndicator color={accentFg} />
                   ) : (
                     <Text style={[s.primaryText, { color: accentFg }]}>
-                      Confirm {discoveredBanks.length} account{discoveredBanks.length === 1 ? '' : 's'}
+                      Add {selectedBanks.length} account{selectedBanks.length === 1 ? '' : 's'}
                     </Text>
                   )}
                 </Pressable>
                 <Pressable onPress={finish} disabled={isSaving} style={s.secondary} accessibilityRole="button">
-                  <Text style={[s.secondaryText, { color: muted }]}>Skip and add manually</Text>
+                  <Text style={[s.secondaryText, { color: muted }]}>Skip for now</Text>
                 </Pressable>
               </>
             ) : (
-              <PrimaryButton label="Continue to dashboard" onPress={finish} />
+              <PrimaryButton label="Continue" onPress={finish} />
             )}
           </Animated.View>
+
+          <Modal
+            visible={!!editingBank}
+            transparent
+            animationType="slide"
+            statusBarTranslucent
+            navigationBarTranslucent
+            onRequestClose={() => setEditingId(null)}
+          >
+            <KeyboardAvoidingView behavior="padding" style={s.sheetOverlay}>
+              <Pressable style={s.sheetBackdrop} onPress={() => setEditingId(null)} accessibilityLabel="Close" />
+              {editingBank && (
+                <View style={[s.sheet, { backgroundColor: surface, paddingBottom: Math.max(insets.bottom, 16) + 8 }]}>
+                  <View style={[s.grabBar, { backgroundColor: line }]} />
+                  <View style={s.sheetHead}>
+                    <View style={[s.logoWrap, { borderColor: line }]}>
+                      <BankIcon code={editingBank.bankCode} name={editingBank.bankName} size={34} />
+                    </View>
+                    <View style={s.bankRowText}>
+                      <Text style={[s.bankRowName, { color: ink }]} numberOfLines={1}>{editingBank.bankName}</Text>
+                      <Text style={[s.bankRowMeta, { color: muted }]}>{editingBank.accountType}</Text>
+                    </View>
+                  </View>
+
+                  <View style={s.sheetFields}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[s.fieldLabel, { color: muted }]}>Last 4 digits</Text>
+                      <View style={[s.fieldBox, { backgroundColor: pageBg, borderColor: sheetError ? (isDark ? '#FFA8A8' : '#C92A2A') : line }]}>
+                        <Text style={[s.fieldPrefix, { color: muted }]}>••</Text>
+                        <TextInput
+                          value={draftSuffix}
+                          onChangeText={(t) => {
+                            setDraftSuffix(t.replace(/\D/g, ''));
+                            if (sheetError) setSheetError('');
+                          }}
+                          keyboardType="number-pad"
+                          maxLength={4}
+                          placeholder="0000"
+                          placeholderTextColor={muted}
+                          autoFocus={!hasValidSuffix(editingBank)}
+                          style={[s.fieldInput, { color: ink }]}
+                          accessibilityLabel="Account last 4 digits"
+                        />
+                      </View>
+                    </View>
+                    <View style={{ flex: 1.3 }}>
+                      <Text style={[s.fieldLabel, { color: muted }]}>Balance</Text>
+                      <View style={[s.fieldBox, { backgroundColor: pageBg, borderColor: line }]}>
+                        <Text style={[s.fieldPrefix, { color: muted }]}>₹</Text>
+                        <TextInput
+                          value={draftBalance}
+                          onChangeText={(t) => setDraftBalance(t.replace(/[^0-9.]/g, ''))}
+                          keyboardType="decimal-pad"
+                          placeholder="0"
+                          placeholderTextColor={muted}
+                          style={[s.fieldInput, { color: ink }]}
+                          accessibilityLabel="Current balance"
+                        />
+                      </View>
+                    </View>
+                  </View>
+
+                  {sheetError ? (
+                    <Text style={[s.sheetError, { color: isDark ? '#FFA8A8' : '#C92A2A' }]}>{sheetError}</Text>
+                  ) : null}
+
+                  <Pressable
+                    onPress={saveEditor}
+                    style={({ pressed }) => [s.primary, { backgroundColor: accent, marginTop: 20 }, pressed && { transform: [{ scale: 0.98 }] }]}
+                    accessibilityRole="button"
+                  >
+                    <Text style={[s.primaryText, { color: accentFg }]}>Save</Text>
+                  </Pressable>
+                </View>
+              )}
+            </KeyboardAvoidingView>
+          </Modal>
         </View>
       )}
 
@@ -503,35 +581,6 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
         </>
       )}
 
-      {phase === 'sim_mismatch' && (
-        <>
-          <View style={s.center}>
-            <Animated.View entering={ZoomIn.springify().damping(12)} style={s.hero}>
-              <View style={[s.ring, { borderColor: isDark ? 'rgba(239,68,68,0.25)' : 'rgba(220,38,38,0.18)' }]} />
-              <View style={[s.heroCore, { backgroundColor: isDark ? 'rgba(239,68,68,0.18)' : '#FEE2E2' }]}>
-                <Feather name="shield" size={36} color={isDark ? '#F87171' : '#DC2626'} />
-              </View>
-            </Animated.View>
-            <Text style={[s.stateTitle, { color: ink, marginTop: 24, fontFamily: display, fontWeight: display ? undefined : '800' }]}>
-              Different SIM detected
-            </Text>
-            <Text style={[s.stateSub, { color: muted }]}>
-              This phone’s active SIM card doesn’t match your registered Regent Money number.
-            </Text>
-            <View style={[s.point, { marginTop: 22, paddingHorizontal: 12 }]}>
-              <View style={[s.pointIcon, { backgroundColor: soft }]}>
-                <Feather name="lock" size={16} color={accent} />
-              </View>
-              <Text style={[s.pointText, { color: ink, fontSize: 13, lineHeight: 18 }]}>
-                SMS tracking is automatically paused on this device so this phone’s personal messages stay private.
-              </Text>
-            </View>
-          </View>
-          <Animated.View entering={FadeInDown.delay(300).duration(400)}>
-            <PrimaryButton label="Continue to dashboard" onPress={finish} />
-          </Animated.View>
-        </>
-      )}
     </View>
   );
 };
@@ -575,43 +624,52 @@ const s = StyleSheet.create({
   stateTitle: { fontSize: 24, letterSpacing: -0.4, marginTop: 24, textAlign: 'center' },
   stateSub: { fontSize: 15, lineHeight: 22, marginTop: 8, textAlign: 'center', maxWidth: 300 },
 
-  bankCard: {
-    borderWidth: 1,
-    borderRadius: 20,
-    padding: 16,
-    marginBottom: 12,
-  },
-  bankCardHead: {
+  eyebrow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    alignSelf: 'flex-start',
+    gap: 6,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    marginTop: 12,
   },
+  eyebrowText: { fontSize: 12, fontWeight: '600' },
+  reviewTitle: { fontSize: 30, letterSpacing: -0.8, lineHeight: 34, marginTop: 14 },
+  reviewSub: { fontSize: 15, lineHeight: 22, marginTop: 6, marginBottom: 18 },
+
+  totalCard: { borderRadius: 22, paddingHorizontal: 20, paddingVertical: 18, marginBottom: 12 },
+  totalLabel: { fontSize: 13, fontWeight: '500', color: '#A7C9B5' },
+  totalValue: { fontSize: 34, letterSpacing: -1, lineHeight: 40, marginTop: 2, color: LIME, fontVariant: ['tabular-nums'] },
+
+  listCard: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 22, overflow: 'hidden' },
+  bankRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 14, gap: 12 },
+  bankRowMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  bankRowText: { flex: 1, minWidth: 0 },
+  bankRowName: { fontSize: 15, fontWeight: '700' },
+  bankRowMeta: { fontSize: 12, marginTop: 2 },
+  bankRowBalance: { fontSize: 15, fontWeight: '700', fontVariant: ['tabular-nums'] },
   logoWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    borderWidth: 1,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    borderWidth: StyleSheet.hairlineWidth,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#FFFFFF',
     overflow: 'hidden',
   },
-  bankCardName: {
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  bankCardType: {
-    fontSize: 12,
-    marginTop: 2,
-  },
-  trashBtn: {
-    padding: 8,
-    borderRadius: 10,
-  },
-  bankCardInputs: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
+  missingChip: { alignSelf: 'flex-start', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2, marginTop: 3 },
+  missingChipText: { fontSize: 11, fontWeight: '600' },
+  check: { width: 24, height: 24, borderRadius: 12, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
+
+  sheetOverlay: { flex: 1, justifyContent: 'flex-end' },
+  sheetBackdrop: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(0,0,0,0.45)' },
+  sheet: { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 24, paddingTop: 10 },
+  grabBar: { width: 40, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: 18 },
+  sheetHead: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 20 },
+  sheetFields: { flexDirection: 'row', gap: 10 },
+  sheetError: { fontSize: 13, fontWeight: '600', marginTop: 10 },
   fieldLabel: {
     fontSize: 12,
     fontWeight: '600',

@@ -3,7 +3,6 @@ package com.anonymous.regentmoney
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
-import android.content.pm.ServiceInfo
 import android.graphics.BitmapFactory
 import android.os.Build
 import android.util.Log
@@ -76,7 +75,6 @@ class SmsDirectSyncWorker(context: Context, workerParams: WorkerParameters) : Wo
 
             val workRequest = OneTimeWorkRequestBuilder<SmsDirectSyncWorker>()
                 .addTag(TAG_SMS_SYNC)
-                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
                 .setConstraints(constraints)
                 .setInputData(inputData)
                 .setBackoffCriteria(
@@ -87,27 +85,7 @@ class SmsDirectSyncWorker(context: Context, workerParams: WorkerParameters) : Wo
                 .build()
 
             WorkManager.getInstance(context).enqueue(workRequest)
-            Log.d(TAG, "Enqueued expedited WorkManager SMS direct sync request for sender $sender (user: $currentUserId)")
-        }
-    }
-
-    override fun getForegroundInfo(): ForegroundInfo {
-        val channelId = "regent_sync"
-        val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            nm.createNotificationChannel(
-                NotificationChannel(channelId, "Background sync", NotificationManager.IMPORTANCE_MIN)
-            )
-        }
-        val notification = NotificationCompat.Builder(applicationContext, channelId)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("Syncing transaction…")
-            .setPriority(NotificationCompat.PRIORITY_MIN)
-            .build()
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ForegroundInfo(4201, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            ForegroundInfo(4201, notification)
+            Log.d(TAG, "Enqueued WorkManager SMS direct sync request for sender $sender (user: $currentUserId)")
         }
     }
 
@@ -127,8 +105,9 @@ class SmsDirectSyncWorker(context: Context, workerParams: WorkerParameters) : Wo
 
         // Read token and active user at execution time
         val prefs = applicationContext.getSharedPreferences("regent_native_prefs", Context.MODE_PRIVATE)
-        val rawToken = prefs.getString("auth_access_token", null)
-        val token = KeystoreHelper.decrypt(rawToken) ?: rawToken
+        KeystoreHelper.init(applicationContext)
+        val hasStoredToken = !prefs.getString("auth_access_token", null).isNullOrBlank()
+        val token = KeystoreHelper.readWrapped(applicationContext, "auth_access_token")
         val currentUserId = prefs.getString("user_id", null)
         val enqueuedUserId = inputData.getString(KEY_USER_ID)
 
@@ -144,7 +123,13 @@ class SmsDirectSyncWorker(context: Context, workerParams: WorkerParameters) : Wo
         }
 
         if (token.isNullOrBlank()) {
-            Log.w(TAG, "No user auth token found or keystore decryption failed. Skipping native ingestion.")
+            if (hasStoredToken) {
+                // Token is still wrapped by the pre-1.0.57 key, which only opens while the phone is
+                // unlocked; retry with backoff instead of sending the ciphertext as a bearer token
+                Log.w(TAG, "Auth token could not be unwrapped yet; retrying later.")
+                return Result.retry()
+            }
+            Log.w(TAG, "No user auth token found. Skipping native ingestion.")
             return Result.failure()
         }
 

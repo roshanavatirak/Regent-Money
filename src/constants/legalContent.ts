@@ -28,6 +28,7 @@ export interface LegalDocument {
 
 export const LEGAL_CONTACT = 'privacy@regentmoney.com';
 export const LEGAL_PUBLISHER = 'Regent Money by Rao Dev Studios';
+export const PRIVACY_POLICY_URL = 'https://raodevstudios.in/privacy';
 
 export const TERMS: LegalDocument = {
   title: 'Terms of service',
@@ -91,7 +92,7 @@ export const TERMS: LegalDocument = {
 
 export const PRIVACY: LegalDocument = {
   title: 'Privacy policy',
-  version: '2.2',
+  version: '2.3',
   effective: 'November 2026',
   summary: [
     'We read only bank messages, on your phone. The message text never leaves it.',
@@ -102,13 +103,13 @@ export const PRIVACY: LegalDocument = {
     {
       heading: 'What we collect',
       points: [
-        { title: 'Account details', text: 'Your name, email and, if you add it, your phone number.' },
+        { title: 'Account details', text: 'Your name, email and, if you add it, your phone number. Regent never reads your phone number or SIM details from your device.' },
         {
           title: 'Bank messages',
           text: 'With your permission, Regent reads SMS from known bank senders and any you add, including in the background as they arrive. Each message is read on your phone; only the amount, type, merchant, date, last digits of the account, available balance and bank reference number are sent to your account. The message text never leaves your phone. Personal messages and OTPs are skipped.',
         },
-        { title: 'SIM number', text: 'We check that this phone’s SIM number matches your account before turning on SMS tracking. The number is checked on your phone and is not sent to us.' },
-        { title: 'Files you import', text: 'Statements and screenshots you choose to upload, to find the transactions in them.' },
+        { title: 'Files you import', text: 'Statements and screenshots you choose to upload, to find the transactions in them. If a statement PDF is password protected, the password you enter is sent with it only to open that file; on your phone it is kept in the device’s secure keystore.' },
+        { title: 'Profile photo', text: 'A photo, if you choose to add one.' },
         { title: 'Profile details', text: 'Things you add yourself, like date of birth, occupation and income.' },
       ],
     },
@@ -127,7 +128,8 @@ export const PRIVACY: LegalDocument = {
     {
       heading: 'Who we share it with',
       paragraphs: [
-        'We never sell your data or share it with advertisers. We use service providers, such as hosting and AI processing, only to run Regent for you.',
+        'We never sell your data or share it with advertisers. We use these service providers only to run Regent for you:',
+        'Render (servers and database hosting); Google Gemini, Groq and Mistral (AI processing of Regent chat messages and of statements and screenshots you import, together with the balances and transactions needed to answer); Cloudinary (profile photos); Brevo (account emails such as verification and password reset); Expo and Firebase Cloud Messaging (push notifications); Google Sign-In (if you choose to sign in with Google).',
       ],
     },
     {

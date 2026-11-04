@@ -3556,6 +3556,16 @@ export default function AppNavigator() {
     },
   };
 
+  const linking = {
+    prefixes: ['regentmoney://', 'https://api.regentmoney.com'],
+    config: {
+      screens: {
+        Login: 'login',
+        Signup: 'signup',
+      },
+    },
+  };
+
   return (
     <SafeAreaProvider>
       <StatusBar style={colors.statusBar} />
@@ -3564,6 +3574,7 @@ export default function AppNavigator() {
           <NavigationContainer
             ref={navigationRef}
             theme={navTheme}
+            linking={linking}
             onReady={() => {
               if (Platform.OS === 'android' && user === null) {
                 NativeModules?.NativeStorage?.notifyAppReady?.();

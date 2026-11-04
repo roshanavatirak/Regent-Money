@@ -88,8 +88,8 @@ android {
     compileSdk rootProject.ext.compileSdkVersion
 
     namespace 'com.anonymous.regentmoney'
-    def appVersionCode = Integer.parseInt(findProperty('versionCode') ?: '140')
-    def appVersionName = findProperty('versionName') ?: '1.0.57'
+    def appVersionCode = Integer.parseInt(findProperty('versionCode') ?: '141')
+    def appVersionName = findProperty('versionName') ?: '1.0.58'
 
     defaultConfig {
         applicationId 'com.anonymous.regentmoney'
@@ -113,16 +113,22 @@ android {
             keyPassword 'android'
         }
         release {
-            if (file('regent-release.keystore').exists()) {
-                storeFile file('regent-release.keystore')
-                storePassword 'regentmoneyrelease123'
-                keyAlias 'regentmoney'
-                keyPassword 'regentmoneyrelease123'
-            } else {
-                storeFile file('debug.keystore')
-                storePassword 'android'
-                keyAlias 'androiddebugkey'
-                keyPassword 'android'
+            // Release signing secrets never live in git. They come from android/keystore.properties
+            // (gitignored), -P gradle properties, or environment variables (CI).
+            def keystoreProps = new Properties()
+            def keystorePropsFile = rootProject.file('keystore.properties')
+            if (keystorePropsFile.exists()) {
+                keystorePropsFile.withInputStream { keystoreProps.load(it) }
+            }
+            def signingValue = { String key ->
+                keystoreProps.getProperty(key) ?: findProperty(key) ?: System.getenv(key)
+            }
+            def releaseStoreFile = signingValue('REGENT_RELEASE_STORE_FILE') ?: 'regent-release.keystore'
+            if (file(releaseStoreFile).exists() && signingValue('REGENT_RELEASE_STORE_PASSWORD')) {
+                storeFile file(releaseStoreFile)
+                storePassword signingValue('REGENT_RELEASE_STORE_PASSWORD')
+                keyAlias signingValue('REGENT_RELEASE_KEY_ALIAS') ?: 'regentmoney'
+                keyPassword signingValue('REGENT_RELEASE_KEY_PASSWORD') ?: signingValue('REGENT_RELEASE_STORE_PASSWORD')
             }
         }
     }
@@ -131,6 +137,12 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
+            def isReleaseTask = gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') }
+            if (isReleaseTask && signingConfigs.release.storeFile == null) {
+                // Fail loudly instead of silently shipping a debug-signed release build
+                throw new GradleException("Release signing is not configured. Create android/keystore.properties " +
+                    "(see android/keystore.properties.example) or set REGENT_RELEASE_* environment variables.")
+            }
             signingConfig signingConfigs.release
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
@@ -178,8 +190,9 @@ android {
     }
 
     lint {
-        abortOnError false
-        checkReleaseBuilds false
+        // Release builds run lint-vital (fatal checks only, e.g. crash-level API misuse) and stop on errors
+        abortOnError true
+        checkReleaseBuilds true
         checkDependencies false
     }
 }

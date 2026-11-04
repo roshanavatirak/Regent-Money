@@ -25,7 +25,7 @@ class NativeStorageModule(reactContext: ReactApplicationContext) : ReactContextB
             constants["MMKV_KEY"] = KeystoreHelper.getOrCreateMmkvKey(reactApplicationContext)
             constants["SECURITY_LEVEL"] = KeystoreHelper.getSecurityLevel()
         } catch (e: Exception) {
-            constants["MMKV_KEY"] = "regent_fallback_key"
+            constants["MMKV_KEY"] = null
             constants["SECURITY_LEVEL"] = "UNKNOWN"
         }
         return constants
@@ -93,28 +93,6 @@ class NativeStorageModule(reactContext: ReactApplicationContext) : ReactContextB
     }
 
     @ReactMethod
-    fun setSmsTrackingDisabled(disabled: Boolean, promise: Promise) {
-        try {
-            val prefs = reactApplicationContext.getSharedPreferences("regent_native_prefs", Context.MODE_PRIVATE)
-            prefs.edit().putBoolean("sms_tracking_disabled", disabled).apply()
-            promise.resolve(true)
-        } catch (e: Exception) {
-            promise.reject("STORAGE_ERROR", e.message, e)
-        }
-    }
-
-    @ReactMethod
-    fun isSmsTrackingDisabled(promise: Promise) {
-        try {
-            val prefs = reactApplicationContext.getSharedPreferences("regent_native_prefs", Context.MODE_PRIVATE)
-            val disabled = prefs.getBoolean("sms_tracking_disabled", false)
-            promise.resolve(disabled)
-        } catch (e: Exception) {
-            promise.resolve(false)
-        }
-    }
-
-    @ReactMethod
     fun notifyAppReady(promise: Promise) {
         try {
             MainActivity.onReactNativeReady()
@@ -162,24 +140,9 @@ class NativeStorageModule(reactContext: ReactApplicationContext) : ReactContextB
     @ReactMethod
     fun getOrCreateDeviceDek(promise: Promise) {
         try {
-            val prefs = reactApplicationContext.getSharedPreferences("regent_native_prefs", Context.MODE_PRIVATE)
-            val wrappedDek = prefs.getString("device_wrapped_dek", null)
-            if (!wrappedDek.isNullOrBlank()) {
-                val decrypted = KeystoreHelper.decrypt(wrappedDek)
-                if (!decrypted.isNullOrBlank()) {
-                    promise.resolve(decrypted)
-                    return
-                }
-            }
-
-            // Generate cryptographically secure random 256-bit software DEK
-            val randomBytes = ByteArray(32)
-            java.security.SecureRandom().nextBytes(randomBytes)
-            val hexDek = bytesToHex(randomBytes)
-            val newlyWrapped = KeystoreHelper.encrypt(hexDek)
-                ?: throw IllegalStateException("Failed to wrap software DEK with hardware KEK")
-            prefs.edit().putString("device_wrapped_dek", newlyWrapped).apply()
-            promise.resolve(hexDek)
+            // Never replaces a DEK that exists but cannot be unwrapped right now: that would
+            // make every field encrypted with it unreadable
+            promise.resolve(KeystoreHelper.getOrCreateWrappedSecret(reactApplicationContext, "device_wrapped_dek"))
         } catch (e: Exception) {
             promise.reject("CRYPTO_ERROR", e.message, e)
         }

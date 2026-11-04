@@ -375,6 +375,20 @@ function EmailVerificationModal({ visible, email, onClose, onProceedToLogin }: E
     }
   };
 
+  const handleOpenEmailApp = async () => {
+    try {
+      const url = Platform.OS === 'android' ? 'mailto:' : 'message:';
+      const supported = await Linking.canOpenURL(url).catch(() => false);
+      if (supported) {
+        await Linking.openURL(url);
+      } else if (Platform.OS === 'android') {
+        await Linking.openURL('https://mail.google.com').catch(() => {});
+      }
+    } catch {
+      // Fallback
+    }
+  };
+
   return (
     <Modal visible={visible} transparent animationType="fade" statusBarTranslucent onRequestClose={onClose}>
       <View style={styles.verifyModalBackdrop}>
@@ -407,8 +421,24 @@ function EmailVerificationModal({ visible, email, onClose, onProceedToLogin }: E
             </Animated.Text>
           )}
 
-          {/* Single clean primary button */}
-          <Button label="Back to Log In" onPress={onProceedToLogin} style={styles.verifyPrimaryBtn} />
+          {/* Primary Action: Open Email App */}
+          <Button
+            label="Open Email App"
+            onPress={handleOpenEmailApp}
+            leading={<Feather name="external-link" size={16} color={C.white} style={{ marginRight: 8 }} />}
+            style={styles.verifyPrimaryBtn}
+          />
+
+          {/* Secondary Action: Go to Log In */}
+          <Pressable
+            onPress={onProceedToLogin}
+            hitSlop={10}
+            style={styles.verifyLoginLinkBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Go to Log In"
+          >
+            <Text style={styles.verifyLoginLinkText}>Go to Log In</Text>
+          </Pressable>
 
           {/* Subtle Resend option */}
           <Pressable
@@ -1370,9 +1400,22 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
     }
   };
 
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('blur', () => {
+      setShowVerifyModal(false);
+    });
+    return unsubscribe;
+  }, [navigation]);
+
   const closeVerify = () => {
     setShowVerifyModal(false);
-    navigation.navigate('Login');
+  };
+
+  const handleProceedToLogin = () => {
+    setShowVerifyModal(false);
+    setTimeout(() => {
+      navigation.replace('Login');
+    }, 100);
   };
 
   return (
@@ -1522,7 +1565,7 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
         visible={showVerifyModal}
         email={registeredEmail}
         onClose={closeVerify}
-        onProceedToLogin={closeVerify}
+        onProceedToLogin={handleProceedToLogin}
       />
     </View>
   );
@@ -1876,6 +1919,18 @@ const styles = StyleSheet.create({
   verifyPrimaryBtn: {
     width: '100%',
     marginTop: 22,
+  },
+  verifyLoginLinkBtn: {
+    marginTop: 10,
+    marginBottom: 4,
+    paddingVertical: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  verifyLoginLinkText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: C.green,
   },
   verifyResendRow: {
     marginTop: 14,

@@ -33,8 +33,11 @@ class MainActivity : ReactActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     currentActivity = WeakReference(this)
-    // Screen capture protection (FLAG_SECURE) disabled to allow screenshots
+    // Screen capture protection (FLAG_SECURE) disabled to allow screenshots everywhere
     window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      setRecentsScreenshotEnabled(true)
+    }
 
     // Set the theme to AppTheme BEFORE onCreate to support
     // coloring the background, status bar, and navigation bar.
@@ -113,6 +116,7 @@ class MainActivity : ReactActivity() {
 
   override fun onResume() {
     super.onResume()
+    window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
     introOverlay?.resume()
   }
 

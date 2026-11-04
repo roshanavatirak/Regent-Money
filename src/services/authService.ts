@@ -580,6 +580,25 @@ export const authService = {
    * Log out session.
    */
   async logOut(): Promise<void> {
+    // Revoke the session on the server first, so the token stops working even if a copy exists.
+    // Best effort with a short timeout: sign-out must still finish offline.
+    const currentToken = tokenStore.getAccessToken();
+    if (currentToken) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+      try {
+        await fetch(`${BACKEND_URL}/auth/logout`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${currentToken}` },
+          signal: controller.signal,
+        });
+      } catch {
+        // Offline or server unreachable; the local wipe below still runs
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
     try {
       const { GoogleSignin } = require('@react-native-google-signin/google-signin');
       const isSignedIn = await GoogleSignin.isSignedIn();

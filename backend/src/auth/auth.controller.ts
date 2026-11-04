@@ -307,6 +307,13 @@ export class AuthController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Post('logout')
+  @HttpCode(HttpStatus.OK)
+  async logout(@Req() req: any) {
+    return this.authService.revokeSessions(req.user.id);
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Post('account/request-deletion')
   @HttpCode(HttpStatus.OK)
   async requestAccountDeletion(
@@ -495,8 +502,40 @@ export class AuthController {
             </div>
             <h1>Account Verified!</h1>
             <p>Thank you for verifying your email address. Your Regent Money account is now fully active. You can return to the mobile application to start managing your wealth.</p>
-            <a href="regentmoney://login" class="btn">Launch Regent Money App</a>
+            <a href="intent://login#Intent;scheme=regentmoney;package=com.anonymous.regentmoney;end" class="btn" id="openAppBtn" onclick="return launchApp(event)">Open Regent Money App</a>
           </div>
+          <script>
+            function launchApp(e) {
+              if (e && e.preventDefault) e.preventDefault();
+              var isAndroid = /Android/i.test(navigator.userAgent);
+              var isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+              var directUrl = "regentmoney://login";
+              var intentUrl = "intent://login#Intent;scheme=regentmoney;package=com.anonymous.regentmoney;end";
+
+              if (isAndroid) {
+                var isChrome = /Chrome|CriOS/i.test(navigator.userAgent) && !/SamsungBrowser|Firefox|EdgA/i.test(navigator.userAgent);
+                if (isChrome) {
+                  window.location.href = intentUrl;
+                } else {
+                  window.location.href = directUrl;
+                  setTimeout(function() {
+                    window.location.href = intentUrl;
+                  }, 600);
+                }
+              } else if (isIOS) {
+                window.location.href = directUrl;
+              } else {
+                window.location.href = directUrl;
+              }
+              return false;
+            }
+
+            window.addEventListener("load", function() {
+              setTimeout(function() {
+                launchApp();
+              }, 400);
+            });
+          </script>
         </body>
         </html>
       `);
@@ -638,7 +677,7 @@ export class AuthController {
             </div>
             <h1>Verification Failed</h1>
             <p>${e.message || 'The verification link is invalid or has expired. Please contact support or sign up again.'}</p>
-            <a href="regentmoney://signup" class="btn">Go Back</a>
+            <a href="intent://signup#Intent;scheme=regentmoney;package=com.anonymous.regentmoney;end" class="btn" id="goBackBtn">Open Regent Money App</a>
           </div>
         </body>
         </html>

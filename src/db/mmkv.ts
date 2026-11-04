@@ -26,42 +26,44 @@ if (Platform.OS === 'web') {
     const createMMKV = MMKVModule?.createMMKV;
     const MMKVClass = MMKVModule?.MMKV;
 
-    // MMKV encryption keys for AES-128 must be <= 16 bytes
+    // 64-hex-char key generated and wrapped by the hardware Keystore. Null when the Keystore
+    // could not unwrap it this launch: we then stay in memory rather than write plaintext.
     const nativeKey =
       NativeModules?.NativeStorage?.getConstants?.()?.MMKV_KEY ||
       NativeModules?.NativeStorage?.MMKV_KEY;
-    const rawKey = nativeKey || 'regent-vault-device-key';
-    const encryptionKey = typeof rawKey === 'string' && rawKey.length > 0
-      ? rawKey.slice(0, 16)
-      : undefined;
+    const hasNativeKey = typeof nativeKey === 'string' && nativeKey.length >= 32;
 
-    const mmkvConfig: any = {
-      id: 'regent-money-settings',
-    };
-    if (encryptionKey) {
-      mmkvConfig.encryptionKey = encryptionKey;
-    }
+    // Builds before 1.0.57 used the first 16 chars as an AES-128 key (64 bits of entropy).
+    // Stores are upgraded once to AES-256 with 32 chars (128 bits); the format marker lives
+    // in a separate unencrypted instance because it must be read before the store is opened.
+    const legacyKey = hasNativeKey ? nativeKey.slice(0, 16) : '';
+    const strongKey = hasNativeKey ? nativeKey.slice(0, 32) : '';
+    const KEY_FORMAT_MARKER = 'settings_key_format';
+    const KEY_FORMAT_AES256 = 'aes256-v2';
 
-    if (typeof createMMKV === 'function') {
+    if (hasNativeKey && typeof createMMKV === 'function') {
       try {
-        storage = createMMKV(mmkvConfig);
-      } catch (err: any) {
-        console.warn('[MMKV] Failed with encryption key, falling back to unencrypted:', err?.message || err);
-        try {
-          storage = createMMKV({ id: 'regent-money-settings' });
-        } catch {
-          // ignore
+        const meta = createMMKV({ id: 'regent-money-meta' });
+        if (meta.getString(KEY_FORMAT_MARKER) === KEY_FORMAT_AES256) {
+          storage = createMMKV({ id: 'regent-money-settings', encryptionKey: strongKey, encryptionType: 'AES-256' });
+        } else {
+          storage = createMMKV({ id: 'regent-money-settings', encryptionKey: legacyKey });
+          try {
+            storage.encrypt(strongKey, 'AES-256');
+            meta.set(KEY_FORMAT_MARKER, KEY_FORMAT_AES256);
+          } catch (err: any) {
+            console.warn('[MMKV] AES-256 upgrade deferred:', err?.message || err);
+          }
         }
+      } catch (err: any) {
+        console.warn('[MMKV] Encrypted storage unavailable this launch:', err?.message || err);
+        storage = undefined;
       }
-    } else if (typeof MMKVClass === 'function') {
+    } else if (hasNativeKey && typeof MMKVClass === 'function') {
       try {
-        storage = new MMKVClass(mmkvConfig);
-      } catch (err: any) {
-        try {
-          storage = new MMKVClass({ id: 'regent-money-settings' });
-        } catch {
-          // ignore
-        }
+        storage = new MMKVClass({ id: 'regent-money-settings', encryptionKey: legacyKey });
+      } catch {
+        storage = undefined;
       }
     }
 

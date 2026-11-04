@@ -13,6 +13,7 @@ import {
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../store';
 import { smsPermissionService } from '../services/smsPermissionService';
+import { PRIVACY_POLICY_URL } from '../constants/legalContent';
 import { smsCatchupService } from '../services/smsCatchupService';
 
 interface SmsPermissionModalProps {
@@ -56,7 +57,7 @@ export const SmsPermissionModal: React.FC<SmsPermissionModalProps> = ({
   };
 
   const openPrivacyPolicy = () => {
-    Linking.openURL('https://regentmoney.com/privacy').catch(() => {});
+    Linking.openURL(PRIVACY_POLICY_URL).catch(() => {});
   };
 
   const styles = getStyles(colors, isDark);
@@ -114,7 +115,7 @@ export const SmsPermissionModal: React.FC<SmsPermissionModalProps> = ({
               <View style={styles.featureTextWrap}>
                 <Text style={styles.featureTitle}>How it's used</Text>
                 <Text style={styles.featureDesc}>
-                  Bank transaction messages are read on your phone, including in the background as they arrive. Only the amount, merchant, date, account digits and balance are sent securely to your Regent account; the message text never leaves your phone. We also check this phone's SIM number matches your account; the number never leaves your phone.
+                  Bank transaction messages are read on your phone, including in the background as they arrive. Only the amount, merchant, date, account digits and balance are sent securely to your Regent account; the message text never leaves your phone.
                 </Text>
               </View>
             </View>

@@ -60,13 +60,6 @@ export class SyncController {
     return this.syncService.getIncomeRecords(userId);
   }
 
-  @Post('inject-mock')
-  @HttpCode(HttpStatus.OK)
-  async injectMockData(@Req() req: any) {
-    const userId = req.user.id;
-    return this.syncService.injectMockData(userId);
-  }
-
   @Post('verify-bank')
   @HttpCode(HttpStatus.OK)
   async verifyBankAccount(

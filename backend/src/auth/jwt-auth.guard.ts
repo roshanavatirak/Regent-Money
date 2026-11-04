@@ -40,10 +40,16 @@ export class JwtAuthGuard implements CanActivate {
 
     const cacheKey = `user:status:${userId}`;
 
-    // 1. Fast Redis Status Check ('active' | 'banned' | 'deleted')
+    // 1. Fast Redis Status Check ('active[:<tokensValidAfter>]' | 'banned' | 'deleted')
     let status: 'active' | 'banned' | 'deleted' | null = null;
+    let tokensValidAfter = 0;
     try {
-      status = (await this.redisService.get(cacheKey)) as any;
+      const cached = await this.redisService.get(cacheKey);
+      if (cached) {
+        const [cachedStatus, validAfter] = cached.split(':');
+        status = cachedStatus as any;
+        tokensValidAfter = Number(validAfter) || 0;
+      }
     } catch {
       status = null; // On Redis failure, fall through to database
     }
@@ -51,7 +57,7 @@ export class JwtAuthGuard implements CanActivate {
     // 2. Database Fallback on Cache Miss / Redis Failure
     if (!status) {
       const rows = await this.dataSource.query(
-        `SELECT id, is_banned, is_deleted FROM core.users WHERE id = $1`,
+        `SELECT id, is_banned, is_deleted, tokens_valid_after FROM core.users WHERE id = $1`,
         [userId],
       );
 
@@ -65,8 +71,9 @@ export class JwtAuthGuard implements CanActivate {
         await this.redisService.set(cacheKey, 'banned', 3600).catch(() => {});
       } else {
         status = 'active';
-        // Cache active status for 60s
-        await this.redisService.set(cacheKey, 'active', 60).catch(() => {});
+        tokensValidAfter = Number(rows[0].tokens_valid_after) || 0;
+        // Cache active status (with the sign-out cutoff) for 60s
+        await this.redisService.set(cacheKey, `active:${tokensValidAfter}`, 60).catch(() => {});
       }
     }
 
@@ -86,6 +93,16 @@ export class JwtAuthGuard implements CanActivate {
         error: 'Unauthorized',
         code: 'ACCOUNT_DELETED',
         message: 'This account no longer exists.',
+      });
+    }
+
+    // Tokens issued before the user's last sign-out are revoked
+    if (tokensValidAfter && (typeof payload.iat !== 'number' || payload.iat < tokensValidAfter)) {
+      throw new UnauthorizedException({
+        statusCode: 401,
+        error: 'Unauthorized',
+        code: 'SESSION_REVOKED',
+        message: 'You have been signed out. Please sign in again.',
       });
     }
 

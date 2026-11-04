@@ -88,6 +88,7 @@ export class AuthService implements OnModuleInit {
         ALTER TABLE core.users ADD COLUMN IF NOT EXISTS deletion_feedback TEXT;
         ALTER TABLE core.users ADD COLUMN IF NOT EXISTS restored_at BIGINT;
         ALTER TABLE core.users ADD COLUMN IF NOT EXISTS deletion_cooldown_until BIGINT;
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS tokens_valid_after BIGINT;
         CREATE INDEX IF NOT EXISTS idx_users_deletion_deadline ON core.users(deletion_deadline) WHERE is_scheduled_for_deletion = TRUE;
       `);
 
@@ -611,6 +612,11 @@ export class AuthService implements OnModuleInit {
       throw new UnauthorizedException('Google token does not contain a valid email address');
     }
 
+    // An unverified Google email must never sign in to (or link with) the account that owns it
+    if (payload.email_verified !== true) {
+      throw new UnauthorizedException('Your Google email address is not verified.');
+    }
+
     const email = payload.email.trim().toLowerCase();
     const name = payload.name || payload.given_name || 'Google User';
     const avatarUrl = payload.picture || '';
@@ -935,6 +941,20 @@ export class AuthService implements OnModuleInit {
       }
       throw err;
     }
+  }
+
+  /**
+   * Signs the user out on the server: every access token issued before now stops working,
+   * so a token copied off a device is useless after sign-out.
+   */
+  async revokeSessions(userId: string): Promise<{ success: boolean }> {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    await this.userRepository.query(
+      `UPDATE core.users SET tokens_valid_after = $1 WHERE id = $2`,
+      [nowSeconds, userId],
+    );
+    await this.redisService.del(`user:status:${userId}`).catch(() => false);
+    return { success: true };
   }
 
   async requestAccountDeletion(

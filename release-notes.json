@@ -1,20 +1,16 @@
 {
   "notes": [
     {
-      "title": "Automatic SMS Bank Discovery",
-      "detail": "Instantly scans and detects active bank accounts from SMS alerts upon permission grant, eliminating manual bank account setup."
+      "title": "Email Verification Deep Links",
+      "detail": "Open Regent Money directly from verification emails to log in instantly."
     },
     {
-      "title": "Interactive Account Review & Control",
-      "detail": "Review detected bank accounts, edit 4-digit account numbers, update current balances, and remove unwanted accounts before linking."
+      "title": "Smoother Sign Up",
+      "detail": "One-tap action to open your email app and complete registration quickly."
     },
     {
-      "title": "Smart Historical Catch-up Sync",
-      "detail": "Seamlessly imports the past 30 days of transactions strictly for confirmed accounts with intelligent category classification and accurate local timestamps."
-    },
-    {
-      "title": "Zero-Knowledge Privacy Architecture",
-      "detail": "100% on-device SMS parsing where message text never leaves the phone. Strict hardware-backed envelope encryption (AES-256-GCM + AWS KMS) at rest in the database."
+      "title": "Security & Usability Updates",
+      "detail": "Instant server-side session revocation, hardware keystore fixes, and enabled screenshots."
     }
   ]
 }

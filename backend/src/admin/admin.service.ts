@@ -17,7 +17,11 @@ import { RedisService } from '../redis/redis.service';
 
 export const CASCADE_DELETE_TABLES = [
   { schema: 'core', table: 'notifications', column: 'user_id' },
+  { schema: 'core', table: 'notification_log', column: 'user_id' },
+  { schema: 'core', table: 'user_signals', column: 'user_id' },
+  { schema: 'core', table: 'user_keys', column: 'user_id' },
   { schema: 'core', table: 'bank_profiles', column: 'user_id' },
+  { schema: 'finance', table: 'applied_ops', column: 'user_id' },
   { schema: 'finance', table: 'budget_declarations', column: 'user_id' },
   { schema: 'finance', table: 'budget_transaction_exclusions', column: 'user_id' },
   { schema: 'finance', table: 'income_records', column: 'user_id' },
@@ -372,7 +376,7 @@ export class AdminService {
           const finalReason = 'Automated 7-day expiration hard purge';
           const avatarUrl = target.avatarUrl;
 
-          // Atomic purge across all 18 database cascade tables
+          // Atomic purge across all database cascade tables
           await this.dataSource.transaction(async (manager) => {
             // 1. Audit log
             await manager.query(

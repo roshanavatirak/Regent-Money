@@ -15,8 +15,12 @@ object KeystoreHelper {
     private const val ANDROID_KEYSTORE = "AndroidKeyStore"
     private const val LEGACY_KEY_ALIAS = "regent_hardware_master_key"
     private const val KEK_ALIAS_PREFIX = "regent_hardware_master_key_v"
-    private const val KEK_VERSION = 1
+    // v2 drops setUnlockedDeviceRequired so background SMS sync can read the token while the
+    // phone is locked. v1 values are still readable and get re-wrapped under v2 on first use.
+    private const val KEK_VERSION = 2
     const val CURRENT_KEY_ALIAS = "$KEK_ALIAS_PREFIX$KEK_VERSION"
+    private const val PREVIOUS_KEY_ALIAS = "${KEK_ALIAS_PREFIX}1"
+    private const val PREFS = "regent_native_prefs"
 
     private const val AES_GCM_NO_PADDING = "AES/GCM/NoPadding"
     private const val GCM_IV_LENGTH = 12
@@ -47,8 +51,6 @@ object KeystoreHelper {
             if (useStrongBox) {
                 builder.setIsStrongBoxBacked(true)
             }
-            // Device unlock requirement: keys are only accessible when the device itself is unlocked
-            builder.setUnlockedDeviceRequired(true)
         }
 
         // Storage master key MUST NOT require interactive biometric authentication at cold boot.
@@ -117,7 +119,10 @@ object KeystoreHelper {
         }
     }
 
-    fun decrypt(encryptedText: String?): String? {
+    fun decrypt(encryptedText: String?): String? = decryptDetailed(encryptedText)?.first
+
+    /** Returns the plaintext and whether it was wrapped by an older key and should be re-wrapped. */
+    private fun decryptDetailed(encryptedText: String?): Pair<String, Boolean>? {
         if (encryptedText.isNullOrEmpty()) return null
         if (!encryptedText.startsWith(PREFIX_V1)) {
             return null
@@ -135,47 +140,64 @@ object KeystoreHelper {
         System.arraycopy(combined, GCM_IV_LENGTH, cipherBytes, 0, cipherBytes.size)
         val spec = GCMParameterSpec(GCM_TAG_LENGTH, iv)
 
-        // 1. Try decrypting with CURRENT_KEY_ALIAS
-        try {
-            val key = getOrCreateSecretKey()
-            val cipher = Cipher.getInstance(AES_GCM_NO_PADDING)
-            cipher.init(Cipher.DECRYPT_MODE, key, spec)
-            val plainBytes = cipher.doFinal(cipherBytes)
-            return String(plainBytes, Charsets.UTF_8)
-        } catch (e: KeyPermanentlyInvalidatedException) {
-            handleKeyInvalidated()
-            return null
-        } catch (_: Exception) {
-            // Attempt fallback to legacy key alias below
-        }
-
-        // 2. Try decrypting with LEGACY_KEY_ALIAS (for users upgrading from 1.0.53)
-        try {
-            val legacyKey = getExistingSecretKey(LEGACY_KEY_ALIAS)
-            if (legacyKey != null) {
+        // Try the current key first, then older ones (v1 needs the phone unlocked; legacy is pre-1.0.53).
+        // GCM's auth tag tells us which key a value was wrapped with.
+        for (alias in listOf(CURRENT_KEY_ALIAS, PREVIOUS_KEY_ALIAS, LEGACY_KEY_ALIAS)) {
+            val key = getExistingSecretKey(alias) ?: continue
+            try {
                 val cipher = Cipher.getInstance(AES_GCM_NO_PADDING)
-                cipher.init(Cipher.DECRYPT_MODE, legacyKey, spec)
-                val plainBytes = cipher.doFinal(cipherBytes)
-                val decrypted = String(plainBytes, Charsets.UTF_8)
-                // Successfully decrypted with legacy key; re-encrypt under current alias for future boots
-                try {
-                    val reEncrypted = encrypt(decrypted)
-                    if (!reEncrypted.isNullOrBlank()) {
-                        appContext?.let { ctx ->
-                            ctx.getSharedPreferences("regent_native_prefs", android.content.Context.MODE_PRIVATE)
-                                .edit()
-                                .putString("mmkv_keystore_enc_key", reEncrypted)
-                                .apply()
-                        }
-                    }
-                } catch (_: Exception) {}
-                return decrypted
+                cipher.init(Cipher.DECRYPT_MODE, key, spec)
+                val plain = String(cipher.doFinal(cipherBytes), Charsets.UTF_8)
+                return Pair(plain, alias != CURRENT_KEY_ALIAS)
+            } catch (e: KeyPermanentlyInvalidatedException) {
+                if (alias == CURRENT_KEY_ALIAS) {
+                    handleKeyInvalidated()
+                    return null
+                }
+            } catch (_: Exception) {
+                // Wrong key or locked device; try the next alias
             }
-        } catch (_: Exception) {
-            // Legacy decryption also failed
+        }
+        return null
+    }
+
+    /** True when any wrapping key still exists, i.e. a failed unwrap may be temporary. */
+    private fun hasAnyWrappingKey(): Boolean {
+        return listOf(CURRENT_KEY_ALIAS, PREVIOUS_KEY_ALIAS, LEGACY_KEY_ALIAS).any { getExistingSecretKey(it) != null }
+    }
+
+    /**
+     * Reads and unwraps the value stored under [prefKey], re-wrapping it with the current key
+     * when it was written under an older one. Returns null when it is missing or cannot be
+     * unwrapped right now.
+     */
+    fun readWrapped(context: android.content.Context, prefKey: String): String? {
+        val prefs = context.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+        val (plain, needsRewrap) = decryptDetailed(prefs.getString(prefKey, null)) ?: return null
+        if (needsRewrap) {
+            encrypt(plain)?.let { prefs.edit().putString(prefKey, it).apply() }
+        }
+        return plain
+    }
+
+    /**
+     * Unwraps the random secret stored under [prefKey], creating one if none exists yet.
+     * Throws if a stored secret exists but cannot be unwrapped while its key is still present:
+     * replacing it would make everything encrypted with it unreadable for good.
+     */
+    fun getOrCreateWrappedSecret(context: android.content.Context, prefKey: String): String {
+        val prefs = context.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+        readWrapped(context, prefKey)?.let { if (it.isNotBlank()) return it }
+        if (!prefs.getString(prefKey, null).isNullOrBlank() && hasAnyWrappingKey()) {
+            throw IllegalStateException("Stored secret could not be unwrapped; keeping it for the next attempt")
         }
 
-        return null
+        val randomBytes = ByteArray(32)
+        java.security.SecureRandom().nextBytes(randomBytes)
+        val hex = randomBytes.joinToString("") { "%02x".format(it) }
+        val wrapped = encrypt(hex) ?: throw IllegalStateException("Hardware keystore encryption failed")
+        prefs.edit().putString(prefKey, wrapped).commit()
+        return hex
     }
 
     private fun handleKeyInvalidated() {
@@ -194,36 +216,24 @@ object KeystoreHelper {
                     .edit()
                     .remove("device_wrapped_dek")
                     .remove("auth_access_token")
+                    .remove("mmkv_keystore_enc_key")
                     .apply()
                 ctx.deleteDatabase("regent_vault.db")
+                // The local MMKV store was encrypted with the lost key and can never be read again;
+                // drop it so a fresh one is created (data comes back from the cloud on sign-in)
+                java.io.File(ctx.filesDir, "mmkv").listFiles()
+                    ?.filter { it.name.startsWith("regent-money-settings") }
+                    ?.forEach { it.delete() }
             } catch (_: Exception) {}
         }
     }
 
-    fun getOrCreateMmkvKey(context: android.content.Context): String {
+    /** Null when the key cannot be unwrapped this launch; JS then keeps data in memory only. */
+    fun getOrCreateMmkvKey(context: android.content.Context): String? {
         return try {
-            val prefs = context.getSharedPreferences("regent_native_prefs", android.content.Context.MODE_PRIVATE)
-            val encryptedKey = prefs.getString("mmkv_keystore_enc_key", null)
-            if (!encryptedKey.isNullOrBlank()) {
-                val decrypted = decrypt(encryptedKey)
-                if (!decrypted.isNullOrBlank()) {
-                    return decrypted
-                }
-            }
-
-            // Generate cryptographically random 256-bit key
-            val randomBytes = ByteArray(32)
-            java.security.SecureRandom().nextBytes(randomBytes)
-            val hexKey = randomBytes.joinToString("") { "%02x".format(it) }
-
-            val newEncrypted = encrypt(hexKey)
-            if (!newEncrypted.isNullOrBlank()) {
-                prefs.edit().putString("mmkv_keystore_enc_key", newEncrypted).apply()
-            }
-            hexKey
-        } catch (e: Exception) {
-            // Safe fallback if hardware keystore error occurs
-            "regent_device_key_" + android.os.Build.FINGERPRINT.hashCode()
+            getOrCreateWrappedSecret(context, "mmkv_keystore_enc_key")
+        } catch (_: Exception) {
+            null
         }
     }
 }

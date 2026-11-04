@@ -74,6 +74,16 @@ jobs:
           EXPO_PUBLIC_TURNSTILE_SITE_KEY=${{ secrets.EXPO_PUBLIC_TURNSTILE_SITE_KEY || '0x4AAAAAAFS21ZDrV2b2WG7k' }}
           EOF
 
+      - name: Restore Release Keystore
+        env:
+          REGENT_RELEASE_KEYSTORE_BASE64: ${{ secrets.REGENT_RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$REGENT_RELEASE_KEYSTORE_BASE64" ]; then
+            echo "::error::Missing REGENT_RELEASE_KEYSTORE_BASE64 secret; refusing to build an unsigned release."
+            exit 1
+          fi
+          echo "$REGENT_RELEASE_KEYSTORE_BASE64" | base64 -d > android/app/regent-release.keystore
+
       - name: Make Gradlew Executable
         run: chmod +x android/gradlew
 
@@ -98,11 +108,14 @@ jobs:
           EXPO_PUBLIC_BACKEND_URL: ${{ secrets.EXPO_PUBLIC_BACKEND_URL || 'https://regent-money.onrender.com' }}
           EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: ${{ secrets.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '55231273460-epfomp35a43c6d15bhilb92i6btl6jt9.apps.googleusercontent.com' }}
           EXPO_PUBLIC_TURNSTILE_SITE_KEY: ${{ secrets.EXPO_PUBLIC_TURNSTILE_SITE_KEY || '0x4AAAAAAFS21ZDrV2b2WG7k' }}
+          REGENT_RELEASE_STORE_PASSWORD: ${{ secrets.REGENT_RELEASE_STORE_PASSWORD }}
+          REGENT_RELEASE_KEY_ALIAS: ${{ secrets.REGENT_RELEASE_KEY_ALIAS }}
+          REGENT_RELEASE_KEY_PASSWORD: ${{ secrets.REGENT_RELEASE_KEY_PASSWORD }}
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m"
         run: |
           cd android
           echo "Building Regent Money with versionCode: $APP_VERSION_CODE, versionName: $APP_VERSION"
-          ./gradlew assembleRelease -PversionCode=$APP_VERSION_CODE -PversionName=$APP_VERSION --no-daemon -x lint -x lintVitalRelease -x lintVitalAnalyzeRelease --stacktrace
+          ./gradlew assembleRelease -PversionCode=$APP_VERSION_CODE -PversionName=$APP_VERSION --no-daemon -x lint --stacktrace
 
       - name: Print CMake Logs on Failure
         if: failure()
