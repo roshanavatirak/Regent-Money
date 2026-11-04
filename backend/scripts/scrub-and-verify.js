@@ -80,3 +80,4 @@ async function scrubAndVerify() {
 }
 
 scrubAndVerify().catch(console.error);
+

@@ -1,16 +1,16 @@
 {
   "notes": [
     {
-      "title": "Real-Time Income & Calibrated Analytics",
-      "detail": "Money in now dynamically calculates real monthly credits (or ₹0). Month-over-month spending comparisons are calibrated to prevent early-month false alarms."
+      "title": "Zero-Plaintext Encryption at Rest",
+      "detail": "Complete transition of financial records to hardware-backed envelope encryption (AES-256-GCM + AWS KMS) with zero plaintext storage in the database."
     },
     {
-      "title": "Category & Tagging Consistency",
-      "detail": "Synchronized credit categorization across bank transaction lists and detail views with refined auto-tagging."
+      "title": "Instant Dynamic Decryption",
+      "detail": "High-performance authenticated decryption pipeline for bank accounts, transactions, and real-time income analytics."
     },
     {
-      "title": "Navigation & Push Notification Polish",
-      "detail": "Seamless native back navigation in bank modal sheets and Firebase Cloud Messaging integration."
+      "title": "Seamless Cloud Sync Resilience",
+      "detail": "Native BigInt payload serialization and calibrated network routing for rock-solid sync across emulator and cloud production environments."
     }
   ]
 }

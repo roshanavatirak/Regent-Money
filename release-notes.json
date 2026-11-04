@@ -1,16 +1,16 @@
 {
   "notes": [
     {
-      "title": "Critical Cloud Sync & Storage Hotfix",
-      "detail": "Restored seamless account synchronization and cloud vault reconnectivity for all existing users."
+      "title": "Zero-Plaintext Encryption at Rest",
+      "detail": "Complete transition of financial records to hardware-backed envelope encryption (AES-256-GCM + AWS KMS) with zero plaintext storage in the database."
     },
     {
-      "title": "Hardware Keystore Cold-Start Stability",
-      "detail": "Optimized hardware security module initialization to eliminate startup key lockouts and preserve local sessions."
+      "title": "Instant Dynamic Decryption",
+      "detail": "High-performance authenticated decryption pipeline for bank accounts, transactions, and real-time income analytics."
     },
     {
-      "title": "Resilient Offline & Sync Indicators",
-      "detail": "Clear connectivity and retry states so temporary server unavailability never presents false empty accounts."
+      "title": "Seamless Cloud Sync Resilience",
+      "detail": "Native BigInt payload serialization and calibrated network routing for rock-solid sync across emulator and cloud production environments."
     }
   ]
 }
