@@ -5,7 +5,7 @@ export class AddEncryptionAtRestShadowColumns1730000001000 implements MigrationI
     // 1. Table for envelope encryption keys (EDEKs)
     await q.query(`
       CREATE TABLE IF NOT EXISTS core.user_keys (
-        user_id      UUID NOT NULL REFERENCES core.users(id) ON DELETE CASCADE,
+        user_id      UUID NOT NULL,
         key_version  INTEGER NOT NULL,
         status       VARCHAR(32) NOT NULL DEFAULT 'active',
         edek         BYTEA NOT NULL,

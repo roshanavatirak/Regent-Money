@@ -33,11 +33,25 @@ export const getBackendUrl = (): string => {
   }
 
   // In Native (Android / iOS):
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    // In Android Emulator during development, 10.0.2.2 maps to host machine localhost:3000
+    if (Platform.OS === 'android') {
+      if (envUrl) {
+        return envUrl.replace('localhost', '10.0.2.2').replace('127.0.0.1', '10.0.2.2').replace(/\/+$/, '');
+      }
+      return 'http://10.0.2.2:3000';
+    }
+    if (envUrl) {
+      return envUrl.replace(/\/+$/, '');
+    }
+    return 'http://localhost:3000';
+  }
+
   if (envUrl && !envUrl.includes('localhost') && !envUrl.includes('10.0.2.2')) {
     return envUrl.replace(/\/+$/, '');
   }
 
-  // On native device, localhost is unreachable; fallback to live Render backend
+  // On native release build fallback to live Render backend
   return PRODUCTION_RENDER_URL;
 };
 

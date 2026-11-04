@@ -9,6 +9,11 @@ import { json, urlencoded } from 'express';
 // Force Node.js to prioritize IPv4 address resolution (fixes Render IPv6 connection failures)
 dns.setDefaultResultOrder('ipv4first');
 
+// Enable BigInt serialization to JSON globally (prevents TypeError: Do not know how to serialize a BigInt on row_version)
+(BigInt.prototype as any).toJSON = function () {
+  return Number(this);
+};
+
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
   const app = await NestFactory.create(AppModule);

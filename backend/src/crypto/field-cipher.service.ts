@@ -412,21 +412,25 @@ export class FieldCipherService implements OnModuleDestroy {
     // 2. If enc_amount is present, it MUST decrypt. Failure throws DecryptionTamperingException immediately.
     const decrypted = await this.decryptTransactionFields(userId, tx);
 
-    // 3. Exact integer paise equality check
-    const expectedPaise = decimalToPaise(tx.amount);
-    if (decrypted.paise !== expectedPaise) {
-      this.logger.error(
-        `Dual-run amount mismatch for transaction row ${tx.id} (metric: dual_run_amount_mismatch)`,
-      );
+    // 3. Exact integer paise equality check (when legacy plaintext is present)
+    if (tx.amount != null) {
+      const expectedPaise = decimalToPaise(tx.amount);
+      if (decrypted.paise !== expectedPaise) {
+        this.logger.error(
+          `Dual-run amount mismatch for transaction row ${tx.id} (metric: dual_run_amount_mismatch)`,
+        );
+      }
     }
 
-    // 4. Exact merchant equality check
-    const expectedMerchant = tx.merchant ? tx.merchant.trim() : null;
-    const actualMerchant = decrypted.merchant ? decrypted.merchant.trim() : null;
-    if (expectedMerchant !== actualMerchant) {
-      this.logger.error(
-        `Dual-run merchant mismatch for transaction row ${tx.id} (metric: dual_run_merchant_mismatch)`,
-      );
+    // 4. Exact merchant equality check (when legacy plaintext is present)
+    if (tx.merchant != null) {
+      const expectedMerchant = tx.merchant ? tx.merchant.trim() : null;
+      const actualMerchant = decrypted.merchant ? decrypted.merchant.trim() : null;
+      if (expectedMerchant !== actualMerchant) {
+        this.logger.error(
+          `Dual-run merchant mismatch for transaction row ${tx.id} (metric: dual_run_merchant_mismatch)`,
+        );
+      }
     }
 
     return {
@@ -533,21 +537,25 @@ export class FieldCipherService implements OnModuleDestroy {
     // 2. If enc_amount is present, it MUST decrypt. Failure throws DecryptionTamperingException immediately.
     const decrypted = await this.decryptIncomeFields(userId, inc);
 
-    // 3. Exact integer paise equality check
-    const expectedPaise = decimalToPaise(inc.amount);
-    if (decrypted.paise !== expectedPaise) {
-      this.logger.error(
-        `Dual-run amount mismatch for income row ${inc.id} (metric: dual_run_amount_mismatch)`,
-      );
+    // 3. Exact integer paise equality check (when legacy plaintext is present)
+    if (inc.amount != null) {
+      const expectedPaise = decimalToPaise(inc.amount);
+      if (decrypted.paise !== expectedPaise) {
+        this.logger.error(
+          `Dual-run amount mismatch for income row ${inc.id} (metric: dual_run_amount_mismatch)`,
+        );
+      }
     }
 
-    // 4. Exact source equality check
-    const expectedSource = inc.source ? inc.source.trim() : null;
-    const actualSource = decrypted.source ? decrypted.source.trim() : null;
-    if (expectedSource !== actualSource) {
-      this.logger.error(
-        `Dual-run source mismatch for income row ${inc.id} (metric: dual_run_source_mismatch)`,
-      );
+    // 4. Exact source equality check (when legacy plaintext is present)
+    if (inc.source != null) {
+      const expectedSource = inc.source ? inc.source.trim() : null;
+      const actualSource = decrypted.source ? decrypted.source.trim() : null;
+      if (expectedSource !== actualSource) {
+        this.logger.error(
+          `Dual-run source mismatch for income row ${inc.id} (metric: dual_run_source_mismatch)`,
+        );
+      }
     }
 
     return {
@@ -575,7 +583,7 @@ export class FieldCipherService implements OnModuleDestroy {
   async backfillTransactionsBatch(batchSize = 500): Promise<number> {
     if (!this.dataSource) return 0;
     const rows = await this.dataSource.query(
-      `SELECT id, user_id, amount, merchant, note, row_version
+      `SELECT id, user_id, amount, merchant, row_version
        FROM finance.transactions
        WHERE enc_amount IS NULL
        LIMIT $1`,
@@ -589,7 +597,7 @@ export class FieldCipherService implements OnModuleDestroy {
         const enc = await this.encryptTransactionFields(
           r.user_id,
           r.id,
-          { amount: Number(r.amount ?? 0), merchant: r.merchant, note: r.note },
+          { amount: Number(r.amount ?? 0), merchant: r.merchant, note: (r as any).note ?? null },
           expectedVer,
         );
 
@@ -621,7 +629,7 @@ export class FieldCipherService implements OnModuleDestroy {
   async backfillIncomeBatch(batchSize = 500): Promise<number> {
     if (!this.dataSource) return 0;
     const rows = await this.dataSource.query(
-      `SELECT id, user_id, amount, source, note, row_version
+      `SELECT id, user_id, amount, source, row_version
        FROM finance.income_records
        WHERE enc_amount IS NULL
        LIMIT $1`,
@@ -635,7 +643,7 @@ export class FieldCipherService implements OnModuleDestroy {
         const enc = await this.encryptIncomeFields(
           r.user_id,
           r.id,
-          { amount: Number(r.amount ?? 0), source: r.source, note: r.note },
+          { amount: Number(r.amount ?? 0), source: r.source, note: (r as any).note ?? null },
           expectedVer,
         );
 

@@ -1,5 +1,11 @@
 import { Entity, Column, PrimaryColumn } from 'typeorm';
 
+if (typeof BigInt !== 'undefined' && !(BigInt.prototype as any).toJSON) {
+  (BigInt.prototype as any).toJSON = function () {
+    return Number(this);
+  };
+}
+
 @Entity({ name: 'income_records', schema: 'finance' })
 export class IncomeRecord {
   @PrimaryColumn({ type: 'text' })

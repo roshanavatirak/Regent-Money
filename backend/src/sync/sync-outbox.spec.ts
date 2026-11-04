@@ -103,31 +103,28 @@ describe('SyncService - Offline Outbox (applyOutbox)', () => {
 
         // 5. INSERT
         if (cleanSql.includes('INSERT INTO finance.transactions') || cleanSql.includes('INSERT INTO finance.income_records')) {
-          const [id, userId, updatedAt, encAmount, encText, textIdx, ...vals] = params;
           const isTx = cleanSql.includes('finance.transactions');
           const table = isTx ? mockTransactions : mockIncomeRecords;
+          const [id, userId, updatedAt, encAmount, encText, textIdx, ...vals] = params;
           if (table.has(id)) {
             return []; // insert race
           }
-          // dbCols match Object.keys(f) passed into vals:
-          // ['amount', 'timestamp', 'category', textField, bankProfileId]
-          const row: any = {
-            id,
-            user_id: userId,
-            updated_at: updatedAt,
-            amount: vals[0],
-            timestamp: vals[1],
-            category: vals[2],
-            is_deleted: false,
-          };
+          const match = cleanSql.match(/\(([^)]+)\)\s+VALUES/i);
+          const colNames = match ? match[1].split(',').map((c) => c.trim()) : [];
+          const row: any = { is_deleted: false, id, user_id: userId, updated_at: updatedAt, enc_amount: encAmount };
           if (isTx) {
-            row.merchant = vals[3];
-            row.bank_profile_id = vals[4];
-            row.status = vals[5];
-            row.sms_id = 'manual_entry';
+            row.enc_merchant = encText;
+            row.merchant_idx = textIdx;
           } else {
-            row.source = vals[3];
-            row.bank_profile_id = vals[4];
+            row.enc_source = encText;
+            row.source_idx = textIdx;
+          }
+          // Map remaining dynamic values to dbCols (skipping the first 7 fixed columns in SQL)
+          for (let i = 0; i < vals.length; i++) {
+            const col = colNames[7 + i];
+            if (col && col !== 'is_deleted' && col !== 'sms_id') {
+              row[col] = vals[i];
+            }
           }
           table.set(id, row);
           return [{ '?column?': 1 }];
@@ -526,8 +523,9 @@ describe('SyncService - Offline Outbox (applyOutbox)', () => {
     expect(mockIncomeRecords.has('inc_manual_uuid_009')).toBe(true);
 
     const inc = mockIncomeRecords.get('inc_manual_uuid_009');
-    expect(inc.amount).toBe(50000);
-    expect(inc.source).toBe('Acme Corp');
+    expect(inc.enc_amount).toEqual(Buffer.from('mock_enc_amount'));
+    expect(inc.enc_source).toEqual(Buffer.from('mock_enc_source'));
     expect(inc.category).toBe('salary');
+    expect(inc.amount).toBeUndefined(); // Zero plaintext in DB
   });
 });

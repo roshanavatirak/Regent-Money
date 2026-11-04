@@ -22,6 +22,13 @@ import { RedisService } from '../redis/redis.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { FieldCipherService } from '../crypto/field-cipher.service';
 
+// Enable BigInt serialization to JSON (prevents TypeError: Do not know how to serialize a BigInt on row_version)
+if (typeof BigInt !== 'undefined' && !(BigInt.prototype as any).toJSON) {
+  (BigInt.prototype as any).toJSON = function () {
+    return Number(this);
+  };
+}
+
 export class RejectOp extends Error {}
 
 export type OpResult = {
@@ -279,7 +286,7 @@ export class SyncService implements OnModuleInit {
       // Encryption-at-Rest schema additions (idempotent hotfix)
       await this.dataSource.query(`
         CREATE TABLE IF NOT EXISTS core.user_keys (
-          user_id      UUID NOT NULL REFERENCES core.users(id) ON DELETE CASCADE,
+          user_id      UUID NOT NULL,
           key_version  INTEGER NOT NULL,
           status       VARCHAR(32) NOT NULL DEFAULT 'active',
           edek         BYTEA NOT NULL,
@@ -384,6 +391,19 @@ export class SyncService implements OnModuleInit {
       (inc) => !(inc.amount === 95000 && /^income_\d+_/.test(inc.id)),
     );
 
+    // Read and verify encrypted income records
+    for (const inc of incomeRecords) {
+      if (inc.encAmount != null) {
+        try {
+          const dec = await this.fieldCipherService.readIncomeDualRun(userId, inc);
+          inc.amount = dec.amount;
+          if (dec.source) inc.source = dec.source;
+        } catch (e: any) {
+          this.logger.error(`Tampering alert: Failed to decrypt income row ${inc.id}`, e.stack);
+        }
+      }
+    }
+
     const excludedTransactionIds = (exclusions || []).map((e) => e.transactionId);
 
     // Deduplicate only true duplicate records (identical reference ID, identical SMS hash, or exact-second collision)
@@ -425,6 +445,15 @@ export class SyncService implements OnModuleInit {
       if (isDuplicate) {
         duplicateIdsToDelete.push(tx.id);
         continue;
+      }
+      if (tx.encAmount != null) {
+        try {
+          const dec = await this.fieldCipherService.readTransactionDualRun(userId, tx);
+          tx.amount = dec.amount;
+          if (dec.merchant) tx.merchant = dec.merchant;
+        } catch (e: any) {
+          this.logger.error(`Tampering alert: Failed to decrypt transaction row ${tx.id}`, e.stack);
+        }
       }
       (tx as any).excludedFromBudget = excludedTransactionIds.includes(tx.id);
       transactions.push(tx);
@@ -553,10 +582,23 @@ export class SyncService implements OnModuleInit {
     this.logger.log(`Fetching income records for user: ${userId}`);
     const records = await this.incomeRecordRepository.find({
       where: { userId, isDeleted: false },
+      order: { timestamp: 'DESC' },
     });
-    return (records || []).filter(
+    const filtered = (records || []).filter(
       (inc) => !(inc.amount === 95000 && /^income_\d+_/.test(inc.id)),
     );
+    for (const inc of filtered) {
+      if (inc.encAmount != null) {
+        try {
+          const dec = await this.fieldCipherService.readIncomeDualRun(userId, inc);
+          inc.amount = dec.amount;
+          if (dec.source) inc.source = dec.source;
+        } catch (e: any) {
+          this.logger.error(`Tampering alert: Failed to decrypt income row ${inc.id}`, e.stack);
+        }
+      }
+    }
+    return filtered;
   }
 
   async injectMockData(userId: string) {
@@ -888,6 +930,25 @@ export class SyncService implements OnModuleInit {
         }),
       ]);
 
+      for (const tx of existingTxs) {
+        if (tx.encAmount != null) {
+          try {
+            const dec = await this.fieldCipherService.readTransactionDualRun(userId, tx);
+            tx.amount = dec.amount;
+            if (dec.merchant) tx.merchant = dec.merchant;
+          } catch {}
+        }
+      }
+      for (const inc of existingIncome) {
+        if (inc.encAmount != null) {
+          try {
+            const dec = await this.fieldCipherService.readIncomeDualRun(userId, inc);
+            inc.amount = dec.amount;
+            if (dec.source) inc.source = dec.source;
+          } catch {}
+        }
+      }
+
       let addedTransactionsCount = 0;
       let addedIncomeCount = 0;
       let netBalanceChange = 0;
@@ -1185,13 +1246,6 @@ export class SyncService implements OnModuleInit {
         }
       }
 
-    if (newTransactions.length > 0) {
-      await this.transactionRepository.save(newTransactions);
-    }
-    if (newIncomeRecords.length > 0) {
-      await this.incomeRecordRepository.save(newIncomeRecords);
-    }
-
     if (!isUnassigned && bank) {
       if (data.applyBalanceChange === false) {
         // User explicitly toggled off balance update -> retain current balance
@@ -1220,6 +1274,43 @@ export class SyncService implements OnModuleInit {
           await this.bankProfileRepository.save(bank);
         }
       }
+    }
+
+    if (newTransactions.length > 0) {
+      for (const tx of newTransactions) {
+        const rawAmt = tx.amount;
+        const rawMerch = tx.merchant;
+        const enc = await this.fieldCipherService.encryptTransactionFields(
+          userId,
+          tx.id,
+          { amount: rawAmt, merchant: rawMerch },
+        );
+        tx.encAmount = enc.encAmount;
+        tx.encMerchant = enc.encMerchant;
+        tx.merchantIdx = enc.merchantIdx;
+        tx.rowVersion = enc.rowVersion;
+        (tx as any).amount = null;
+        (tx as any).merchant = null;
+      }
+      await this.transactionRepository.save(newTransactions);
+    }
+    if (newIncomeRecords.length > 0) {
+      for (const inc of newIncomeRecords) {
+        const rawAmt = inc.amount;
+        const rawSource = inc.source;
+        const enc = await this.fieldCipherService.encryptIncomeFields(
+          userId,
+          inc.id,
+          { amount: rawAmt, source: rawSource },
+        );
+        inc.encAmount = enc.encAmount;
+        inc.encSource = enc.encSource;
+        inc.sourceIdx = enc.sourceIdx;
+        inc.rowVersion = enc.rowVersion;
+        (inc as any).amount = null;
+        (inc as any).source = null;
+      }
+      await this.incomeRecordRepository.save(newIncomeRecords);
     }
 
     await this.invalidateUserSyncCache(userId);
@@ -1554,12 +1645,21 @@ export class SyncService implements OnModuleInit {
 
     if (data.type === 'debit') {
       const txId = 'tx_manual_' + Math.random().toString(36).substr(2, 9);
+      const enc = await this.fieldCipherService.encryptTransactionFields(
+        userId,
+        txId,
+        { amount, merchant: note },
+      );
       const newTx = this.transactionRepository.create({
         id: txId,
         userId,
-        amount,
+        amount: null as any,
         category: cleanCategory.toLowerCase(),
-        merchant: note,
+        merchant: null as any,
+        encAmount: enc.encAmount,
+        encMerchant: enc.encMerchant,
+        merchantIdx: enc.merchantIdx,
+        rowVersion: enc.rowVersion,
         timestamp,
         bankProfileId: bank.id,
         smsId: 'manual_entry',
@@ -1569,6 +1669,8 @@ export class SyncService implements OnModuleInit {
         isDeleted: false,
       });
       createdRecord = await this.transactionRepository.save(newTx);
+      createdRecord.amount = amount;
+      createdRecord.merchant = note;
 
       // Decrement bank balance
       bank.currentBalance = Math.round((parseFloat(String(bank.currentBalance)) - amount) * 100) / 100;
@@ -1589,18 +1691,29 @@ export class SyncService implements OnModuleInit {
     } else {
       // Credit
       const incId = 'income_manual_' + Math.random().toString(36).substr(2, 9);
+      const enc = await this.fieldCipherService.encryptIncomeFields(
+        userId,
+        incId,
+        { amount, source: note },
+      );
       const newInc = this.incomeRecordRepository.create({
         id: incId,
         userId,
-        amount,
+        amount: null as any,
         category: cleanCategory.toLowerCase(),
-        source: note,
+        source: null as any,
+        encAmount: enc.encAmount,
+        encSource: enc.encSource,
+        sourceIdx: enc.sourceIdx,
+        rowVersion: enc.rowVersion,
         timestamp,
         bankProfileId: bank.id,
         updatedAt: Date.now(),
         isDeleted: false,
       });
       createdRecord = await this.incomeRecordRepository.save(newInc);
+      createdRecord.amount = amount;
+      createdRecord.source = note;
 
       // Increment bank balance
       bank.currentBalance = Math.round((parseFloat(String(bank.currentBalance)) + amount) * 100) / 100;
@@ -2372,12 +2485,22 @@ export class SyncService implements OnModuleInit {
         ? await this.classifyCategory(parsed.merchant, userId)
         : 'miscellaneous';
 
+      const enc = await this.fieldCipherService.encryptTransactionFields(
+        userId,
+        txId,
+        { amount: parsed.amount, merchant: parsed.merchant },
+      );
+
       const newTx = this.transactionRepository.create({
         id: txId,
         userId,
-        amount: parsed.amount,
+        amount: null as any,
         category: predictedCategory,
-        merchant: parsed.merchant,
+        merchant: null as any,
+        encAmount: enc.encAmount,
+        encMerchant: enc.encMerchant,
+        merchantIdx: enc.merchantIdx,
+        rowVersion: enc.rowVersion,
         timestamp: txTime,
         bankProfileId: null,
         smsId: directSmsId,
@@ -2410,6 +2533,25 @@ export class SyncService implements OnModuleInit {
         where: { userId, bankProfileId: matchedBank.id },
       }),
     ]);
+
+    for (const tx of existingTxs) {
+      if (tx.encAmount != null) {
+        try {
+          const dec = await this.fieldCipherService.readTransactionDualRun(userId, tx);
+          tx.amount = dec.amount;
+          if (dec.merchant) tx.merchant = dec.merchant;
+        } catch {}
+      }
+    }
+    for (const inc of existingIncome) {
+      if (inc.encAmount != null) {
+        try {
+          const dec = await this.fieldCipherService.readIncomeDualRun(userId, inc);
+          inc.amount = dec.amount;
+          if (dec.source) inc.source = dec.source;
+        } catch {}
+      }
+    }
 
     let ingested = false;
     let newBalance = parseFloat(String(matchedBank.currentBalance || 0));
@@ -2472,12 +2614,22 @@ export class SyncService implements OnModuleInit {
         ? await this.classifyCategory(parsed.merchant, userId)
         : 'miscellaneous';
 
+      const enc = await this.fieldCipherService.encryptTransactionFields(
+        userId,
+        txId,
+        { amount: parsed.amount, merchant: parsed.merchant },
+      );
+
       const newTx = this.transactionRepository.create({
         id: txId,
         userId,
-        amount: parsed.amount,
+        amount: null as any,
         category: predictedCategory,
-        merchant: parsed.merchant,
+        merchant: null as any,
+        encAmount: enc.encAmount,
+        encMerchant: enc.encMerchant,
+        merchantIdx: enc.merchantIdx,
+        rowVersion: enc.rowVersion,
         timestamp: txTime,
         bankProfileId: matchedBank.id,
         smsId: directSmsId,
@@ -2544,11 +2696,21 @@ export class SyncService implements OnModuleInit {
       }
 
       const incId = 'income_direct_' + Math.random().toString(36).substr(2, 9);
+      const enc = await this.fieldCipherService.encryptIncomeFields(
+        userId,
+        incId,
+        { amount: parsed.amount, source: parsed.merchant },
+      );
+
       const newInc = this.incomeRecordRepository.create({
         id: incId,
         userId,
-        amount: parsed.amount,
-        source: parsed.merchant,
+        amount: null as any,
+        source: null as any,
+        encAmount: enc.encAmount,
+        encSource: enc.encSource,
+        sourceIdx: enc.sourceIdx,
+        rowVersion: enc.rowVersion,
         category: parsed.isSalary ? 'Salary' : 'Other Income',
         timestamp: txTime,
         bankProfileId: matchedBank.id,
@@ -2701,12 +2863,21 @@ export class SyncService implements OnModuleInit {
 
         const category = txData.category || (txData.merchant ? await this.classifyCategory(txData.merchant, userId) : 'miscellaneous');
         const txId = 'tx_confirmed_' + Math.random().toString(36).substr(2, 9);
+        const enc = await this.fieldCipherService.encryptTransactionFields(
+          userId,
+          txId,
+          { amount, merchant: txData.merchant || 'Merchant' },
+        );
         const newTx = this.transactionRepository.create({
           id: txId,
           userId,
-          amount,
+          amount: null as any,
           category,
-          merchant: txData.merchant || 'Merchant',
+          merchant: null as any,
+          encAmount: enc.encAmount,
+          encMerchant: enc.encMerchant,
+          merchantIdx: enc.merchantIdx,
+          rowVersion: enc.rowVersion,
           timestamp: txTime,
           bankProfileId: bank ? bank.id : null,
           smsId: uniqueConfirmedSmsId,
@@ -2740,11 +2911,20 @@ export class SyncService implements OnModuleInit {
         }
 
         const incId = 'income_confirmed_' + Math.random().toString(36).substr(2, 9);
+        const enc = await this.fieldCipherService.encryptIncomeFields(
+          userId,
+          incId,
+          { amount, source: txData.merchant || 'Direct Credit' },
+        );
         const newInc = this.incomeRecordRepository.create({
           id: incId,
           userId,
-          amount,
-          source: txData.merchant || 'Direct Credit',
+          amount: null as any,
+          source: null as any,
+          encAmount: enc.encAmount,
+          encSource: enc.encSource,
+          sourceIdx: enc.sourceIdx,
+          rowVersion: enc.rowVersion,
           category: txData.category ? txData.category.toLowerCase() : 'money_received',
           timestamp: incTime,
           bankProfileId: bank ? bank.id : null,
@@ -2827,9 +3007,12 @@ export class SyncService implements OnModuleInit {
     );
     if (!fresh.length) return { idemKey: op.idemKey, status: 'duplicate' };
 
+    const textCol = op.entity === 'transaction' ? 'enc_merchant' : 'enc_source';
+    const idxCol = op.entity === 'transaction' ? 'merchant_idx' : 'source_idx';
+
     // 2. Lock the row so two devices editing it are serialized, then check ownership.
     const [row] = await m.query(
-      `SELECT user_id, updated_at, row_version, amount, ${spec.textField} as text_field FROM ${spec.table} WHERE id=$1 FOR UPDATE`,
+      `SELECT user_id, updated_at, row_version, amount, ${spec.textField} as text_field, enc_amount, ${textCol} as enc_text FROM ${spec.table} WHERE id=$1 FOR UPDATE`,
       [op.entityId],
     );
     if (row && row.user_id !== userId) throw new RejectOp('forbidden');
@@ -2841,9 +3024,6 @@ export class SyncService implements OnModuleInit {
 
     // 4. Last-write-wins. A stale op is a no-op, but still "applied" so the client drops it.
     if (row && Number(row.updated_at ?? 0) > updatedAt) return { idemKey: op.idemKey, status: 'applied' };
-
-    const textCol = op.entity === 'transaction' ? 'enc_merchant' : 'enc_source';
-    const idxCol = op.entity === 'transaction' ? 'merchant_idx' : 'source_idx';
 
     if (op.op === 'delete') {
       if (row) {
@@ -2898,9 +3078,14 @@ export class SyncService implements OnModuleInit {
       if (!ok.length) throw new RejectOp('bad_bank_profile');
     }
 
-    const cols = Object.keys(f); // keys come from the whitelist, never from the client
+    // Single-write encrypted-only mode: plaintext fields are NOT stored in the database
+    const dbPayload = { ...f };
+    delete dbPayload.amount;
+    delete dbPayload[spec.textField];
+
+    const cols = Object.keys(dbPayload); // keys come from the whitelist, never from the client
     const dbCols = cols.map((c) => (spec.cols as any)[c]);
-    const vals = cols.map((c) => f[c]);
+    const vals = cols.map((c) => dbPayload[c]);
 
     if (isInsert) {
       let encAmount: Buffer;
@@ -2942,8 +3127,37 @@ export class SyncService implements OnModuleInit {
       if (!ins.length) throw new Error('insert_race'); // another writer took the id: retry, next pass rejects as forbidden
     } else {
       const expectedRowVersion = BigInt(row.row_version ?? 1);
-      const targetAmount = f.amount != null ? f.amount : Number(row.amount ?? 0);
-      const targetText = f[spec.textField] != null ? f[spec.textField] : row.text_field;
+      let targetAmount = f.amount;
+      let targetText = f[spec.textField];
+
+      if ((targetAmount == null || targetText == null) && row.enc_amount) {
+        if (op.entity === 'transaction') {
+          try {
+            const dec = await this.fieldCipherService.decryptTransactionFields(userId, {
+              id: op.entityId,
+              encAmount: row.enc_amount,
+              encMerchant: row.enc_text,
+              rowVersion: expectedRowVersion,
+            } as any);
+            if (targetAmount == null) targetAmount = dec.amount;
+            if (targetText == null) targetText = dec.merchant;
+          } catch {}
+        } else {
+          try {
+            const dec = await this.fieldCipherService.decryptIncomeFields(userId, {
+              id: op.entityId,
+              encAmount: row.enc_amount,
+              encSource: row.enc_text,
+              rowVersion: expectedRowVersion,
+            } as any);
+            if (targetAmount == null) targetAmount = dec.amount;
+            if (targetText == null) targetText = dec.source;
+          } catch {}
+        }
+      }
+
+      if (targetAmount == null) targetAmount = Number(row.amount ?? 0);
+      if (targetText == null) targetText = row.text_field ?? '';
 
       let encAmount: Buffer;
       let encText: Buffer | null = null;

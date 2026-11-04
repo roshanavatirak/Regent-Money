@@ -58,7 +58,7 @@ describe('FieldCipherService (Repository Level Integration)', () => {
     mockDataSource = {
       query: jest.fn().mockImplementation((sql: string, params: any[] = []) => {
         const clean = sql.replace(/\s+/g, ' ').trim();
-        if (clean.includes('SELECT id, user_id, amount, merchant, note, row_version FROM finance.transactions WHERE enc_amount IS NULL')) {
+        if (clean.includes('FROM finance.transactions WHERE enc_amount IS NULL')) {
           const limit = params[0] || 500;
           return Promise.resolve(dbTransactions.filter((r) => r.enc_amount == null).slice(0, limit));
         }
