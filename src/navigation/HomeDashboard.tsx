@@ -25,7 +25,7 @@ import Animated, {
   Easing,
   FadeInDown,
 } from 'react-native-reanimated';
-import Svg, { Path, Circle } from 'react-native-svg';
+import Svg, { Path, Circle, Rect, G, Text as SvgText } from 'react-native-svg';
 import { Feather } from '@expo/vector-icons';
 import { useFonts } from 'expo-font';
 import {
@@ -123,6 +123,141 @@ const BANNER_THEMES = {
 } as const;
 
 type BannerTheme = keyof typeof BANNER_THEMES;
+type BannerArtKind = 'bank' | 'overspend' | 'kept' | 'sms' | 'regent';
+
+const BANNER_PALETTE: BannerTheme[] = ['lime', 'lilac', 'amber', 'coral'];
+
+/**
+ * Give every banner a colour so that no two neighbours match — including the
+ * last→first wrap, since the carousel auto-loops. Each banner's preferred
+ * colour is kept when possible; otherwise an unused colour is picked.
+ */
+function assignBannerThemes(preferred: BannerTheme[]): BannerTheme[] {
+  const out: BannerTheme[] = [];
+  preferred.forEach((pref, i) => {
+    const prev = out[i - 1];
+    const wrapsToFirst = i > 0 && i === preferred.length - 1;
+    const ok = (t: BannerTheme) => t !== prev && !(wrapsToFirst && t === out[0]);
+    const unused = (t: BannerTheme) => !out.includes(t);
+    const pick =
+      (ok(pref) && unused(pref) && pref) ||
+      BANNER_PALETTE.find((t) => ok(t) && unused(t)) ||
+      (ok(pref) && pref) ||
+      BANNER_PALETTE.find(ok) ||
+      pref;
+    out.push(pick);
+  });
+  return out;
+}
+
+/** Four-point sparkle centred on (cx, cy). */
+const sparkle = (cx: number, cy: number, r: number) =>
+  `M${cx} ${cy - r} Q${cx} ${cy} ${cx + r} ${cy} Q${cx} ${cy} ${cx} ${cy + r} Q${cx} ${cy} ${cx - r} ${cy} Q${cx} ${cy} ${cx} ${cy - r} Z`;
+
+/** Illustration drawn in the banner's own colours, bottom-right corner. */
+function BannerArt({ kind, theme }: { kind: BannerArtKind; theme: (typeof BANNER_THEMES)[BannerTheme] }) {
+  const { fg, ring, ring2 } = theme;
+  const W = '#FFFFFF';
+  return (
+    <View pointerEvents="none" style={bannerArtStyles.wrap}>
+      <View style={[bannerArtStyles.blob, { backgroundColor: ring }]} />
+      <View style={[bannerArtStyles.blobSmall, { backgroundColor: ring2 }]} />
+      <Svg width={104} height={104} viewBox="0 0 100 100">
+        {kind === 'bank' && (
+          <G>
+            <Path d="M18 42 L52 20 L86 42 Z" fill={fg} />
+            <Rect x={20} y={42} width={64} height={6} rx={2} fill={fg} />
+            {[26, 41, 56, 71].map((x) => (
+              <Rect key={x} x={x} y={51} width={7} height={24} rx={2} fill={W} stroke={fg} strokeWidth={2.5} />
+            ))}
+            <Rect x={16} y={76} width={72} height={8} rx={3} fill={fg} />
+            <Circle cx={52} cy={33} r={4} fill={ring2} />
+            <Circle cx={84} cy={22} r={12} fill={ring2} stroke={fg} strokeWidth={2.5} />
+            <SvgText x={84} y={27.5} fontSize={15} fontWeight="800" fill={fg} textAnchor="middle">₹</SvgText>
+          </G>
+        )}
+        {kind === 'overspend' && (
+          <G>
+            <Rect x={14} y={42} width={62} height={44} rx={10} fill={fg} />
+            <Rect x={52} y={54} width={28} height={20} rx={6} fill={ring2} stroke={fg} strokeWidth={2.5} />
+            <Circle cx={63} cy={64} r={3.5} fill={fg} />
+            <Path d="M24 42 L34 30 L58 42" fill="none" stroke={fg} strokeWidth={3} strokeLinejoin="round" />
+            <Circle cx={66} cy={24} r={10} fill={W} stroke={fg} strokeWidth={2.5} />
+            <SvgText x={66} y={28.5} fontSize={12} fontWeight="800" fill={fg} textAnchor="middle">₹</SvgText>
+            <Circle cx={86} cy={12} r={7} fill={W} stroke={fg} strokeWidth={2.5} />
+            <Path d="M50 20 l-6 -4 M54 12 l-2 -7 M80 34 l7 3" stroke={fg} strokeWidth={2.5} strokeLinecap="round" />
+          </G>
+        )}
+        {kind === 'kept' && (
+          <G>
+            <Rect x={16} y={62} width={14} height={22} rx={4} fill={fg} />
+            <Rect x={36} y={50} width={14} height={34} rx={4} fill={fg} />
+            <Rect x={56} y={38} width={14} height={46} rx={4} fill={W} stroke={fg} strokeWidth={2.5} />
+            <Path d="M14 50 L36 34 L50 40 L80 14" fill="none" stroke={fg} strokeWidth={4} strokeLinecap="round" strokeLinejoin="round" />
+            <Path d="M68 13 L81 13 L81 26" fill="none" stroke={fg} strokeWidth={4} strokeLinecap="round" strokeLinejoin="round" />
+            <Path d={sparkle(86, 46, 8)} fill={W} stroke={fg} strokeWidth={2} />
+            <Path d={sparkle(22, 26, 5)} fill={fg} />
+          </G>
+        )}
+        {kind === 'sms' && (
+          <G>
+            <Rect x={24} y={10} width={42} height={78} rx={10} fill={fg} />
+            <Rect x={28.5} y={18} width={33} height={60} rx={5} fill={W} />
+            <Rect x={33} y={25} width={22} height={9} rx={4.5} fill={ring} />
+            <Rect x={33} y={38} width={16} height={9} rx={4.5} fill={ring} />
+            <Rect x={40} y={52} width={50} height={24} rx={12} fill={ring2} stroke={fg} strokeWidth={2.5} />
+            <Circle cx={53} cy={64} r={7} fill={fg} />
+            <Path d="M49.5 64 l2.5 2.5 l4.5 -5" fill="none" stroke={W} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+            <SvgText x={74} y={69} fontSize={13} fontWeight="800" fill={fg} textAnchor="middle">₹</SvgText>
+            <Path d={sparkle(84, 32, 8)} fill={W} stroke={fg} strokeWidth={2} />
+          </G>
+        )}
+        {kind === 'regent' && (
+          <G>
+            <Rect x={10} y={30} width={62} height={44} rx={16} fill={fg} />
+            <Path d="M24 70 L20 86 L40 72 Z" fill={fg} />
+            {[28, 41, 54].map((x) => (
+              <Circle key={x} cx={x} cy={52} r={4.5} fill={W} />
+            ))}
+            <Path d={sparkle(80, 24, 14)} fill={ring2} stroke={fg} strokeWidth={2.5} strokeLinejoin="round" />
+            <Path d={sparkle(90, 50, 6)} fill={W} stroke={fg} strokeWidth={2} />
+            <Path d={sparkle(62, 12, 4)} fill={fg} />
+          </G>
+        )}
+      </Svg>
+    </View>
+  );
+}
+
+const bannerArtStyles = StyleSheet.create({
+  wrap: {
+    position: 'absolute',
+    right: 4,
+    bottom: 6,
+    width: 108,
+    height: 108,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  blob: {
+    position: 'absolute',
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    right: -26,
+    bottom: -34,
+    opacity: 0.85,
+  },
+  blobSmall: {
+    position: 'absolute',
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    left: -4,
+    top: -2,
+    opacity: 0.7,
+  },
+});
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -489,49 +624,50 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
   const banners = useMemo(() => {
     const list: {
       key: string;
-      theme: BannerTheme;
+      prefer: BannerTheme;
+      art: BannerArtKind;
       title: string;
       cta: string;
       onPress: () => void;
-      decorated?: boolean;
     }[] = [];
 
     if (!hasBanks) {
       list.push({
         key: 'bank',
-        theme: 'amber',
+        prefer: 'amber',
+        art: 'bank',
         title: 'Link your first bank account to see your real balance',
         cta: 'Add bank',
         onPress: props.onAddBank,
-        decorated: true,
       });
     }
 
     if (income > 0 && spent > income) {
       list.push({
         key: 'ratio',
-        theme: hasBanks ? 'amber' : 'coral',
+        prefer: 'coral',
+        art: 'overspend',
         title: `You spent ₹${(spent / income).toFixed(2)} for every ₹1 you earned`,
         cta: 'See where it went',
         onPress: () => scrollRef.current?.scrollTo({ y: Math.max(breakdownY.current - 12, 0), animated: true }),
-        decorated: hasBanks,
       });
     } else if (income > 0) {
       const keptPct = Math.round(((income - spent) / income) * 100);
       list.push({
         key: 'kept',
-        theme: 'lime',
+        prefer: 'lime',
+        art: 'kept',
         title: `You kept ${keptPct}% of what you earned this month`,
         cta: 'See breakdown',
         onPress: () => scrollRef.current?.scrollTo({ y: Math.max(breakdownY.current - 12, 0), animated: true }),
-        decorated: true,
       });
     }
 
     if (Platform.OS === 'android' && !smsTrackingOn) {
       list.push({
         key: 'sms',
-        theme: 'lilac',
+        prefer: 'lilac',
+        art: 'sms',
         title: 'Track every rupee without typing',
         cta: 'Turn on auto-tracking',
         onPress: props.onSetupTracking,
@@ -540,13 +676,15 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
 
     list.push({
       key: 'regent',
-      theme: list.length % 2 === 0 ? 'lime' : 'lilac',
+      prefer: 'lime',
+      art: 'regent',
       title: 'Ask Regent where your money went this month',
       cta: 'Ask Regent',
       onPress: props.onOpenRegent,
     });
 
-    return list;
+    const themes = assignBannerThemes(list.map((b) => b.prefer));
+    return list.map((b, i) => ({ ...b, theme: themes[i] }));
   }, [hasBanks, income, spent, smsTrackingOn, props.onAddBank, props.onSetupTracking, props.onOpenRegent]);
 
   const [carouselWidth, setCarouselWidth] = useState(0);
@@ -731,13 +869,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
                 style={[styles.banner, { width: bannerWidth, backgroundColor: t.bg }]}
                 accessibilityLabel={b.title}
               >
-                {b.decorated && (
-                  <>
-                    <View style={[styles.coin, { right: -18, bottom: -22, backgroundColor: t.ring, borderColor: t.fg }]} />
-                    <View style={[styles.coin, { right: 30, bottom: -42, backgroundColor: t.ring2, borderColor: t.fg }]} />
-                    <Text style={[styles.coinSymbol, { color: t.fg }]}>₹</Text>
-                  </>
-                )}
+                <BannerArt kind={b.art} theme={t} />
                 <Text style={[styles.bannerTitle, { color: t.fg }]} numberOfLines={3}>
                   {b.title}
                 </Text>
@@ -1154,25 +1286,10 @@ const getStyles = (
       padding: 18,
       overflow: 'hidden',
     },
-    coin: {
-      position: 'absolute',
-      width: 96,
-      height: 96,
-      borderRadius: 48,
-      borderWidth: 3,
-    },
-    coinSymbol: {
-      position: 'absolute',
-      right: 14,
-      bottom: 26,
-      fontSize: 30,
-      fontFamily: font.display,
-      fontWeight: font.display ? undefined : '800',
-    },
     bannerTitle: {
       fontSize: 20,
       lineHeight: 24,
-      maxWidth: '72%',
+      maxWidth: '66%',
       letterSpacing: -0.3,
       fontFamily: font.display,
       fontWeight: font.display ? undefined : '800',
