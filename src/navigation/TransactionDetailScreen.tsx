@@ -14,6 +14,8 @@ import {
   Platform,
   Switch,
   BackHandler,
+  Modal,
+  ScrollView,
 } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import Animated, {
@@ -42,6 +44,7 @@ import { CategoryIcon } from '../components/CategoryIcon';
 import { BankIcon } from '../components/BankIcon';
 import { getCategory } from '../constants/categories';
 import { tagLearningService } from '../services/tagLearningService';
+import { AddBankModal } from './AddBankModal';
 import bankNamesJson from './banknames.json';
 
 const BACKEND_URL = getBackendUrl();
@@ -145,9 +148,24 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
     return name ? bankProfiles.find((b) => b.bankName.toLowerCase() === name) : null;
   }, [bankProfiles, transaction?.bankProfileId, props.bankName, route?.params?.bankName]);
 
-  const bankName: string | undefined = props.bankName || route?.params?.bankName || matchedBank?.bankName;
+  const initialBankProfileId = transaction?.bankProfileId || matchedBank?.id || null;
+  const [selectedBankProfileId, setSelectedBankProfileId] = useState<string | null>(initialBankProfileId);
+  const [bankModalOpen, setBankModalOpen] = useState(false);
+  const [addBankModalOpen, setAddBankModalOpen] = useState(false);
+
+  const selectedBank = useMemo(() => {
+    if (selectedBankProfileId) {
+      return bankProfiles.find((b) => b.id === selectedBankProfileId) || null;
+    }
+    return null;
+  }, [bankProfiles, selectedBankProfileId]);
+
+  const bankName: string | undefined =
+    selectedBank?.bankName ||
+    (selectedBankProfileId === null ? undefined : (props.bankName || route?.params?.bankName || matchedBank?.bankName));
   const accountSuffix: string | undefined =
-    props.accountNumberSuffix || route?.params?.accountNumberSuffix || matchedBank?.accountNumberSuffix;
+    selectedBank?.accountNumberSuffix ||
+    (selectedBankProfileId === null ? undefined : (props.accountNumberSuffix || route?.params?.accountNumberSuffix || matchedBank?.accountNumberSuffix));
 
   const originalAmount = Number(transaction?.amount || 0);
   const rawCat = (transaction?.category || '').toLowerCase();
@@ -256,7 +274,8 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
     getCategory(category).id !== getCategory(originalCategory).id ||
     note.trim() !== originalNote.trim() ||
     Math.abs(timestamp - originalTimestamp) > 60000 ||
-    rememberRule !== initialHasActiveRule;
+    rememberRule !== initialHasActiveRule ||
+    selectedBankProfileId !== initialBankProfileId;
 
   const payee = niceName(note.trim() || transaction.merchant) || (isCredit ? 'Money received' : 'Payment');
   const catLabel = getCategory(category).label;
@@ -303,6 +322,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
             category,
             [isCredit ? 'source' : 'merchant']: label,
             timestamp,
+            bankProfileId: selectedBankProfileId || null,
             updatedAt: Date.now(),
           },
         });
@@ -319,6 +339,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
               merchant: label,
               source: label,
               timestamp,
+              bankProfileId: selectedBankProfileId || null,
             });
           }
         } else {
@@ -327,6 +348,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
             category,
             merchant: label,
             timestamp,
+            bankProfileId: selectedBankProfileId || null,
           });
         }
 
@@ -354,6 +376,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
           category,
           merchant: label,
           timestamp,
+          bankProfileId: selectedBankProfileId || null,
         };
         if (typeof props.onSuccess === 'function') props.onSuccess('updated', payload);
         else if (typeof route?.params?.onSuccess === 'function') route.params.onSuccess('updated', payload);
@@ -376,6 +399,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
           category,
           note: note.trim() || undefined,
           timestamp,
+          bankProfileId: selectedBankProfileId || null,
           updateMerchantRule: rememberRule,
         }),
       });
@@ -385,8 +409,9 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
       }
       const res = await response.json();
 
-      if (transaction.bankProfileId && res.updatedBalance !== undefined) {
-        useBankStore.getState().updateBankBalance(transaction.bankProfileId, res.updatedBalance);
+      const activeBankId = selectedBankProfileId || transaction.bankProfileId;
+      if (activeBankId && res.updatedBalance !== undefined) {
+        useBankStore.getState().updateBankBalance(activeBankId, res.updatedBalance);
       }
 
       const label = note.trim() || category;
@@ -611,14 +636,46 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
               </Pressable>
             ) : null}
             {bankName ? (
-              <View style={[styles.metaChip, { backgroundColor: chip, paddingLeft: 4 }]}>
+              <Pressable
+                onPress={() => setBankModalOpen(true)}
+                style={({ pressed }) => [
+                  styles.metaChip,
+                  { backgroundColor: chip, paddingLeft: 4 },
+                  pressed && { opacity: 0.75 },
+                ]}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel={`Bank account ${bankName}. Tap to change`}
+              >
                 <BankIcon code={getBankCode(bankName)} name={bankName} size={26} />
                 <Text style={[styles.metaText, { color: ink }]} numberOfLines={1}>
                   {firstWord(bankName)}
                   {accountSuffix ? ` •• ${accountSuffix}` : ''}
                 </Text>
-              </View>
-            ) : null}
+                <Feather name="chevron-down" size={12} color={muted} style={{ marginLeft: 2 }} />
+              </Pressable>
+            ) : (
+              <Pressable
+                onPress={() => setBankModalOpen(true)}
+                style={({ pressed }) => [
+                  styles.metaChip,
+                  {
+                    backgroundColor: isDark ? 'rgba(234, 179, 8, 0.15)' : '#FEF3C7',
+                    borderColor: isDark ? 'rgba(234, 179, 8, 0.4)' : '#FDE68A',
+                    borderWidth: 1,
+                  },
+                  pressed && { opacity: 0.75 },
+                ]}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="No bank account linked. Tap to link bank account"
+              >
+                <Feather name="plus-circle" size={13} color={isDark ? '#FACC15' : '#D97706'} />
+                <Text style={[styles.metaText, { color: isDark ? '#FEF08A' : '#B45309', fontWeight: '700' }]}>
+                  Link Bank
+                </Text>
+              </Pressable>
+            )}
           </View>
         </Animated.View>
 
@@ -627,6 +684,59 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
           entering={FadeInDown.delay(120).duration(380)}
           style={[styles.group, { backgroundColor: colors.card, borderColor: line }]}
         >
+          {/* Bank Account */}
+          <Pressable
+            onPress={() => setBankModalOpen(true)}
+            style={({ pressed }) => [
+              styles.row,
+              { borderBottomColor: line, borderBottomWidth: StyleSheet.hairlineWidth },
+              pressed && { opacity: 0.7 },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel={`Bank account ${bankName || 'not linked'}. ${bankName ? 'Change' : 'Link bank'}`}
+          >
+            {bankName ? (
+              <BankIcon code={getBankCode(bankName)} name={bankName} size={38} />
+            ) : (
+              <View
+                style={[
+                  styles.noteIcon,
+                  { backgroundColor: isDark ? 'rgba(234, 179, 8, 0.15)' : '#FEF3C7' },
+                ]}
+              >
+                <Feather name="credit-card" size={18} color={isDark ? '#FACC15' : '#D97706'} />
+              </View>
+            )}
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.rowLabel, { color: muted }]}>Account</Text>
+              {bankName ? (
+                <Text style={[styles.rowValue, { color: ink }]} numberOfLines={1}>
+                  {bankName}
+                  {accountSuffix ? ` •• ${accountSuffix}` : ''}
+                </Text>
+              ) : (
+                <Text style={[styles.rowValue, { color: isDark ? '#FACC15' : '#D97706' }]}>
+                  No bank linked
+                </Text>
+              )}
+            </View>
+            <Text
+              style={[
+                styles.rowAction,
+                {
+                  color: bankName ? muted : (isDark ? LIME : '#0B6B3A'),
+                  fontWeight: bankName ? '600' : '700',
+                },
+              ]}
+            >
+              {bankName ? 'Change' : 'Link bank'}
+            </Text>
+            <Feather
+              name="chevron-right"
+              size={16}
+              color={bankName ? muted : (isDark ? LIME : '#0B6B3A')}
+            />
+          </Pressable>
           <Pressable
             onPress={() => setTagSheet(true)}
             style={({ pressed }) => [styles.row, { borderBottomColor: line, borderBottomWidth: StyleSheet.hairlineWidth }, pressed && { opacity: 0.7 }]}
@@ -752,6 +862,174 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
           setDatePickerOpen(false);
         }}
       />
+
+      {/* Bank Account Selection Modal */}
+      <Modal
+        visible={bankModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setBankModalOpen(false)}
+      >
+        <Pressable
+          style={styles.modalBackdrop}
+          onPress={() => setBankModalOpen(false)}
+        >
+          <Pressable
+            style={[styles.modalSheet, { backgroundColor: colors.card, borderColor: line }]}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <View style={styles.sheetHandle} />
+            <View style={styles.sheetHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.sheetTitle, { color: ink }]}>Link Bank Account</Text>
+                <Text style={[styles.sheetSubtitle, { color: muted }]}>
+                  Choose which account to link this transaction to
+                </Text>
+              </View>
+              <Pressable
+                onPress={() => setBankModalOpen(false)}
+                style={[styles.sheetCloseBtn, { backgroundColor: pageBg }]}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+              >
+                <Feather name="x" size={18} color={ink} />
+              </Pressable>
+            </View>
+
+            <ScrollView style={{ maxHeight: 380 }} showsVerticalScrollIndicator={false}>
+              {bankProfiles.length > 0 && (
+                <View style={{ marginBottom: 12 }}>
+                  <Text style={[styles.bankSectionTitle, { color: muted }]}>YOUR ACCOUNTS</Text>
+                  {bankProfiles.map((b) => {
+                    const isSelected = selectedBankProfileId === b.id;
+                    const bSuffix = b.accountNumberSuffix ? `•• ${b.accountNumberSuffix}` : '';
+                    const bal = Number(b.currentBalance || 0);
+                    return (
+                      <Pressable
+                        key={b.id}
+                        onPress={() => {
+                          setSelectedBankProfileId(b.id);
+                          setBankModalOpen(false);
+                        }}
+                        style={({ pressed }) => [
+                          styles.bankItem,
+                          {
+                            backgroundColor: isSelected
+                              ? isDark
+                                ? 'rgba(184,243,107,0.12)'
+                                : '#EAF7ED'
+                              : pageBg,
+                            borderColor: isSelected ? (isDark ? LIME : '#059669') : line,
+                          },
+                          pressed && { opacity: 0.8 },
+                        ]}
+                      >
+                        <BankIcon code={getBankCode(b.bankName)} name={b.bankName} size={36} />
+                        <View style={{ flex: 1, marginLeft: 12 }}>
+                          <Text style={[styles.bankItemName, { color: ink }]} numberOfLines={1}>
+                            {b.bankName} {bSuffix}
+                          </Text>
+                          <Text style={[styles.bankItemBalance, { color: muted }]}>
+                            ₹{bal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                          </Text>
+                        </View>
+                        {isSelected ? (
+                          <Feather name="check-circle" size={20} color={isDark ? LIME : '#059669'} />
+                        ) : (
+                          <View style={[styles.radioCircle, { borderColor: line }]} />
+                        )}
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              )}
+
+              {/* Unlinked option */}
+              <Pressable
+                onPress={() => {
+                  setSelectedBankProfileId(null);
+                  setBankModalOpen(false);
+                }}
+                style={({ pressed }) => [
+                  styles.bankItem,
+                  {
+                    backgroundColor:
+                      selectedBankProfileId === null
+                        ? isDark
+                          ? 'rgba(234,179,8,0.15)'
+                          : '#FEF3C7'
+                        : pageBg,
+                    borderColor:
+                      selectedBankProfileId === null ? (isDark ? '#CA8A04' : '#F59E0B') : line,
+                    marginBottom: 12,
+                  },
+                  pressed && { opacity: 0.8 },
+                ]}
+              >
+                <View
+                  style={[
+                    styles.unlinkedIconWrap,
+                    { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#E5E7EB' },
+                  ]}
+                >
+                  <Feather name="slash" size={18} color={muted} />
+                </View>
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Text style={[styles.bankItemName, { color: ink }]}>Unlinked / Cash</Text>
+                  <Text style={[styles.bankItemBalance, { color: muted }]}>
+                    No bank account linked
+                  </Text>
+                </View>
+                {selectedBankProfileId === null ? (
+                  <Feather name="check-circle" size={20} color={isDark ? '#FACC15' : '#D97706'} />
+                ) : (
+                  <View style={[styles.radioCircle, { borderColor: line }]} />
+                )}
+              </Pressable>
+
+              {/* Add New Bank Account */}
+              <Pressable
+                onPress={() => {
+                  setBankModalOpen(false);
+                  setTimeout(() => setAddBankModalOpen(true), 250);
+                }}
+                style={({ pressed }) => [
+                  styles.addBankBtn,
+                  {
+                    backgroundColor: isDark ? 'rgba(184,243,107,0.15)' : '#EAF7ED',
+                    borderColor: isDark ? LIME : '#059669',
+                  },
+                  pressed && { opacity: 0.8 },
+                ]}
+              >
+                <Feather name="plus" size={18} color={isDark ? LIME : '#059669'} />
+                <Text
+                  style={[styles.addBankBtnText, { color: isDark ? LIME : '#059669' }]}
+                >
+                  Link a new bank account
+                </Text>
+              </Pressable>
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <AddBankModal
+        visible={addBankModalOpen}
+        onClose={() => setAddBankModalOpen(false)}
+        onSuccess={async () => {
+          setAddBankModalOpen(false);
+          try {
+            const { syncService } = require('../services/syncService');
+            await syncService.sync(true);
+          } catch {}
+          const profiles = useBankStore.getState().bankProfiles || [];
+          if (profiles.length > 0) {
+            const latest = profiles[profiles.length - 1];
+            setSelectedBankProfileId(latest.id);
+          }
+        }}
+      />
     </View>
   );
 };
@@ -795,4 +1073,20 @@ const styles = StyleSheet.create({
   savedWrap: { alignItems: 'center', justifyContent: 'center' },
   savedCircle: { width: 88, height: 88, borderRadius: 44, alignItems: 'center', justifyContent: 'center' },
   savedText: { fontSize: 24, marginTop: 18 },
+
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  modalSheet: { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 32, borderWidth: 1, borderBottomWidth: 0 },
+  sheetHandle: { width: 38, height: 4, borderRadius: 2, backgroundColor: 'rgba(128,128,128,0.4)', alignSelf: 'center', marginBottom: 12 },
+  sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
+  sheetTitle: { fontSize: 18, fontWeight: '700' },
+  sheetSubtitle: { fontSize: 13, marginTop: 2 },
+  sheetCloseBtn: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+  bankSectionTitle: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, marginBottom: 8, textTransform: 'uppercase' },
+  bankItem: { flexDirection: 'row', alignItems: 'center', padding: 12, borderRadius: 16, borderWidth: 1, marginBottom: 8 },
+  bankItemName: { fontSize: 15, fontWeight: '700' },
+  bankItemBalance: { fontSize: 13, marginTop: 2 },
+  radioCircle: { width: 20, height: 20, borderRadius: 10, borderWidth: 2 },
+  unlinkedIconWrap: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  addBankBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16, borderWidth: 1, marginTop: 4 },
+  addBankBtnText: { fontSize: 15, fontWeight: '700' },
 });

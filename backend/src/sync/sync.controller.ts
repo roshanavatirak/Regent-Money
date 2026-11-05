@@ -170,6 +170,7 @@ export class SyncController {
       category: string;
       note?: string;
       timestamp?: number;
+      bankProfileId?: string | null;
       updateMerchantRule?: boolean;
     },
   ) {

@@ -1593,6 +1593,7 @@ export class SyncService implements OnModuleInit {
       category: string;
       note?: string;
       timestamp?: number;
+      bankProfileId?: string | null;
       updateMerchantRule?: boolean;
     },
   ) {
@@ -1620,10 +1621,14 @@ export class SyncService implements OnModuleInit {
 
       const oldAmount = parseFloat(String(tx.amount || 0));
       const amountDiff = newAmount - oldAmount;
+      const oldBankProfileId = tx.bankProfileId || null;
+      const targetBankProfileId =
+        data.bankProfileId !== undefined ? (data.bankProfileId || null) : oldBankProfileId;
 
       tx.amount = newAmount;
       tx.category = cleanCategory.toLowerCase();
       tx.merchant = note;
+      tx.bankProfileId = targetBankProfileId;
       if (data.timestamp && !isNaN(Number(data.timestamp))) {
         tx.timestamp = Number(data.timestamp);
       }
@@ -1635,12 +1640,39 @@ export class SyncService implements OnModuleInit {
       }
 
       let updatedBalance: number | null = null;
-      if (tx.bankProfileId) {
+      if (oldBankProfileId !== targetBankProfileId) {
+        if (oldBankProfileId) {
+          const oldBank = await this.bankProfileRepository.findOne({
+            where: { id: oldBankProfileId, userId, isDeleted: false },
+          });
+          if (oldBank) {
+            oldBank.currentBalance =
+              Math.round((parseFloat(String(oldBank.currentBalance)) + oldAmount) * 100) / 100;
+            oldBank.lastSyncTimestamp = Date.now();
+            oldBank.updatedAt = Date.now();
+            await this.bankProfileRepository.save(oldBank);
+          }
+        }
+        if (targetBankProfileId) {
+          const newBank = await this.bankProfileRepository.findOne({
+            where: { id: targetBankProfileId, userId, isDeleted: false },
+          });
+          if (newBank) {
+            newBank.currentBalance =
+              Math.round((parseFloat(String(newBank.currentBalance)) - newAmount) * 100) / 100;
+            newBank.lastSyncTimestamp = Date.now();
+            newBank.updatedAt = Date.now();
+            await this.bankProfileRepository.save(newBank);
+            updatedBalance = newBank.currentBalance;
+          }
+        }
+      } else if (targetBankProfileId && amountDiff !== 0) {
         const bank = await this.bankProfileRepository.findOne({
-          where: { id: tx.bankProfileId, userId, isDeleted: false },
+          where: { id: targetBankProfileId, userId, isDeleted: false },
         });
         if (bank) {
-          bank.currentBalance = Math.round((parseFloat(String(bank.currentBalance)) - amountDiff) * 100) / 100;
+          bank.currentBalance =
+            Math.round((parseFloat(String(bank.currentBalance)) - amountDiff) * 100) / 100;
           bank.lastSyncTimestamp = Date.now();
           bank.updatedAt = Date.now();
           await this.bankProfileRepository.save(bank);
@@ -1664,10 +1696,14 @@ export class SyncService implements OnModuleInit {
 
       const oldAmount = parseFloat(String(inc.amount || 0));
       const amountDiff = newAmount - oldAmount;
+      const oldBankProfileId = inc.bankProfileId || null;
+      const targetBankProfileId =
+        data.bankProfileId !== undefined ? (data.bankProfileId || null) : oldBankProfileId;
 
       inc.amount = newAmount;
       inc.category = cleanCategory.toLowerCase();
       inc.source = note;
+      inc.bankProfileId = targetBankProfileId;
       if (data.timestamp && !isNaN(Number(data.timestamp))) {
         inc.timestamp = Number(data.timestamp);
       }
@@ -1675,12 +1711,39 @@ export class SyncService implements OnModuleInit {
       await this.incomeRecordRepository.save(inc);
 
       let updatedBalance: number | null = null;
-      if (inc.bankProfileId) {
+      if (oldBankProfileId !== targetBankProfileId) {
+        if (oldBankProfileId) {
+          const oldBank = await this.bankProfileRepository.findOne({
+            where: { id: oldBankProfileId, userId, isDeleted: false },
+          });
+          if (oldBank) {
+            oldBank.currentBalance =
+              Math.round((parseFloat(String(oldBank.currentBalance)) - oldAmount) * 100) / 100;
+            oldBank.lastSyncTimestamp = Date.now();
+            oldBank.updatedAt = Date.now();
+            await this.bankProfileRepository.save(oldBank);
+          }
+        }
+        if (targetBankProfileId) {
+          const newBank = await this.bankProfileRepository.findOne({
+            where: { id: targetBankProfileId, userId, isDeleted: false },
+          });
+          if (newBank) {
+            newBank.currentBalance =
+              Math.round((parseFloat(String(newBank.currentBalance)) + newAmount) * 100) / 100;
+            newBank.lastSyncTimestamp = Date.now();
+            newBank.updatedAt = Date.now();
+            await this.bankProfileRepository.save(newBank);
+            updatedBalance = newBank.currentBalance;
+          }
+        }
+      } else if (targetBankProfileId && amountDiff !== 0) {
         const bank = await this.bankProfileRepository.findOne({
-          where: { id: inc.bankProfileId, userId, isDeleted: false },
+          where: { id: targetBankProfileId, userId, isDeleted: false },
         });
         if (bank) {
-          bank.currentBalance = Math.round((parseFloat(String(bank.currentBalance)) + amountDiff) * 100) / 100;
+          bank.currentBalance =
+            Math.round((parseFloat(String(bank.currentBalance)) + amountDiff) * 100) / 100;
           bank.lastSyncTimestamp = Date.now();
           bank.updatedAt = Date.now();
           await this.bankProfileRepository.save(bank);
