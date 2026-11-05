@@ -245,7 +245,7 @@ class TagLearningService {
     isSalary: boolean = false
   ): string {
     this.ensureInitialized();
-    return predictTagForTransaction(merchant, body, type, isSalary, this.learnedMap!);
+    return predictTagForTransaction(merchant, body, type, this.learnedMap!, isSalary);
   }
 }
 

@@ -1,5 +1,5 @@
 import { toMinor, fromMinor } from './money';
-import { isExcludedFromBudget } from './budget';
+import { isExcludedFromBudget, findPairedTransferIds } from './budget';
 import type { DashboardCategory } from '../navigation/HomeDashboard';
 
 const toLabel = (key: string): string =>
@@ -17,6 +17,7 @@ export interface MonthSummaryResult {
 /**
  * Single-pass integer-paise month summary calculation.
  * Immune to IEEE-754 floating point drift during aggregation.
+ * Strictly excludes self-transfers (single-leg & paired cross-account legs) from Money In & Money Out.
  */
 export function monthSummary(
   txs: any[],
@@ -34,6 +35,9 @@ export function monthSummary(
   const prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0).getTime();
   const prevEnd = new Date(now.getFullYear(), now.getMonth() - 1, currentDay, 23, 59, 59, 999).getTime();
 
+  // 1. Identify paired cross-account transfer legs (e.g. transfer between user's own accounts)
+  const pairedTransferIds = findPairedTransferIds(txs, incomes);
+
   let outMinor = 0;
   let inMinor = 0;
   let prevSamePeriodMinor = 0;
@@ -42,7 +46,13 @@ export function monthSummary(
   const prevMapMinor = new Map<string, number>();
 
   for (const tx of txs) {
-    if (!tx || tx.isDeleted || tx.type === 'credit' || isExcludedFromBudget(tx)) continue;
+    if (
+      !tx ||
+      tx.isDeleted ||
+      tx.type === 'credit' ||
+      pairedTransferIds.has(tx.id) ||
+      isExcludedFromBudget(tx)
+    ) continue;
     const ts = Number(tx.timestamp);
     const m = Math.abs(toMinor(tx.amount));
     const key = (tx.category || 'other').toLowerCase().trim();
@@ -57,7 +67,13 @@ export function monthSummary(
   }
 
   for (const inc of incomes) {
-    if (!inc || inc.isDeleted || Number(inc.timestamp) < monthStart) continue;
+    if (
+      !inc ||
+      inc.isDeleted ||
+      Number(inc.timestamp) < monthStart ||
+      pairedTransferIds.has(inc.id) ||
+      isExcludedFromBudget(inc)
+    ) continue;
     if (activeBankIds.size > 0 && inc.bankProfileId && !activeBankIds.has(inc.bankProfileId)) continue;
     // Purge any legacy synthetic mock income records
     if (inc.amount === 95000 && /^income_\d+_/.test(inc.id)) continue;

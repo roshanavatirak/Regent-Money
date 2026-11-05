@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useTransactionStore, useBankStore } from '../store';
+import { isExcludedFromBudget } from '../utils/budget';
 
 export interface DayFinancialData {
   dateKey: string; // YYYY-MM-DD
@@ -68,21 +69,8 @@ export function useCalendarAnalytics(currentDate: Date, userCreatedAt?: string |
   // Filter out self-transfers and credit card payments
   const eligibleTransactions = useMemo(() => {
     return (transactions as any[]).filter((tx: any) => {
-      if (tx.isDeleted) return false;
-      const cat = (tx.category || '').toLowerCase();
-      const merchant = (tx.merchant || '').toLowerCase();
-
-      // Exclude self transfers & card bill repayments
-      if (
-        cat.includes('transfer') ||
-        cat.includes('credit card bill') ||
-        cat.includes('card payment') ||
-        cat.includes('self transfer') ||
-        merchant.includes('credit card payment') ||
-        merchant.includes('billdesk cc')
-      ) {
-        return false;
-      }
+      if (!tx || tx.isDeleted) return false;
+      if (isExcludedFromBudget(tx)) return false;
       return true;
     });
   }, [transactions]);

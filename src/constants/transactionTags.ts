@@ -435,24 +435,51 @@ export const INDIAN_MERCHANT_KEYWORD_RULES: Record<string, string[]> = {
   interest: [
     'interest', 'savings bank interest', 'fd interest', 'int.pd',
   ],
+  self_transfer: [
+    'self transfer', 'self-transfer', 'self_transfer', 'self trf', 'self-trf',
+    'transfer to own', 'transfer from own', 'trf to own', 'trf from own',
+    'transferred to own', 'transferred from own', 'transfer to self', 'transfer from self',
+    'sent to self', 'received from self', 'same bank transfer',
+    'own a/c', 'own ac', 'own acc', 'own account', 'self acc', 'self a/c',
+    'to self', 'from self', 'internal transfer', 'internal trf',
+    'account transfer', 'a/c transfer', 'own bank', 'transfer xx', 'trf xx',
+    'trf to', 'trf from',
+  ],
 };
 
 /**
  * Predicts the most accurate category tag for a transaction based on:
  * 1. User memory map (passed in or queried)
- * 2. Credit vs Debit semantics
- * 3. 30+ Indian merchant & brand keywords
- * 4. Fallback to 'miscellaneous' (NEVER generic 'shopping')
+ * 2. Self-transfer detection (credit & debit)
+ * 3. Credit vs Debit semantics
+ * 4. 30+ Indian merchant & brand keywords
+ * 5. Fallback to 'miscellaneous' (NEVER generic 'shopping')
  */
 export function predictTagForTransaction(
   merchant: string,
   body?: string,
   type: 'debit' | 'credit' = 'debit',
-  isSalary: boolean = false,
-  userLearnedTags?: Record<string, string>
+  arg4?: boolean | Record<string, string>,
+  arg5?: boolean | Record<string, string>
 ): string {
+  let isSalary = false;
+  let userLearnedTags: Record<string, string> | undefined;
+
+  if (typeof arg4 === 'boolean') {
+    isSalary = arg4;
+    if (typeof arg5 === 'object' && arg5 !== null) userLearnedTags = arg5 as Record<string, string>;
+  } else if (typeof arg4 === 'object' && arg4 !== null) {
+    userLearnedTags = arg4 as Record<string, string>;
+    if (typeof arg5 === 'boolean') isSalary = arg5;
+  } else if (typeof arg5 === 'boolean') {
+    isSalary = arg5;
+  } else if (typeof arg5 === 'object' && arg5 !== null) {
+    userLearnedTags = arg5 as Record<string, string>;
+  }
+
   const normMerchant = normalizeMerchantName(merchant);
   const normBody = (body || '').toLowerCase();
+  const targetText = `${normMerchant} ${normBody}`;
 
   // 1. User's previously chosen/custom tag takes supreme priority
   if (userLearnedTags && normMerchant) {
@@ -467,7 +494,15 @@ export function predictTagForTransaction(
     }
   }
 
-  // 2. Credit-specific resolution
+  // 2. Self-transfer detection (both credit & debit)
+  const selfTransferKeywords = INDIAN_MERCHANT_KEYWORD_RULES.self_transfer || [];
+  for (const kw of selfTransferKeywords) {
+    if (targetText.includes(kw)) {
+      return 'self_transfer';
+    }
+  }
+
+  // 3. Credit-specific resolution
   if (type === 'credit') {
     if (isSalary || normMerchant.includes('salary') || normBody.includes('salary') || normBody.includes('payroll')) {
       return 'salary';
@@ -478,15 +513,12 @@ export function predictTagForTransaction(
     if (normMerchant.includes('interest') || normBody.includes('interest')) {
       return 'interest';
     }
-    if (normBody.includes('self trf') || normBody.includes('own a/c')) {
-      return 'self_transfer';
-    }
     return 'money_received';
   }
 
-  // 3. Indian Brand & Keyword Classification
-  const targetText = `${normMerchant} ${normBody}`;
+  // 4. Indian Brand & Keyword Classification
   for (const [tag, keywords] of Object.entries(INDIAN_MERCHANT_KEYWORD_RULES)) {
+    if (tag === 'self_transfer') continue; // Handled above
     for (const kw of keywords) {
       if (targetText.includes(kw)) {
         return tag;
@@ -494,7 +526,7 @@ export function predictTagForTransaction(
     }
   }
 
-  // 4. Default: miscellaneous (NOT hardcoded shopping)
+  // 5. Default: miscellaneous (NOT hardcoded shopping)
   return 'miscellaneous';
 }
 

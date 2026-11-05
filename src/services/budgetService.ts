@@ -370,8 +370,8 @@ export function getBudgetPeriodRange(
  * Detect if a transaction is a self-transfer or credit card bill payment
  * (Strictly excluded to prevent double counting in budgets)
  */
-import { isExcludedFromBudget } from '../utils/budget';
-export { isExcludedFromBudget };
+import { isExcludedFromBudget, findPairedTransferIds } from '../utils/budget';
+export { isExcludedFromBudget, findPairedTransferIds };
 
 /**
  * Category alias dictionary to link various transaction spend tags/categories

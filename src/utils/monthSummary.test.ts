@@ -98,3 +98,35 @@ test('Old three-pass calculation vs new monthSummary on complex dataset', () => 
   assert.strictEqual(Math.round((oldOutWithDeleted - newSummary.out) * 100) / 100, 150);
 });
 
+test('monthSummary excludes self-transfers from Money In (incomes)', () => {
+  const monthStart = 1000000;
+  const incomes = [
+    { id: 'inc_1', amount: 2500, type: 'credit', category: 'self_transfer', timestamp: monthStart + 10 },
+    { id: 'inc_2', amount: 1500, type: 'credit', category: 'money_received', source: 'Transfer from own account', timestamp: monthStart + 20 },
+    { id: 'inc_3', amount: 1000, type: 'credit', category: 'other', isSelfTransfer: true, timestamp: monthStart + 30 },
+    { id: 'inc_4', amount: 50000, type: 'credit', category: 'salary', source: 'Acme Corp', timestamp: monthStart + 40 },
+  ];
+  const res = monthSummary([], incomes, monthStart, new Set(), false, dummyGetColor);
+  // Only the 50000 salary income should be counted in Money In! 2500, 1500, and 1000 self-transfers excluded.
+  assert.strictEqual(res.in, 50000);
+});
+
+test('monthSummary excludes cross-account paired transfers from both Money In and Money Out', () => {
+  const monthStart = 1000000;
+  // User transfers ₹2,500 from HDFC (bank_1) to SBI (bank_2)
+  const txs = [
+    { id: 'tx_debit_pair', amount: 2500, type: 'debit', category: 'miscellaneous', bankProfileId: 'bank_1', timestamp: monthStart + 100 },
+    { id: 'tx_coffee', amount: 200, type: 'debit', category: 'food', bankProfileId: 'bank_1', timestamp: monthStart + 200 },
+  ];
+  const incomes = [
+    { id: 'inc_credit_pair', amount: 2500, type: 'credit', category: 'money_received', bankProfileId: 'bank_2', timestamp: monthStart + 120 },
+    { id: 'inc_bonus', amount: 5000, type: 'credit', category: 'salary', bankProfileId: 'bank_2', timestamp: monthStart + 300 },
+  ];
+
+  const res = monthSummary(txs, incomes, monthStart, new Set(), false, dummyGetColor);
+  // Money Out: Only 200 coffee (2500 transfer debit is excluded!)
+  assert.strictEqual(res.out, 200);
+  // Money In: Only 5000 bonus (2500 transfer credit is excluded!)
+  assert.strictEqual(res.in, 5000);
+});
+
