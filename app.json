@@ -26,8 +26,7 @@
         "android.permission.READ_SMS",
         "android.permission.RECEIVE_BOOT_COMPLETED",
         "android.permission.USE_BIOMETRIC",
-        "android.permission.POST_NOTIFICATIONS",
-        "android.permission.REQUEST_INSTALL_PACKAGES"
+        "android.permission.POST_NOTIFICATIONS"
       ],
       "blockedPermissions": [
         "android.permission.CAMERA",
@@ -43,7 +42,8 @@
         "android.permission.USE_FINGERPRINT",
         "android.permission.READ_PHONE_STATE",
         "android.permission.READ_PHONE_NUMBERS",
-        "android.permission.FOREGROUND_SERVICE_DATA_SYNC"
+        "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
+        "android.permission.REQUEST_INSTALL_PACKAGES"
       ],
       "predictiveBackGestureEnabled": false,
       "package": "com.regentmoney",

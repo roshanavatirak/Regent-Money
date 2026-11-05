@@ -905,12 +905,25 @@ export class SyncService implements OnModuleInit {
         const itemDate = new Date(exactTimestamp);
         const hasExplicitItemTime = !!(item.time && item.time.trim());
 
+        const isIdenticalDebit = (tx: Transaction): boolean => {
+          if (isSameSms(tx.smsId)) return true;
+          if (itemRef && (tx.smsId === `ref_${itemRef}` || tx.smsId === itemRef || (tx as any).referenceId === itemRef)) return true;
+          return false;
+        };
+
+        const isIdenticalCredit = (inc: IncomeRecord): boolean => {
+          if (isSameSms((inc as any).smsId)) return true;
+          if (itemRef && ((inc as any).smsId === `ref_${itemRef}` || (inc as any).smsId === itemRef || (inc as any).referenceId === itemRef)) return true;
+          return false;
+        };
+
         if (item.type === 'debit') {
+          // Exact same SMS or Reference ID already processed — silently skip as idempotent no-op!
+          if (existingTxs.some(isIdenticalDebit) || newTransactions.some(isIdenticalDebit)) {
+            continue;
+          }
+
           const checkDebitDuplicate = (tx: Transaction, isBatchCheck = false): boolean => {
-            // 1. If both transactions have reference IDs / UTRs:
-            // Same SMS seen before (also after parser changes alter merchant or reference detection)
-            if (!isBatchCheck && isSameSms(tx.smsId)) return true;
-            if (itemRef && (tx.smsId === `ref_${itemRef}` || tx.smsId === itemRef)) return true;
             if (itemRef && tx.smsId && tx.smsId.startsWith('ref_') && tx.smsId !== `ref_${itemRef}`) return false;
 
             // 2. Intra-statement check (Comparing against another transaction from the same upload batch):
@@ -994,9 +1007,12 @@ export class SyncService implements OnModuleInit {
             }).catch((err) => this.logger.warn(`Failed to dispatch duplicate alert: ${err.message}`));
           }
         } else if (item.type === 'credit') {
+          // Exact same SMS or Reference ID already processed — silently skip as idempotent no-op!
+          if (existingIncome.some(isIdenticalCredit) || newIncomeRecords.some(isIdenticalCredit)) {
+            continue;
+          }
+
           const checkCreditDuplicate = (inc: IncomeRecord, isBatchCheck = false): boolean => {
-            if (!isBatchCheck && isSameSms((inc as any).smsId)) return true;
-            if (itemRef && ((inc as any).smsId === `ref_${itemRef}` || (inc as any).referenceId === itemRef)) return true;
             if (itemRef && (inc as any).smsId && (inc as any).smsId.startsWith('ref_') && (inc as any).smsId !== `ref_${itemRef}`) return false;
 
             if (isBatchCheck) {
@@ -2384,14 +2400,21 @@ export class SyncService implements OnModuleInit {
     let newBalance = parseFloat(String(matchedBank.currentBalance || 0));
 
     if (parsed.type === 'debit') {
-      const isDuplicate = existingTxs.some((tx) => {
-        // 1. Authoritative UPI Ref / RRN comparison
+      const isAlreadyIngested = existingTxs.some((tx) => {
         if (incomingRef && (tx.smsId === `ref_${incomingRef}` || (tx as any).referenceId === incomingRef)) {
           return true;
         }
         if (tx.smsId && (tx.smsId === directSmsId || tx.smsId === data.contentId)) {
           return true;
         }
+        return false;
+      });
+
+      if (isAlreadyIngested) {
+        return { success: true, duplicate: true, idempotent: true, message: 'Transaction already recorded' };
+      }
+
+      const isDuplicate = existingTxs.some((tx) => {
         if (incomingRef && tx.smsId && tx.smsId.startsWith('ref_') && tx.smsId !== `ref_${incomingRef}`) {
           return false;
         }
@@ -2474,13 +2497,21 @@ export class SyncService implements OnModuleInit {
       }
       ingested = true;
     } else {
-      const isDuplicate = existingIncome.some((inc) => {
+      const isAlreadyIngested = existingIncome.some((inc) => {
         if (incomingRef && ((inc as any).smsId === `ref_${incomingRef}` || (inc as any).referenceId === incomingRef)) {
           return true;
         }
         if ((inc as any).smsId && ((inc as any).smsId === directSmsId || (inc as any).smsId === data.contentId)) {
           return true;
         }
+        return false;
+      });
+
+      if (isAlreadyIngested) {
+        return { success: true, duplicate: true, idempotent: true, message: 'Income already recorded' };
+      }
+
+      const isDuplicate = existingIncome.some((inc) => {
         if (incomingRef && (inc as any).smsId && (inc as any).smsId.startsWith('ref_') && (inc as any).smsId !== `ref_${incomingRef}`) {
           return false;
         }

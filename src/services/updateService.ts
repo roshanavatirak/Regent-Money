@@ -1,4 +1,4 @@
-import { Platform, Linking } from 'react-native';
+import { Platform, Linking, NativeModules } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as IntentLauncher from 'expo-intent-launcher';
 import * as Application from 'expo-application';
@@ -19,6 +19,8 @@ export interface UpdateInfo {
   downloadUrl: string;
   /** Comes from the server only. Empty means the "What's new" section is hidden. */
   releaseNotes: ReleaseNote[];
+  /** True when the app is installed via Google Play or targeted for Play Store. */
+  isPlayStore?: boolean;
 }
 
 /**
@@ -76,6 +78,21 @@ class UpdateService {
     return 0;
   }
 
+  /** Checks if the app was installed via Google Play Store. */
+  isPlayStoreInstall(): boolean {
+    if (Platform.OS !== 'android') return false;
+    if (process.env.EXPO_PUBLIC_BUILD_TARGET === 'playstore') return true;
+
+    try {
+      const nativeInstaller = (NativeModules?.NativeStorage?.getConstants?.()?.INSTALLER_PACKAGE ||
+        NativeModules?.NativeStorage?.INSTALLER_PACKAGE) as string | undefined;
+
+      return nativeInstaller === 'com.android.vending';
+    } catch {
+      return false;
+    }
+  }
+
   /** Ask the backend whether a newer version exists. */
   async checkForUpdates(): Promise<UpdateInfo | null> {
     if (Platform.OS === 'web') return null;
@@ -96,6 +113,8 @@ class UpdateService {
       const isUpdateAvailable = this.compareVersions(latestVersion, currentVersion) > 0;
       if (!isUpdateAvailable) return null;
 
+      const isPlayStore = this.isPlayStoreInstall() || (typeof data.downloadUrl === 'string' && data.downloadUrl.includes('play.google.com'));
+
       return {
         isUpdateAvailable,
         forceUpdate: !!data.forceUpdate,
@@ -105,6 +124,7 @@ class UpdateService {
           data.downloadUrl ||
           'https://github.com/roshanavatirak/Regent-Money/releases/latest/download/regent-money.apk',
         releaseNotes: normalizeNotes(data.releaseNotes),
+        isPlayStore,
       };
     } catch (e) {
       console.warn('[UpdateService] Update check failed:', e);

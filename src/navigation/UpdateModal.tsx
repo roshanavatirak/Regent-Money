@@ -45,6 +45,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({ updateInfo, visible, o
   const fillStyle = useAnimatedStyle(() => ({ width: `${fill.value * 100}%` }));
 
   const isMandatory = !!updateInfo?.forceUpdate;
+  const isPlayStore = !!(updateInfo?.isPlayStore || updateService.isPlayStoreInstall());
 
   // Block the Android back button for required updates
   useEffect(() => {
@@ -133,8 +134,9 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({ updateInfo, visible, o
     </View>
   );
 
-  const mainLabel =
-    state === 'downloading'
+  const mainLabel = isPlayStore
+    ? 'Update on Google Play'
+    : state === 'downloading'
       ? `Downloading ${percent}%`
       : state === 'ready'
         ? 'Install update'
@@ -142,9 +144,15 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({ updateInfo, visible, o
           ? 'Try again'
           : 'Update now';
 
-  const onMain = state === 'ready' ? install : state === 'downloading' ? undefined : startDownload;
+  const onMain = isPlayStore
+    ? () => updateService.openStore()
+    : state === 'ready'
+      ? install
+      : state === 'downloading'
+        ? undefined
+        : startDownload;
 
-  const isDownloading = state === 'downloading';
+  const isDownloading = !isPlayStore && state === 'downloading';
 
   const MainButton = (
     <Pressable
@@ -190,7 +198,15 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({ updateInfo, visible, o
       ) : (
         <View style={s.mainContent}>
           <Feather
-            name={state === 'ready' ? 'check-circle' : state === 'failed' ? 'refresh-cw' : 'download'}
+            name={
+              isPlayStore
+                ? 'external-link'
+                : state === 'ready'
+                  ? 'check-circle'
+                  : state === 'failed'
+                    ? 'refresh-cw'
+                    : 'download'
+            }
             size={18}
             color={accentFg}
           />
@@ -202,17 +218,17 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({ updateInfo, visible, o
 
   const Footer = (
     <View>
-      {state === 'failed' && (
+      {!isPlayStore && state === 'failed' && (
         <Animated.View entering={FadeIn.duration(200)} style={s.errorRow}>
           <Feather name="alert-circle" size={14} color={isDark ? '#FFA8A8' : '#C92A2A'} />
           <Text style={[s.errorText, { color: isDark ? '#FFA8A8' : '#C92A2A' }]}>{errorText}</Text>
         </Animated.View>
       )}
-      {state === 'ready' && (
+      {!isPlayStore && state === 'ready' && (
         <Text style={[s.helper, { color: muted }]}>If the installer didn’t open, tap Install update.</Text>
       )}
       {MainButton}
-      {state === 'ready' || state === 'failed' ? (
+      {!isPlayStore && (state === 'ready' || state === 'failed') ? (
         <Pressable onPress={openInBrowser} style={s.textBtn} accessibilityRole="button">
           <Text style={[s.textBtnLabel, { color: muted }]}>Download in browser instead</Text>
         </Pressable>

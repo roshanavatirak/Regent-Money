@@ -280,20 +280,6 @@ export const smsCatchupService = {
         const contentId = `sms_${Math.abs(bodyHash)}`;
         const candidateSmsId = parsed.referenceId ? `ref_${parsed.referenceId}` : contentId;
 
-        bankTxsMap.get(targetGroupKey)!.push({
-          amount: parsed.amount,
-          type: parsed.type,
-          merchant: parsed.merchant,
-          category: predictedCategory,
-          date: dateStr,
-          time: timeStr,
-          timestamp: msgTimestamp,
-          availableBalance: parsed.availableBalance,
-          referenceId: parsed.referenceId,
-          smsId: candidateSmsId,
-          contentId,
-        });
-
         // Check if this transaction already exists in our local store
         const existingTransactions = useTransactionStore.getState().transactions || [];
         const normIncoming = (parsed.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -323,8 +309,22 @@ export const smsCatchupService = {
           return Math.abs(txTime - msgTimestamp) < 600000;
         });
 
-        // Only trigger real-time budget nudge & salary cycle detection for NEW transactions
+        // Only enqueue and trigger alerts for genuinely NEW transactions
         if (!isTxExisting) {
+          bankTxsMap.get(targetGroupKey)!.push({
+            amount: parsed.amount,
+            type: parsed.type,
+            merchant: parsed.merchant,
+            category: predictedCategory,
+            date: dateStr,
+            time: timeStr,
+            timestamp: msgTimestamp,
+            availableBalance: parsed.availableBalance,
+            referenceId: parsed.referenceId,
+            smsId: candidateSmsId,
+            contentId,
+          });
+
           try {
             checkAndDispatchBudgetAlert(
               {

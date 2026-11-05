@@ -9,6 +9,25 @@
       "client_info": {
         "mobilesdk_app_id": "1:1055907799633:android:b2a15de5b605306d228e70",
         "android_client_info": {
+          "package_name": "com.anonymous.regentmoney"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBZxWm4-ukjm-bBDceITe7w6AYxJ2zN72c"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1055907799633:android:1bf400dcf89d6c02228e70",
+        "android_client_info": {
           "package_name": "com.regentmoney"
         }
       },

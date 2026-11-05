@@ -24,9 +24,16 @@ class NativeStorageModule(reactContext: ReactApplicationContext) : ReactContextB
         try {
             constants["MMKV_KEY"] = KeystoreHelper.getOrCreateMmkvKey(reactApplicationContext)
             constants["SECURITY_LEVEL"] = KeystoreHelper.getSecurityLevel()
+            constants["INSTALLER_PACKAGE"] = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                reactApplicationContext.packageManager.getInstallSourceInfo(reactApplicationContext.packageName).installingPackageName
+            } else {
+                @Suppress("DEPRECATION")
+                reactApplicationContext.packageManager.getInstallerPackageName(reactApplicationContext.packageName)
+            }
         } catch (e: Exception) {
             constants["MMKV_KEY"] = null
             constants["SECURITY_LEVEL"] = "UNKNOWN"
+            constants["INSTALLER_PACKAGE"] = null
         }
         return constants
     }
