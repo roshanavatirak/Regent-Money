@@ -1,4 +1,4 @@
-package com.anonymous.regentmoney.intro
+package com.regentmoney.intro
 
 import android.graphics.Path
 import androidx.core.graphics.PathParser

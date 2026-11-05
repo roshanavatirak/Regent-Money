@@ -1,11 +1,11 @@
-package com.anonymous.regentmoney
+package com.regentmoney
 
 import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
-import com.anonymous.regentmoney.intro.IntroView
+import com.regentmoney.intro.IntroView
 import java.lang.ref.WeakReference
 
 import com.facebook.react.ReactActivity

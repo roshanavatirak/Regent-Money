@@ -1,4 +1,4 @@
-package com.anonymous.regentmoney
+package com.regentmoney
 
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec

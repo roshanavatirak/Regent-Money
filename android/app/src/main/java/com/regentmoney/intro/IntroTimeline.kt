@@ -1,4 +1,4 @@
-package com.anonymous.regentmoney.intro
+package com.regentmoney.intro
 
 import kotlin.math.PI
 import kotlin.math.cos

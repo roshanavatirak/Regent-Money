@@ -1,4 +1,4 @@
-package com.anonymous.regentmoney
+package com.regentmoney
 
 import android.content.BroadcastReceiver
 import android.content.Context

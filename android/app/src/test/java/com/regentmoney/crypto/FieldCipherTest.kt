@@ -1,4 +1,4 @@
-package com.anonymous.regentmoney.crypto
+package com.regentmoney.crypto
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows

@@ -1,4 +1,4 @@
-package com.anonymous.regentmoney
+package com.regentmoney
 
 import android.app.NotificationChannel
 import android.app.NotificationManager

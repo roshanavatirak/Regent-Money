@@ -1,4 +1,4 @@
-package com.anonymous.regentmoney.intro
+package com.regentmoney.intro
 
 import android.content.Context
 import android.graphics.Canvas

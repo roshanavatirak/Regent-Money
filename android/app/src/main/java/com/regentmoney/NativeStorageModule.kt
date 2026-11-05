@@ -1,9 +1,9 @@
-package com.anonymous.regentmoney
+package com.regentmoney
 
 import android.content.Context
 import androidx.work.WorkManager
-import com.anonymous.regentmoney.crypto.FieldCipher
-import com.anonymous.regentmoney.crypto.FieldContext
+import com.regentmoney.crypto.FieldCipher
+import com.regentmoney.crypto.FieldContext
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod

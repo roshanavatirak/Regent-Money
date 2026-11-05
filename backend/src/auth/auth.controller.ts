@@ -502,7 +502,7 @@ export class AuthController {
             </div>
             <h1>Account Verified!</h1>
             <p>Thank you for verifying your email address. Your Regent Money account is now fully active. You can return to the mobile application to start managing your wealth.</p>
-            <a href="intent://login#Intent;scheme=regentmoney;package=com.anonymous.regentmoney;end" class="btn" id="openAppBtn" onclick="return launchApp(event)">Open Regent Money App</a>
+            <a href="intent://login#Intent;scheme=regentmoney;package=com.regentmoney;end" class="btn" id="openAppBtn" onclick="return launchApp(event)">Open Regent Money App</a>
           </div>
           <script>
             function launchApp(e) {
@@ -510,7 +510,7 @@ export class AuthController {
               var isAndroid = /Android/i.test(navigator.userAgent);
               var isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
               var directUrl = "regentmoney://login";
-              var intentUrl = "intent://login#Intent;scheme=regentmoney;package=com.anonymous.regentmoney;end";
+              var intentUrl = "intent://login#Intent;scheme=regentmoney;package=com.regentmoney;end";
 
               if (isAndroid) {
                 var isChrome = /Chrome|CriOS/i.test(navigator.userAgent) && !/SamsungBrowser|Firefox|EdgA/i.test(navigator.userAgent);
@@ -677,7 +677,7 @@ export class AuthController {
             </div>
             <h1>Verification Failed</h1>
             <p>${e.message || 'The verification link is invalid or has expired. Please contact support or sign up again.'}</p>
-            <a href="intent://signup#Intent;scheme=regentmoney;package=com.anonymous.regentmoney;end" class="btn" id="goBackBtn">Open Regent Money App</a>
+            <a href="intent://signup#Intent;scheme=regentmoney;package=com.regentmoney;end" class="btn" id="goBackBtn">Open Regent Money App</a>
           </div>
         </body>
         </html>

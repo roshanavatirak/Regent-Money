@@ -538,7 +538,7 @@ const GoogleAuthButton: React.FC<GoogleAuthButtonProps> = ({ loading, setLoading
       ) {
         showGlobalAlert(
           'Configuration Notice',
-          'Google Web Client ID is mismatching, or your SHA-1 fingerprint is not configured in the Google Cloud Console for Android Package Name (com.anonymous.regentmoney). Please check settings.',
+          'Google Web Client ID is mismatching, or your SHA-1 fingerprint is not configured in the Google Cloud Console for Android Package Name (com.regentmoney). Please check settings.',
         );
       } else if (e.code === 'SIGN_IN_CANCELLED' || e.message?.includes('cancelled')) {
         console.log('[Auth] Google Sign-In cancelled.');

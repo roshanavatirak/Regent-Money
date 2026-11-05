@@ -1,4 +1,4 @@
-package com.anonymous.regentmoney
+package com.regentmoney
 
 import android.view.View
 import com.facebook.react.ReactPackage

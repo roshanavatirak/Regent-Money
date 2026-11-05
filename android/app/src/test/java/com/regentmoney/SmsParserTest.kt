@@ -1,4 +1,4 @@
-package com.anonymous.regentmoney
+package com.regentmoney
 
 import org.json.JSONObject
 import org.junit.Assert.assertEquals

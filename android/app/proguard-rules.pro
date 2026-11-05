@@ -33,9 +33,9 @@
 -keep class fr.greweb.reactnativeviewshot.** { *; }
 
 # Regent Money Native Intro & Storage
--keep class com.anonymous.regentmoney.intro.** { *; }
--keepclassmembers class com.anonymous.regentmoney.intro.** { *; }
--keep class com.anonymous.regentmoney.NativeStorageModule { *; }
--keepclassmembers class com.anonymous.regentmoney.NativeStorageModule { *; }
--keepclassmembers class com.anonymous.regentmoney.MainActivity { *; }
+-keep class com.regentmoney.intro.** { *; }
+-keepclassmembers class com.regentmoney.intro.** { *; }
+-keep class com.regentmoney.NativeStorageModule { *; }
+-keepclassmembers class com.regentmoney.NativeStorageModule { *; }
+-keepclassmembers class com.regentmoney.MainActivity { *; }
 

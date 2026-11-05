@@ -46,7 +46,7 @@
         "android.permission.FOREGROUND_SERVICE_DATA_SYNC"
       ],
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.regentmoney",
+      "package": "com.regentmoney",
       "versionCode": 141,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",

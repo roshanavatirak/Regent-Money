@@ -179,7 +179,7 @@ class UpdateService {
 
   /** Opens Google Play (Android). */
   async openStore(): Promise<boolean> {
-    const id = Application.applicationId || appConfig?.expo?.android?.package || 'com.anonymous.regentmoney';
+    const id = Application.applicationId || appConfig?.expo?.android?.package || 'com.regentmoney';
     const urls = Platform.OS === 'android' ? [`market://details?id=${id}`, `https://play.google.com/store/apps/details?id=${id}`] : [];
     for (const url of urls) {
       try {
