@@ -28,7 +28,7 @@ import Animated, {
   FadeInDown,
   ZoomIn,
 } from 'react-native-reanimated';
-import { Feather } from '@expo/vector-icons';
+import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import * as Font from 'expo-font';
@@ -827,134 +827,89 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
           >
             <View style={styles.sheetHandle} />
             <View style={styles.sheetHeader}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.sheetTitle, { color: ink }]}>Link Bank Account</Text>
-                <Text style={[styles.sheetSubtitle, { color: muted }]}>
-                  Choose which account to link this transaction to
-                </Text>
-              </View>
+              <Text style={[styles.sheetTitle, { color: ink }]}>Link to account</Text>
               <Pressable
                 onPress={() => setBankModalOpen(false)}
-                style={[styles.sheetCloseBtn, { backgroundColor: pageBg }]}
+                style={[styles.sheetCloseBtn, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#EDF1EE' }]}
+                hitSlop={8}
                 accessibilityRole="button"
                 accessibilityLabel="Close"
               >
-                <Feather name="x" size={18} color={ink} />
+                <Feather name="x" size={17} color={ink} />
               </Pressable>
             </View>
 
-            <ScrollView style={{ maxHeight: 380 }} showsVerticalScrollIndicator={false}>
-              {bankProfiles.length > 0 && (
-                <View style={{ marginBottom: 12 }}>
-                  <Text style={[styles.bankSectionTitle, { color: muted }]}>YOUR ACCOUNTS</Text>
-                  {bankProfiles.map((b) => {
-                    const isSelected = selectedBankProfileId === b.id;
-                    const bSuffix = b.accountNumberSuffix ? `•• ${b.accountNumberSuffix}` : '';
-                    const bal = Number(b.currentBalance || 0);
-                    return (
-                      <Pressable
-                        key={b.id}
-                        onPress={() => {
-                          setSelectedBankProfileId(b.id);
-                          setBankModalOpen(false);
-                        }}
-                        style={({ pressed }) => [
-                          styles.bankItem,
-                          {
-                            backgroundColor: isSelected
-                              ? isDark
-                                ? 'rgba(184,243,107,0.12)'
-                                : '#EAF7ED'
-                              : pageBg,
-                            borderColor: isSelected ? (isDark ? LIME : '#059669') : line,
-                          },
-                          pressed && { opacity: 0.8 },
-                        ]}
-                      >
-                        <BankIcon code={getBankCode(b.bankName)} name={b.bankName} size={36} />
-                        <View style={{ flex: 1, marginLeft: 12 }}>
-                          <Text style={[styles.bankItemName, { color: ink }]} numberOfLines={1}>
-                            {b.bankName} {bSuffix}
-                          </Text>
-                          <Text style={[styles.bankItemBalance, { color: muted }]}>
-                            ₹{bal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
-                          </Text>
-                        </View>
-                        {isSelected ? (
-                          <Feather name="check-circle" size={20} color={isDark ? LIME : '#059669'} />
-                        ) : (
-                          <View style={[styles.radioCircle, { borderColor: line }]} />
-                        )}
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              )}
+            <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+              {[
+                ...bankProfiles.map((b) => ({
+                  id: b.id as string | null,
+                  title: b.bankName,
+                  sub: `${b.accountNumberSuffix ? `••${b.accountNumberSuffix} · ` : ''}₹${Number(b.currentBalance || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                  icon: <BankIcon code={getBankCode(b.bankName)} name={b.bankName} size={40} />,
+                })),
+                {
+                  id: null as string | null,
+                  title: 'Cash',
+                  sub: 'Not linked to a bank',
+                  icon: (
+                    <View style={[styles.cashIcon, { borderColor: line, backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#FFFFFF' }]}>
+                      <MaterialCommunityIcons name="cash" size={22} color={muted} />
+                    </View>
+                  ),
+                },
+              ].map((opt) => {
+                const isSelected = selectedBankProfileId === opt.id;
+                const accent = isDark ? LIME : FOREST;
+                return (
+                  <Pressable
+                    key={opt.id ?? 'cash'}
+                    onPress={() => {
+                      setSelectedBankProfileId(opt.id);
+                      setBankModalOpen(false);
+                    }}
+                    style={({ pressed }) => [
+                      styles.bankItem,
+                      {
+                        borderColor: isSelected ? accent : 'transparent',
+                        backgroundColor: isSelected ? (isDark ? 'rgba(184,243,107,0.08)' : '#FFFFFF') : 'transparent',
+                      },
+                      pressed && !isSelected && { backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : '#EEF3F0' },
+                    ]}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected: isSelected }}
+                    accessibilityLabel={`${opt.title}, ${opt.sub}`}
+                  >
+                    {opt.icon}
+                    <View style={{ flex: 1, marginLeft: 12, minWidth: 0 }}>
+                      <Text style={[styles.bankItemName, { color: ink }]} numberOfLines={1}>
+                        {opt.title}
+                      </Text>
+                      <Text style={[styles.bankItemBalance, { color: muted }]} numberOfLines={1}>
+                        {opt.sub}
+                      </Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.radioCircle,
+                        isSelected ? { backgroundColor: accent, borderColor: accent } : { borderColor: isDark ? colors.border : '#CBD5CF' },
+                      ]}
+                    >
+                      {isSelected && <Feather name="check" size={13} color={isDark ? FOREST : LIME} />}
+                    </View>
+                  </Pressable>
+                );
+              })}
 
-              {/* Unlinked option */}
-              <Pressable
-                onPress={() => {
-                  setSelectedBankProfileId(null);
-                  setBankModalOpen(false);
-                }}
-                style={({ pressed }) => [
-                  styles.bankItem,
-                  {
-                    backgroundColor:
-                      selectedBankProfileId === null
-                        ? isDark
-                          ? 'rgba(234,179,8,0.15)'
-                          : '#FEF3C7'
-                        : pageBg,
-                    borderColor:
-                      selectedBankProfileId === null ? (isDark ? '#CA8A04' : '#F59E0B') : line,
-                    marginBottom: 12,
-                  },
-                  pressed && { opacity: 0.8 },
-                ]}
-              >
-                <View
-                  style={[
-                    styles.unlinkedIconWrap,
-                    { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#E5E7EB' },
-                  ]}
-                >
-                  <Feather name="slash" size={18} color={muted} />
-                </View>
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                  <Text style={[styles.bankItemName, { color: ink }]}>Unlinked / Cash</Text>
-                  <Text style={[styles.bankItemBalance, { color: muted }]}>
-                    No bank account linked
-                  </Text>
-                </View>
-                {selectedBankProfileId === null ? (
-                  <Feather name="check-circle" size={20} color={isDark ? '#FACC15' : '#D97706'} />
-                ) : (
-                  <View style={[styles.radioCircle, { borderColor: line }]} />
-                )}
-              </Pressable>
-
-              {/* Add New Bank Account */}
               <Pressable
                 onPress={() => {
                   setBankModalOpen(false);
                   setTimeout(() => setAddBankModalOpen(true), 250);
                 }}
-                style={({ pressed }) => [
-                  styles.addBankBtn,
-                  {
-                    backgroundColor: isDark ? 'rgba(184,243,107,0.15)' : '#EAF7ED',
-                    borderColor: isDark ? LIME : '#059669',
-                  },
-                  pressed && { opacity: 0.8 },
-                ]}
+                style={({ pressed }) => [styles.addBankBtn, pressed && { opacity: 0.6 }]}
+                accessibilityRole="button"
               >
-                <Feather name="plus" size={18} color={isDark ? LIME : '#059669'} />
-                <Text
-                  style={[styles.addBankBtnText, { color: isDark ? LIME : '#059669' }]}
-                >
-                  Link a new bank account
-                </Text>
+                <Feather name="plus" size={17} color={isDark ? LIME : FOREST} />
+                <Text style={[styles.addBankBtnText, { color: isDark ? LIME : FOREST }]}>Add bank account</Text>
               </Pressable>
             </ScrollView>
           </Pressable>
@@ -1024,16 +979,14 @@ const styles = StyleSheet.create({
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalSheet: { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 32, borderWidth: 1, borderBottomWidth: 0 },
   sheetHandle: { width: 38, height: 4, borderRadius: 2, backgroundColor: 'rgba(128,128,128,0.4)', alignSelf: 'center', marginBottom: 12 },
-  sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
-  sheetTitle: { fontSize: 18, fontWeight: '700' },
-  sheetSubtitle: { fontSize: 13, marginTop: 2 },
+  sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, paddingHorizontal: 2 },
+  sheetTitle: { fontSize: 21, fontWeight: '700', letterSpacing: -0.3 },
   sheetCloseBtn: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
-  bankSectionTitle: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, marginBottom: 8, textTransform: 'uppercase' },
-  bankItem: { flexDirection: 'row', alignItems: 'center', padding: 12, borderRadius: 16, borderWidth: 1, marginBottom: 8 },
-  bankItemName: { fontSize: 15, fontWeight: '700' },
-  bankItemBalance: { fontSize: 13, marginTop: 2 },
-  radioCircle: { width: 20, height: 20, borderRadius: 10, borderWidth: 2 },
-  unlinkedIconWrap: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  addBankBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16, borderWidth: 1, marginTop: 4 },
-  addBankBtnText: { fontSize: 15, fontWeight: '700' },
+  bankItem: { flexDirection: 'row', alignItems: 'center', padding: 12, borderRadius: 18, borderWidth: 1, marginBottom: 4 },
+  bankItemName: { fontSize: 15, fontWeight: '600' },
+  bankItemBalance: { fontSize: 12.5, marginTop: 2, fontVariant: ['tabular-nums'] },
+  radioCircle: { width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
+  cashIcon: { width: 40, height: 40, borderRadius: 20, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  addBankBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, height: 48, marginTop: 8 },
+  addBankBtnText: { fontSize: 15, fontWeight: '600' },
 });
