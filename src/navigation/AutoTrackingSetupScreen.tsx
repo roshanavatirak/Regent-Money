@@ -84,6 +84,7 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
 
   // Discovered accounts state
   const [discoveredBanks, setDiscoveredBanks] = useState<DiscoveredBank[]>([]);
+  const [alreadyLinkedBanks, setAlreadyLinkedBanks] = useState<DiscoveredBank[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [errorText, setErrorText] = useState('');
   // Accounts the user unchecked; kept in the list so they can be re-added
@@ -138,15 +139,38 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
       setPhase('scanning');
       // Discover bank accounts from SMS on-device
       const discovered = await bankDiscoveryService.discoverBanksFromSms(720);
-      if (discovered && discovered.length > 0) {
-        setDiscoveredBanks(discovered);
-        setPhase('review_banks');
-      } else {
-        // No bank accounts found; run standard catch-up
+      const existingBanks = useBankStore.getState().bankProfiles || [];
+
+      const isBankMatch = (disc: DiscoveredBank, exist: any) => {
+        const discSuffix = (disc.accountNumberSuffix || '').trim();
+        const existSuffix = (exist.accountNumberSuffix || '').trim();
+        const discName = (disc.bankName || '').trim().toLowerCase();
+        const existName = (exist.bankName || '').trim().toLowerCase();
+        const suffixMatch = Boolean(discSuffix && existSuffix && discSuffix === existSuffix);
+        const nameMatch = discName === existName || discName.includes(existName) || existName.includes(discName);
+        return suffixMatch && nameMatch;
+      };
+
+      const newDiscovered = (discovered || []).filter(
+        (d) => !existingBanks.some((e: any) => isBankMatch(d, e))
+      );
+      const matchedExisting = (discovered || []).filter(
+        (d) => existingBanks.some((e: any) => isBankMatch(d, e))
+      );
+
+      // If all discovered accounts already match existing profiles, bypass setup!
+      if (newDiscovered.length === 0) {
+        mmkvStorage.setBoolean(TRACKING_SETUP_KEY, true);
+        smsPermissionService.setPrompted(true);
         const result = await smsCatchupService.reconcile(false, 720);
         setFound(result?.syncedCount ?? 0);
-        setPhase('done');
+        navigation.replace('Main');
+        return;
       }
+
+      setDiscoveredBanks(newDiscovered);
+      setAlreadyLinkedBanks(matchedExisting);
+      setPhase('review_banks');
     } catch (e) {
       console.warn('[AutoTrackingSetup] Scan error:', e);
       finish();
@@ -368,7 +392,7 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
               <Text style={[s.eyebrowText, { color: accent }]}>From your bank SMS</Text>
             </View>
             <Text style={[s.reviewTitle, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}>
-              {discoveredBanks.length} account{discoveredBanks.length === 1 ? '' : 's'} found
+              {discoveredBanks.length === 1 ? '1 new account found' : `${discoveredBanks.length} new accounts found`}
             </Text>
             <Text style={[s.reviewSub, { color: muted }]}>Tap to edit. Uncheck to skip.</Text>
           </Animated.View>
@@ -434,6 +458,52 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
               })}
             </Animated.View>
 
+            {/* Already Active / Linked Accounts */}
+            {alreadyLinkedBanks.length > 0 && (
+              <View style={{ marginTop: 20 }}>
+                <View style={{ marginBottom: 8, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Feather name="check-circle" size={14} color={isDark ? LIME : '#16A34A'} />
+                  <Text style={[s.sectionTitle, { color: ink }]}>
+                    Already linked ({alreadyLinkedBanks.length})
+                  </Text>
+                </View>
+                <View style={[s.listCard, { backgroundColor: surface, borderColor: line, opacity: 0.9 }]}>
+                  {alreadyLinkedBanks.map((b, i) => {
+                    const balance = parseFloat(b.currentBalance) || 0;
+                    return (
+                      <View
+                        key={b.tempId}
+                        style={[
+                          s.bankRow,
+                          i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: line },
+                        ]}
+                      >
+                        <View style={s.bankRowMain}>
+                          <View style={[s.logoWrap, { borderColor: line }]}>
+                            <BankIcon code={b.bankCode} name={b.bankName} size={34} />
+                          </View>
+                          <View style={s.bankRowText}>
+                            <Text style={[s.bankRowName, { color: ink }]} numberOfLines={1}>
+                              {b.bankName}
+                            </Text>
+                            <Text style={[s.bankRowMeta, { color: muted }]} numberOfLines={1}>
+                              {b.accountType} ··{b.accountNumberSuffix}
+                            </Text>
+                          </View>
+                          <Text style={[s.bankRowBalance, { color: ink }]}>
+                            ₹{balance.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                          </Text>
+                        </View>
+                        <View style={[s.activeBadge, { backgroundColor: isDark ? 'rgba(184,243,107,0.16)' : '#E3F2E8' }]}>
+                          <Text style={[s.activeBadgeText, { color: isDark ? LIME : '#15803D' }]}>Active</Text>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+              </View>
+            )}
+
             {errorText ? (
               <View style={s.errorRow}>
                 <Feather name="alert-circle" size={14} color={isDark ? '#FFA8A8' : '#C92A2A'} />
@@ -455,7 +525,7 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
                     <ActivityIndicator color={accentFg} />
                   ) : (
                     <Text style={[s.primaryText, { color: accentFg }]}>
-                      Add {selectedBanks.length} account{selectedBanks.length === 1 ? '' : 's'}
+                      Link {selectedBanks.length} new account{selectedBanks.length === 1 ? '' : 's'}
                     </Text>
                   )}
                 </Pressable>
@@ -464,7 +534,7 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
                 </Pressable>
               </>
             ) : (
-              <PrimaryButton label="Continue" onPress={finish} />
+              <PrimaryButton label="Skip & Continue to Dashboard" onPress={finish} />
             )}
           </Animated.View>
 
@@ -703,5 +773,18 @@ const s = StyleSheet.create({
   errorText: {
     fontSize: 13,
     fontWeight: '600',
+  },
+  activeBadge: {
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  activeBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  sectionTitle: {
+    fontSize: 14,
+    fontWeight: '700',
   },
 });

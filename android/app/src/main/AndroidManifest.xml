@@ -69,8 +69,6 @@
         <category android:name="android.intent.category.DEFAULT"/>
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="regentmoney"/>
-        <data android:scheme="regentmoney" android:host="login"/>
-        <data android:scheme="regentmoney" android:host="signup"/>
       </intent-filter>
     </activity>
 

@@ -512,7 +512,10 @@ export class SyncService implements OnModuleInit {
     this.logger.log(`Creating/updating bank profile for user: ${userId} (${data.id})`);
 
     let existing = await this.bankProfileRepository.findOne({
-      where: { id: data.id, userId, isDeleted: false },
+      where: [
+        { id: data.id, userId, isDeleted: false },
+        { userId, bankName: data.bankName, accountNumberSuffix: data.accountNumberSuffix, isDeleted: false },
+      ],
     });
 
     if (existing) {

@@ -3392,6 +3392,14 @@ export default function AppNavigator() {
   const [splashFinished, setSplashFinished] = useState(Platform.OS === 'android');
   const hasSeenOnboarding = mmkvStorage.getBoolean('has_seen_onboarding_v1') ?? false;
   const hasSetupTracking = mmkvStorage.getBoolean(TRACKING_SETUP_KEY) ?? false;
+  const bankProfiles = useBankStore((state) => state.bankProfiles) || [];
+  const hasBankProfiles = bankProfiles.length > 0;
+
+  useEffect(() => {
+    if (hasBankProfiles && !hasSetupTracking) {
+      mmkvStorage.setBoolean(TRACKING_SETUP_KEY, true);
+    }
+  }, [hasBankProfiles, hasSetupTracking]);
 
   const updateInfo = useAppUpdateStore((state) => state.updateInfo);
   const updateModalVisible = useAppUpdateStore((state) => state.updateModalVisible);
@@ -3643,7 +3651,7 @@ export default function AppNavigator() {
                 </>
               ) : (
                 <>
-                  {!hasSetupTracking && Platform.OS === 'android' ? (
+                  {!hasSetupTracking && !hasBankProfiles && Platform.OS === 'android' ? (
                     <>
                       <Stack.Screen name="AutoTrackingSetup" component={AutoTrackingSetupScreen} />
                       <Stack.Screen name="Main" component={TabNavigator} />
