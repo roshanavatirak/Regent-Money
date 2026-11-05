@@ -41,6 +41,10 @@ export class BankProfile {
   @Column({ name: 'statement_password', type: 'text', nullable: true })
   statementPassword: string | null;
 
+  /** Last 4 digits of debit cards on this account, comma-separated ("1479,0032"). */
+  @Column({ name: 'debit_card_suffixes', type: 'text', nullable: true })
+  debitCardSuffixes: string | null;
+
   @Column({ name: 'sms_consent', type: 'boolean', default: true })
   smsConsent: boolean;
 

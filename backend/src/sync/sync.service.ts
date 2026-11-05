@@ -119,6 +119,9 @@ export class SyncService implements OnModuleInit {
         ALTER TABLE core.bank_profiles ADD COLUMN IF NOT EXISTS account_type TEXT DEFAULT 'Savings';
       `);
       await this.dataSource.query(`
+        ALTER TABLE core.bank_profiles ADD COLUMN IF NOT EXISTS debit_card_suffixes TEXT;
+      `);
+      await this.dataSource.query(`
         ALTER TABLE finance.income_records ADD COLUMN IF NOT EXISTS category TEXT;
       `);
       // Savings Goal enrichments
@@ -2356,6 +2359,14 @@ export class SyncService implements OnModuleInit {
         const dbSuffix = (b.accountNumberSuffix || '').replace(/\D/g, '').slice(-4);
         return dbSuffix === parsedSuffix;
       }) || null;
+      // A linked debit card routes its spends to the card's account
+      if (!matchedBank) {
+        matchedBank = candidateBanks.find((b) => this.debitCardsOf(b).includes(parsedSuffix)) || null;
+      }
+      if (!matchedBank && parsed.isDebitCard) {
+        const owners = bankProfiles.filter((b) => this.debitCardsOf(b).includes(parsedSuffix));
+        if (owners.length === 1) matchedBank = owners[0];
+      }
     } else if (candidateBanks.length === 1) {
       matchedBank = candidateBanks[0];
     }
@@ -2420,6 +2431,12 @@ export class SyncService implements OnModuleInit {
       });
       await this.transactionRepository.save(newTx);
       await this.invalidateUserSyncCache(userId);
+
+      if (parsed.isDebitCard && parsed.type === 'debit' && /^\d{4}$/.test(parsedSuffix) && candidateBanks.length > 0) {
+        this.promptDebitCardLink(userId, parsedSuffix, parsed, candidateBanks).catch((err) =>
+          this.logger.warn(`Failed to dispatch debit card prompt: ${err.message}`),
+        );
+      }
 
       return {
         success: true,
@@ -2672,6 +2689,74 @@ export class SyncService implements OnModuleInit {
       merchant: parsed.merchant,
     };
     });
+  }
+
+  /** Debit card last-4s linked to a bank account. */
+  private debitCardsOf(bank: BankProfile): string[] {
+    return (bank.debitCardSuffixes || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => /^\d{4}$/.test(s));
+  }
+
+  /**
+   * Asks the user once a week per card whether an unrecognised debit card belongs to one of
+   * their accounts at the issuing bank.
+   */
+  private async promptDebitCardLink(
+    userId: string,
+    cardSuffix: string,
+    parsed: ParsedTransaction,
+    candidateBanks: BankProfile[],
+  ) {
+    const key = `debit_card_prompt:${userId}:${cardSuffix}`;
+    if (await this.redisService.get(key)) return;
+    await this.redisService.set(key, '1', 7 * 24 * 60 * 60);
+
+    const bankName = candidateBanks[0].bankName || parsed.bankName || 'your bank';
+    const where = parsed.merchant && !/^(?:spends|credits)$/i.test(parsed.merchant) ? ` at ${parsed.merchant}` : '';
+    await this.notificationsService.sendNotification(userId, {
+      title: `New ${bankName} debit card spotted`,
+      body: `₹${parsed.amount} was spent${where} with card ••${cardSuffix}. Link it to your account so card spends are tracked automatically.`,
+      type: 'review',
+      payload: {
+        action: 'link_debit_card',
+        cardSuffix,
+        bankName,
+        bankProfileIds: candidateBanks.map((b) => b.id),
+      },
+    });
+  }
+
+  /** Replaces the debit cards linked to one account. */
+  async setDebitCards(userId: string, bankProfileId: string, cardSuffixes: string[]) {
+    const clean = Array.from(new Set((cardSuffixes || []).map((s) => String(s).trim())));
+    if (clean.some((s) => !/^\d{4}$/.test(s))) {
+      throw new BadRequestException('Enter the last 4 digits of the card.');
+    }
+    if (clean.length > 4) {
+      throw new BadRequestException('An account can have up to 4 debit cards.');
+    }
+
+    const banks = await this.bankProfileRepository.find({ where: { userId, isDeleted: false } });
+    const bank = banks.find((b) => b.id === bankProfileId);
+    if (!bank) {
+      throw new BadRequestException('Bank account not found.');
+    }
+    for (const other of banks) {
+      if (other.id === bank.id) continue;
+      const clash = clean.find((s) => this.debitCardsOf(other).includes(s));
+      if (clash) {
+        throw new BadRequestException(`Card ••${clash} is already linked to ${other.bankName} ••${other.accountNumberSuffix}.`);
+      }
+    }
+
+    bank.debitCardSuffixes = clean.length ? clean.join(',') : null;
+    bank.updatedAt = Date.now();
+    await this.bankProfileRepository.save(bank);
+    await Promise.all(clean.map((s) => this.redisService.del(`debit_card_prompt:${userId}:${s}`)));
+    await this.invalidateUserSyncCache(userId);
+    return { success: true, bankProfile: bank };
   }
 
   /**

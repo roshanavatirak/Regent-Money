@@ -7,6 +7,7 @@ import {
   useAnalyticsStore,
   useIncomeStore,
   useSyncStatusStore,
+  parseDebitCardSuffixes,
 } from '../store';
 import { mmkvStorage } from '../db/mmkv';
 import { getBackendUrl } from '../config/api';
@@ -313,6 +314,7 @@ export const syncService = {
         upiId: b.upiId ?? b.upi_id,
         customKeywords: b.customKeywords ?? b.custom_keywords,
         smsConsent: b.smsConsent ?? b.sms_consent ?? false,
+        debitCardSuffixes: parseDebitCardSuffixes(b.debitCardSuffixes ?? b.debit_card_suffixes),
       }));
       useBankStore.getState().setBankProfiles(mappedBanks);
 

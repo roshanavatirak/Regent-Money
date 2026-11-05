@@ -2,7 +2,7 @@ import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
 import { parseSMS, detectBankFromSender } from './smsParser';
 import { authService } from './authService';
 import { getBackendUrl } from '../config/api';
-import { useBankStore, useAuthStore, useTransactionStore } from '../store';
+import { useBankStore, useAuthStore, useTransactionStore, parseDebitCardSuffixes } from '../store';
 import { syncService } from './syncService';
 import { matchesSmsSender, isBankSmsSender } from '../constants/bankSmsSenders';
 import { tagLearningService } from './tagLearningService';
@@ -224,6 +224,12 @@ export const smsCatchupService = {
               .slice(-4);
             return dbSuffix === parsedSuffix;
           });
+          // A linked debit card routes its spends to the card's account
+          if (!matchedBank) {
+            matchedBank = candidateBanks.find((b: any) =>
+              parseDebitCardSuffixes(b.debitCardSuffixes ?? b.debit_card_suffixes).includes(parsedSuffix)
+            );
+          }
           // If a suffix was present in the SMS but did not match any account at this bank,
           // do NOT assign to any other bank. Leave matchedBank as null (Review Queue).
         } else if (candidateBanks.length === 1) {

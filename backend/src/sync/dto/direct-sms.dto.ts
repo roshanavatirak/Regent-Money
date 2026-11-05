@@ -44,6 +44,11 @@ export class ParsedSmsDto {
   @IsString()
   @MaxLength(32)
   referenceId?: string;
+
+  /** The suffix is a debit card, not an account number. */
+  @IsOptional()
+  @IsBoolean()
+  isDebitCard?: boolean;
 }
 
 export class DirectSmsDto {

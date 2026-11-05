@@ -599,7 +599,15 @@ export interface BankProfileType {
   customKeywords?: string;
   accountType?: string;
   smsConsent: boolean;
+  /** Last 4 digits of debit cards on this account. */
+  debitCardSuffixes?: string[];
 }
+
+/** Normalises the backend's comma-separated card list. */
+export const parseDebitCardSuffixes = (raw: unknown): string[] =>
+  (Array.isArray(raw) ? raw : String(raw ?? '').split(','))
+    .map((s) => String(s).trim())
+    .filter((s) => /^\d{4}$/.test(s));
 
 export interface BankState {
   bankProfiles: BankProfileType[];

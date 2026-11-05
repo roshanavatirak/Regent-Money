@@ -38,6 +38,17 @@ export class SyncController {
     return this.syncService.createBankProfile(userId, body);
   }
 
+  @Post('bank-profile/:id/debit-cards')
+  @HttpCode(HttpStatus.OK)
+  async setDebitCards(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { cardSuffixes: string[] },
+  ) {
+    const userId = req.user.id;
+    return this.syncService.setDebitCards(userId, id, Array.isArray(body?.cardSuffixes) ? body.cardSuffixes : []);
+  }
+
   @Delete('bank-profile/:id')
   @HttpCode(HttpStatus.OK)
   async deleteBankProfile(

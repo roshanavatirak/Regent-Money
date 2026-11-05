@@ -128,6 +128,7 @@ import { AddBankModal } from './AddBankModal';
 import { ProfileScreen } from './ProfileScreen';
 import { EditProfileScreen } from './EditProfileScreen';
 import { EditBankScreen } from './EditBankScreen';
+import { LinkDebitCardScreen } from './LinkDebitCardScreen';
 import { ManualTransactionScreen } from './ManualTransactionScreen';
 import { TransactionDetailScreen } from './TransactionDetailScreen';
 import { SettingsScreen } from './SettingsScreen';
@@ -1110,6 +1111,7 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
   const insets = useSafeAreaInsets();
 
   const notifications = useNotificationStore((state) => state.notifications);
+  const bankProfiles = useBankStore((state) => state.bankProfiles);
   const isLoading = useNotificationStore((state) => state.isLoading);
   const unreadCount = useNotificationStore((state) => state.unreadCount);
 
@@ -1263,6 +1265,29 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
     });
   };
 
+  const openLinkDebitCard = (notification: any, payload: any) => {
+    const bankIds = (payload?.bankProfileIds || []).filter((id: string) => bankProfiles.some((b) => b.id === id));
+    if (!bankIds.length) {
+      Alert.alert('Account not found', 'Add the bank account first, then link this card from its options.');
+      return;
+    }
+    onClose();
+    if (navigationRef?.isReady?.()) {
+      (navigationRef.navigate as any)('LinkDebitCard', {
+        bankId: bankIds[0],
+        bankIds,
+        suggestedSuffix: payload.cardSuffix,
+        notificationId: notification.id,
+      });
+    }
+  };
+
+  const dismissDebitCard = async (notification: any) => {
+    await notificationService.markAsRead(notification.id).catch(() => {});
+    useNotificationStore.getState().resolveNotificationState?.(notification.id, 'not_mine');
+    setResolvedIds((prev) => new Set(prev).add(notification.id));
+  };
+
   const openRegent = () => {
     onClose();
     if (navigationRef?.isReady?.()) {
@@ -1284,7 +1309,10 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
     const payload = typeof item.raw.payload === 'string'
       ? (() => { try { return JSON.parse(item.raw.payload); } catch { return null; } })()
       : item.raw.payload;
-    const resolved = resolvedIds.has(item.id) || !!payload?.resolved;
+    const cardLinked =
+      payload?.action === 'link_debit_card' &&
+      bankProfiles.some((b) => (b.debitCardSuffixes || []).includes(payload?.cardSuffix));
+    const resolved = resolvedIds.has(item.id) || !!payload?.resolved || cardLinked;
     const showActions =
       item.kind === 'review' && !resolved && !!payload;
 
@@ -1351,7 +1379,11 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
                     ? payload?.decision === 'ignore'
                       ? 'Duplicate dismissed'
                       : 'Transaction added'
-                    : 'Resolved'}
+                    : payload?.action === 'link_debit_card'
+                      ? cardLinked
+                        ? `Card ••${payload?.cardSuffix} linked`
+                        : 'Dismissed'
+                      : 'Resolved'}
                 </Text>
               </View>
             )}
@@ -1362,6 +1394,45 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
             {busyId === item.id ? (
               <ActivityIndicator size="small" color={colors.accent} style={{ paddingVertical: 8 }} />
+            ) : payload?.action === 'link_debit_card' ? (
+              <>
+                <TouchableOpacity
+                  onPress={() => openLinkDebitCard(item.raw, payload)}
+                  activeOpacity={0.8}
+                  style={{
+                    flex: 1,
+                    backgroundColor: isDark ? LIME : FOREST,
+                    borderRadius: 999,
+                    height: 38,
+                    paddingHorizontal: 8,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Text numberOfLines={1} style={{ color: isDark ? FOREST : LIME, fontSize: 13, fontWeight: '700' }}>
+                    Link card
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => dismissDebitCard(item.raw)}
+                  activeOpacity={0.8}
+                  style={{
+                    flex: 1,
+                    borderWidth: 1,
+                    borderColor: line,
+                    backgroundColor: cardBg,
+                    borderRadius: 999,
+                    height: 38,
+                    paddingHorizontal: 8,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Text numberOfLines={1} style={{ color: ink, fontSize: 13, fontWeight: '600' }}>
+                    Not mine
+                  </Text>
+                </TouchableOpacity>
+              </>
             ) : payload?.action === 'duplicate_transaction_review' ? (
               <>
                 <TouchableOpacity
@@ -3677,6 +3748,15 @@ export default function AppNavigator() {
                     options={{
                       presentation: 'card',
                       animation: 'slide_from_bottom',
+                      headerShown: false,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="LinkDebitCard"
+                    component={LinkDebitCardScreen}
+                    options={{
+                      presentation: 'card',
+                      animation: 'slide_from_right',
                       headerShown: false,
                     }}
                   />

@@ -39,6 +39,7 @@ import { getBackendUrl } from '../config/api';
 import { ReviewTransactionsModal } from './ReviewTransactionsModal';
 import { TransactionDetailScreen } from './TransactionDetailScreen';
 import { EditBankScreen } from './EditBankScreen';
+import { LinkDebitCardScreen } from './LinkDebitCardScreen';
 import { ManualTransactionScreen } from './ManualTransactionScreen';
 import { smsCatchupService } from '../services/smsCatchupService';
 import { smsPermissionService } from '../services/smsPermissionService';
@@ -125,6 +126,8 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
   const [detectedFinalBalance, setDetectedFinalBalance] = useState<number | null>(null);
   const [selectedTx, setSelectedTx] = useState<any | null>(null);
   const [isEditingBank, setIsEditingBank] = useState(false);
+  /** Open debit card editor: '' links a new card, '1479' edits that card. */
+  const [cardEditor, setCardEditor] = useState<string | null>(null);
   const [manualTxType, setManualTxType] = useState<'credit' | 'debit' | null>(null);
 
   const [smsConsent, setSmsConsent] = useState(activeBank?.smsConsent || false);
@@ -138,6 +141,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
   useEffect(() => {
     if (!visible) {
       setIsEditingBank(false);
+      setCardEditor(null);
       setManualTxType(null);
       setSelectedTx(null);
       setSearchQuery('');
@@ -790,6 +794,20 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
           </View>
         )}
 
+        {cardEditor !== null && (
+          <View style={[StyleSheet.absoluteFill, { zIndex: 9999, backgroundColor: pageBg }]}>
+            <LinkDebitCardScreen
+              bankId={activeBank.id}
+              cardSuffix={cardEditor || undefined}
+              onBack={() => setCardEditor(null)}
+              onSuccess={(updated: any) => {
+                setCardEditor(null);
+                setLocalBank(updated);
+              }}
+            />
+          </View>
+        )}
+
         {manualTxType && (
           <View style={[StyleSheet.absoluteFill, { zIndex: 9999, backgroundColor: pageBg }]}>
             <ManualTransactionScreen
@@ -854,6 +872,41 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
                 <Text style={[s.optLabel, { color: ink }]}>Edit account details</Text>
                 <Feather name="chevron-right" size={16} color={muted} />
               </Pressable>
+              {(activeBank.debitCardSuffixes || []).map((card: string) => (
+                <Pressable
+                  key={card}
+                  onPress={() => {
+                    setOptionsSheet(false);
+                    setCardEditor(card);
+                  }}
+                  style={[s.optRow, { borderBottomColor: line }]}
+                >
+                  <Feather name="credit-card" size={18} color={ink} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[s.optLabel, { color: ink, flex: 0 }]}>Debit card ••{card}</Text>
+                    <Text style={[s.optSub, { color: muted }]}>Card spends go to this account</Text>
+                  </View>
+                  <Feather name="chevron-right" size={16} color={muted} />
+                </Pressable>
+              ))}
+              {(activeBank.debitCardSuffixes || []).length < 4 && (
+                <Pressable
+                  onPress={() => {
+                    setOptionsSheet(false);
+                    setCardEditor('');
+                  }}
+                  style={[s.optRow, { borderBottomColor: line }]}
+                >
+                  <Feather name="credit-card" size={18} color={ink} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[s.optLabel, { color: ink, flex: 0 }]}>
+                      {(activeBank.debitCardSuffixes || []).length ? 'Link another debit card' : 'Link debit card'}
+                    </Text>
+                    <Text style={[s.optSub, { color: muted }]}>Track card spends on this account</Text>
+                  </View>
+                  <Feather name="chevron-right" size={16} color={muted} />
+                </Pressable>
+              )}
               <Pressable onPress={scanLast48h} disabled={isSyncingSms} style={[s.optRow, { borderBottomColor: line }]}>
                 {isSyncingSms ? <ActivityIndicator size="small" color={ink} /> : <Feather name="refresh-cw" size={18} color={ink} />}
                 <View style={{ flex: 1 }}>
