@@ -31,6 +31,7 @@ class SmsDirectSyncWorker(context: Context, workerParams: WorkerParameters) : Wo
         const val KEY_TYPE = "type"
         const val KEY_MERCHANT = "merchant"
         const val KEY_ACCOUNT_SUFFIX = "account_suffix"
+        const val KEY_IS_DEBIT_CARD = "is_debit_card"
         const val KEY_BANK_NAME = "bank_name"
         const val KEY_IS_SALARY = "is_salary"
         const val KEY_AVAILABLE_BALANCE = "available_balance"
@@ -63,6 +64,7 @@ class SmsDirectSyncWorker(context: Context, workerParams: WorkerParameters) : Wo
                 .putString(KEY_TYPE, parsed.type)
                 .putString(KEY_MERCHANT, parsed.merchant)
                 .putString(KEY_ACCOUNT_SUFFIX, parsed.accountSuffix)
+                .putBoolean(KEY_IS_DEBIT_CARD, parsed.isDebitCard)
                 .putString(KEY_BANK_NAME, parsed.bankName)
                 .putBoolean(KEY_IS_SALARY, parsed.isSalary)
                 .apply { parsed.availableBalance?.let { putDouble(KEY_AVAILABLE_BALANCE, it) } }
@@ -144,6 +146,7 @@ class SmsDirectSyncWorker(context: Context, workerParams: WorkerParameters) : Wo
                 put("accountSuffix", inputData.getString(KEY_ACCOUNT_SUFFIX) ?: "XXXX")
                 put("bankName", inputData.getString(KEY_BANK_NAME) ?: "Bank")
                 put("isSalary", inputData.getBoolean(KEY_IS_SALARY, false))
+                if (inputData.getBoolean(KEY_IS_DEBIT_CARD, false)) put("isDebitCard", true)
                 if (inputData.keyValueMap.containsKey(KEY_AVAILABLE_BALANCE)) {
                     put("availableBalance", inputData.getDouble(KEY_AVAILABLE_BALANCE, 0.0))
                 }

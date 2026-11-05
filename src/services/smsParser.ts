@@ -7,6 +7,8 @@ export interface ParsedTransaction {
   isSalary: boolean;
   availableBalance?: number;
   referenceId?: string;
+  /** Set only when the suffix is a debit card (e.g. "Kotak Debit Card XX1479"). */
+  isDebitCard?: boolean;
 }
 
 // OTP rule, kept identical in SmsParser.kt and backend/src/sync/sms-parser.util.ts.
@@ -337,6 +339,7 @@ export const parseSMS = (sender: string, body: string): ParsedTransaction | null
     isSalary,
     availableBalance,
     referenceId,
+    ...(isDebitCardSuffix(clean, accountSuffix) ? { isDebitCard: true } : {}),
   };
 };
 
@@ -404,6 +407,23 @@ export function detectBankFromSender(sender: string): string | null {
   if (clean.includes('CENTBK') || clean.includes('CBIN')) return 'Central Bank of India';
   if (clean.includes('INDIBK') || clean.includes('IDIB')) return 'Indian Bank';
   return null;
+}
+
+// A card suffix ("Debit Card XX1479", "Card x1234") on a bank-account alert, not a credit card
+const CARD_SUFFIX = /\bcard\b[^0-9]{0,25}?[xX*.]*(\d{3,18})\b/gi;
+const CREDIT_CARD_HINT = /\b(?:credit\s*card|avl\s*limit|avail(?:able)?\s*(?:credit\s*)?limit|sbi\s*card|outstanding|total\s*due|min(?:imum)?\s*due)\b/i;
+const DEBIT_CARD_HINT = /\b(?:debit\s*card|bal(?:ance)?)\b/i;
+
+/** True when the SMS suffix belongs to a debit card rather than a bank account or credit card. */
+export function isDebitCardSuffix(cleanText: string, suffix: string): boolean {
+  if (!suffix || suffix === 'XXXX') return false;
+  if (CREDIT_CARD_HINT.test(cleanText) || !DEBIT_CARD_HINT.test(cleanText)) return false;
+  const rx = new RegExp(CARD_SUFFIX.source, 'gi');
+  let m: RegExpExecArray | null;
+  while ((m = rx.exec(cleanText)) !== null) {
+    if (m[1].slice(-4) === suffix) return true;
+  }
+  return false;
 }
 
 /**

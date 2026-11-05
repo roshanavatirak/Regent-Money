@@ -20,6 +20,8 @@ object SmsParser {
         val isSalary: Boolean,
         val availableBalance: Double?,
         val referenceId: String?,
+        /** True only when the suffix is a debit card ("Kotak Debit Card XX1479"). */
+        val isDebitCard: Boolean = false,
     )
 
     private val I = RegexOption.IGNORE_CASE
@@ -236,7 +238,7 @@ object SmsParser {
             (lower.contains("salary") || lower.contains("employer") || lower.contains("stipend") ||
                 merchant.lowercase().contains("payroll"))
 
-        return ParsedSms(amount, type, merchant, accountSuffix, bankName, isSalary, availableBalance, referenceId)
+        return ParsedSms(amount, type, merchant, accountSuffix, bankName, isSalary, availableBalance, referenceId, isDebitCardSuffix(clean, accountSuffix))
     }
 
     /**
@@ -318,6 +320,17 @@ object SmsParser {
             clean.contains("INDIBK") || clean.contains("IDIB") -> "Indian Bank"
             else -> null
         }
+    }
+
+    // A card suffix on a bank-account alert, not a credit card; mirrors isDebitCardSuffix in smsParser.ts
+    private val CARD_SUFFIX = Regex("\\bcard\\b[^0-9]{0,25}?[xX*.]*(\\d{3,18})\\b", I)
+    private val CREDIT_CARD_HINT = Regex("\\b(?:credit\\s*card|avl\\s*limit|avail(?:able)?\\s*(?:credit\\s*)?limit|sbi\\s*card|outstanding|total\\s*due|min(?:imum)?\\s*due)\\b", I)
+    private val DEBIT_CARD_HINT = Regex("\\b(?:debit\\s*card|bal(?:ance)?)\\b", I)
+
+    fun isDebitCardSuffix(cleanText: String, suffix: String): Boolean {
+        if (suffix.isEmpty() || suffix == "XXXX") return false
+        if (CREDIT_CARD_HINT.containsMatchIn(cleanText) || !DEBIT_CARD_HINT.containsMatchIn(cleanText)) return false
+        return CARD_SUFFIX.findAll(cleanText).any { it.groupValues[1].takeLast(4) == suffix }
     }
 
     private val SUFFIX = Regex("\\b(?:a\\/c|acct|account|ac|card)\\b[^0-9]{0,25}?([xX*.]*)(\\d{3,18})\\b", I)

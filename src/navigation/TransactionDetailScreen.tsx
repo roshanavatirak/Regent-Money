@@ -684,59 +684,6 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
           entering={FadeInDown.delay(120).duration(380)}
           style={[styles.group, { backgroundColor: colors.card, borderColor: line }]}
         >
-          {/* Bank Account */}
-          <Pressable
-            onPress={() => setBankModalOpen(true)}
-            style={({ pressed }) => [
-              styles.row,
-              { borderBottomColor: line, borderBottomWidth: StyleSheet.hairlineWidth },
-              pressed && { opacity: 0.7 },
-            ]}
-            accessibilityRole="button"
-            accessibilityLabel={`Bank account ${bankName || 'not linked'}. ${bankName ? 'Change' : 'Link bank'}`}
-          >
-            {bankName ? (
-              <BankIcon code={getBankCode(bankName)} name={bankName} size={38} />
-            ) : (
-              <View
-                style={[
-                  styles.noteIcon,
-                  { backgroundColor: isDark ? 'rgba(234, 179, 8, 0.15)' : '#FEF3C7' },
-                ]}
-              >
-                <Feather name="credit-card" size={18} color={isDark ? '#FACC15' : '#D97706'} />
-              </View>
-            )}
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.rowLabel, { color: muted }]}>Account</Text>
-              {bankName ? (
-                <Text style={[styles.rowValue, { color: ink }]} numberOfLines={1}>
-                  {bankName}
-                  {accountSuffix ? ` •• ${accountSuffix}` : ''}
-                </Text>
-              ) : (
-                <Text style={[styles.rowValue, { color: isDark ? '#FACC15' : '#D97706' }]}>
-                  No bank linked
-                </Text>
-              )}
-            </View>
-            <Text
-              style={[
-                styles.rowAction,
-                {
-                  color: bankName ? muted : (isDark ? LIME : '#0B6B3A'),
-                  fontWeight: bankName ? '600' : '700',
-                },
-              ]}
-            >
-              {bankName ? 'Change' : 'Link bank'}
-            </Text>
-            <Feather
-              name="chevron-right"
-              size={16}
-              color={bankName ? muted : (isDark ? LIME : '#0B6B3A')}
-            />
-          </Pressable>
           <Pressable
             onPress={() => setTagSheet(true)}
             style={({ pressed }) => [styles.row, { borderBottomColor: line, borderBottomWidth: StyleSheet.hairlineWidth }, pressed && { opacity: 0.7 }]}

@@ -40,6 +40,7 @@ class SmsParserTest {
             assertEquals(label, e.getBoolean("isSalary"), parsed.isSalary)
             assertEquals(label, if (e.has("availableBalance")) e.getDouble("availableBalance") else null, parsed.availableBalance)
             assertEquals(label, if (e.has("referenceId")) e.getString("referenceId") else null, parsed.referenceId)
+            assertEquals(label, e.optBoolean("isDebitCard", false), parsed.isDebitCard)
             assertEquals(label, c.getString("smsId"), SmsParser.smsId(body, parsed.referenceId))
             assertEquals(label, c.getString("contentId"), SmsParser.contentId(body))
         }
