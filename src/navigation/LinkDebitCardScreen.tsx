@@ -498,8 +498,8 @@ const s = StyleSheet.create({
   verifiedText: { color: LIME, fontSize: 11, fontWeight: '600' },
 
   inputWrap: { paddingHorizontal: 24, paddingTop: 36 },
-  label: { fontSize: 13, letterSpacing: 0.2 },
-  slots: { flexDirection: 'row', gap: 16, marginTop: 8 },
+  label: { fontSize: 13, letterSpacing: 0.2, textAlign: 'center' },
+  slots: { flexDirection: 'row', gap: 16, marginTop: 8, alignSelf: 'center' },
   slot: { width: 48, height: 52, alignItems: 'center', justifyContent: 'center' },
   slotText: { fontSize: 30 },
   caret: { width: 2, height: 26, borderRadius: 1 },
@@ -518,7 +518,7 @@ const s = StyleSheet.create({
   suggestText: { fontSize: 13 },
   usePill: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999 },
   usePillText: { fontSize: 13, fontWeight: '700' },
-  error: { color: '#E03131', fontSize: 13, marginTop: 14 },
+  error: { color: '#E03131', fontSize: 13, marginTop: 14, textAlign: 'center' },
 
   footer: { paddingHorizontal: 20, paddingTop: 24 },
   privacy: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 12 },

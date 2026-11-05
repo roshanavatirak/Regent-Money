@@ -71,10 +71,12 @@ const Sheet: React.FC<{
   children: React.ReactNode;
   bg: string;
   dark: boolean;
-}> = ({ visible, onClose, children, bg, dark }) => {
+  /** Show and hide without the slide, e.g. when returning from a sub-screen. */
+  instant?: boolean;
+}> = ({ visible, onClose, children, bg, dark, instant }) => {
   const insets = useSafeAreaInsets();
   return (
-    <Modal visible={visible} transparent animationType="slide" statusBarTranslucent onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType={instant ? 'none' : 'slide'} statusBarTranslucent onRequestClose={onClose}>
       <View style={sheet.backdrop}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close" />
         <KeyboardAvoidingView behavior="padding" style={{ width: '100%' }}>
@@ -133,6 +135,8 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
   const [smsConsent, setSmsConsent] = useState(activeBank?.smsConsent || false);
   const [consentSheet, setConsentSheet] = useState(false);
   const [optionsSheet, setOptionsSheet] = useState(false);
+  /** Options sheet is hidden behind a sub-screen and comes back, without animating, when it closes. */
+  const [optionsReturn, setOptionsReturn] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [isSyncingSms, setIsSyncingSms] = useState(false);
@@ -142,6 +146,8 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
     if (!visible) {
       setIsEditingBank(false);
       setCardEditor(null);
+      setOptionsSheet(false);
+      setOptionsReturn(false);
       setManualTxType(null);
       setSelectedTx(null);
       setSearchQuery('');
@@ -547,7 +553,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
             <Text style={s.brandName} numberOfLines={1}>{activeBank.bankName}</Text>
             <Text style={s.brandSub}>{activeBank.accountType || 'Savings'} •• {activeBank.accountNumberSuffix}</Text>
           </View>
-          <Pressable onPress={() => setOptionsSheet(true)} style={s.ghostBtn} accessibilityLabel="Account options">
+          <Pressable onPress={() => { setOptionsReturn(false); setOptionsSheet(true); }} style={s.ghostBtn} accessibilityLabel="Account options">
             <Feather name="more-horizontal" size={18} color="#FFFFFF" />
           </Pressable>
         </View>
@@ -628,6 +634,10 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
       setIsEditingBank(false);
       return;
     }
+    if (cardEditor !== null) {
+      setCardEditor(null);
+      return;
+    }
     if (manualTxType) {
       setManualTxType(null);
       return;
@@ -657,6 +667,15 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
       return;
     }
     onClose();
+  };
+
+  const CARDS: string[] = activeBank?.debitCardSuffixes || [];
+  const tileBg = isDark ? 'rgba(184,243,107,0.12)' : '#FFFFFF';
+  const tileFg = isDark ? LIME : FOREST;
+  /** Opens a sub-screen from the options sheet; the sheet returns, unanimated, when it closes. */
+  const openFromOptions = (open: () => void) => {
+    setOptionsReturn(true);
+    open();
   };
 
   return (
@@ -825,9 +844,11 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
 
       {/* Account options */}
       <Sheet
-        visible={optionsSheet && !isEditingBank && !manualTxType}
+        visible={optionsSheet && !isEditingBank && !manualTxType && cardEditor === null}
+        instant={optionsReturn}
         onClose={() => {
           setOptionsSheet(false);
+          setOptionsReturn(false);
           setConfirmRemove(false);
         }}
         bg={surface}
@@ -854,85 +875,108 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
         ) : (
           <View>
             <View style={s.sheetHeadRow}>
-              <BankIcon code={getBankCode(activeBank.bankName)} name={activeBank.bankName} size={36} />
-              <View style={{ flex: 1 }}>
-                <Text style={[s.optTitle, { color: ink }]} numberOfLines={1}>{activeBank.bankName}</Text>
-                <Text style={[s.optSub, { color: muted }]}>{activeBank.accountType || 'Savings'} •• {activeBank.accountNumberSuffix}</Text>
+              <BankIcon code={getBankCode(activeBank.bankName)} name={activeBank.bankName} size={46} />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text
+                  style={[s.optTitle, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}
+                  numberOfLines={1}
+                >
+                  {activeBank.bankName}
+                </Text>
+                <Text style={[s.optSub, { color: muted }]}>
+                  {activeBank.accountType || 'Savings'} ••{activeBank.accountNumberSuffix}
+                </Text>
               </View>
             </View>
-            <View style={[s.optGroup, { borderColor: line }]}>
-              <Pressable
-                onPress={() => {
-                  setOptionsSheet(false);
-                  setIsEditingBank(true);
-                }}
-                style={[s.optRow, { borderBottomColor: line }]}
-              >
-                <Feather name="edit-3" size={18} color={ink} />
-                <Text style={[s.optLabel, { color: ink }]}>Edit account details</Text>
-                <Feather name="chevron-right" size={16} color={muted} />
-              </Pressable>
-              {(activeBank.debitCardSuffixes || []).map((card: string) => (
+
+            <View style={[s.optGroup, { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#F4F7F5' }]}>
+              {[
+                {
+                  key: 'edit',
+                  icon: <Feather name="edit-3" size={17} color={tileFg} />,
+                  label: 'Edit account details',
+                  sub: 'Name, number, balance and SMS senders',
+                  onPress: () => openFromOptions(() => setIsEditingBank(true)),
+                },
+                ...CARDS.map((card) => ({
+                  key: `card-${card}`,
+                  icon: (
+                    <View style={[s.miniCard, { backgroundColor: bankBrandColor(activeBank.bankName) }]}>
+                      <View style={s.miniChip} />
+                    </View>
+                  ),
+                  label: `Debit card ••${card}`,
+                  sub: 'Card spends go to this account',
+                  onPress: () => openFromOptions(() => setCardEditor(card)),
+                })),
+                ...(CARDS.length < 4
+                  ? [
+                      {
+                        key: 'link-card',
+                        icon: <Feather name="credit-card" size={17} color={tileFg} />,
+                        label: CARDS.length ? 'Link another debit card' : 'Link debit card',
+                        sub: 'Track card spends on this account',
+                        onPress: () => openFromOptions(() => setCardEditor('')),
+                      },
+                    ]
+                  : []),
+                {
+                  key: 'scan',
+                  icon: isSyncingSms ? (
+                    <ActivityIndicator size="small" color={tileFg} />
+                  ) : (
+                    <Feather name="refresh-cw" size={17} color={tileFg} />
+                  ),
+                  label: 'Check missed transactions',
+                  sub: 'Reads the last 48 hours of bank messages',
+                  onPress: scanLast48h,
+                },
+              ].map((row) => (
                 <Pressable
-                  key={card}
-                  onPress={() => {
-                    setOptionsSheet(false);
-                    setCardEditor(card);
-                  }}
-                  style={[s.optRow, { borderBottomColor: line }]}
+                  key={row.key}
+                  onPress={row.onPress}
+                  disabled={row.key === 'scan' && isSyncingSms}
+                  style={({ pressed }) => [s.optRow, pressed && { backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : '#EAF0EC' }]}
+                  accessibilityRole="button"
+                  accessibilityLabel={row.label}
                 >
-                  <Feather name="credit-card" size={18} color={ink} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={[s.optLabel, { color: ink, flex: 0 }]}>Debit card ••{card}</Text>
-                    <Text style={[s.optSub, { color: muted }]}>Card spends go to this account</Text>
+                  <View style={[s.optTile, { backgroundColor: tileBg }]}>{row.icon}</View>
+                  <View style={[s.optBody, { borderBottomColor: line }]}>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={[s.optLabel, { color: ink }]} numberOfLines={1}>{row.label}</Text>
+                      <Text style={[s.optSub, { color: muted }]} numberOfLines={1}>{row.sub}</Text>
+                    </View>
+                    <Feather name="chevron-right" size={17} color={muted} />
                   </View>
-                  <Feather name="chevron-right" size={16} color={muted} />
                 </Pressable>
               ))}
-              {(activeBank.debitCardSuffixes || []).length < 4 && (
-                <Pressable
-                  onPress={() => {
-                    setOptionsSheet(false);
-                    setCardEditor('');
-                  }}
-                  style={[s.optRow, { borderBottomColor: line }]}
-                >
-                  <Feather name="credit-card" size={18} color={ink} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={[s.optLabel, { color: ink, flex: 0 }]}>
-                      {(activeBank.debitCardSuffixes || []).length ? 'Link another debit card' : 'Link debit card'}
-                    </Text>
-                    <Text style={[s.optSub, { color: muted }]}>Track card spends on this account</Text>
+              <View style={s.optRow}>
+                <View style={[s.optTile, { backgroundColor: tileBg }]}>
+                  <Feather name="message-square" size={17} color={tileFg} />
+                </View>
+                <View style={[s.optBody, { borderBottomWidth: 0 }]}>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={[s.optLabel, { color: ink }]}>Auto-track from SMS</Text>
+                    <Text style={[s.optSub, { color: muted }]} numberOfLines={1}>Updates balance from new bank alerts</Text>
                   </View>
-                  <Feather name="chevron-right" size={16} color={muted} />
-                </Pressable>
-              )}
-              <Pressable onPress={scanLast48h} disabled={isSyncingSms} style={[s.optRow, { borderBottomColor: line }]}>
-                {isSyncingSms ? <ActivityIndicator size="small" color={ink} /> : <Feather name="refresh-cw" size={18} color={ink} />}
-                <View style={{ flex: 1 }}>
-                  <Text style={[s.optLabel, { color: ink, flex: 0 }]}>Check missed transactions</Text>
-                  <Text style={[s.optSub, { color: muted }]}>Reads the last 48 hours of bank messages</Text>
+                  <Switch
+                    value={smsConsent}
+                    onValueChange={toggleSmsConsent}
+                    trackColor={{ false: isDark ? '#3A3A3C' : '#D1D9D4', true: isDark ? LIME : FOREST }}
+                    thumbColor={smsConsent && isDark ? FOREST : '#FFFFFF'}
+                    ios_backgroundColor={isDark ? '#3A3A3C' : '#D1D9D4'}
+                  />
                 </View>
-                <Feather name="chevron-right" size={16} color={muted} />
-              </Pressable>
-              <View style={[s.optRow, { borderBottomWidth: 0 }]}>
-                <Feather name="message-square" size={18} color={ink} />
-                <View style={{ flex: 1 }}>
-                  <Text style={[s.optLabel, { color: ink, flex: 0 }]}>Auto-track from SMS</Text>
-                  <Text style={[s.optSub, { color: muted }]}>Updates balance from new bank alerts</Text>
-                </View>
-                <Switch
-                  value={smsConsent}
-                  onValueChange={toggleSmsConsent}
-                  trackColor={{ false: isDark ? '#3A3A3C' : '#D1D5DB', true: '#16A34A' }}
-                  thumbColor="#FFFFFF"
-                  ios_backgroundColor={isDark ? '#3A3A3C' : '#D1D5DB'}
-                />
               </View>
             </View>
-            <Pressable onPress={() => setConfirmRemove(true)} style={[s.removeRow, { borderColor: line }]}>
-              <Feather name="trash-2" size={18} color={red} />
-              <Text style={[s.optLabel, { color: red }]}>Remove account</Text>
+
+            <Pressable
+              onPress={() => setConfirmRemove(true)}
+              style={({ pressed }) => [s.removeRow, pressed && { opacity: 0.6 }]}
+              accessibilityRole="button"
+            >
+              <Feather name="trash-2" size={16} color={red} />
+              <Text style={[s.removeText, { color: red }]}>Remove account</Text>
             </Pressable>
           </View>
         )}
@@ -1101,11 +1145,16 @@ const s = StyleSheet.create({
   sheetSecondaryText: { fontSize: 15, fontWeight: '600' },
   pwdInput: { height: 52, borderRadius: 16, borderWidth: 1, paddingHorizontal: 16, fontSize: 16, marginTop: 18, ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : {}) },
 
-  sheetHeadRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
-  optTitle: { fontSize: 16, fontWeight: '700' },
+  sheetHeadRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 18, paddingHorizontal: 2 },
+  optTitle: { fontSize: 19, letterSpacing: -0.3 },
   optSub: { fontSize: 12, marginTop: 2 },
-  optGroup: { borderWidth: 1, borderRadius: 20, overflow: 'hidden' },
-  optRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 16, paddingVertical: 14, minHeight: 56, borderBottomWidth: StyleSheet.hairlineWidth },
-  optLabel: { flex: 1, fontSize: 15, fontWeight: '600' },
-  removeRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 16, height: 56, borderRadius: 20, borderWidth: 1, marginTop: 12 },
+  optGroup: { borderRadius: 22, overflow: 'hidden', paddingVertical: 4 },
+  optRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingLeft: 14 },
+  optTile: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  optBody: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 14, paddingRight: 14, minHeight: 64, borderBottomWidth: StyleSheet.hairlineWidth },
+  miniCard: { width: 24, height: 16, borderRadius: 3, justifyContent: 'center', paddingLeft: 3 },
+  miniChip: { width: 6, height: 5, borderRadius: 1, backgroundColor: '#E2CC8F' },
+  optLabel: { fontSize: 15, fontWeight: '600' },
+  removeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 52, marginTop: 8 },
+  removeText: { fontSize: 15, fontWeight: '600' },
 });
