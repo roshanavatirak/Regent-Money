@@ -1,5 +1,5 @@
-import { Injectable } from '@nestjs/common';
-import { ThrottlerGuard } from '@nestjs/throttler';
+import { ExecutionContext, HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import { ThrottlerGuard, ThrottlerLimitDetail } from '@nestjs/throttler';
 import { timingSafeEqual } from 'crypto';
 
 function safeEqual(given: any, expected: string | undefined): boolean {
@@ -23,5 +23,27 @@ export class ThrottlerBehindProxyGuard extends ThrottlerGuard {
     return viaCloudflare && typeof req.headers?.['cf-connecting-ip'] === 'string'
       ? req.headers['cf-connecting-ip'].trim()
       : (req.ips?.length ? req.ips[0] : req.ip);
+  }
+
+  /**
+   * 429 with a readable message and the wait in seconds in the body, so the app can
+   * show "Too many attempts. Try again in 42s" without reading the Retry-After header
+   * (which browsers hide from cross-origin fetches).
+   */
+  protected async throwThrottlingException(
+    _context: ExecutionContext,
+    detail: ThrottlerLimitDetail,
+  ): Promise<void> {
+    const retryAfterSeconds = Math.max(1, Math.ceil(Number(detail.timeToBlockExpire || detail.timeToExpire) || 60));
+    throw new HttpException(
+      {
+        statusCode: HttpStatus.TOO_MANY_REQUESTS,
+        error: 'Too Many Requests',
+        rateLimited: true,
+        retryAfterSeconds,
+        message: `Too many attempts. Try again in ${retryAfterSeconds}s.`,
+      },
+      HttpStatus.TOO_MANY_REQUESTS,
+    );
   }
 }

@@ -11,6 +11,11 @@ class Glyph(val x: Float, val y: Float, val w: Float, val h: Float, d: String) {
     val path: Path = PathParser.createPathFromPathData(d)
 }
 
+/** A glyph placed in the one-line wordmark (offset in wordmark units). */
+class PlacedGlyph(val glyph: Glyph, val dx: Float, val dy: Float, val money: Boolean) {
+    val top: Float get() = glyph.y + dy
+}
+
 object WordmarkGlyphs {
     const val WM_W = 632f
     const val WM_H = 338f
@@ -48,6 +53,18 @@ object WordmarkGlyphs {
 
     /** Green leaf on top of the t. */
     val LEAF = Glyph(579.6f, 11.9f, 25.6f, 20.1f, "M591.9 12.3C591 12.4 590.3 12.6 590.1 12.8C590 12.9 589.3 13.2 588.6 13.4C584.6 15 581.3 19.2 580.2 24.4C579.6 27.2 579.6 30.8 580.2 31.4C580.7 31.9 603.6 31.9 604.4 31.4C605.2 30.8 605.2 13.2 604.4 12.5C603.7 12 594.8 11.9 591.9 12.3Z")
+
+    /* ---- One-line layout: "Regent Money" on a single baseline ---- */
+
+    /** "Money" sits after "Regent" plus a word space, raised onto Regent's baseline (y 134). */
+    const val MONEY_DX = 677f
+    const val MONEY_DY = -164f
+    const val ONE_LINE_W = MONEY_DX + 625f
+    const val ONE_LINE_H = 177f
+
+    val ONE_LINE: List<PlacedGlyph> =
+        REGENT.map { PlacedGlyph(it, 0f, 0f, money = false) } +
+            MONEY.map { PlacedGlyph(it, MONEY_DX, MONEY_DY, money = true) }
 
     /** Four-point sparkle in a 24 × 24 box. */
     val SPARKLE: Path = PathParser.createPathFromPathData(

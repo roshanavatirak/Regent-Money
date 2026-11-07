@@ -168,6 +168,48 @@ export class NotificationsService implements OnModuleInit {
     return { success: true, count: result.affected || 0 };
   }
 
+  /** A user's own notification by id, including resolved and deleted ones. */
+  async findNotification(userId: string, notificationId: string): Promise<Notification | null> {
+    return this.notificationRepository.findOne({ where: { id: notificationId, userId } });
+  }
+
+  /**
+   * Every duplicate review ever raised for an SMS (open, answered or deleted), matched on any of
+   * its identity keys. Lets the sync service ask about a given SMS once and never again.
+   */
+  async findDuplicateReviews(userId: string, keys: string[]): Promise<Notification[]> {
+    const cleanKeys = Array.from(new Set(keys.filter(Boolean)));
+    if (cleanKeys.length === 0) return [];
+    return this.notificationRepository
+      .createQueryBuilder('n')
+      .where('n.userId = :userId', { userId })
+      .andWhere(`n.payload ->> 'action' = 'duplicate_transaction_review'`)
+      .andWhere(
+        `(n.payload -> 'transactionData' ->> 'smsId' IN (:...keys) OR n.payload -> 'transactionData' ->> 'contentId' IN (:...keys))`,
+        { keys: cleanKeys },
+      )
+      .getMany();
+  }
+
+  /**
+   * Closes open duplicate reviews for an SMS that turned out to be already recorded,
+   * clearing false alerts raised before SMS identities were stored.
+   */
+  async resolveStaleDuplicateReviews(userId: string, keys: string[]): Promise<number> {
+    const reviews = await this.findDuplicateReviews(userId, keys);
+    const open = reviews.filter((n) => !n.isDeleted && !n.payload?.resolved);
+    if (open.length === 0) return 0;
+    const now = Date.now();
+    for (const n of open) {
+      n.readStatus = true;
+      n.payload = { ...(n.payload || {}), resolved: true, decision: 'already_recorded' };
+      n.updatedAt = now;
+    }
+    await this.notificationRepository.save(open);
+    this.logger.log(`Closed ${open.length} stale duplicate review(s) for user ${userId}`);
+    return open.length;
+  }
+
   async resolveNotification(userId: string, notificationId: string, decision?: string): Promise<Notification> {
     this.logger.log(`Resolving review notification ${notificationId} for user ${userId} with decision: ${decision}`);
     const notification = await this.notificationRepository.findOne({

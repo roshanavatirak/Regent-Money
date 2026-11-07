@@ -29,6 +29,15 @@ export class DuplicateTransactionDataDto {
   @IsOptional()
   @IsString()
   source?: string;
+
+  /** SMS text hash of the reviewed SMS; stored with the answer so it is never asked again. */
+  @IsOptional()
+  @IsString()
+  contentId?: string;
+
+  @IsOptional()
+  @IsString()
+  referenceId?: string;
 }
 
 export class ConfirmDuplicateDto {

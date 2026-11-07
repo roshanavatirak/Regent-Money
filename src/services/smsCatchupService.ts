@@ -2,7 +2,7 @@ import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
 import { parseSMS, detectBankFromSender } from './smsParser';
 import { authService } from './authService';
 import { getBackendUrl } from '../config/api';
-import { useBankStore, useAuthStore, useTransactionStore, parseDebitCardSuffixes } from '../store';
+import { useBankStore, useAuthStore, useTransactionStore, useIncomeStore, parseDebitCardSuffixes } from '../store';
 import { syncService } from './syncService';
 import { matchesSmsSender, isBankSmsSender } from '../constants/bankSmsSenders';
 import { tagLearningService } from './tagLearningService';
@@ -286,18 +286,29 @@ export const smsCatchupService = {
         const contentId = `sms_${Math.abs(bodyHash)}`;
         const candidateSmsId = parsed.referenceId ? `ref_${parsed.referenceId}` : contentId;
 
-        // Check if this transaction already exists in our local store
+        // The backend is the authority on what is already recorded. Locally we only skip an SMS
+        // whose exact identity is already in the store; anything that merely looks similar is sent,
+        // so a genuine second payment still reaches the server's duplicate review.
         const existingTransactions = useTransactionStore.getState().transactions || [];
+        const localLedger: any[] =
+          parsed.type === 'credit' ? useIncomeStore.getState().incomeRecords || [] : existingTransactions;
+        const hasSameIdentity = localLedger.some((row: any) => {
+          const rowSmsId = row.smsId ?? row.sms_id;
+          const rowContentId = row.contentId ?? row.content_id;
+          if (parsed.referenceId && (rowSmsId === `ref_${parsed.referenceId}` || row.referenceId === parsed.referenceId)) {
+            return true;
+          }
+          const textMatches =
+            (!!rowSmsId && (rowSmsId === candidateSmsId || rowSmsId === contentId)) ||
+            (!!rowContentId && rowContentId === contentId);
+          // Same text at a different sent second is a second payment: leave that call to the server
+          return textMatches && Math.abs(Number(row.timestamp || 0) - msgTimestamp) < 1000;
+        });
+        if (hasSameIdentity) continue;
+
+        // Looks-alike check, used only to avoid repeating a budget nudge for a spend already shown
         const normIncoming = (parsed.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
         const isTxExisting = existingTransactions.some((tx: any) => {
-          // 1. Authoritative UPI Ref / RRN comparison
-          if (parsed.referenceId && (tx.smsId === `ref_${parsed.referenceId}` || (tx as any).referenceId === parsed.referenceId)) {
-            return true;
-          }
-          // 2. Deterministic content hash match (unified with direct native worker) or legacy inbox ID
-          if (tx.smsId && (tx.smsId === candidateSmsId || tx.smsId === contentId || tx.smsId === `sms_${msg.id}`)) {
-            return true;
-          }
           if (parsed.referenceId && tx.smsId && tx.smsId.startsWith('ref_') && tx.smsId !== `ref_${parsed.referenceId}`) {
             return false;
           }
@@ -315,22 +326,21 @@ export const smsCatchupService = {
           return Math.abs(txTime - msgTimestamp) < 600000;
         });
 
-        // Only enqueue and trigger alerts for genuinely NEW transactions
-        if (!isTxExisting) {
-          bankTxsMap.get(targetGroupKey)!.push({
-            amount: parsed.amount,
-            type: parsed.type,
-            merchant: parsed.merchant,
-            category: predictedCategory,
-            date: dateStr,
-            time: timeStr,
-            timestamp: msgTimestamp,
-            availableBalance: parsed.availableBalance,
-            referenceId: parsed.referenceId,
-            smsId: candidateSmsId,
-            contentId,
-          });
+        bankTxsMap.get(targetGroupKey)!.push({
+          amount: parsed.amount,
+          type: parsed.type,
+          merchant: parsed.merchant,
+          category: predictedCategory,
+          date: dateStr,
+          time: timeStr,
+          timestamp: msgTimestamp,
+          availableBalance: parsed.availableBalance,
+          referenceId: parsed.referenceId,
+          smsId: candidateSmsId,
+          contentId,
+        });
 
+        if (!isTxExisting) {
           try {
             checkAndDispatchBudgetAlert(
               {
@@ -381,14 +391,20 @@ export const smsCatchupService = {
         }
 
         try {
-          const res = await fetch(`${BACKEND_URL}/sync/ocr-sync`, {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(bodyPayload),
-          });
+          const post = (path: string) =>
+            fetch(`${BACKEND_URL}${path}`, {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(bodyPayload),
+            });
+          // SMS re-scans use SMS identity rules; older servers only know /sync/ocr-sync
+          let res = await post('/sync/sms-catchup');
+          if (res.status === 404) {
+            res = await post('/sync/ocr-sync');
+          }
 
           if (res.ok) {
             const resJson = await res.json();

@@ -1,5 +1,5 @@
 // Auth screens: Welcome, Auth landing, Login and Signup (Regent Money)
-// Same light canvas, green and money agent as the launch intro and onboarding.
+// Mint canvas, forest and lime: the same palette as the dashboard, profile and lock screen.
 
 import React, { ComponentProps, ReactNode, useEffect, useState, useRef } from 'react';
 import {
@@ -28,43 +28,57 @@ import Animated, {
   Easing,
   FadeIn,
   FadeInDown,
+  FadeInLeft,
   FadeOut,
   SlideInDown,
   ZoomIn,
   interpolateColor,
+  useAnimatedProps,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
+  withDelay,
   withRepeat,
+  withSequence,
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import Svg, { Circle, Defs, RadialGradient, Rect, Stop } from 'react-native-svg';
+import Svg, { Circle, Path } from 'react-native-svg';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useFonts } from 'expo-font';
+import { BricolageGrotesque_800ExtraBold } from '@expo-google-fonts/bricolage-grotesque';
 import { showGlobalAlert, useTermsModalStore, usePrivacyModalStore } from '../store';
 import { StatusBar } from 'expo-status-bar';
 import { CloudflareTurnstile } from '../components/CloudflareTurnstile';
-import { RegentWordmark, WM_H, WM_W } from '../components/RegentWordmark';
-import { AGENT_H, AGENT_W, MoneyAgent, nudgeNo, sayHi, useAgentControls } from '../components/MoneyAgent';
+import { BrandWordmark } from '../components/BrandWordmark';
+
+const AnimatedPath = Animated.createAnimatedComponent(Path);
+const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
 /* ------------------------------------------------------------------ */
 /* Tokens                                                             */
 /* ------------------------------------------------------------------ */
 
 const C = {
-  bg: '#fafbfc',
+  bg: '#F3F6F4',
   white: '#ffffff',
-  green: '#2dba4e',
-  greenDeep: '#1f8f3a',
-  mist: '#e7f7eb',
-  ink: '#1c252e',
-  body: '#5b6672',
-  muted: '#8a94a0',
-  line: '#e3e8ed',
-  disabled: '#c9d1d8',
-  danger: '#d93838',
-  dangerInk: '#b42318',
-  dangerBg: '#fdf1f1',
-  dangerLine: '#f4cccc',
+  green: '#0B3D2C', // forest: focus, links, ticks
+  greenDeep: '#0B3D2C',
+  forest: '#0B3D2C',
+  lime: '#B8F36B',
+  brandGreen: '#16A34A',
+  mist: '#E3F2E8',
+  mistInk: '#B5CEC1',
+  ink: '#0B1F17',
+  body: '#5E7A6C',
+  muted: '#7B9488',
+  line: '#E1E9E4',
+  lineSoft: '#EEF3F0',
+  disabled: '#C3CFC8',
+  danger: '#C92A2A',
+  dangerInk: '#B42318',
+  dangerBg: '#FDF1F1',
+  dangerLine: '#F4CCCC',
   amber: '#d9930d',
 };
 
@@ -80,33 +94,13 @@ const openPrivacy = () => usePrivacyModalStore.getState().openPrivacyModal();
 /* Building blocks                                                    */
 /* ------------------------------------------------------------------ */
 
-function Glow({ id, size, strength }: { id: string; size: number; strength: number }) {
-  return (
-    <Svg width={size} height={size}>
-      <Defs>
-        <RadialGradient id={id} cx="50%" cy="50%" r="50%">
-          <Stop offset="0" stopColor={C.green} stopOpacity={strength} />
-          <Stop offset="0.55" stopColor={C.green} stopOpacity={strength * 0.35} />
-          <Stop offset="1" stopColor={C.green} stopOpacity={0} />
-        </RadialGradient>
-      </Defs>
-      <Rect width={size} height={size} fill={`url(#${id})`} />
-    </Svg>
-  );
-}
-
-/** Soft green light in two corners, same as the intro and onboarding. */
+/** Faint forest rings in two corners, the same motif as the dashboard and lock screen. */
 function Backdrop() {
-  const { width: W } = useWindowDimensions();
-  const size = W * 1.5;
   return (
     <View pointerEvents="none" style={[StyleSheet.absoluteFill, { overflow: 'hidden' }]}>
-      <View style={{ position: 'absolute', left: -size * 0.42, top: -size * 0.5 }}>
-        <Glow id="authGlowTop" size={size} strength={0.11} />
-      </View>
-      <View style={{ position: 'absolute', right: -size * 0.45, bottom: -size * 0.5 }}>
-        <Glow id="authGlowLow" size={size} strength={0.08} />
-      </View>
+      <View style={[styles.ring, { width: 360, height: 360, borderRadius: 180, right: -160, top: -170 }]} />
+      <View style={[styles.ring, { width: 200, height: 200, borderRadius: 100, right: -60, top: -80 }]} />
+      <View style={[styles.ring, { width: 300, height: 300, borderRadius: 150, left: -170, bottom: -130 }]} />
     </View>
   );
 }
@@ -162,7 +156,7 @@ function Button({ label, onPress, variant = 'primary', loading, disabled, leadin
       style={[styles.btn, primary ? styles.btnPrimary : styles.btnSecondary, disabled && styles.btnDisabled, style]}
     >
       {loading ? (
-        <ActivityIndicator color={primary ? C.white : C.green} />
+        <ActivityIndicator color={primary ? C.lime : C.forest} />
       ) : (
         <>
           {leading}
@@ -425,7 +419,7 @@ function EmailVerificationModal({ visible, email, onClose, onProceedToLogin }: E
           <Button
             label="Open Email App"
             onPress={handleOpenEmailApp}
-            leading={<Feather name="external-link" size={16} color={C.white} style={{ marginRight: 8 }} />}
+            leading={<Feather name="external-link" size={16} color={C.lime} style={{ marginRight: 8 }} />}
             style={styles.verifyPrimaryBtn}
           />
 
@@ -462,41 +456,6 @@ function EmailVerificationModal({ visible, email, onClose, onProceedToLogin }: E
       </View>
     </Modal>
   );
-}
-
-/* ------------------------------------------------------------------ */
-/* The agent reacts to the form                                       */
-/* ------------------------------------------------------------------ */
-
-type FocusKind = 'text' | 'secret';
-
-/**
- * Looks at what you type, covers its eyes for passwords,
- * and peeks when you choose to show the password.
- */
-function useFormAgent(reveal: boolean) {
-  const agent = useAgentControls();
-  const [focus, setFocus] = useState<FocusKind | null>(null);
-
-  useEffect(() => {
-    agent.lookY.value = withTiming(focus ? 1 : 0, { duration: 220 });
-    agent.cover.value = withSpring(focus === 'secret' ? 1 : 0, SOFT);
-    agent.peek.value = withSpring(focus === 'secret' && reveal ? 1 : 0, SOFT);
-    if (focus !== 'text') agent.lookX.value = withTiming(0, { duration: 220 });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focus, reveal]);
-
-  const typed = (length: number) => {
-    agent.lookX.value = withTiming(Math.max(-1, Math.min(1, -0.9 + length / 14)), { duration: 120 });
-  };
-  const bind = (kind: FocusKind, length?: number) => ({
-    onFocus: () => {
-      setFocus(kind);
-      if (length != null) typed(length);
-    },
-    onBlur: () => setFocus(f => (f === kind ? null : f)),
-  });
-  return { agent, typed, bind };
 }
 
 /* ------------------------------------------------------------------ */
@@ -623,58 +582,90 @@ const GoogleAuthButton: React.FC<GoogleAuthButtonProps> = ({ loading, setLoading
 /* 1. Welcome and 1B. Auth landing                                    */
 /* ------------------------------------------------------------------ */
 
-/** The intro's last frame: the logo with the agent standing on the "n", waving. */
-function Hero({ width }: { width: number }) {
-  const agent = useAgentControls();
-  const S = width / WM_W;
-  const logoH = WM_H * S;
-  const size = (width / 240) * 0.8; // same proportion as the intro
-  const aw = AGENT_W * size;
-  const ah = AGENT_H * size;
-  const top = ah + 4;
+/** Display font (Bricolage) once it is loaded, bold system font until then. */
+function useDisplayFont() {
+  const [loaded] = useFonts({ BricolageGrotesque_800ExtraBold });
+  return loaded
+    ? ({ fontFamily: 'BricolageGrotesque_800ExtraBold' } as const)
+    : ({ fontWeight: '800' } as const);
+}
 
+/** 1845000 -> "18,45,000" (Indian grouping, no Intl needed on Hermes). */
+function formatINR(n: number) {
+  const s = String(Math.round(n));
+  if (s.length <= 3) return s;
+  const head = s.slice(0, -3).replace(/\B(?=(\d{2})+(?!\d))/g, ',');
+  return `${head},${s.slice(-3)}`;
+}
+
+/** Counts from 0 up to target with an ease-out curve. */
+function useCountUp(target: number, delay: number, duration: number, enabled: boolean) {
+  const [value, setValue] = useState(enabled ? 0 : target);
   useEffect(() => {
-    sayHi(agent, 1250);
+    if (!enabled) {
+      setValue(target);
+      return;
+    }
+    let raf = 0;
+    const start = Date.now() + delay;
+    const tick = () => {
+      const t = Math.min(1, Math.max(0, (Date.now() - start) / duration));
+      setValue(Math.round(target * (1 - Math.pow(1 - t, 4))));
+      if (t < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [enabled]);
+  return value;
+}
 
+/** A soft band of light that sweeps across a card every few seconds. */
+function Sheen({ width, delay, tint }: { width: number; delay: number; tint: string }) {
+  const reduceMotion = useReducedMotion();
+  const x = useSharedValue(-140);
+  useEffect(() => {
+    if (reduceMotion) return;
+    x.value = withDelay(
+      delay,
+      withRepeat(
+        withSequence(
+          withTiming(width + 140, { duration: 1700, easing: Easing.inOut(Easing.quad) }),
+          withDelay(4800, withTiming(-140, { duration: 0 })),
+        ),
+        -1,
+        false,
+      ),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reduceMotion, width]);
+  const style = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }, { skewX: '-18deg' }] }));
+  if (reduceMotion) return null;
   return (
-    <View style={{ width, height: top + logoH }}>
-      <Animated.View entering={FadeInDown.delay(120).duration(700)} style={{ position: 'absolute', left: 0, top }}>
-        <RegentWordmark height={logoH} />
-      </Animated.View>
-      <MoneyAgent
-        size={size}
-        controls={agent}
-        dropIn
-        dropDelay={620}
-        style={{ position: 'absolute', left: PERCH.x * S - aw / 2, top: top + PERCH.y * S - ah }}
+    <Animated.View pointerEvents="none" style={[styles.sheen, style]}>
+      <LinearGradient
+        colors={['transparent', tint, 'transparent']}
+        start={{ x: 0, y: 0.5 }}
+        end={{ x: 1, y: 0.5 }}
+        style={StyleSheet.absoluteFill}
       />
-    </View>
+    </Animated.View>
   );
 }
 
-/** Three faint rings behind the cards, like ripples from a coin dropped in water. */
-function Rings({ size }: { size: number }) {
-  const r = size / 2;
-  return (
-    <View pointerEvents="none" style={{ position: 'absolute', width: size, height: size }}>
-      <Svg width={size} height={size}>
-        {[0.99, 0.76, 0.53].map((f, i) => (
-          <Circle
-            key={f}
-            cx={r}
-            cy={r}
-            r={r * f}
-            stroke={C.green}
-            strokeOpacity={0.08 + i * 0.04}
-            strokeWidth={1}
-            fill="none"
-          />
-        ))}
-      </Svg>
-    </View>
-  );
+/** Gentle up-and-down drift, started once the entry animation is done. */
+function useFloat(distance: number, duration: number, delay: number) {
+  const reduceMotion = useReducedMotion();
+  const y = useSharedValue(0);
+  useEffect(() => {
+    if (reduceMotion) return;
+    y.value = withDelay(
+      delay,
+      withRepeat(withTiming(-distance, { duration, easing: Easing.inOut(Easing.sin) }), -1, true),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reduceMotion]);
+  return useAnimatedStyle(() => ({ transform: [{ translateY: y.value }] }));
 }
 
 const SORTED = [
@@ -682,94 +673,224 @@ const SORTED = [
   { icon: 'home' as IconName, name: 'House rent', amount: '₹14,000', tag: 'Rent' },
 ];
 
-const CARD_TOP = 48; // how much of the goal card peeks out above the front card
+const STACK_H = 392;
+const CHART_H = 120;
+const GOAL_C = 2 * Math.PI * 14; // goal ring circumference
 
 /**
- * The one memorable moment on this screen: a small stack of cards showing
- * the agent at work. Rows arrive one by one and each gets its category,
- * then the stack floats gently. Floating stops when Reduce Motion is on.
+ * Welcome hero: a forest "saved this month" card whose number counts up while a lime
+ * growth line draws in, a small goal chip filling its ring, and a white "sorted for you"
+ * card rising over it with rows that slide in and get tagged. Then the stack drifts.
  */
-function AgentPreview({ width }: { width: number }) {
+function WelcomeHero({ width }: { width: number }) {
   const reduceMotion = useReducedMotion();
-  const float = useSharedValue(0);
+  const display = useDisplayFont();
+  const amount = useCountUp(18450, 500, 1800, !reduceMotion);
+
+  const line = useSharedValue(reduceMotion ? 0 : 1);
+  const area = useSharedValue(reduceMotion ? 1 : 0);
+  const pulse = useSharedValue(0);
+  const goal = useSharedValue(reduceMotion ? 1 : 0);
+  const float = useFloat(4, 2500, 2600);
 
   useEffect(() => {
     if (reduceMotion) return;
-    float.value = withRepeat(withTiming(1, { duration: 3400, easing: Easing.inOut(Easing.sin) }), -1, true);
+    line.value = withDelay(500, withTiming(0, { duration: 1800, easing: Easing.bezier(0.65, 0, 0.35, 1) }));
+    area.value = withDelay(1600, withTiming(1, { duration: 1200 }));
+    goal.value = withDelay(1500, withTiming(1, { duration: 1200, easing: Easing.bezier(0.65, 0, 0.35, 1) }));
+    pulse.value = withDelay(2400, withRepeat(withTiming(1, { duration: 2400, easing: Easing.out(Easing.quad) }), -1, false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reduceMotion]);
 
-  const front = useAnimatedStyle(() => ({
-    transform: [{ translateY: -5 + float.value * 10 }, { rotate: '-1.5deg' }],
-  }));
-  const back = useAnimatedStyle(() => ({
-    transform: [{ translateY: 4 - float.value * 8 }, { rotate: '5deg' }],
-  }));
+  // Chart path, scaled so the end dot sits on the card's inner right edge.
+  const endX = width - 24;
+  const sx = endX / 318;
+  const P = (x: number, y: number) => `${(x * sx).toFixed(1)} ${y}`;
+  const curve = `M${P(0, 100)} C ${P(40, 96)}, ${P(58, 74)}, ${P(90, 78)} S ${P(140, 100)}, ${P(170, 74)} S ${P(225, 40)}, ${P(255, 50)} S ${P(300, 28)}, ${P(318, 16)}`;
+  const fill = `${curve} L ${P(318, CHART_H)} L ${P(0, CHART_H)} Z`;
+  const DASH = Math.ceil(width * 1.6);
+
+  const lineProps = useAnimatedProps(() => ({ strokeDashoffset: DASH * line.value }));
+  const areaProps = useAnimatedProps(() => ({ opacity: area.value }));
+  const endProps = useAnimatedProps(() => ({ opacity: area.value }));
+  const pulseProps = useAnimatedProps(() => ({ r: 5 + pulse.value * 9, opacity: 0.5 * (1 - pulse.value) * area.value }));
+  const goalProps = useAnimatedProps(() => ({ strokeDashoffset: GOAL_C - GOAL_C * 0.65 * goal.value }));
 
   return (
-    <View style={[styles.previewWrap, { width, height: CARD_TOP + 160 }]}>
-      <Rings size={width * 1.45} />
+    <Animated.View style={[{ width, height: STACK_H }, float]}>
+      {/* Balance card */}
+      <Animated.View entering={reduceMotion ? undefined : FadeInDown.delay(100).duration(800)} style={styles.balanceCard}>
+        <Sheen width={width} delay={2600} tint="rgba(255,255,255,0.09)" />
+        <Text style={styles.balanceLabel}>Saved this month</Text>
+        <Text style={[styles.balanceValue, display]}>₹{formatINR(amount)}</Text>
+        <Text style={styles.balanceDelta}>+₹6,200 vs last month</Text>
 
-      {/* Goal card, tucked behind */}
-      <Animated.View entering={FadeIn.delay(900).duration(700)} style={[styles.goalCard, { width: width * 0.88 }]}>
-        <Animated.View style={[styles.goalInner, back]}>
-          <View style={styles.goalHead}>
-            <Text style={styles.goalTitle}>First bike</Text>
-            <Text style={styles.goalMeta}>65%</Text>
+        <Svg width={width} height={CHART_H} style={styles.chart} pointerEvents="none">
+          <AnimatedPath d={fill} fill="rgba(184,243,107,0.07)" animatedProps={areaProps} />
+          <AnimatedPath
+            d={curve}
+            fill="none"
+            stroke={C.lime}
+            strokeWidth={2.5}
+            strokeLinecap="round"
+            strokeDasharray={`${DASH} ${DASH}`}
+            animatedProps={lineProps}
+          />
+          <AnimatedCircle cx={endX} cy={16} fill={C.lime} animatedProps={pulseProps} />
+          <AnimatedCircle cx={endX} cy={16} r={5} fill={C.lime} stroke={C.forest} strokeWidth={2.5} animatedProps={endProps} />
+        </Svg>
+
+        {/* Goal chip */}
+        <Animated.View
+          entering={reduceMotion ? undefined : ZoomIn.delay(1300).springify().damping(14)}
+          style={styles.goalChip}
+        >
+          <View style={styles.goalRing}>
+            <Svg width={32} height={32} style={{ transform: [{ rotate: '-90deg' }] }}>
+              <Circle cx={16} cy={16} r={14} fill="none" stroke={C.mist} strokeWidth={3.5} />
+              <AnimatedCircle
+                cx={16}
+                cy={16}
+                r={14}
+                fill="none"
+                stroke={C.forest}
+                strokeWidth={3.5}
+                strokeLinecap="round"
+                strokeDasharray={`${GOAL_C} ${GOAL_C}`}
+                animatedProps={goalProps}
+              />
+            </Svg>
+            <View style={[StyleSheet.absoluteFill, styles.centerBox]}>
+              <Ionicons name="bicycle-outline" size={14} color={C.forest} />
+            </View>
           </View>
-          <View style={styles.goalTrack}>
-            <View style={[styles.goalFill, { width: '65%' }]} />
+          <View>
+            <Text style={styles.goalName}>First bike</Text>
+            <Text style={styles.goalMeta}>65% saved</Text>
           </View>
         </Animated.View>
       </Animated.View>
 
-      {/* Front card: what the agent sorted today */}
-      <Animated.View entering={FadeInDown.delay(700).duration(700)} style={[styles.feedCard, { width, top: CARD_TOP }]}>
-        <Animated.View style={[styles.feedInner, front]}>
-          <View style={styles.feedHead}>
-            <Text style={styles.feedTitle}>Sorted for you today</Text>
-          </View>
-
-          {SORTED.map((row, i) => (
+      {/* Sorted card */}
+      <Animated.View
+        entering={reduceMotion ? undefined : FadeInDown.delay(1000).duration(800)}
+        style={styles.sortedCard}
+      >
+        <Sheen width={width} delay={2900} tint="rgba(11,61,44,0.035)" />
+        <View style={styles.sortedHead}>
+          <Text style={[styles.sortedTitle, display]}>Sorted for you today</Text>
+          <Text style={styles.sortedAuto}>Auto</Text>
+        </View>
+        {SORTED.map((row, i) => (
+          <Animated.View
+            key={row.name}
+            entering={reduceMotion ? undefined : FadeInLeft.delay(1500 + i * 250).duration(600)}
+            style={[styles.sortedRow, i > 0 && styles.sortedRowLine]}
+          >
+            <View style={styles.sortedIcon}>
+              <Feather name={row.icon} size={16} color={C.forest} />
+            </View>
+            <View style={styles.sortedMeta}>
+              <Text style={styles.sortedName} numberOfLines={1}>
+                {row.name}
+              </Text>
+              <Text style={styles.sortedAmount}>{row.amount}</Text>
+            </View>
             <Animated.View
-              key={row.name}
-              entering={FadeInDown.delay(1100 + i * 260).duration(420)}
-              style={[styles.feedRow, i > 0 && styles.feedRowLine]}
+              entering={reduceMotion ? undefined : ZoomIn.delay(1900 + i * 250).springify().damping(13)}
+              style={styles.sortedTag}
             >
-              <View style={styles.feedIcon}>
-                <Feather name={row.icon} size={14} color={C.greenDeep} />
-              </View>
-              <View style={styles.feedMeta}>
-                <Text style={styles.feedName} numberOfLines={1}>
-                  {row.name}
-                </Text>
-                <Text style={styles.feedAmount}>{row.amount}</Text>
-              </View>
-              <Animated.View entering={ZoomIn.delay(1300 + i * 260).springify().damping(13)} style={styles.tag}>
-                <Text style={styles.tagText}>{row.tag}</Text>
-              </Animated.View>
+              <Feather name="check" size={11} color={C.lime} />
+              <Text style={styles.sortedTagText}>{row.tag}</Text>
             </Animated.View>
-          ))}
-        </Animated.View>
+          </Animated.View>
+        ))}
+      </Animated.View>
+    </Animated.View>
+  );
+}
+
+/**
+ * Welcome back hero: a forest ring (like the profile avatar) holding a rupee coin
+ * that flips now and then, soft pulses around it and a twinkling lime badge.
+ */
+function WelcomeBackHero() {
+  const reduceMotion = useReducedMotion();
+  const display = useDisplayFont();
+  const flip = useSharedValue(0);
+  const pulse = useSharedValue(0);
+  const twinkle = useSharedValue(0);
+
+  useEffect(() => {
+    if (reduceMotion) return;
+    flip.value = withDelay(
+      900,
+      withRepeat(
+        withSequence(
+          withDelay(1900, withTiming(360, { duration: 700, easing: Easing.inOut(Easing.cubic) })),
+          withTiming(0, { duration: 0 }),
+        ),
+        -1,
+        false,
+      ),
+    );
+    pulse.value = withRepeat(withTiming(1, { duration: 2800, easing: Easing.out(Easing.quad) }), -1, false);
+    twinkle.value = withRepeat(withTiming(1, { duration: 1000, easing: Easing.inOut(Easing.sin) }), -1, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reduceMotion]);
+
+  const coin = useAnimatedStyle(() => ({ transform: [{ perspective: 400 }, { rotateY: `${flip.value}deg` }] }));
+  const ring = (offset: number) =>
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    useAnimatedStyle(() => {
+      const t = (pulse.value + offset) % 1;
+      return {
+        opacity: reduceMotion ? 0 : t < 0.2 ? (t / 0.2) * 0.5 : 0.5 * (1 - (t - 0.2) / 0.8),
+        transform: [{ scale: 0.8 + t * 0.9 }],
+      };
+    });
+  const ringA = ring(0);
+  const ringB = ring(0.5);
+  const star = useAnimatedStyle(() => ({
+    opacity: 0.6 + twinkle.value * 0.4,
+    transform: [{ scale: 0.75 + twinkle.value * 0.3 }, { rotate: `${twinkle.value * 20}deg` }],
+  }));
+
+  return (
+    <View style={styles.backHero}>
+      <Animated.View entering={reduceMotion ? undefined : ZoomIn.delay(100).springify().damping(16)} style={styles.backRingWrap}>
+        <Animated.View style={[styles.backPulse, ringA]} />
+        <Animated.View style={[styles.backPulse, ringB]} />
+        <View style={styles.backRing}>
+          <View style={styles.backRingInner}>
+            <Animated.View style={[styles.backCoin, coin]}>
+              <Text style={[styles.backCoinText, display]}>₹</Text>
+            </Animated.View>
+          </View>
+        </View>
+        <View style={styles.backBadge}>
+          <Animated.View style={star}>
+            <Svg width={22} height={22} viewBox="0 0 24 24">
+              <Path d="M12 2.5l2.1 6.1 6.4 2.1-6.4 2.1L12 19l-2.1-6.2-6.4-2.1 6.4-2.1z" fill={C.forest} />
+              <Path d="M19 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" fill={C.forest} />
+            </Svg>
+          </Animated.View>
+        </View>
       </Animated.View>
     </View>
   );
 }
 
-/**
- * Replace your existing LegalNotice with this shorter one-line version.
- * (Delete the old function so there's only one.)
- */
 function LegalNotice() {
   return (
     <Text style={styles.notice} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
-      By continuing, you agree to our{' '}
+      By continuing you accept our{' '}
       <Text style={styles.noticeLink} onPress={openTerms}>
-        Terms of Use
+        Terms
       </Text>{' '}
       and{' '}
       <Text style={styles.noticeLink} onPress={openPrivacy}>
-        Privacy Policy
+        Privacy
       </Text>
     </Text>
   );
@@ -777,50 +898,75 @@ function LegalNotice() {
 
 function Landing({ navigation, returning }: { navigation: any; returning: boolean }) {
   const insets = useSafeAreaInsets();
-  const { width: W } = useWindowDimensions();
+  const { width: W, height: H } = useWindowDimensions();
   const [loading, setLoading] = useState(false);
+  const display = useDisplayFont();
 
-  const primary = returning ? { label: 'Log in', to: 'Login' } : { label: 'Create account', to: 'Signup' };
+  const heroW = Math.min(W - 48, 380);
+  // Shrink the card stack on short screens so the buttons always fit.
+  const scale = Math.max(0.72, Math.min(1, (H - insets.top - insets.bottom - 420) / STACK_H));
+
+  const primary = returning ? { label: 'Log in', to: 'Login' } : { label: 'Get started', to: 'Signup' };
   const swap = returning
     ? { prompt: 'New here?', label: 'Create account', to: 'Signup' }
-    : { prompt: 'Already have an account?', label: 'Log in', to: 'Login' };
+    : { prompt: 'Have an account?', label: 'Log in', to: 'Login' };
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 16) }]}>
       <StatusBar style="dark" />
       <Backdrop />
 
-      <View style={styles.landingLogo}>
-        <Hero width={Math.min(W * 0.4, 168)} />
-      </View>
+      <Animated.View entering={FadeIn.duration(600)} style={styles.landingLogo}>
+        <BrandWordmark size={18} />
+      </Animated.View>
 
       <View style={styles.landingVisual}>
-        <AgentPreview width={Math.min(W - 120, 272)} />
+        {returning ? (
+          <View style={styles.centerBox}>
+            <WelcomeBackHero />
+            <Animated.Text entering={FadeInDown.delay(220).duration(600)} style={[styles.backTitle, display]}>
+              Welcome back
+            </Animated.Text>
+            <Animated.Text entering={FadeInDown.delay(280).duration(600)} style={styles.backSub}>
+              Good to see you again
+            </Animated.Text>
+          </View>
+        ) : (
+          <View style={{ width: heroW, height: STACK_H * scale }}>
+            <View style={{ width: heroW, height: STACK_H, transform: [{ scale }], transformOrigin: 'top' as any }}>
+              <WelcomeHero width={heroW} />
+            </View>
+          </View>
+        )}
       </View>
 
       <View style={styles.landingActions}>
-        <Animated.Text entering={FadeInDown.delay(500).duration(600)} style={styles.headline}>
-          {returning ? 'Welcome back' : 'Your money, sorted'}
-        </Animated.Text>
-        <Animated.Text entering={FadeInDown.delay(580).duration(600)} style={styles.subline}>
-          {returning ? 'Pick up where you left off.' : 'Tracked, budgeted and saved for you.'}
-        </Animated.Text>
+        {!returning && (
+          <>
+            <Animated.Text entering={FadeInDown.delay(300).duration(600)} style={[styles.headline, display]}>
+              Your money, sorted.
+            </Animated.Text>
+            <Animated.Text entering={FadeInDown.delay(380).duration(600)} style={styles.subline}>
+              Track, budget and save in one place.
+            </Animated.Text>
+          </>
+        )}
 
-        <Animated.View entering={FadeInDown.delay(660).duration(600)}>
+        <Animated.View entering={FadeInDown.delay(460).duration(600)}>
           <Button label={primary.label} onPress={() => navigation.navigate(primary.to)} disabled={loading} />
         </Animated.View>
-        <Animated.View entering={FadeInDown.delay(740).duration(600)} style={styles.buttonGap}>
+        <Animated.View entering={FadeInDown.delay(520).duration(600)} style={styles.buttonGap}>
           <GoogleAuthButton loading={loading} setLoading={setLoading} />
         </Animated.View>
 
-        <Animated.View entering={FadeIn.delay(860).duration(600)} style={styles.swapRow}>
+        <Animated.View entering={FadeIn.delay(600).duration(600)} style={styles.swapRow}>
           <Text style={styles.switchLabel}>{swap.prompt} </Text>
           <Pressable onPress={() => navigation.navigate(swap.to)} hitSlop={8} accessibilityRole="button">
             <Text style={styles.link}>{swap.label}</Text>
           </Pressable>
         </Animated.View>
 
-        <Animated.View entering={FadeIn.delay(940).duration(600)} style={styles.legalWrap}>
+        <Animated.View entering={FadeIn.delay(660).duration(600)} style={styles.legalWrap}>
           <LegalNotice />
         </Animated.View>
       </View>
@@ -837,132 +983,319 @@ export const AuthLandingScreen = ({ navigation }: { navigation: any }) => (
   <Landing navigation={navigation} returning />
 );
 
-/* Spread into StyleSheet.create: { ...landingStyles, ... } (see STEP 3). */
-
 const landingStyles = {
   /* landing */
-  landingLogo: { alignItems: 'center', paddingTop: 28 },
-  landingVisual: { flex: 1, alignItems: 'center', justifyContent: 'center', minHeight: 0 },
-  headline: {
-    fontSize: 30,
-    lineHeight: 36,
-    fontWeight: '800',
-    color: C.ink,
-    letterSpacing: -0.6,
-    textAlign: 'center',
-  },
-  subline: {
-    marginTop: 8,
-    marginBottom: 32,
-    fontSize: 15,
-    lineHeight: 22,
-    color: C.body,
-    textAlign: 'center',
-  },
-  swapRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 26 },
-  buttonGap: { marginTop: 14 },
-  landingActions: { paddingHorizontal: 28, paddingBottom: 12 },
-  legalWrap: { marginTop: 10 },
+  landingLogo: { alignItems: 'center', paddingTop: 24 },
+  landingVisual: { flex: 1, alignItems: 'center', justifyContent: 'center', minHeight: 0, paddingHorizontal: 24 },
+  headline: { fontSize: 30, lineHeight: 34, color: C.ink, letterSpacing: -0.8 },
+  subline: { marginTop: 8, marginBottom: 24, fontSize: 15, lineHeight: 22, color: C.body },
+  swapRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 18 },
+  buttonGap: { marginTop: 12 },
+  landingActions: { paddingHorizontal: 24, paddingBottom: 8 },
+  legalWrap: { marginTop: 8 },
 
-  /* agent preview */
-  previewWrap: { alignItems: 'center', justifyContent: 'center' },
-  goalCard: { position: 'absolute', top: 0 },
-  goalInner: {
-    backgroundColor: C.mist,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: '#c9ecd3',
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    paddingBottom: 40,
-  },
-  goalHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
-  goalTitle: { fontSize: 13, fontWeight: '800', color: C.greenDeep },
-  goalMeta: { fontSize: 11, fontWeight: '600', color: C.greenDeep, fontVariant: ['tabular-nums'] as any },
-  goalTrack: { height: 6, borderRadius: 3, backgroundColor: C.white, overflow: 'hidden' },
-  goalFill: { height: '100%', borderRadius: 3, backgroundColor: C.green },
-
-  feedCard: { position: 'absolute' },
-  feedInner: {
-    backgroundColor: C.white,
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: C.line,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 6,
-    shadowColor: '#0f3d2a',
-    shadowOpacity: 0.14,
-    shadowRadius: 28,
-    shadowOffset: { width: 0, height: 16 },
+  /* welcome hero */
+  balanceCard: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    height: 264,
+    padding: 24,
+    borderRadius: 28,
+    overflow: 'hidden',
+    backgroundColor: C.forest,
+    shadowColor: C.forest,
+    shadowOpacity: 0.35,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 18 },
     elevation: 10,
   },
-  feedHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
-  feedTitle: { fontSize: 14, fontWeight: '800', color: C.ink, letterSpacing: -0.2 },
-  lockChip: {
+  balanceLabel: { fontSize: 13, lineHeight: 16, fontWeight: '500', color: C.mistInk, letterSpacing: 0.2 },
+  balanceValue: {
+    marginTop: 8,
+    fontSize: 40,
+    lineHeight: 46,
+    color: C.white,
+    letterSpacing: -1.3,
+    fontVariant: ['tabular-nums'] as any,
+  },
+  balanceDelta: { marginTop: 4, fontSize: 13, lineHeight: 16, fontWeight: '500', color: C.lime },
+  chart: { position: 'absolute', left: 0, top: 112 },
+  sheen: { position: 'absolute', top: -40, bottom: -40, left: 0, width: 110 },
+  goalChip: {
+    position: 'absolute',
+    top: 18,
+    right: 18,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
-    backgroundColor: C.mist,
+    gap: 8,
+    paddingVertical: 6,
+    paddingLeft: 6,
+    paddingRight: 12,
+    borderRadius: 16,
+    backgroundColor: C.white,
   },
-  lockText: { fontSize: 10.5, fontWeight: '700', color: C.greenDeep },
-  feedRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 11 },
-  feedRowLine: { borderTopWidth: 1, borderTopColor: '#eef2f5' },
-  feedIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 11,
+  goalRing: { width: 32, height: 32 },
+  goalName: { fontSize: 12, lineHeight: 15, fontWeight: '600', color: C.ink },
+  goalMeta: { fontSize: 11, lineHeight: 14, color: C.body, fontVariant: ['tabular-nums'] as any },
+
+  sortedCard: {
+    position: 'absolute',
+    left: 8,
+    right: 8,
+    top: 214,
+    paddingTop: 16,
+    paddingHorizontal: 16,
+    paddingBottom: 4,
+    borderRadius: 24,
+    overflow: 'hidden',
+    backgroundColor: C.white,
+    borderWidth: 1,
+    borderColor: C.line,
+    shadowColor: C.forest,
+    shadowOpacity: 0.16,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 14 },
+    elevation: 12,
+  },
+  sortedHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', height: 22, marginBottom: 2 },
+  sortedTitle: { fontSize: 15, color: C.ink, letterSpacing: -0.2 },
+  sortedAuto: { fontSize: 12, color: C.body },
+  sortedRow: { flexDirection: 'row', alignItems: 'center', gap: 12, height: 60 },
+  sortedRowLine: { borderTopWidth: 1, borderTopColor: C.lineSoft },
+  sortedIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
     backgroundColor: C.mist,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  feedMeta: { flex: 1, marginLeft: 12, marginRight: 8 },
-  feedName: { fontSize: 13.5, fontWeight: '700', color: C.ink },
-  feedAmount: { marginTop: 1, fontSize: 12, color: C.muted, fontVariant: ['tabular-nums'] as any },
-  tag: {
+  sortedMeta: { flex: 1, minWidth: 0 },
+  sortedName: { fontSize: 14, lineHeight: 18, fontWeight: '600', color: C.ink },
+  sortedAmount: { fontSize: 12.5, lineHeight: 16, color: C.body, fontVariant: ['tabular-nums'] as any },
+  sortedTag: {
+    width: 78,
+    height: 26,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 4,
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-    borderRadius: 10,
-    backgroundColor: C.green,
+    borderRadius: 9,
+    backgroundColor: C.forest,
   },
-  tagText: { fontSize: 11, fontWeight: '800', color: C.white },
+  sortedTagText: { fontSize: 11.5, fontWeight: '600', color: C.lime },
+
+  /* welcome back hero */
+  backHero: { alignItems: 'center', justifyContent: 'center' },
+  backRingWrap: { width: 190, height: 190, alignItems: 'center', justifyContent: 'center' },
+  backPulse: { position: 'absolute', width: 190, height: 190, borderRadius: 95, borderWidth: 1, borderColor: C.forest },
+  backRing: { width: 150, height: 150, borderRadius: 75, borderWidth: 2, borderColor: C.forest, padding: 5 },
+  backRingInner: { flex: 1, borderRadius: 70, backgroundColor: C.mist, alignItems: 'center', justifyContent: 'center' },
+  backCoin: {
+    width: 82,
+    height: 82,
+    borderRadius: 41,
+    backgroundColor: C.forest,
+    borderWidth: 4,
+    borderColor: '#2E5A3E',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  backCoinText: { fontSize: 38, lineHeight: 46, color: C.lime },
+  backBadge: {
+    position: 'absolute',
+    right: 14,
+    top: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 3,
+    borderColor: C.bg,
+    backgroundColor: C.lime,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  backTitle: { marginTop: 28, fontSize: 28, lineHeight: 34, color: C.ink, letterSpacing: -0.6, textAlign: 'center' },
+  backSub: { marginTop: 6, fontSize: 15, lineHeight: 22, color: C.body, textAlign: 'center' },
 } as const;
 
 /* ------------------------------------------------------------------ */
 /* Shared form header                                                 */
 /* ------------------------------------------------------------------ */
 
-function FormHeader({
-  title,
-  subtitle,
-  agent,
-  onBack,
-}: {
-  title: string;
-  subtitle: string;
-  agent: ReturnType<typeof useAgentControls>;
-  onBack: () => void;
-}) {
+/** Back button, centred wordmark, then the animated icon tile and the title. */
+function FormHeader({ title, icon, onBack }: { title: string; icon: ReactNode; onBack: () => void }) {
+  const display = useDisplayFont();
   return (
     <>
-      <Animated.View entering={FadeIn.duration(400)}>
+      <Animated.View entering={FadeIn.duration(400)} style={styles.formTop}>
         <BackButton onPress={onBack} />
+        <BrandWordmark size={15} />
+        <View style={styles.formTopSpacer} />
       </Animated.View>
-      <View style={styles.headRow}>
-        <Animated.View entering={FadeInDown.delay(80).duration(550)} style={styles.headText}>
-          <Text style={styles.title}>{title}</Text>
-          <Text style={styles.subtitle}>{subtitle}</Text>
-        </Animated.View>
-        <MoneyAgent size={1.3} controls={agent} dropIn dropDelay={220} />
-      </View>
+      <Animated.View entering={ZoomIn.delay(60).springify().damping(15)} style={styles.iconTile}>
+        {icon}
+      </Animated.View>
+      <Animated.Text entering={FadeInDown.delay(120).duration(550)} style={[styles.formTitle, display]}>
+        {title}
+      </Animated.Text>
     </>
   );
+}
+
+/** Lock that bobs gently, and swings open while you type the password. */
+function LockIcon({ open }: { open: boolean }) {
+  const reduceMotion = useReducedMotion();
+  const bob = useSharedValue(0);
+  const swing = useSharedValue(0);
+  useEffect(() => {
+    if (reduceMotion) return;
+    bob.value = withRepeat(withTiming(1, { duration: 1300, easing: Easing.inOut(Easing.sin) }), -1, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reduceMotion]);
+  useEffect(() => {
+    swing.value = withSequence(withTiming(1, { duration: 120 }), withSpring(0, SOFT));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  const style = useAnimatedStyle(() => ({
+    transform: [{ translateY: -3 * bob.value }, { rotate: `${swing.value * -12}deg` }],
+  }));
+  return (
+    <Animated.View style={style}>
+      <Feather name={open ? 'unlock' : 'lock'} size={26} color={C.forest} />
+    </Animated.View>
+  );
+}
+
+/** Add-person icon with a twinkling spark in the corner. */
+function NewUserIcon() {
+  const reduceMotion = useReducedMotion();
+  const t = useSharedValue(reduceMotion ? 1 : 0);
+  useEffect(() => {
+    if (reduceMotion) return;
+    t.value = withRepeat(withTiming(1, { duration: 900, easing: Easing.inOut(Easing.sin) }), -1, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reduceMotion]);
+  const spark = useAnimatedStyle(() => ({
+    opacity: 0.35 + t.value * 0.65,
+    transform: [{ scale: 0.6 + t.value * 0.4 }, { rotate: `${t.value * 30}deg` }],
+  }));
+  return (
+    <View>
+      <Feather name="user-plus" size={26} color={C.forest} />
+      <Animated.View style={[styles.spark, spark]}>
+        <Svg width={16} height={16} viewBox="0 0 24 24">
+          <Path d="M12 2.5l2.1 6.1 6.4 2.1-6.4 2.1L12 19l-2.1-6.2-6.4-2.1 6.4-2.1z" fill={C.brandGreen} />
+        </Svg>
+      </Animated.View>
+    </View>
+  );
+}
+
+/** One bar per sign-up field; each fills forest once that field is valid. */
+function StepBar({ done }: { done: boolean[] }) {
+  return (
+    <View style={styles.steps} accessibilityLabel={`${done.filter(Boolean).length} of ${done.length} fields done`}>
+      {done.map((d, i) => (
+        <StepSegment key={i} done={d} />
+      ))}
+    </View>
+  );
+}
+
+function StepSegment({ done }: { done: boolean }) {
+  const v = useSharedValue(done ? 1 : 0);
+  useEffect(() => {
+    v.value = withTiming(done ? 1 : 0, { duration: 300 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [done]);
+  const style = useAnimatedStyle(() => ({ backgroundColor: interpolateColor(v.value, [0, 1], [C.line, C.forest]) }));
+  return <Animated.View style={[styles.step, style]} />;
+}
+
+/** Password strength, 0-4, matched to the sign-up rule of 6+ characters. */
+function passwordScore(pw: string) {
+  if (!pw) return 0;
+  let s = 0;
+  if (pw.length >= 6) s++;
+  if (pw.length >= 10) s++;
+  if (/[A-Z]/.test(pw) && /[a-z]/.test(pw)) s++;
+  if (/\d/.test(pw) && /[^A-Za-z0-9]/.test(pw)) s++;
+  return Math.max(1, s);
+}
+
+function StrengthMeter({ password }: { password: string }) {
+  const score = passwordScore(password);
+  const w = useSharedValue(0);
+  useEffect(() => {
+    w.value = withTiming(score / 4, { duration: 300 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [score]);
+  const color = score >= 3 ? C.forest : score === 2 ? C.brandGreen : C.danger;
+  const bar = useAnimatedStyle(() => ({ width: `${w.value * 100}%` }));
+  const label = !password
+    ? 'Use 6 or more characters'
+    : password.length < 6
+      ? 'Too short'
+      : score >= 3
+        ? 'Strong password'
+        : 'Good, could be stronger';
+  return (
+    <View style={styles.strength}>
+      <View style={styles.strengthTrack}>
+        <Animated.View style={[styles.strengthFill, { backgroundColor: color }, bar]} />
+      </View>
+      <Text style={styles.strengthText}>{label}</Text>
+    </View>
+  );
+}
+
+function OrDivider() {
+  return (
+    <View style={styles.divider}>
+      <View style={styles.dividerLine} />
+      <Text style={styles.dividerText}>or</Text>
+      <View style={styles.dividerLine} />
+    </View>
+  );
+}
+
+/**
+ * Cloudflare check + rate-limit state shared by Log in and Sign up.
+ * Turnstile tokens are single use, so `refresh()` remounts the widget for a new one
+ * after every attempt. `rateLimit(s)` starts a live countdown after a 429.
+ */
+function useHumanCheck() {
+  const [token, setToken] = useState('');
+  const [widgetKey, setWidgetKey] = useState(0);
+  const [cooldownUntil, setCooldownUntil] = useState<number | null>(null);
+  const [cooldown, setCooldown] = useState(0);
+
+  useEffect(() => {
+    if (!cooldownUntil) return;
+    const tick = () => {
+      const left = Math.max(0, Math.ceil((cooldownUntil - Date.now()) / 1000));
+      setCooldown(left);
+      if (left <= 0) setCooldownUntil(null);
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [cooldownUntil]);
+
+  return {
+    token,
+    setToken,
+    widgetKey,
+    cooldown,
+    refresh: () => {
+      setToken('');
+      setWidgetKey(k => k + 1);
+    },
+    rateLimit: (seconds: number) => setCooldownUntil(Date.now() + Math.max(1, seconds) * 1000),
+  };
 }
 
 const formatRemainingTime = (seconds: number): string => {
@@ -1047,10 +1380,14 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
   const [secureText, setSecureText] = useState(true);
   const [rememberMe, setRememberMe] = useState(true);
   const [active, setActive] = useState(false);
+  const [pwFocus, setPwFocus] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [errorTick, setErrorTick] = useState(0);
-  const [turnstileToken, setTurnstileToken] = useState('');
+  const human = useHumanCheck();
+  const turnstileToken = human.token;
+  const setTurnstileToken = human.setToken;
 
   // Lockout state and live countdown
   const [lockoutUntil, setLockoutUntil] = useState<number | null>(null);
@@ -1063,7 +1400,6 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
   const [resetSending, setResetSending] = useState<boolean>(false);
   const [resetMsg, setResetMsg] = useState<{ text: string; error: boolean } | null>(null);
 
-  const face = useFormAgent(!secureText);
   const locked = lockoutRemainingSec > 0;
 
   const fail = (message: string) => {
@@ -1086,16 +1422,6 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
     return () => clearInterval(interval);
   }, [lockoutUntil]);
 
-  // the agent's mood follows the form
-  useEffect(() => {
-    face.agent.mood.value = withTiming(locked ? -1 : loading ? 1 : 0, { duration: 300 });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locked, loading]);
-  useEffect(() => {
-    if (errorTick) nudgeNo(face.agent, locked ? -1 : 0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [errorTick]);
-
   const openForgot = () => {
     if (emailOrMobile.includes('@')) setResetEmail(emailOrMobile);
     setResetMsg(null);
@@ -1111,7 +1437,11 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
       fail('Enter your email or mobile number and password.');
       return;
     }
-    if (Platform.OS === 'web' && !turnstileToken) {
+    if (human.cooldown > 0) {
+      fail(`Too many attempts. Try again in ${formatRemainingTime(human.cooldown)}.`);
+      return;
+    }
+    if (!turnstileToken) {
       fail('Complete the security check to continue.');
       return;
     }
@@ -1120,6 +1450,13 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
     try {
       await authService.logIn(emailOrMobile, password, rememberMe, turnstileToken);
     } catch (e: any) {
+      human.refresh();
+      if (e.rateLimited) {
+        // the live countdown banner replaces the error text
+        human.rateLimit(e.retryAfterSeconds || 60);
+        setError('');
+        return;
+      }
       if (e.locked || e.status === 423) {
         setLockoutUntil(e.lockedUntil || Date.now() + (e.remainingSeconds || 1800) * 1000);
         setLockoutTier(e.tier || 1);
@@ -1160,17 +1497,12 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
         showsVerticalScrollIndicator={false}
         keyboardDismissMode="on-drag"
       >
-        <Animated.View entering={FadeIn.duration(400)}>
-          <BackButton onPress={() => navigation.goBack()} />
-        </Animated.View>
-
-        <View style={styles.suHead}>
-          <Animated.View entering={FadeInDown.delay(80).duration(550)} style={styles.suHeadText}>
-            <Text style={styles.suTitle}>Welcome back</Text>
-            <Text style={styles.suSub}>Log in to your account.</Text>
-          </Animated.View>
-          <MoneyAgent size={1.05} controls={face.agent} dropIn dropDelay={220} />
-        </View>
+        <FormHeader
+          title="Let’s get you in"
+          icon={<LockIcon open={pwFocus || password.length > 0} />}
+          onBack={() => navigation.goBack()}
+        />
+        <View style={styles.formGap} />
 
         {locked ? (
           <Animated.View entering={FadeInDown.duration(300)} style={[styles.banner, styles.lockout]}>
@@ -1191,6 +1523,8 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
               <Text style={styles.lockoutBtnText}>Reset password to unlock</Text>
             </PressScale>
           </Animated.View>
+        ) : human.cooldown > 0 ? (
+          <ErrorBanner message={`Too many attempts. Try again in ${formatRemainingTime(human.cooldown)}.`} />
         ) : error ? (
           <ErrorBanner key={errorTick} message={error} />
         ) : null}
@@ -1209,13 +1543,9 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
             autoComplete="username"
             returnKeyType="next"
             value={emailOrMobile}
-            onChangeText={t => {
-              setEmailOrMobile(t);
-              face.typed(t.length);
-            }}
+            onChangeText={setEmailOrMobile}
             onSubmitEditing={() => passwordRef.current?.focus()}
             onActive={setActive}
-            {...face.bind('text', emailOrMobile.length)}
           />
           <View style={styles.gDivider} />
           <GroupRow
@@ -1232,7 +1562,8 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
             onSubmitEditing={handleLogin}
             onActive={setActive}
             right={<EyeToggle hidden={secureText} onToggle={() => setSecureText(s => !s)} />}
-            {...face.bind('secret')}
+            onFocus={() => setPwFocus(true)}
+            onBlur={() => setPwFocus(false)}
           />
         </Animated.View>
 
@@ -1247,29 +1578,40 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
           </View>
 
           <CloudflareTurnstile
+            key={human.widgetKey}
             theme="light"
             onVerify={token => {
               setTurnstileToken(token);
               setError('');
             }}
             onExpire={() => setTurnstileToken('')}
+            onError={() => setTurnstileToken('')}
           />
 
           <Button
-            label={locked ? `Locked for ${formatRemainingTime(lockoutRemainingSec)}` : 'Log in'}
+            label={
+              locked
+                ? `Locked for ${formatRemainingTime(lockoutRemainingSec)}`
+                : human.cooldown > 0
+                  ? `Try again in ${formatRemainingTime(human.cooldown)}`
+                  : 'Log in'
+            }
             onPress={handleLogin}
             loading={loading}
-            disabled={locked}
+            disabled={locked || human.cooldown > 0}
             style={styles.suSubmit}
           />
-
-          <View style={styles.switchRow}>
-            <Text style={styles.switchLabel}>New here? </Text>
-            <Pressable onPress={() => navigation.navigate('Signup')} hitSlop={8} accessibilityRole="button">
-              <Text style={styles.link}>Create account</Text>
-            </Pressable>
-          </View>
+          <OrDivider />
+          <GoogleAuthButton loading={googleLoading} setLoading={setGoogleLoading} />
         </Animated.View>
+
+        <View style={styles.formSpacer} />
+        <View style={styles.switchRow}>
+          <Text style={styles.switchLabel}>New here? </Text>
+          <Pressable onPress={() => navigation.navigate('Signup')} hitSlop={8} accessibilityRole="button">
+            <Text style={styles.link}>Create account</Text>
+          </Pressable>
+        </View>
       </KeyboardScreen>
 
       <Sheet visible={showForgotModal} title="Reset your password" onClose={() => setShowForgotModal(false)}>
@@ -1333,31 +1675,23 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
   const [secureText, setSecureText] = useState(true);
   const [active, setActive] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState('');
   const [errorTick, setErrorTick] = useState(0);
-  const [turnstileToken, setTurnstileToken] = useState('');
+  const human = useHumanCheck();
+  const turnstileToken = human.token;
+  const setTurnstileToken = human.setToken;
   const [showVerifyModal, setShowVerifyModal] = useState(false);
   const [registeredEmail, setRegisteredEmail] = useState('');
   // Consent must be an active choice, so the box starts unticked.
   const [agreeTerms, setAgreeTerms] = useState(false);
 
-  const face = useFormAgent(!secureText);
-  const ready = name.trim() && email.includes('@') && phone.length === 10 && password.length >= 6;
+  const steps = [!!name.trim(), email.includes('@'), phone.length === 10, password.length >= 6];
 
   const fail = (message: string) => {
     setError(message);
     setErrorTick(t => t + 1);
   };
-
-  // the agent brightens up once everything is filled in
-  useEffect(() => {
-    face.agent.mood.value = withTiming(loading ? 1 : ready ? 0.8 : 0, { duration: 300 });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, ready]);
-  useEffect(() => {
-    if (errorTick) nudgeNo(face.agent, 0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [errorTick]);
 
   const handleSignup = async () => {
     if (!name.trim() || !email.trim() || !phone || !password) {
@@ -1380,7 +1714,11 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
       fail('Agree to the Terms of Use and Privacy Policy to continue.');
       return;
     }
-    if (Platform.OS === 'web' && !turnstileToken) {
+    if (human.cooldown > 0) {
+      fail(`Too many attempts. Try again in ${formatRemainingTime(human.cooldown)}.`);
+      return;
+    }
+    if (!turnstileToken) {
       fail('Complete the security check to continue.');
       return;
     }
@@ -1394,6 +1732,13 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
         setShowVerifyModal(true);
       }
     } catch (e: any) {
+      human.refresh();
+      if (e.rateLimited) {
+        // the live countdown banner replaces the error text
+        human.rateLimit(e.retryAfterSeconds || 60);
+        setError('');
+        return;
+      }
       fail(e.message);
     } finally {
       setLoading(false);
@@ -1427,19 +1772,17 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
         showsVerticalScrollIndicator={false}
         keyboardDismissMode="on-drag"
       >
-        <Animated.View entering={FadeIn.duration(400)}>
-          <BackButton onPress={() => navigation.goBack()} />
+        <FormHeader title="Let’s get you set up" icon={<NewUserIcon />} onBack={() => navigation.goBack()} />
+        <Animated.View entering={FadeInDown.delay(160).duration(550)}>
+          <StepBar done={steps} />
         </Animated.View>
+        <View style={styles.formGap} />
 
-        <View style={styles.suHead}>
-          <Animated.View entering={FadeInDown.delay(80).duration(550)} style={styles.suHeadText}>
-            <Text style={styles.suTitle}>Create account</Text>
-            <Text style={styles.suSub}>Takes less than a minute.</Text>
-          </Animated.View>
-          <MoneyAgent size={1.05} controls={face.agent} dropIn dropDelay={220} />
-        </View>
-
-        {error ? <ErrorBanner key={errorTick} message={error} /> : null}
+        {human.cooldown > 0 ? (
+          <ErrorBanner message={`Too many attempts. Try again in ${formatRemainingTime(human.cooldown)}.`} />
+        ) : error ? (
+          <ErrorBanner key={errorTick} message={error} />
+        ) : null}
 
         <Animated.View
           entering={FadeInDown.delay(160).duration(550)}
@@ -1453,13 +1796,9 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
             autoComplete="name"
             returnKeyType="next"
             value={name}
-            onChangeText={t => {
-              setName(t);
-              face.typed(t.length);
-            }}
+            onChangeText={setName}
             onSubmitEditing={() => emailRef.current?.focus()}
             onActive={setActive}
-            {...face.bind('text', name.length)}
           />
           <View style={styles.gDivider} />
           <GroupRow
@@ -1473,13 +1812,9 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
             autoComplete="email"
             returnKeyType="next"
             value={email}
-            onChangeText={t => {
-              setEmail(t);
-              face.typed(t.length);
-            }}
+            onChangeText={setEmail}
             onSubmitEditing={() => phoneRef.current?.focus()}
             onActive={setActive}
-            {...face.bind('text', email.length)}
           />
           <View style={styles.gDivider} />
           <GroupRow
@@ -1496,11 +1831,9 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
             onChangeText={t => {
               const digits = t.replace(/\D/g, '');
               setPhone(digits);
-              face.typed(digits.length);
             }}
             onSubmitEditing={() => passwordRef.current?.focus()}
             onActive={setActive}
-            {...face.bind('text', phone.length)}
           />
           <View style={styles.gDivider} />
           <GroupRow
@@ -1517,9 +1850,9 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
             onSubmitEditing={handleSignup}
             onActive={setActive}
             right={<EyeToggle hidden={secureText} onToggle={() => setSecureText(s => !s)} />}
-            {...face.bind('secret')}
           />
         </Animated.View>
+        <StrengthMeter password={password} />
 
         <Animated.View entering={FadeInDown.delay(240).duration(550)}>
           <View style={styles.suTerms}>
@@ -1542,23 +1875,34 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
           </View>
 
           <CloudflareTurnstile
+            key={human.widgetKey}
             theme="light"
             onVerify={token => {
               setTurnstileToken(token);
               setError('');
             }}
             onExpire={() => setTurnstileToken('')}
+            onError={() => setTurnstileToken('')}
           />
 
-          <Button label="Create account" onPress={handleSignup} loading={loading} style={styles.suSubmit} />
-
-          <View style={styles.switchRow}>
-            <Text style={styles.switchLabel}>Already have an account? </Text>
-            <Pressable onPress={() => navigation.navigate('Login')} hitSlop={8} accessibilityRole="button">
-              <Text style={styles.link}>Log in</Text>
-            </Pressable>
-          </View>
+          <Button
+            label={human.cooldown > 0 ? `Try again in ${formatRemainingTime(human.cooldown)}` : 'Create account'}
+            onPress={handleSignup}
+            loading={loading}
+            disabled={human.cooldown > 0}
+            style={styles.suSubmit}
+          />
+          <OrDivider />
+          <GoogleAuthButton loading={googleLoading} setLoading={setGoogleLoading} />
         </Animated.View>
+
+        <View style={styles.formSpacer} />
+        <View style={styles.switchRow}>
+          <Text style={styles.switchLabel}>Have an account? </Text>
+          <Pressable onPress={() => navigation.navigate('Login')} hitSlop={8} accessibilityRole="button">
+            <Text style={styles.link}>Log in</Text>
+          </Pressable>
+        </View>
       </KeyboardScreen>
 
       <EmailVerificationModal
@@ -1578,7 +1922,7 @@ const loginStyles = {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 20,
+    marginTop: 16,
   },
   liForgot: { fontSize: 14, fontWeight: '600', color: C.greenDeep },
 } as const;
@@ -1602,13 +1946,13 @@ const signupStyles = {
     shadowOffset: { width: 0, height: 10 },
     elevation: 4,
   },
-  groupActive: { borderColor: C.green, shadowColor: C.green, shadowOpacity: 0.14 },
+  groupActive: { borderColor: C.forest, shadowColor: C.forest, shadowOpacity: 0.12 },
   gRow: { height: 60, flexDirection: 'row', alignItems: 'center', gap: 14 },
-  gDivider: { height: 1, backgroundColor: '#eef2f5', marginLeft: 32 },
+  gDivider: { height: 1, backgroundColor: C.lineSoft, marginLeft: 32 },
   gPrefix: { fontSize: 16, fontWeight: '600', color: C.ink, marginRight: -4 },
   gInput: { flex: 1, height: '100%', fontSize: 16, color: C.ink },
 
-  suTerms: { marginTop: 20 },
+  suTerms: { marginTop: 18 },
   suSubmit: { marginTop: 24 },
 } as const;
 
@@ -1636,6 +1980,31 @@ const styles = StyleSheet.create({
     maxHeight: '100%',
   },
   center: { textAlign: 'center' },
+  centerBox: { alignItems: 'center', justifyContent: 'center' },
+  ring: { position: 'absolute', borderWidth: 1, borderColor: 'rgba(11,61,44,0.08)' },
+
+  /* form header */
+  formTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  formTopSpacer: { width: 44 },
+  iconTile: {
+    marginTop: 28,
+    width: 60,
+    height: 60,
+    borderRadius: 19,
+    backgroundColor: C.mist,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  formTitle: { marginTop: 18, fontSize: 30, lineHeight: 36, color: C.ink, letterSpacing: -0.7 },
+  formGap: { height: 20 },
+  formSpacer: { flexGrow: 1, minHeight: 24 },
+  spark: { position: 'absolute', right: -9, top: -9 },
+  steps: { flexDirection: 'row', gap: 6, marginTop: 14 },
+  step: { flex: 1, height: 4, borderRadius: 2 },
+  strength: { marginTop: 10, marginHorizontal: 2 },
+  strengthTrack: { height: 4, borderRadius: 2, backgroundColor: C.line, overflow: 'hidden' },
+  strengthFill: { height: '100%', borderRadius: 2 },
+  strengthText: { marginTop: 6, fontSize: 12, color: C.body },
 
   /* buttons */
   btn: {
@@ -1646,10 +2015,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 20,
   },
-  btnPrimary: { backgroundColor: C.green, ...shadow(C.green, 0.3, 14, 8, 6) },
+  btnPrimary: { backgroundColor: C.forest, ...shadow(C.forest, 0.28, 14, 8, 6) },
   btnSecondary: { backgroundColor: C.white, borderWidth: 1, borderColor: C.line, ...shadow(C.ink, 0.05, 10, 4, 2) },
   btnDisabled: { backgroundColor: C.disabled, shadowOpacity: 0, elevation: 0 },
-  btnText: { fontSize: 16, fontWeight: '700', color: C.white },
+  btnText: { fontSize: 16, fontWeight: '700', color: C.lime },
   btnTextSecondary: { color: C.ink },
   btnIcon: { marginRight: 10 },
   back: {
@@ -1663,7 +2032,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  divider: { flexDirection: 'row', alignItems: 'center', marginVertical: 18 },
+  divider: { flexDirection: 'row', alignItems: 'center', marginVertical: 16 },
   dividerLine: { flex: 1, height: 1, backgroundColor: C.line },
   dividerText: { marginHorizontal: 12, fontSize: 13, color: C.muted },
 
@@ -1695,8 +2064,8 @@ const styles = StyleSheet.create({
     ...shadow(C.ink, 0.06, 12, 4, 3),
   },
   avatar: { width: 42, height: 42, borderRadius: 21 },
-  avatarFallback: { backgroundColor: C.green, alignItems: 'center', justifyContent: 'center' },
-  avatarInitial: { color: C.white, fontSize: 17, fontWeight: '800' },
+  avatarFallback: { backgroundColor: C.forest, alignItems: 'center', justifyContent: 'center' },
+  avatarInitial: { color: C.lime, fontSize: 17, fontWeight: '800' },
   lastUserMeta: { flex: 1, marginLeft: 12 },
   lastUserRow: { flexDirection: 'row', alignItems: 'center' },
   lastUserName: { flexShrink: 1, fontSize: 15, fontWeight: '700', color: C.ink },
@@ -1787,7 +2156,7 @@ const styles = StyleSheet.create({
     backgroundColor: C.dangerBg,
   },
   bannerText: { flex: 1, fontSize: 13, lineHeight: 19, fontWeight: '600', color: C.dangerInk },
-  bannerOk: { borderColor: '#c9ecd3', backgroundColor: C.mist },
+  bannerOk: { borderColor: C.line, backgroundColor: C.mist },
   bannerTextOk: { color: C.greenDeep },
   lockout: { flexDirection: 'column', alignItems: 'flex-start', gap: 8 },
   lockoutHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -1801,13 +2170,13 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     backgroundColor: C.white,
   },
-  lockoutTimerText: { fontSize: 13, fontWeight: '700', color: C.ink, fontVariant: ['tabular-nums'] },
+  lockoutTimerText: { fontSize: 13, fontWeight: '700', color: C.ink, fontVariant: ['tabular-nums'] as any },
   lockoutBody: { fontSize: 13, lineHeight: 19, color: C.body },
   lockoutBtn: { marginTop: 2, paddingHorizontal: 14, paddingVertical: 9, borderRadius: 12, backgroundColor: C.green },
-  lockoutBtnText: { fontSize: 13, fontWeight: '700', color: C.white },
+  lockoutBtnText: { fontSize: 13, fontWeight: '700', color: C.lime },
 
   /* sheets */
-  sheetWrap: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(28,37,46,0.45)' },
+  sheetWrap: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(7,17,13,0.55)' },
   sheet: {
     backgroundColor: C.bg,
     borderTopLeftRadius: 28,

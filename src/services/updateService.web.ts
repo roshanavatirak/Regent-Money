@@ -55,6 +55,11 @@ class UpdateService {
   async openStore(): Promise<boolean> {
     return false;
   }
+
+  /** Never a Play Store install on web; mirrors the native service so UpdateModal works. */
+  isPlayStoreInstall(): boolean {
+    return false;
+  }
 }
 
 export const updateService = new UpdateService();

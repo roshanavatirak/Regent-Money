@@ -134,6 +134,17 @@ export class SyncController {
     return this.syncService.syncOcrTransactions(userId, body);
   }
 
+  /** Inbox re-scan of bank SMS: identical SMS are no-ops, only distinct look-alikes are reviewed. */
+  @Post('sms-catchup')
+  @HttpCode(HttpStatus.OK)
+  async syncSmsCatchup(
+    @Req() req: any,
+    @Body() body: OcrSyncDto,
+  ) {
+    const userId = req.user.id;
+    return this.syncService.syncSmsCatchup(userId, body);
+  }
+
   @Post('direct-sms')
   @HttpCode(HttpStatus.OK)
   async ingestDirectSms(

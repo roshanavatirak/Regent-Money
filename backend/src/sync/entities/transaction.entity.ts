@@ -38,6 +38,10 @@ export class Transaction {
   @Column({ name: 'sms_id', type: 'text', nullable: true })
   smsId: string;
 
+  /** Hash of the SMS text alone; recognises a re-scanned SMS even if the parser output changes. */
+  @Column({ name: 'content_id', type: 'text', nullable: true })
+  contentId?: string | null;
+
   @Column({ name: 'is_anomaly', type: 'boolean', nullable: true })
   isAnomaly: boolean;
 

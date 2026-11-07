@@ -20,12 +20,7 @@ export class AuthController {
     @Req() req: any,
     @Body() body: { name: string; email: string; phone: string; password?: string; turnstileToken?: string },
   ) {
-    const isWeb = Boolean(req.headers?.origin || req.headers?.referer);
-    if (body.turnstileToken) {
-      await this.turnstileService.verifyToken(body.turnstileToken, req?.ip);
-    } else if (isWeb && process.env.CLOUDFLARE_TURNSTILE_SECRET_KEY) {
-      throw new BadRequestException('Security verification token is required for web signup.');
-    }
+    await this.requireHumanCheck(req, body.turnstileToken);
     return this.authService.signUp(body);
   }
 
@@ -36,13 +31,27 @@ export class AuthController {
     @Req() req: any,
     @Body() body: { emailOrMobile: string; password?: string; turnstileToken?: string },
   ) {
-    const isWeb = Boolean(req.headers?.origin || req.headers?.referer);
-    if (body.turnstileToken) {
-      await this.turnstileService.verifyToken(body.turnstileToken, req?.ip);
-    } else if (isWeb && process.env.CLOUDFLARE_TURNSTILE_SECRET_KEY) {
-      throw new BadRequestException('Security verification token is required for web login.');
-    }
+    await this.requireHumanCheck(req, body.turnstileToken);
     return this.authService.login(body);
+  }
+
+  /**
+   * Cloudflare Turnstile is required for login and signup on web AND the mobile app
+   * (the app renders the widget in a WebView). With no secret configured (local dev)
+   * the check is skipped. Set TURNSTILE_REQUIRE_NATIVE=false to temporarily accept
+   * app requests without a token, e.g. while older app builds are still in use.
+   */
+  private async requireHumanCheck(req: any, token?: string) {
+    if (!process.env.CLOUDFLARE_TURNSTILE_SECRET_KEY) return;
+    if (token) {
+      await this.turnstileService.verifyToken(token, req?.ip);
+      return;
+    }
+    const isWeb = Boolean(req.headers?.origin || req.headers?.referer);
+    const requireNative = (process.env.TURNSTILE_REQUIRE_NATIVE ?? 'true').toLowerCase() !== 'false';
+    if (isWeb || requireNative) {
+      throw new BadRequestException('Complete the security check to continue.');
+    }
   }
 
   @Throttle({ default: { limit: 5, ttl: 60000 } })

@@ -1,24 +1,25 @@
 /**
- * Regent Money onboarding
- * Picks up where the launch intro ends: same light canvas, same green,
- * and the same money agent, who now hops from scene to scene as you swipe.
+ * Regent Money onboarding: three pages on the mint canvas, forest and lime.
  *
- * Uses packages already in the project: react-native-reanimated,
- * react-native-svg, react-native-safe-area-context, @expo/vector-icons.
- * Logo: src/components/RegentWordmark.tsx (shared with the intro).
+ *   1 · Sorted   a bank SMS is scanned and turns into a tagged transaction (loops 3 examples)
+ *   2 · Private  data chips drift into a phone and the lock clicks shut each time
+ *   3 · Goals    a plane flies 68% of the way to the pin while the goal ring fills to 68%
  *
- * What moves (all on the UI thread)
- *   - The agent drops in, then hops between scenes as the pages scroll.
- *   - Each scene builds itself when it arrives and rebuilds when you return.
- *   - Scenes, headlines and body text travel at different speeds (parallax).
- *   - The round button fills its progress ring, then stretches into "Get started".
+ * Behaviour is unchanged from the previous version: horizontal paging, tappable dots,
+ * Skip, a round Next button with a progress ring that stretches into "Get started",
+ * and finishing sets `has_seen_onboarding_v1` then replaces the route with Welcome.
+ *
+ * Each scene runs one 6 s clock only while its page is showing; every element is a
+ * keyframe interpolation of that clock, all on the UI thread. Reduce Motion freezes
+ * each scene on a representative frame.
  */
 
-import React, { ComponentProps, useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   LayoutChangeEvent,
   NativeScrollEvent,
   NativeSyntheticEvent,
+  Platform,
   Pressable,
   StatusBar,
   StyleSheet,
@@ -29,707 +30,593 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import Animated, {
+  cancelAnimation,
   Easing,
   Extrapolation,
   interpolate,
-  interpolateColor,
   SharedValue,
   useAnimatedProps,
-  useAnimatedReaction,
   useAnimatedRef,
   useAnimatedScrollHandler,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
-  withDelay,
   withRepeat,
-  withSequence,
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
 import Svg, { Circle, Defs, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
+import { useFonts } from 'expo-font';
+import { BricolageGrotesque_800ExtraBold } from '@expo-google-fonts/bricolage-grotesque';
 import { mmkvStorage } from '../db/mmkv';
-import { RegentWordmark } from '../components/RegentWordmark';
+import { BrandWordmark } from '../components/BrandWordmark';
 
 /* ------------------------------------------------------------------ */
 /* Tokens                                                             */
 /* ------------------------------------------------------------------ */
 
 const C = {
-  bg: '#fafbfc',
-  white: '#ffffff',
-  green: '#2dba4e',
-  greenDeep: '#1f8f3a',
-  sage: '#8fdca2',
-  mint: '#bfeccb',
-  mist: '#e7f7eb',
-  ink: '#1c252e',
-  body: '#5b6672',
-  muted: '#8a94a0',
-  line: '#e6ebef',
-  dot: '#d3dbe1',
+  bg: '#F3F6F4',
+  white: '#FFFFFF',
+  forest: '#0B3D2C',
+  lime: '#B8F36B',
+  green: '#16A34A',
+  mist: '#E3F2E8',
+  mistInk: '#B5CEC1',
+  ink: '#0B1F17',
+  body: '#5E7A6C',
+  muted: '#7B9488',
+  line: '#E1E9E4',
+  dot: '#C3CFC8',
 };
 
-const D = 340; // every scene is drawn on a 340 × 340 stage, then scaled to fit
-const CW = 60; // agent box (same proportions as in the intro)
-const CH = 72;
+const STAGE_W = 390; // scenes are drawn on a 390 × 400 stage, then scaled to fit
+const STAGE_H = 400;
 const HEADER_H = 56;
 const FOOTER_H = 112;
-const SCENE_TOP = 4;
-const TEXT_H = 196; // room kept below the scene for the headline and body
+const TEXT_H = 170;
+const CYCLE = 6000;
 const BTN = 64;
-const RING_R = 37;
+const PILL_W = 176;
+const RING_R = 30;
 const RING_C = 2 * Math.PI * RING_R;
+const MONO = Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' });
 
 type SlideCopy = { id: string; title: string; body: string };
 
 const SLIDES: SlideCopy[] = [
-  {
-    id: 'track',
-    title: 'Every rupee,\ntracked for you',
-    body: 'Regent Money reads your bank SMS and sorts each spend on its own. No typing, no spreadsheets.',
-  },
-  {
-    id: 'private',
-    title: 'Your money data\nstays on your phone',
-    body: 'Bank messages are read and stored securely on this device with end-to-end encryption. Your financial data is completely private and never sold.',
-  },
-  {
-    id: 'goals',
-    title: 'Set a goal.\nWatch it grow.',
-    body: "Plan for a trip, a bike or a home. See how much to save each month and when you'll get there.",
-  },
+  { id: 'sorted', title: 'Every rupee,\nsorted for you.', body: 'We read your bank SMS and file each spend on its own.' },
+  { id: 'private', title: 'Private by design.', body: 'Your money data stays on this phone. Never sold.' },
+  { id: 'goals', title: 'Set a goal.\nWatch it grow.', body: 'Know what to save each month to get there.' },
 ];
 const LAST = SLIDES.length - 1;
 
-/** Where the agent stands in each scene (stage units, feet position) */
-const POSE_X = [170, 272, 104];
-const POSE_Y = [232, 318, 268];
-const POSE_S = [1.45, 1.15, 1.25];
-
-const SPARKLE = 'M12 0C13 7 17 11 24 12C17 13 13 17 12 24C11 17 7 13 0 12C7 11 11 7 12 0Z';
-
 type SV = SharedValue<number>;
-type IconName = ComponentProps<typeof Feather>['name'];
-type SceneProps = { enter: SV; float: SV; spin: SV };
+type SceneProps = { t: SV };
 
-const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 const AnimatedPath = Animated.createAnimatedComponent(Path);
+const AnimatedCircle = Animated.createAnimatedComponent(Circle);
+
+/** Ease-out used for most keyframe segments (matches the design's cubic-bezier(.22,1,.36,1)). */
+const EASE = Extrapolation.CLAMP;
+
+/** interpolate with clamping, as a worklet-friendly helper. */
+const kf = (v: number, inp: number[], out: number[]) => {
+  'worklet';
+  return interpolate(v, inp, out, EASE);
+};
+
+/** Smooth step on 0..1 so linear keyframes feel eased. */
+const ease = (v: number) => {
+  'worklet';
+  const p = Math.min(1, Math.max(0, v));
+  return 1 - Math.pow(1 - p, 3);
+};
 
 /* ------------------------------------------------------------------ */
-/* Motion helpers (worklets)                                          */
+/* Shared bits                                                        */
 /* ------------------------------------------------------------------ */
 
-const clamp01 = (v: number) => {
-  'worklet';
-  return Math.min(1, Math.max(0, v));
-};
-/** progress of v inside the window [a, b], as 0..1 */
-const seg = (v: number, a: number, b: number) => {
-  'worklet';
-  return clamp01((v - a) / (b - a));
-};
-const mix = (a: number, b: number, t: number) => {
-  'worklet';
-  return a + (b - a) * t;
-};
-const outCubic = (t: number) => {
-  'worklet';
-  return 1 - Math.pow(1 - t, 3);
-};
-const outBack = (t: number) => {
-  'worklet';
-  const s = 1.7;
-  return 1 + (s + 1) * Math.pow(t - 1, 3) + s * Math.pow(t - 1, 2);
-};
-/** 0 while resting on a page, 1 at the top of the hop between two pages */
-const hopOf = (p: number) => {
-  'worklet';
-  const q = Math.min(LAST, Math.max(0, p));
-  return Math.sin((q - Math.floor(q)) * Math.PI);
-};
-
-/**
- * 0 → 1 build-up for a scene. Starts when the page is more than half in view,
- * resets once it is fully off screen so it plays again on the way back.
- */
-function useEnter(index: number, scrollX: SV, W: number, reduce: boolean) {
-  const enter = useSharedValue(0);
-  const played = useSharedValue(0);
-  useAnimatedReaction(
-    () => Math.abs(scrollX.value / W - index),
-    d => {
-      if (d < 0.5 && played.value === 0) {
-        played.value = 1;
-        enter.value = reduce ? 1 : withTiming(1, { duration: 1500, easing: Easing.linear });
-      } else if (d > 0.98 && played.value === 1) {
-        played.value = 0;
-        enter.value = 0;
-      }
-    },
-    [W, reduce],
-  );
-  return enter;
-}
-
-/* ------------------------------------------------------------------ */
-/* Shared pieces                                                      */
-/* ------------------------------------------------------------------ */
-
-function Glow({ id, size, strength }: { id: string; size: number; strength: number }) {
+function Glow({ id, cx, cy, r }: { id: string; cx: number; cy: number; r: number }) {
   return (
-    <Svg width={size} height={size}>
+    <Svg width={r * 2} height={r * 2} style={{ position: 'absolute', left: cx - r, top: cy - r }} pointerEvents="none">
       <Defs>
         <RadialGradient id={id} cx="50%" cy="50%" r="50%">
-          <Stop offset="0" stopColor={C.green} stopOpacity={strength} />
-          <Stop offset="0.55" stopColor={C.green} stopOpacity={strength * 0.35} />
-          <Stop offset="1" stopColor={C.green} stopOpacity={0} />
+          <Stop offset="0" stopColor={C.lime} stopOpacity={0.3} />
+          <Stop offset="0.64" stopColor={C.lime} stopOpacity={0} />
         </RadialGradient>
       </Defs>
-      <Rect width={size} height={size} fill={`url(#${id})`} />
+      <Rect width={r * 2} height={r * 2} fill={`url(#${id})`} />
     </Svg>
   );
 }
 
-type ChipData = { icon: IconName; label: string; amount: string; credit: boolean; x: number; y: number };
-
-function Chip({ chip, at, dir, enter, float }: { chip: ChipData; at: number; dir: number; enter: SV; float: SV }) {
-  const style = useAnimatedStyle(() => {
-    const t = seg(enter.value, at, at + 0.35);
-    const e = outBack(t);
-    return {
-      opacity: clamp01(t * 2.5),
-      transform: [{ translateY: mix(26, 0, e) + (float.value - 0.5) * 8 * dir }, { scale: mix(0.86, 1, e) }],
-    };
-  });
+function Pill({ children, dark }: { children: React.ReactNode; dark?: boolean }) {
   return (
-    <Animated.View style={[styles.chip, { left: chip.x, top: chip.y }, style]}>
-      <View style={styles.chipIcon}>
-        <Feather name={chip.icon} size={14} color={C.green} />
-      </View>
-      <Text style={styles.chipLabel}>{chip.label}</Text>
-      <Text style={[styles.chipAmount, chip.credit && { color: C.green }]}>{chip.amount}</Text>
-    </Animated.View>
-  );
-}
-
-function Badge(props: {
-  icon: IconName;
-  size: number;
-  x: number;
-  y: number;
-  at: number;
-  dir: number;
-  tint: string;
-  enter: SV;
-  float: SV;
-}) {
-  const { icon, size, x, y, at, dir, tint, enter, float } = props;
-  const style = useAnimatedStyle(() => {
-    const t = seg(enter.value, at, at + 0.3);
-    return {
-      opacity: clamp01(t * 3),
-      transform: [{ translateY: (float.value - 0.5) * 8 * dir }, { scale: mix(0.3, 1, outBack(t)) }],
-    };
-  });
-  return (
-    <Animated.View style={[styles.badge, { left: x, top: y, width: size, height: size, borderRadius: size / 2 }, style]}>
-      <Feather name={icon} size={Math.round(size * 0.4)} color={tint} />
-    </Animated.View>
+    <View style={[styles.pill, dark ? styles.pillDark : styles.pillLight]}>
+      {children}
+    </View>
   );
 }
 
 /* ------------------------------------------------------------------ */
-/* Scene 1: spending sorted automatically                             */
+/* Scene 1 · Sorted                                                   */
 /* ------------------------------------------------------------------ */
 
-const DONUT = { cx: 170, cy: 176, r: 104, w: 18 };
-const DONUT_C = 2 * Math.PI * DONUT.r;
-const DONUT_GAP = 26;
-const SEGMENTS = [
-  { frac: 0.4, color: C.green },
-  { frac: 0.33, color: C.greenDeep },
-  { frac: 0.27, color: C.mint },
-].map((s, i, all) => ({ ...s, start: all.slice(0, i).reduce((sum, x) => sum + x.frac, 0) }));
-
-const TRACK_CHIPS: ChipData[] = [
-  { icon: 'coffee', label: 'Coffee', amount: '−₹180', credit: false, x: 2, y: 24 },
-  { icon: 'briefcase', label: 'Salary', amount: '+₹52,000', credit: true, x: 166, y: 74 },
-  { icon: 'home', label: 'Rent', amount: '−₹15,000', credit: false, x: 14, y: 264 },
+const SORTED = [
+  {
+    sms: 'Rs.180 debited from A/c XX4821 at BLUE TOKAI COFFEE.',
+    name: 'Coffee',
+    amount: '−₹180',
+    credit: false,
+    tag: 'Food',
+    icon: 'coffee' as const,
+  },
+  {
+    sms: 'Rs.52,000 credited to A/c XX4821. SALARY OCT.',
+    name: 'Salary',
+    amount: '+₹52,000',
+    credit: true,
+    tag: 'Income',
+    icon: 'arrow-down-left' as const,
+  },
+  {
+    sms: 'Rs.15,000 paid via UPI to RAJESH (rent).',
+    name: 'House rent',
+    amount: '−₹15,000',
+    credit: false,
+    tag: 'Bills',
+    icon: 'home' as const,
+  },
 ];
 
-function DonutSegment({ i, start, frac, color, enter }: { i: number; start: number; frac: number; color: string; enter: SV }) {
-  const len = frac * DONUT_C - DONUT_GAP;
-  const animatedProps = useAnimatedProps(() => {
-    const t = outCubic(seg(enter.value, 0.04 + i * 0.1, 0.42 + i * 0.1));
-    return { strokeDashoffset: (1 - t) * (len + 1), strokeOpacity: t > 0.01 ? 1 : 0 };
-  });
-  const angle = ((start * DONUT_C + DONUT_GAP / 2) / DONUT_C) * 360 - 90;
-  return (
-    <AnimatedCircle
-      cx={DONUT.cx}
-      cy={DONUT.cy}
-      r={DONUT.r}
-      fill="none"
-      stroke={color}
-      strokeWidth={DONUT.w}
-      strokeLinecap="round"
-      strokeDasharray={`${len} ${DONUT_C}`}
-      transform={`rotate(${angle} ${DONUT.cx} ${DONUT.cy})`}
-      animatedProps={animatedProps}
-    />
-  );
-}
+function SortedItem({ t, k }: { t: SV; k: number }) {
+  const item = SORTED[k];
+  // each example owns one third of the cycle; u runs 0 → 1 over the full 6 s from its start
+  const local = (v: number) => {
+    'worklet';
+    return (v - k / 3 + 1) % 1;
+  };
 
-function SceneTrack({ enter, float }: SceneProps) {
-  const plate = useAnimatedStyle(() => {
-    const t = seg(enter.value, 0, 0.3);
-    return { opacity: clamp01(t * 3), transform: [{ scale: mix(0.7, 1, outBack(t)) }] };
-  });
-  return (
-    <>
-      <Animated.View style={[styles.plate, plate]} />
-      <Svg width={D} height={D} style={StyleSheet.absoluteFill}>
-        <Circle cx={DONUT.cx} cy={DONUT.cy} r={DONUT.r} fill="none" stroke={C.mist} strokeWidth={DONUT.w} />
-        {SEGMENTS.map((s, i) => (
-          <DonutSegment key={s.color} i={i} start={s.start} frac={s.frac} color={s.color} enter={enter} />
-        ))}
-      </Svg>
-      <View style={[styles.groundShadow, { left: POSE_X[0] - 32, top: POSE_Y[0] - 5, width: 64 }]} />
-      {TRACK_CHIPS.map((chip, i) => (
-        <Chip key={chip.label} chip={chip} at={0.28 + i * 0.1} dir={i % 2 ? -1 : 1} enter={enter} float={float} />
-      ))}
-    </>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Scene 2: data stays on the phone                                   */
-/* ------------------------------------------------------------------ */
-
-const SHIELD = 'M39 4 L72 16 V44 C72 66 57 80 39 87 C21 80 6 66 6 44 V16 Z';
-const CHECK = 'M24 46 L35 57 L55 35';
-const CHECK_LEN = 46;
-
-function SmsRow({ i, enter }: { i: number; enter: SV }) {
-  const style = useAnimatedStyle(() => {
-    const t = outCubic(seg(enter.value, 0.42 + i * 0.08, 0.68 + i * 0.08));
-    return { opacity: t, transform: [{ translateX: mix(-14, 0, t) }] };
-  });
-  return (
-    <Animated.View style={[styles.smsRow, { top: 140 + i * 24 }, style]}>
-      <View style={styles.smsDot} />
-      <View>
-        <View style={[styles.smsBar, { width: [72, 58, 66][i] }]} />
-        <View style={[styles.smsBarSmall, { width: [40, 50, 34][i] }]} />
-      </View>
-    </Animated.View>
-  );
-}
-
-function ScenePrivacy({ enter, float, spin }: SceneProps) {
-  const ring = useAnimatedStyle(() => ({
-    opacity: seg(enter.value, 0.1, 0.5),
-    transform: [{ rotate: `${spin.value * 360}deg` }],
-  }));
-  const phone = useAnimatedStyle(() => {
-    const t = outCubic(seg(enter.value, 0, 0.4));
-    return { opacity: clamp01(t * 2), transform: [{ translateY: mix(40, 0, t) }] };
-  });
-  const shield = useAnimatedStyle(() => {
-    const t = seg(enter.value, 0.22, 0.55);
-    return { opacity: clamp01(t * 3), transform: [{ scale: mix(0.4, 1, outBack(t)) }] };
-  });
-  const check = useAnimatedProps(() => ({
-    strokeDashoffset: (1 - outCubic(seg(enter.value, 0.5, 0.72))) * CHECK_LEN,
-  }));
-  const pill = useAnimatedStyle(() => {
-    const t = outCubic(seg(enter.value, 0.72, 0.95));
-    return { opacity: t, transform: [{ translateY: mix(8, 0, t) }] };
-  });
-  return (
-    <>
-      <Animated.View style={[styles.ring, ring]}>
-        <Svg width={308} height={308}>
-          <Circle
-            cx={154}
-            cy={154}
-            r={152}
-            fill="none"
-            stroke={C.green}
-            strokeOpacity={0.35}
-            strokeWidth={1.6}
-            strokeDasharray="3 9"
-            strokeLinecap="round"
-          />
-        </Svg>
-      </Animated.View>
-      <View style={[styles.groundShadow, { left: POSE_X[1] - 30, top: POSE_Y[1] - 5, width: 60 }]} />
-      <Animated.View style={[styles.phone, phone]}>
-        <View style={styles.notch} />
-        <View style={styles.shieldGlow} />
-        <Animated.View style={[styles.shield, shield]}>
-          <Svg width={78} height={90} viewBox="0 0 78 90">
-            <Path d={SHIELD} fill={C.green} />
-            <AnimatedPath
-              d={CHECK}
-              fill="none"
-              stroke={C.white}
-              strokeWidth={7}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeDasharray={`${CHECK_LEN} ${CHECK_LEN}`}
-              animatedProps={check}
-            />
-          </Svg>
-        </Animated.View>
-        {[0, 1, 2].map(i => (
-          <SmsRow key={i} i={i} enter={enter} />
-        ))}
-        <Animated.View style={[styles.devicePill, pill]}>
-          <Feather name="check" size={11} color={C.green} />
-          <Text style={styles.devicePillText}>On this device</Text>
-        </Animated.View>
-      </Animated.View>
-      <Badge icon="lock" size={54} x={0} y={86} at={0.55} dir={1} tint={C.green} enter={enter} float={float} />
-      <Badge icon="eye-off" size={46} x={245} y={26} at={0.65} dir={-1} tint={C.body} enter={enter} float={float} />
-    </>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Scene 3: goals that grow                                           */
-/* ------------------------------------------------------------------ */
-
-const BASE = 316; // ground line
-const COIN_TOP = BASE - 24;
-const BARS = [
-  { x: 196, h: 54, color: C.mint },
-  { x: 228, h: 84, color: C.sage },
-  { x: 260, h: 120, color: C.green },
-  { x: 292, h: 164, color: C.greenDeep },
-];
-const TREND = 'M182 268 C222 258 262 222 304 146';
-const TREND_LEN = 200;
-const TREND_HEAD = 'M286 146 L305 143 L304 162';
-const HEAD_LEN = 40;
-const GOAL_BAR_W = 182;
-
-function Coin({ i, enter }: { i: number; enter: SV }) {
-  const style = useAnimatedStyle(() => {
-    const t = seg(enter.value, i * 0.06, 0.2 + i * 0.06);
-    return { opacity: clamp01(t * 4), transform: [{ translateY: mix(-70, 0, outBack(t)) }] };
-  });
-  return (
-    <Animated.View style={[styles.coin, { top: COIN_TOP - i * 15 }, style]}>
-      <View style={styles.coinFace}>{i === 2 && <Text style={styles.coinMark}>₹</Text>}</View>
-    </Animated.View>
-  );
-}
-
-function Bar({ i, x, h, color, enter }: { i: number; x: number; h: number; color: string; enter: SV }) {
-  const style = useAnimatedStyle(() => {
-    const t = seg(enter.value, 0.25 + i * 0.07, 0.6 + i * 0.07);
-    // scale from the bottom edge: move pivot down, scale, move back
+  const bubble = useAnimatedStyle(() => {
+    const u = local(t.value);
     return {
-      transform: [{ translateY: h / 2 }, { scaleY: Math.max(0.001, outBack(t)) }, { translateY: -h / 2 }],
-    };
-  });
-  return <Animated.View style={[styles.bar, { left: x, top: BASE - h, height: h, backgroundColor: color }, style]} />;
-}
-
-function SceneGoals({ enter, float }: SceneProps) {
-  const card = useAnimatedStyle(() => {
-    const t = outCubic(seg(enter.value, 0.05, 0.4));
-    return { opacity: t, transform: [{ translateY: mix(-18, 0, t) + (float.value - 0.5) * 6 }] };
-  });
-  const fill = useAnimatedStyle(() => {
-    const t = outCubic(seg(enter.value, 0.35, 0.85));
-    return { transform: [{ translateX: -GOAL_BAR_W + GOAL_BAR_W * 0.68 * t }] };
-  });
-  const trendHalo = useAnimatedProps(() => ({
-    strokeDashoffset: (1 - outCubic(seg(enter.value, 0.45, 0.8))) * TREND_LEN,
-  }));
-  const trend = useAnimatedProps(() => ({
-    strokeDashoffset: (1 - outCubic(seg(enter.value, 0.45, 0.8))) * TREND_LEN,
-  }));
-  const head = useAnimatedProps(() => ({
-    strokeDashoffset: (1 - outCubic(seg(enter.value, 0.78, 0.9))) * HEAD_LEN,
-  }));
-  const sparkle = useAnimatedStyle(() => {
-    const t = seg(enter.value, 0.85, 1);
-    return { opacity: clamp01(t * 3), transform: [{ rotate: `${float.value * 40}deg` }, { scale: outBack(t) }] };
-  });
-  return (
-    <>
-      <View style={[styles.groundShadow, { left: POSE_X[2] - 56, top: BASE - 6, width: 112, height: 12, borderRadius: 6 }]} />
-      {[0, 1, 2].map(i => (
-        <Coin key={i} i={i} enter={enter} />
-      ))}
-      {BARS.map((b, i) => (
-        <Bar key={b.x} i={i} x={b.x} h={b.h} color={b.color} enter={enter} />
-      ))}
-      <Svg width={D} height={D} style={StyleSheet.absoluteFill}>
-        <AnimatedPath
-          d={TREND}
-          fill="none"
-          stroke={C.bg}
-          strokeWidth={11}
-          strokeLinecap="round"
-          strokeDasharray={`${TREND_LEN} ${TREND_LEN}`}
-          animatedProps={trendHalo}
-        />
-        <AnimatedPath
-          d={TREND}
-          fill="none"
-          stroke={C.ink}
-          strokeWidth={4.5}
-          strokeLinecap="round"
-          strokeDasharray={`${TREND_LEN} ${TREND_LEN}`}
-          animatedProps={trend}
-        />
-        <AnimatedPath
-          d={TREND_HEAD}
-          fill="none"
-          stroke={C.ink}
-          strokeWidth={4.5}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeDasharray={`${HEAD_LEN} ${HEAD_LEN}`}
-          animatedProps={head}
-        />
-      </Svg>
-      <Animated.View style={[styles.goalCard, card]}>
-        <View style={styles.goalIcon}>
-          <Feather name="sun" size={18} color={C.green} />
-        </View>
-        <Text style={styles.goalTitle}>Goa trip</Text>
-        <Text style={styles.goalAmount}>₹34,000 of ₹50,000</Text>
-        <View style={styles.goalTrack}>
-          <Animated.View style={[styles.goalFill, fill]} />
-        </View>
-        <Text style={styles.goalNote}>On track for March</Text>
-      </Animated.View>
-      <Animated.View style={[styles.sparkle, sparkle]}>
-        <Svg width={22} height={22} viewBox="0 0 24 24">
-          <Path d={SPARKLE} fill={C.green} />
-        </Svg>
-      </Animated.View>
-    </>
-  );
-}
-
-const SCENES = [SceneTrack, ScenePrivacy, SceneGoals];
-
-/* ------------------------------------------------------------------ */
-/* The money agent (same character as the intro)                      */
-/* ------------------------------------------------------------------ */
-
-function Agent({ scrollX, W, reduce }: { scrollX: SV; W: number; reduce: boolean }) {
-  const blink = useSharedValue(1);
-  const breath = useSharedValue(0.5);
-  const sway = useSharedValue(0.5);
-  const drop = useSharedValue(reduce ? 1 : 0);
-  const land = useSharedValue(0);
-  const landed = useSharedValue(0);
-
-  useEffect(() => {
-    if (reduce) {
-      drop.value = 1;
-      return;
-    }
-    const close = () => withTiming(0.1, { duration: 70 });
-    const open = () => withTiming(1, { duration: 120 });
-    drop.value = withDelay(150, withTiming(1, { duration: 520, easing: Easing.in(Easing.quad) }));
-    land.value = withDelay(
-      670,
-      withSequence(withTiming(1, { duration: 90 }), withSpring(0, { damping: 7, stiffness: 220 })),
-    );
-    blink.value = withDelay(
-      1400,
-      withRepeat(
-        withSequence(
-          close(), open(),
-          withDelay(3200, close()), open(),
-          withDelay(180, close()), open(),
-          withDelay(2600, withTiming(1, { duration: 1 })),
-        ),
-        -1,
-      ),
-    );
-    breath.value = withRepeat(withTiming(1, { duration: 1800, easing: Easing.inOut(Easing.sin) }), -1, true);
-    sway.value = withRepeat(withTiming(1, { duration: 2300, easing: Easing.inOut(Easing.sin) }), -1, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reduce]);
-
-  // a little squash every time it lands on a page
-  useAnimatedReaction(
-    () => scrollX.value / W,
-    p => {
-      const n = Math.round(p);
-      if (Math.abs(p - n) < 0.015 && n !== landed.value) {
-        landed.value = n;
-        if (!reduce) {
-          land.value = withSequence(withTiming(1, { duration: 90 }), withSpring(0, { damping: 7, stiffness: 220 }));
-        }
-      }
-    },
-    [W, reduce],
-  );
-
-  const position = useAnimatedStyle(() => {
-    const p = Math.min(LAST, Math.max(0, scrollX.value / W));
-    const hop = reduce ? 0 : hopOf(p);
-    const x = interpolate(p, [0, 1, 2], POSE_X);
-    const y = interpolate(p, [0, 1, 2], POSE_Y);
-    const s = interpolate(p, [0, 1, 2], POSE_S);
-    const fall = (1 - drop.value) * -320;
-    return {
-      opacity: drop.value > 0 ? 1 : 0,
+      opacity: kf(u, [0, 0.05, 0.15, 0.19], [0, 1, 1, 0]),
       transform: [
-        { translateX: x - CW / 2 },
-        { translateY: y - CH - hop * 64 + fall },
-        { translateY: CH / 2 },
-        { scale: s },
-        { translateY: -CH / 2 },
-        { rotate: `${hop * 10}deg` },
+        { translateY: kf(u, [0, 0.05, 0.15, 0.19], [-14, 0, 0, 10]) },
+        { scale: kf(u, [0.15, 0.19], [1, 0.96]) },
       ],
     };
   });
-
-  const body = useAnimatedStyle(() => {
-    const hop = reduce ? 0 : hopOf(scrollX.value / W);
-    const v = land.value + (breath.value - 0.5) * 0.08 - hop * 0.3; // > 0 squash, < 0 stretch
+  const scan = useAnimatedStyle(() => {
+    const u = local(t.value);
     return {
-      transform: [{ translateY: CH / 2 }, { scaleX: 1 + 0.2 * v }, { scaleY: 1 - 0.24 * v }, { translateY: -CH / 2 }],
+      opacity: kf(u, [0.06, 0.07, 0.14, 0.15], [0, 1, 1, 0]),
+      transform: [{ translateX: kf(u, [0.06, 0.14], [-40, 300]) }],
     };
   });
-
-  const armL = useAnimatedStyle(() => {
-    const hop = reduce ? 0 : hopOf(scrollX.value / W);
-    return { transform: [{ translateY: -9 }, { rotate: `${25 + hop * 135}deg` }, { translateY: 9 }] };
-  });
-  const armR = useAnimatedStyle(() => {
-    const hop = reduce ? 0 : hopOf(scrollX.value / W);
-    return { transform: [{ translateY: -9 }, { rotate: `${-25 - hop * 135}deg` }, { translateY: 9 }] };
-  });
-  const sprout = useAnimatedStyle(() => {
-    const hop = reduce ? 0 : hopOf(scrollX.value / W);
+  const travel = useAnimatedStyle(() => {
+    const u = local(t.value);
     return {
-      transform: [{ translateY: 8 }, { rotate: `${(sway.value - 0.5) * 12 - hop * 22}deg` }, { translateY: -8 }],
+      opacity: kf(u, [0.15, 0.16, 0.2, 0.21], [0, 1, 1, 0]),
+      transform: [{ translateY: kf(u, [0.15, 0.2], [0, 64]) }],
     };
   });
-  const eye = useAnimatedStyle(() => ({ transform: [{ scaleY: blink.value }] }));
-  const pupil = useAnimatedStyle(() => {
-    const p = scrollX.value / W;
-    const hop = reduce ? 0 : hopOf(p);
-    const look = Math.max(-2.6, Math.min(2.6, (p - landed.value) * 9));
-    return { transform: [{ translateX: look }, { translateY: -hop * 1.8 }] };
+  const row = useAnimatedStyle(() => {
+    const u = local(t.value);
+    return {
+      opacity: kf(u, [0.18, 0.23, 0.31, 0.34], [0, 1, 1, 0]),
+      transform: [
+        { translateY: kf(u, [0.18, 0.23, 0.31, 0.34], [-24, 0, 0, 22]) },
+        { scale: kf(u, [0.18, 0.23, 0.31, 0.34], [0.92, 1, 1, 0.96]) },
+      ],
+    };
   });
-  const mouth = useAnimatedStyle(() => ({
-    opacity: clamp01((hopOf(scrollX.value / W) - 0.2) * 3),
-  }));
-  const smile = useAnimatedStyle(() => ({
-    opacity: 1 - clamp01((hopOf(scrollX.value / W) - 0.2) * 3),
-  }));
+  const tag = useAnimatedStyle(() => {
+    const u = local(t.value);
+    return { transform: [{ scale: kf(u, [0.22, 0.25, 0.27], [0, 1.15, 1]) }] };
+  });
 
   return (
-    <Animated.View style={[styles.agent, position]}>
-      <Animated.View style={[StyleSheet.absoluteFill, body]}>
-        <Animated.View style={[styles.arm, { left: 6 }, armL]} />
-        <Animated.View style={[styles.arm, { left: 48 }, armR]} />
-        <View style={[styles.foot, { left: 16 }]} />
-        <View style={[styles.foot, { left: 31 }]} />
-        <Animated.View style={[styles.sprout, sprout]}>
-          <View style={styles.stem} />
-          <View style={styles.sproutLeaf} />
-        </Animated.View>
-        <View style={styles.agentBody}>
-          <View style={styles.rim} />
-          <View style={styles.gloss} />
-          {[11, 26].map(left => (
-            <Animated.View key={left} style={[styles.eye, { left }, eye]}>
-              <Animated.View style={[styles.pupil, pupil]}>
-                <View style={styles.glint} />
-              </Animated.View>
-            </Animated.View>
-          ))}
-          <View style={[styles.cheek, { left: 6 }]} />
-          <View style={[styles.cheek, { left: 35 }]} />
-          <Animated.View style={[styles.smile, smile]} />
-          <Animated.View style={[styles.mouthOpen, mouth]} />
+    <>
+      <Animated.View style={[styles.sms, bubble]}>
+        <View style={styles.smsHead}>
+          <Feather name="message-square" size={12} color={C.muted} />
+          <Text style={styles.smsFrom}>BANK SMS</Text>
         </View>
+        <Text style={styles.smsText}>{item.sms}</Text>
+        <Animated.View style={[styles.scan, scan]} />
       </Animated.View>
-    </Animated.View>
+
+      <Animated.View style={[styles.travelDot, travel]} />
+
+      <Animated.View style={[styles.txRow, row]}>
+        <View style={styles.txIcon}>
+          <Feather name={item.icon} size={19} color={C.forest} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.txName}>{item.name}</Text>
+          <Text style={[styles.txAmount, { color: item.credit ? C.green : C.body }]}>{item.amount}</Text>
+        </View>
+        <Animated.View style={[styles.tag, tag]}>
+          <Feather name="check" size={11} color={C.lime} />
+          <Text style={styles.tagText}>{item.tag}</Text>
+        </Animated.View>
+      </Animated.View>
+    </>
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* One page                                                           */
-/* ------------------------------------------------------------------ */
-
-type PageProps = {
-  slide: SlideCopy;
-  index: number;
-  W: number;
-  height: number;
-  S: number;
-  scrollX: SV;
-  float: SV;
-  spin: SV;
-  mount: SV;
-  reduce: boolean;
-};
-
-function Page({ slide, index, W, height, S, scrollX, float, spin, mount, reduce }: PageProps) {
-  const enter = useEnter(index, scrollX, W, reduce);
-  const Scene = SCENES[index];
-
-  const scene = useAnimatedStyle(() => {
-    const o = scrollX.value - index * W;
-    const d = Math.min(1, Math.abs(o) / W);
-    return { opacity: 1 - d * 0.5, transform: [{ translateX: o * 0.2 }, { scale: 1 - d * 0.08 }] };
-  });
-  const title = useAnimatedStyle(() => {
-    const o = scrollX.value - index * W;
-    return {
-      opacity: clamp01(1 - (Math.abs(o) / W) * 2.2) * mount.value,
-      transform: [{ translateX: o * 0.35 }, { translateY: (1 - mount.value) * 18 }],
-    };
-  });
-  const body = useAnimatedStyle(() => {
-    const o = scrollX.value - index * W;
-    return {
-      opacity: clamp01(1 - (Math.abs(o) / W) * 2.6) * mount.value,
-      transform: [{ translateX: o * 0.55 }, { translateY: (1 - mount.value) * 26 }],
-    };
-  });
-
+function SceneSorted({ t }: SceneProps) {
   return (
-    <View style={{ width: W, height }}>
-      <Animated.View style={[{ width: S, height: S, marginTop: SCENE_TOP, alignSelf: 'center' }, scene]}>
-        <View style={[styles.stage, { left: (S - D) / 2, top: (S - D) / 2, transform: [{ scale: S / D }] }]}>
-          <Scene enter={enter} float={float} spin={spin} />
-        </View>
-      </Animated.View>
-      <View style={styles.copy}>
-        <Animated.Text style={[styles.title, title]}>{slide.title}</Animated.Text>
-        <Animated.Text style={[styles.body, body]}>{slide.body}</Animated.Text>
+    <View style={styles.stage}>
+      <Glow id="obGlow1" cx={195} cy={190} r={150} />
+      <Svg width={2} height={64} style={{ position: 'absolute', left: 194, top: 144 }}>
+        <Path d="M1 0 V64" stroke={C.dot} strokeWidth={1.5} strokeDasharray="3 5" strokeLinecap="round" />
+      </Svg>
+      <View style={[styles.ghost, { left: 61, top: 304, width: 268, height: 14, opacity: 0.8 }]} />
+      <View style={[styles.ghost, { left: 77, top: 318, width: 236, height: 12, opacity: 0.55 }]} />
+      {SORTED.map((_, k) => (
+        <SortedItem key={k} t={t} k={k} />
+      ))}
+      <View style={styles.pillRow}>
+        <Pill>
+          <View style={styles.greenDot} />
+          <Text style={styles.pillText}>Auto-sorted, no typing</Text>
+        </Pill>
       </View>
     </View>
   );
 }
 
 /* ------------------------------------------------------------------ */
-/* Footer controls                                                    */
+/* Scene 2 · Private                                                  */
 /* ------------------------------------------------------------------ */
+
+const DATA_CHIPS = [
+  { label: 'Bank SMS', icon: 'message-square' as const, fx: -150, fy: -110, mx: -95, my: -70 },
+  { label: 'Balances', icon: 'credit-card' as const, fx: 150, fy: -40, mx: 95, my: -25 },
+  { label: 'Goals', icon: 'target' as const, fx: -140, fy: 120, mx: -90, my: 78 },
+];
+
+const PHONE_CX = 195;
+const PHONE_CY = 170;
+
+function DataChip({ t, k }: { t: SV; k: number }) {
+  const c = DATA_CHIPS[k];
+  const style = useAnimatedStyle(() => {
+    const third = Math.floor(t.value * 3) % 3;
+    const v = (t.value * 3) % 1; // 0 → 1 within this chip's 2 s window
+    const on = third === k ? 1 : 0;
+    const p = ease(kf(v, [0.18, 0.66], [0, 1]));
+    return {
+      opacity: on * kf(v, [0, 0.18, 0.42, 0.66], [0, 1, 1, 0]),
+      transform: [
+        { translateX: v < 0.42 ? kf(v, [0.18, 0.42], [c.fx, c.mx]) : c.mx * (1 - kf(v, [0.42, 0.66], [0, 1])) },
+        { translateY: v < 0.42 ? kf(v, [0.18, 0.42], [c.fy, c.my]) : c.my * (1 - kf(v, [0.42, 0.66], [0, 1])) },
+        { scale: v < 0.42 ? 1 - 0.1 * p : kf(v, [0.42, 0.66], [0.9, 0.3]) },
+      ],
+    };
+  });
+  return (
+    <Animated.View style={[styles.chipAnchor, style]}>
+      <View style={styles.dataChip}>
+        <View style={styles.dataChipIcon}>
+          <Feather name={c.icon} size={11} color={C.forest} />
+        </View>
+        <Text style={styles.dataChipText}>{c.label}</Text>
+      </View>
+    </Animated.View>
+  );
+}
+
+function ScenePrivate({ t }: SceneProps) {
+  const orbit = useAnimatedStyle(() => ({ transform: [{ rotate: `${t.value * 54}deg` }] }));
+  // every chip lands at v = 0.66 of its window: the lock clicks shut, a pulse goes out
+  const shackle = useAnimatedStyle(() => {
+    const v = (t.value * 3) % 1;
+    return { transform: [{ translateY: kf(v, [0, 0.62, 0.68, 0.85, 0.95], [-5, -5, 0, 0, -5]) }] };
+  });
+  const pulse = useAnimatedStyle(() => {
+    const v = (t.value * 3) % 1;
+    return {
+      opacity: kf(v, [0.66, 0.69, 1], [0, 0.55, 0]),
+      transform: [{ scale: kf(v, [0.66, 1], [1, 1.8]) }],
+    };
+  });
+  const screenGlow = useAnimatedStyle(() => {
+    const v = (t.value * 3) % 1;
+    return { opacity: kf(v, [0.6, 0.68, 0.95], [0, 1, 0]) };
+  });
+
+  return (
+    <View style={styles.stage}>
+      <Glow id="obGlow2" cx={PHONE_CX} cy={PHONE_CY} r={150} />
+      <Animated.View style={[styles.orbit, orbit]}>
+        <Svg width={320} height={320}>
+          <Circle cx={160} cy={160} r={150} fill="none" stroke={C.forest} strokeOpacity={0.22} strokeWidth={1.5} strokeDasharray="2 9" strokeLinecap="round" />
+        </Svg>
+      </Animated.View>
+
+      <View style={styles.phone}>
+        <View style={styles.phoneNotch} />
+        <Animated.View style={[styles.phoneGlow, screenGlow]} />
+        <View style={styles.lockWrap}>
+          <Animated.View style={[styles.lockPulse, pulse]} />
+          <View style={styles.lockTile}>
+            <Animated.View style={[styles.shackle, shackle]}>
+              <Svg width={32} height={32} viewBox="0 0 24 24">
+                <Path d="M8 11V7a4 4 0 0 1 8 0v4" fill="none" stroke={C.lime} strokeWidth={2} strokeLinecap="round" />
+              </Svg>
+            </Animated.View>
+            <Svg width={32} height={32} viewBox="0 0 24 24">
+              <Rect x={5} y={11} width={14} height={10} rx={2.5} fill="none" stroke={C.lime} strokeWidth={2} />
+              <Path d="M12 15v2" stroke={C.lime} strokeWidth={2} strokeLinecap="round" />
+            </Svg>
+          </View>
+        </View>
+        <View style={styles.phoneLines}>
+          <View style={styles.phoneLine} />
+          <View style={[styles.phoneLine, { width: '70%' }]} />
+        </View>
+      </View>
+
+      {DATA_CHIPS.map((_, k) => (
+        <DataChip key={k} t={t} k={k} />
+      ))}
+
+      <View style={styles.pillRow}>
+        <Pill dark>
+          <Feather name="shield" size={12} color={C.lime} />
+          <Text style={[styles.pillText, { color: C.lime }]}>Encrypted, on this device</Text>
+        </Pill>
+      </View>
+    </View>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Scene 3 · Goals                                                    */
+/* ------------------------------------------------------------------ */
+
+// flight path: M48 176 C 120 40, 250 20, 342 66
+const P0 = [48, 176];
+const P1 = [120, 40];
+const P2 = [250, 20];
+const P3 = [342, 66];
+const FLIGHT = 'M48 176 C 120 40, 250 20, 342 66';
+const FLIGHT_LEN = 350;
+const SAVED = 0.68;
+const GOAL_R = 32;
+const GOAL_C = 2 * Math.PI * GOAL_R;
+
+const MONTHS = [
+  { label: 'Dec', h: 22, current: false },
+  { label: 'Jan', h: 34, current: false },
+  { label: 'Feb', h: 44, current: false },
+  { label: 'Mar', h: 52, current: true },
+];
+
+/** 0 → SAVED while the plane flies, holds, then everything fades for the next loop. */
+const progressAt = (v: number) => {
+  'worklet';
+  return SAVED * ease(kf(v, [0.06, 0.52], [0, 1]));
+};
+const sceneFade = (v: number) => {
+  'worklet';
+  return kf(v, [0.88, 0.94], [1, 0]);
+};
+
+function MonthBar({ t, i }: { t: SV; i: number }) {
+  const m = MONTHS[i];
+  const style = useAnimatedStyle(() => {
+    const v = t.value;
+    return {
+      opacity: sceneFade(v),
+      transform: [{ scaleY: ease(kf(v, [0.08 + i * 0.02, 0.22 + i * 0.02], [0, 1])) }],
+    };
+  });
+  return (
+    <View style={styles.monthCol}>
+      <View style={{ height: 52, justifyContent: 'flex-end' }}>
+        <Animated.View
+          style={[
+            styles.monthBar,
+            { height: m.h, backgroundColor: m.current ? C.lime : 'rgba(184,243,107,0.35)', transformOrigin: 'bottom' as any },
+            style,
+          ]}
+        />
+      </View>
+      <Text style={styles.monthLabel}>{m.label}</Text>
+    </View>
+  );
+}
+
+function SceneGoals({ t }: SceneProps) {
+  const trail = useAnimatedProps(() => ({
+    strokeDashoffset: FLIGHT_LEN * (1 - progressAt(t.value)),
+    opacity: sceneFade(t.value),
+  }));
+  const plane = useAnimatedStyle(() => {
+    const v = t.value;
+    const s = progressAt(v);
+    const u = 1 - s;
+    const x = u * u * u * P0[0] + 3 * u * u * s * P1[0] + 3 * u * s * s * P2[0] + s * s * s * P3[0];
+    const y = u * u * u * P0[1] + 3 * u * u * s * P1[1] + 3 * u * s * s * P2[1] + s * s * s * P3[1];
+    const dx = 3 * u * u * (P1[0] - P0[0]) + 6 * u * s * (P2[0] - P1[0]) + 3 * s * s * (P3[0] - P2[0]);
+    const dy = 3 * u * u * (P1[1] - P0[1]) + 6 * u * s * (P2[1] - P1[1]) + 3 * s * s * (P3[1] - P2[1]);
+    return {
+      opacity: kf(v, [0.06, 0.09], [0, 1]) * sceneFade(v),
+      transform: [{ translateX: x - 15 }, { translateY: y - 15 }, { rotate: `${Math.atan2(dy, dx)}rad` }],
+    };
+  });
+  const pinPulse = useAnimatedProps(() => {
+    const v = t.value;
+    return { r: kf(v, [0.52, 0.7], [9, 23]), opacity: kf(v, [0.52, 0.54, 0.7], [0, 0.6, 0]) };
+  });
+  const ring = useAnimatedProps(() => ({
+    strokeDashoffset: GOAL_C * (1 - progressAt(t.value)),
+    opacity: sceneFade(t.value),
+  }));
+  const pct = useAnimatedStyle(() => ({ opacity: kf(t.value, [0.08, 0.2], [0, 1]) * sceneFade(t.value) }));
+  const onTrack = useAnimatedStyle(() => {
+    const v = t.value;
+    return {
+      opacity: kf(v, [0.54, 0.6], [0, 1]) * sceneFade(v),
+      transform: [{ translateY: kf(v, [0.54, 0.6], [8, 0]) }, { scale: kf(v, [0.54, 0.6], [0.9, 1]) }],
+    };
+  });
+
+  return (
+    <View style={styles.stage}>
+      <Svg width={STAGE_W} height={200} style={StyleSheet.absoluteFill}>
+        <Path d={FLIGHT} fill="none" stroke={C.dot} strokeWidth={1.6} strokeDasharray="2 7" strokeLinecap="round" />
+        <AnimatedPath
+          d={FLIGHT}
+          fill="none"
+          stroke={C.forest}
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeDasharray={`${FLIGHT_LEN} ${FLIGHT_LEN}`}
+          animatedProps={trail}
+        />
+        <Circle cx={P0[0]} cy={P0[1]} r={4} fill={C.forest} />
+        <AnimatedCircle cx={P3[0]} cy={P3[1]} fill={C.green} animatedProps={pinPulse} />
+        <Circle cx={P3[0]} cy={P3[1]} r={9} fill={C.white} stroke={C.forest} strokeWidth={2} />
+        <Circle cx={P3[0]} cy={P3[1]} r={3.5} fill={C.green} />
+      </Svg>
+      <Animated.View style={[styles.plane, plane]}>
+        <Svg width={15} height={15} viewBox="0 0 24 24">
+          <Path d="M3 11.5L21 4l-5.5 16-3.2-6.6z" fill={C.lime} transform="rotate(22 12 12)" />
+        </Svg>
+      </Animated.View>
+
+      <View style={styles.goalCard}>
+        <View style={styles.goalRing} />
+        <View style={styles.goalHead}>
+          <View style={styles.goalIcon}>
+            <Svg width={16} height={16} viewBox="0 0 24 24">
+              <Path d="M3 11.5L21 4l-5.5 16-3.2-6.6z" fill={C.forest} />
+            </Svg>
+          </View>
+          <View>
+            <Text style={styles.goalName}>Goa trip</Text>
+            <Text style={styles.goalMeta}>₹34,000 of ₹50,000</Text>
+          </View>
+        </View>
+        <View style={styles.months}>
+          {MONTHS.map((_, i) => (
+            <MonthBar key={i} t={t} i={i} />
+          ))}
+        </View>
+        <View style={styles.goalDial}>
+          <Svg width={76} height={76} style={{ transform: [{ rotate: '-90deg' }] }}>
+            <Circle cx={38} cy={38} r={GOAL_R} fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth={6} />
+            <AnimatedCircle
+              cx={38}
+              cy={38}
+              r={GOAL_R}
+              fill="none"
+              stroke={C.lime}
+              strokeWidth={6}
+              strokeLinecap="round"
+              strokeDasharray={`${GOAL_C} ${GOAL_C}`}
+              animatedProps={ring}
+            />
+          </Svg>
+          <Animated.Text style={[styles.goalPct, pct]}>68%</Animated.Text>
+        </View>
+      </View>
+
+      <View style={[styles.pillRow, { top: 362 }]}>
+        <Animated.View style={onTrack}>
+          <Pill>
+            <Feather name="check" size={12} color={C.green} />
+            <Text style={styles.pillText}>On track for March · ₹8,000/month</Text>
+          </Pill>
+        </Animated.View>
+      </View>
+    </View>
+  );
+}
+
+const SCENES = [SceneSorted, ScenePrivate, SceneGoals];
+/** Frame each scene freezes on when Reduce Motion is on. */
+const STILL = [0.26, 0.75, 0.7];
+
+/* ------------------------------------------------------------------ */
+/* Page                                                               */
+/* ------------------------------------------------------------------ */
+
+type PageProps = {
+  slide: SlideCopy;
+  index: number;
+  active: boolean;
+  W: number;
+  height: number;
+  scale: number;
+  scrollX: SV;
+  reduce: boolean;
+  titleFont: object;
+};
+
+function Page({ slide, index, active, W, height, scale, scrollX, reduce, titleFont }: PageProps) {
+  const t = useSharedValue(reduce ? STILL[index] : 0);
+
+  useEffect(() => {
+    if (reduce) {
+      t.value = STILL[index];
+      return;
+    }
+    if (active) {
+      t.value = 0;
+      t.value = withRepeat(withTiming(1, { duration: CYCLE, easing: Easing.linear }), -1, false);
+    } else {
+      cancelAnimation(t);
+      t.value = 0;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, reduce]);
+
+  // parallax: scene and text slide at different speeds as you swipe
+  const scene = useAnimatedStyle(() => {
+    const d = scrollX.value / W - index;
+    return {
+      opacity: interpolate(Math.abs(d), [0, 0.8], [1, 0], Extrapolation.CLAMP),
+      transform: [{ translateX: d * W * 0.25 }],
+    };
+  });
+  const text = useAnimatedStyle(() => {
+    const d = scrollX.value / W - index;
+    return {
+      opacity: interpolate(Math.abs(d), [0, 0.6], [1, 0], Extrapolation.CLAMP),
+      transform: [{ translateX: d * W * 0.4 }],
+    };
+  });
+
+  const Scene = SCENES[index];
+  return (
+    <View style={{ width: W, height }}>
+      <Animated.View style={[{ height: STAGE_H * scale, alignItems: 'center' }, scene]}>
+        <View style={{ width: STAGE_W, height: STAGE_H, transform: [{ scale }], transformOrigin: 'top' as any }}>
+          <Scene t={t} />
+        </View>
+      </Animated.View>
+      <Animated.View style={[styles.copy, text]}>
+        <Text style={[styles.title, titleFont]}>{slide.title}</Text>
+        <Text style={styles.body}>{slide.body}</Text>
+      </Animated.View>
+    </View>
+  );
+}
 
 function Dot({ i, scrollX, W, onPress }: { i: number; scrollX: SV; W: number; onPress: () => void }) {
   const style = useAnimatedStyle(() => {
     const p = scrollX.value / W;
+    const d = Math.abs(p - i);
     return {
-      width: interpolate(p, [i - 1, i, i + 1], [8, 26, 8], Extrapolation.CLAMP),
-      backgroundColor: interpolateColor(p, [i - 1, i, i + 1], [C.dot, C.green, C.dot]),
+      width: interpolate(d, [0, 1], [26, 6], Extrapolation.CLAMP),
+      backgroundColor: d < 0.5 ? C.forest : p > i ? C.muted : C.dot,
     };
   });
   return (
@@ -758,26 +645,18 @@ export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({ navigation }
   const reduce = useReducedMotion();
   const scrollRef = useAnimatedRef<Animated.ScrollView>();
   const scrollX = useSharedValue(0);
-  const float = useSharedValue(0.5);
-  const spin = useSharedValue(0);
   const mount = useSharedValue(reduce ? 1 : 0);
   const press = useSharedValue(1);
   const [index, setIndex] = useState(0);
   const [areaH, setAreaH] = useState(H - insets.top - insets.bottom - HEADER_H - FOOTER_H);
+  const [fontsLoaded] = useFonts({ BricolageGrotesque_800ExtraBold });
+  const titleFont = fontsLoaded ? { fontFamily: 'BricolageGrotesque_800ExtraBold' } : { fontWeight: '800' as const };
 
-  const S = Math.max(180, Math.min(W - 32, 360, areaH - TEXT_H));
-  const stageLeft = (W - S) / 2;
-  const fullBtn = W - 56;
+  const scale = Math.max(0.55, Math.min(W / STAGE_W, (areaH - TEXT_H) / STAGE_H, 1.15));
   const isLast = index === LAST;
 
   useEffect(() => {
-    if (reduce) {
-      mount.value = 1;
-      return;
-    }
-    mount.value = withTiming(1, { duration: 700, easing: Easing.out(Easing.cubic) });
-    float.value = withRepeat(withTiming(1, { duration: 2800, easing: Easing.inOut(Easing.sin) }), -1, true);
-    spin.value = withRepeat(withTiming(1, { duration: 30000, easing: Easing.linear }), -1, false);
+    mount.value = reduce ? 1 : withTiming(1, { duration: 700, easing: Easing.out(Easing.cubic) });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reduce]);
 
@@ -810,7 +689,7 @@ export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({ navigation }
     if (h > 0 && Math.abs(h - areaH) > 1) setAreaH(h);
   };
 
-  /* chrome animations */
+  /* chrome */
   const header = useAnimatedStyle(() => ({
     opacity: mount.value,
     transform: [{ translateY: (1 - mount.value) * -10 }],
@@ -822,46 +701,32 @@ export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({ navigation }
     opacity: mount.value,
     transform: [{ translateY: (1 - mount.value) * 24 }],
   }));
-  const dots = useAnimatedStyle(() => ({
-    opacity: interpolate(scrollX.value / W, [LAST - 1, LAST - 0.6], [1, 0], Extrapolation.CLAMP),
-  }));
   const ring = useAnimatedStyle(() => ({
     opacity: interpolate(scrollX.value / W, [LAST - 1, LAST - 0.55], [1, 0], Extrapolation.CLAMP),
   }));
   const ringProps = useAnimatedProps(() => ({
-    strokeDashoffset: RING_C * (1 - clamp01((scrollX.value / W + 1) / SLIDES.length)),
+    strokeDashoffset: RING_C * (1 - Math.min(1, Math.max(0, (scrollX.value / W + 1) / SLIDES.length))),
   }));
   const button = useAnimatedStyle(() => ({
-    width: interpolate(scrollX.value / W, [LAST - 1, LAST], [BTN, fullBtn], Extrapolation.CLAMP),
+    width: interpolate(scrollX.value / W, [LAST - 1, LAST], [50, PILL_W], Extrapolation.CLAMP),
     transform: [{ scale: press.value }],
   }));
   const label = useAnimatedStyle(() => ({
     opacity: interpolate(scrollX.value / W, [LAST - 0.45, LAST], [0, 1], Extrapolation.CLAMP),
+    maxWidth: interpolate(scrollX.value / W, [LAST - 0.6, LAST], [0, 120], Extrapolation.CLAMP),
   }));
-  const backdrop = useAnimatedStyle(() => ({
-    transform: [{ translateX: interpolate(scrollX.value / W, [0, LAST], [-28, 28], Extrapolation.CLAMP) }],
-  }));
-
-  const glow = W * 1.3;
-  const sceneCenterY = insets.top + HEADER_H + SCENE_TOP + S / 2;
 
   return (
     <View style={[styles.root, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
       <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
 
-      {/* soft light behind the scenes */}
-      <Animated.View
-        pointerEvents="none"
-        style={[{ position: 'absolute', left: W / 2 - glow / 2, top: sceneCenterY - glow / 2 }, backdrop]}
-      >
-        <Glow id="obGlow" size={glow} strength={0.13} />
-      </Animated.View>
-      <View pointerEvents="none" style={{ position: 'absolute', left: -W * 0.6, bottom: -W * 0.7 }}>
-        <Glow id="obGlowLow" size={W * 1.4} strength={0.07} />
+      <View pointerEvents="none" style={[StyleSheet.absoluteFill, { overflow: 'hidden' }]}>
+        <View style={[styles.cornerRing, { width: 360, height: 360, borderRadius: 180, right: -160, top: -170 }]} />
+        <View style={[styles.cornerRing, { width: 300, height: 300, borderRadius: 150, left: -170, bottom: -130 }]} />
       </View>
 
       <Animated.View style={[styles.header, header]}>
-        <RegentWordmark height={30} />
+        <BrandWordmark size={16} />
         <Animated.View style={skip} pointerEvents={isLast ? 'none' : 'auto'}>
           <Pressable
             onPress={finish}
@@ -893,72 +758,64 @@ export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({ navigation }
               key={slide.id}
               slide={slide}
               index={i}
+              active={i === index}
               W={W}
               height={areaH}
-              S={S}
+              scale={scale}
               scrollX={scrollX}
-              float={float}
-              spin={spin}
-              mount={mount}
               reduce={reduce}
+              titleFont={titleFont}
             />
           ))}
         </Animated.ScrollView>
-
-        {/* the agent lives above the pages so it can hop between them */}
-        <View pointerEvents="none" style={[styles.overlay, { left: stageLeft, width: S, height: S }]}>
-          <View style={[styles.stage, { left: (S - D) / 2, top: (S - D) / 2, transform: [{ scale: S / D }] }]}>
-            <Agent scrollX={scrollX} W={W} reduce={reduce} />
-          </View>
-        </View>
       </View>
 
       <Animated.View style={[styles.footer, footer]}>
-        <Animated.View style={[styles.dots, dots]} pointerEvents={isLast ? 'none' : 'auto'}>
+        <View style={styles.dots}>
           {SLIDES.map((s, i) => (
             <Dot key={s.id} i={i} scrollX={scrollX} W={W} onPress={() => goTo(i)} />
           ))}
-        </Animated.View>
+        </View>
 
-        <Animated.View pointerEvents="none" style={[styles.ringWrap, ring]}>
-          <Svg width={80} height={80}>
-            <Circle cx={40} cy={40} r={RING_R} fill="none" stroke={C.line} strokeWidth={3} />
-            <AnimatedCircle
-              cx={40}
-              cy={40}
-              r={RING_R}
-              fill="none"
-              stroke={C.green}
-              strokeWidth={3}
-              strokeLinecap="round"
-              strokeDasharray={`${RING_C} ${RING_C}`}
-              transform="rotate(-90 40 40)"
-              animatedProps={ringProps}
-            />
-          </Svg>
-        </Animated.View>
+        <View style={styles.cta}>
+          <Animated.View pointerEvents="none" style={[styles.ringWrap, ring]}>
+            <Svg width={BTN} height={BTN}>
+              <Circle cx={BTN / 2} cy={BTN / 2} r={RING_R} fill="none" stroke={C.line} strokeWidth={2.5} />
+              <AnimatedCircle
+                cx={BTN / 2}
+                cy={BTN / 2}
+                r={RING_R}
+                fill="none"
+                stroke={C.forest}
+                strokeWidth={2.5}
+                strokeLinecap="round"
+                strokeDasharray={`${RING_C} ${RING_C}`}
+                transform={`rotate(-90 ${BTN / 2} ${BTN / 2})`}
+                animatedProps={ringProps}
+              />
+            </Svg>
+          </Animated.View>
 
-        <Animated.View style={[styles.button, button]}>
-          <Pressable
-            style={StyleSheet.absoluteFill}
-            onPress={isLast ? finish : () => goTo(index + 1)}
-            onPressIn={() => {
-              press.value = withSpring(0.94, { damping: 15, stiffness: 400 });
-            }}
-            onPressOut={() => {
-              press.value = withSpring(1, { damping: 12, stiffness: 300 });
-            }}
-            accessibilityRole="button"
-            accessibilityLabel={isLast ? 'Get started' : 'Next page'}
-          >
-            <Animated.Text style={[styles.buttonLabel, label]} numberOfLines={1}>
-              Get started
-            </Animated.Text>
-            <View style={styles.buttonIcon}>
-              <Feather name="arrow-right" size={22} color={C.white} />
-            </View>
-          </Pressable>
-        </Animated.View>
+          <Animated.View style={[styles.button, button]}>
+            <Pressable
+              style={styles.buttonInner}
+              onPress={isLast ? finish : () => goTo(index + 1)}
+              onPressIn={() => {
+                press.value = withSpring(0.94, { damping: 15, stiffness: 400 });
+              }}
+              onPressOut={() => {
+                press.value = withSpring(1, { damping: 12, stiffness: 300 });
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={isLast ? 'Get started' : 'Next page'}
+            >
+              <Animated.Text style={[styles.buttonLabel, label]} numberOfLines={1}>
+                Get started
+              </Animated.Text>
+              <Feather name="arrow-right" size={20} color={C.lime} />
+            </Pressable>
+          </Animated.View>
+        </View>
       </Animated.View>
     </View>
   );
@@ -968,16 +825,9 @@ export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({ navigation }
 /* Styles                                                             */
 /* ------------------------------------------------------------------ */
 
-const shadow = (opacity: number, radius: number, y: number, elevation: number) => ({
-  shadowColor: C.ink,
-  shadowOpacity: opacity,
-  shadowRadius: radius,
-  shadowOffset: { width: 0, height: y },
-  elevation,
-});
-
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg, overflow: 'hidden' },
+  cornerRing: { position: 'absolute', borderWidth: 1, borderColor: 'rgba(11,61,44,0.07)' },
 
   header: {
     height: HEADER_H,
@@ -986,299 +836,199 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  skip: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 18,
-    backgroundColor: C.white,
-    borderWidth: 1,
-    borderColor: C.line,
-  },
+  skip: { paddingVertical: 8, paddingHorizontal: 4 },
   skipText: { fontSize: 14, fontWeight: '600', color: C.body },
 
   area: { flex: 1 },
-  overlay: { position: 'absolute', top: SCENE_TOP },
-  stage: { position: 'absolute', width: D, height: D },
+  stage: { width: STAGE_W, height: STAGE_H },
+  copy: { paddingHorizontal: 24, paddingTop: 20 },
+  title: { fontSize: 30, lineHeight: 35, color: C.ink, letterSpacing: -0.8 },
+  body: { marginTop: 12, fontSize: 15, lineHeight: 22, color: C.body, maxWidth: 300 },
 
-  copy: { paddingHorizontal: 28, marginTop: 18 },
-  title: { fontSize: 28, lineHeight: 34, fontWeight: '800', color: C.ink, letterSpacing: -0.6 },
-  body: { marginTop: 12, fontSize: 15, lineHeight: 23, color: C.body, maxWidth: 340 },
-
-  footer: { height: FOOTER_H, marginHorizontal: 28, justifyContent: 'center' },
-  dots: { position: 'absolute', left: 0, flexDirection: 'row', alignItems: 'center', gap: 6 },
-  dot: { height: 8, borderRadius: 4 },
-  ringWrap: { position: 'absolute', right: -8, top: (FOOTER_H - 80) / 2, width: 80, height: 80 },
+  footer: {
+    height: FOOTER_H,
+    paddingHorizontal: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  dots: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  dot: { height: 6, borderRadius: 3 },
+  cta: { height: BTN, minWidth: BTN, alignItems: 'flex-end', justifyContent: 'center' },
+  ringWrap: { position: 'absolute', right: 0, top: 0, width: BTN, height: BTN },
   button: {
-    position: 'absolute',
-    right: 0,
-    top: (FOOTER_H - BTN) / 2,
-    height: BTN,
-    borderRadius: BTN / 2,
-    backgroundColor: C.green,
+    marginRight: (BTN - 50) / 2,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: C.forest,
     overflow: 'hidden',
-    shadowColor: C.green,
-    shadowOpacity: 0.35,
+    shadowColor: C.forest,
+    shadowOpacity: 0.28,
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 8 },
     elevation: 6,
   },
-  buttonLabel: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    bottom: 0,
-    textAlign: 'center',
-    textAlignVertical: 'center',
-    lineHeight: BTN,
-    fontSize: 17,
-    fontWeight: '700',
-    color: C.white,
-  },
-  buttonIcon: {
-    position: 'absolute',
-    right: 0,
-    top: 0,
-    width: BTN,
-    height: BTN,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  buttonInner: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 14 },
+  buttonLabel: { fontSize: 16, fontWeight: '700', color: C.lime },
 
-  /* scene parts (stage units) */
-  groundShadow: { position: 'absolute', height: 10, borderRadius: 5, backgroundColor: 'rgba(28,37,46,0.08)' },
-  plate: {
-    position: 'absolute',
-    left: DONUT.cx - 84,
-    top: DONUT.cy - 84,
-    width: 168,
-    height: 168,
-    borderRadius: 84,
-    backgroundColor: C.white,
-    ...shadow(0.06, 18, 8, 3),
-  },
-  chip: {
-    position: 'absolute',
-    width: 172,
-    height: 46,
-    borderRadius: 23,
-    paddingLeft: 8,
-    paddingRight: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: C.white,
-    ...shadow(0.09, 16, 8, 5),
-  },
-  chipIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: C.mist,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  chipLabel: { flex: 1, marginLeft: 8, fontSize: 13, fontWeight: '600', color: C.ink },
-  chipAmount: { fontSize: 13, fontWeight: '700', color: C.ink },
-  badge: {
-    position: 'absolute',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: C.white,
-    ...shadow(0.1, 14, 6, 5),
-  },
+  /* shared scene bits */
+  pillRow: { position: 'absolute', left: 0, right: 0, top: 352, alignItems: 'center' },
+  pill: { height: 30, paddingHorizontal: 14, borderRadius: 15, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  pillLight: { backgroundColor: C.white, borderWidth: 1, borderColor: C.line },
+  pillDark: { backgroundColor: C.forest },
+  pillText: { fontSize: 12.5, fontWeight: '600', color: C.forest },
+  greenDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.green },
 
-  ring: { position: 'absolute', left: 16, top: 11, width: 308, height: 308 },
-  phone: {
+  /* scene 1 */
+  sms: {
     position: 'absolute',
-    left: 100,
-    top: 34,
-    width: 140,
-    height: 262,
-    borderRadius: 30,
+    left: 45,
+    top: 36,
+    width: 300,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    borderBottomRightRadius: 18,
+    borderBottomLeftRadius: 6,
     backgroundColor: C.white,
     borderWidth: 1,
     borderColor: C.line,
-    ...shadow(0.1, 22, 12, 6),
+    overflow: 'hidden',
   },
-  notch: { position: 'absolute', top: 11, left: 50, width: 40, height: 6, borderRadius: 3, backgroundColor: C.line },
-  shieldGlow: {
+  smsHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  smsFrom: { fontSize: 11.5, fontWeight: '600', color: C.muted, letterSpacing: 0.3 },
+  smsText: { marginTop: 6, fontFamily: MONO, fontSize: 12.5, lineHeight: 18, color: C.ink },
+  scan: { position: 'absolute', top: 0, bottom: 0, left: 0, width: 36, backgroundColor: 'rgba(184,243,107,0.45)' },
+  travelDot: { position: 'absolute', left: 191, top: 140, width: 8, height: 8, borderRadius: 4, backgroundColor: C.green },
+  txRow: {
     position: 'absolute',
-    left: 15,
-    top: 20,
-    width: 110,
-    height: 110,
-    borderRadius: 55,
-    backgroundColor: C.mist,
-  },
-  shield: { position: 'absolute', left: 31, top: 30, width: 78, height: 90 },
-  smsRow: { position: 'absolute', left: 18, flexDirection: 'row', alignItems: 'center' },
-  smsDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.green, marginRight: 8 },
-  smsBar: { height: 7, borderRadius: 3.5, backgroundColor: C.line },
-  smsBarSmall: { height: 5, borderRadius: 2.5, backgroundColor: '#eff2f5', marginTop: 4 },
-  devicePill: {
-    position: 'absolute',
-    left: 16,
+    left: 45,
     top: 222,
-    width: 108,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: C.mist,
+    width: 300,
+    height: 72,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    backgroundColor: C.white,
+    borderWidth: 1,
+    borderColor: C.line,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 12,
+    shadowColor: C.forest,
+    shadowOpacity: 0.16,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 6,
+  },
+  txIcon: { width: 42, height: 42, borderRadius: 14, backgroundColor: C.mist, alignItems: 'center', justifyContent: 'center' },
+  txName: { fontSize: 15, fontWeight: '600', color: C.ink },
+  txAmount: { fontSize: 13, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  tag: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    backgroundColor: C.forest,
   },
-  devicePillText: { fontSize: 11, fontWeight: '700', color: C.greenDeep },
-
-  coin: {
+  tagText: { fontSize: 12, fontWeight: '600', color: C.lime },
+  ghost: {
     position: 'absolute',
-    left: POSE_X[2] - 46,
-    width: 92,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: C.greenDeep,
+    backgroundColor: C.white,
+    borderWidth: 1,
+    borderTopWidth: 0,
+    borderColor: C.line,
+    borderBottomLeftRadius: 16,
+    borderBottomRightRadius: 16,
   },
-  coinFace: {
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: C.green,
+
+  /* scene 2 */
+  orbit: { position: 'absolute', left: PHONE_CX - 160, top: PHONE_CY - 155 },
+  phone: {
+    position: 'absolute',
+    left: 125,
+    top: 50,
+    width: 140,
+    height: 250,
+    borderRadius: 30,
+    borderWidth: 2.5,
+    borderColor: C.forest,
+    backgroundColor: C.white,
+    shadowColor: C.forest,
+    shadowOpacity: 0.2,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 14 },
+    elevation: 8,
+  },
+  phoneNotch: { position: 'absolute', alignSelf: 'center', top: 9, width: 34, height: 5, borderRadius: 3, backgroundColor: C.line },
+  phoneGlow: { position: 'absolute', top: 6, left: 6, right: 6, bottom: 6, borderRadius: 24, backgroundColor: 'rgba(184,243,107,0.22)' },
+  lockWrap: { position: 'absolute', left: 33, top: 85, width: 68, height: 68 },
+  lockPulse: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 22, borderWidth: 1.5, borderColor: C.forest },
+  lockTile: { flex: 1, borderRadius: 22, backgroundColor: C.forest, alignItems: 'center', justifyContent: 'center' },
+  shackle: { position: 'absolute', alignSelf: 'center', top: 18 },
+  phoneLines: { position: 'absolute', left: 22, right: 22, bottom: 40, gap: 7 },
+  phoneLine: { height: 6, borderRadius: 3, backgroundColor: C.mist },
+  chipAnchor: { position: 'absolute', left: PHONE_CX, top: PHONE_CY, width: 0, height: 0, alignItems: 'center', justifyContent: 'center' },
+  dataChip: {
+    position: 'absolute',
+    height: 32,
+    paddingLeft: 8,
+    paddingRight: 12,
+    borderRadius: 16,
+    backgroundColor: C.white,
+    borderWidth: 1,
+    borderColor: C.line,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    shadowColor: C.forest,
+    shadowOpacity: 0.14,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
+  },
+  dataChipIcon: { width: 20, height: 20, borderRadius: 10, backgroundColor: C.mist, alignItems: 'center', justifyContent: 'center' },
+  dataChipText: { fontSize: 12.5, fontWeight: '600', color: C.ink },
+
+  /* scene 3 */
+  plane: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: C.forest,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  coinMark: { fontSize: 11, fontWeight: '800', color: C.white },
-  bar: {
-    position: 'absolute',
-    width: 24,
-    borderTopLeftRadius: 8,
-    borderTopRightRadius: 8,
-    borderBottomLeftRadius: 3,
-    borderBottomRightRadius: 3,
   },
   goalCard: {
     position: 'absolute',
-    left: 18,
-    top: 18,
-    width: 210,
-    height: 116,
-    borderRadius: 22,
-    backgroundColor: C.white,
-    ...shadow(0.09, 18, 8, 5),
-  },
-  goalIcon: {
-    position: 'absolute',
-    left: 14,
-    top: 14,
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: C.mist,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  goalTitle: { position: 'absolute', left: 62, top: 14, fontSize: 15, fontWeight: '700', color: C.ink },
-  goalAmount: { position: 'absolute', left: 62, top: 35, fontSize: 12, color: C.muted },
-  goalTrack: {
-    position: 'absolute',
-    left: 14,
-    top: 66,
-    width: GOAL_BAR_W,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: C.mist,
+    left: 30,
+    top: 168,
+    width: 330,
+    height: 176,
+    padding: 20,
+    borderRadius: 26,
+    backgroundColor: C.forest,
     overflow: 'hidden',
+    shadowColor: C.forest,
+    shadowOpacity: 0.3,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 18 },
+    elevation: 10,
   },
-  goalFill: { width: GOAL_BAR_W, height: 8, borderRadius: 4, backgroundColor: C.green },
-  goalNote: { position: 'absolute', left: 14, top: 84, fontSize: 12, fontWeight: '600', color: C.greenDeep },
-  sparkle: { position: 'absolute', left: 307, top: 112, width: 22, height: 22 },
-
-  /* agent (60 × 72 box, feet at the bottom) */
-  agent: { position: 'absolute', left: 0, top: 0, width: CW, height: CH },
-  arm: { position: 'absolute', top: 42, width: 6, height: 18, borderRadius: 3, backgroundColor: C.greenDeep },
-  foot: { position: 'absolute', top: 66, width: 13, height: 6, borderRadius: 3, backgroundColor: C.greenDeep },
-  sprout: { position: 'absolute', left: 18, top: 6, width: 24, height: 16 },
-  stem: {
-    position: 'absolute',
-    left: 10.5,
-    top: 6,
-    width: 3,
-    height: 10,
-    borderRadius: 1.5,
-    backgroundColor: C.greenDeep,
-  },
-  sproutLeaf: {
-    position: 'absolute',
-    left: 12,
-    top: 1,
-    width: 12,
-    height: 7,
-    backgroundColor: C.greenDeep,
-    borderTopLeftRadius: 7,
-    borderBottomRightRadius: 7,
-    borderTopRightRadius: 1,
-    borderBottomLeftRadius: 1,
-    transform: [{ rotate: '-25deg' }],
-  },
-  agentBody: {
-    position: 'absolute',
-    left: 6,
-    top: 20,
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: C.green,
-    overflow: 'hidden',
-  },
-  rim: {
-    position: 'absolute',
-    left: 5,
-    top: 5,
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.3)',
-  },
-  gloss: {
-    position: 'absolute',
-    left: 9,
-    top: 6,
-    width: 12,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: 'rgba(255,255,255,0.45)',
-    transform: [{ rotate: '-30deg' }],
-  },
-  eye: {
-    position: 'absolute',
-    top: 15,
-    width: 11,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: C.white,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  pupil: { width: 5.5, height: 6.5, borderRadius: 3, backgroundColor: C.ink },
-  glint: { position: 'absolute', left: 1, top: 1, width: 2, height: 2, borderRadius: 1, backgroundColor: C.white },
-  cheek: {
-    position: 'absolute',
-    top: 29,
-    width: 7,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: 'rgba(255,255,255,0.3)',
-  },
-  smile: {
-    position: 'absolute',
-    left: 18.5,
-    top: 28,
-    width: 11,
-    height: 6,
-    borderColor: C.ink,
-    borderWidth: 2.4,
-    borderTopWidth: 0,
-    borderBottomLeftRadius: 6,
-    borderBottomRightRadius: 6,
-  },
-  mouthOpen: { position: 'absolute', left: 20, top: 27.5, width: 8, height: 8, borderRadius: 4, backgroundColor: C.ink },
+  goalRing: { position: 'absolute', width: 220, height: 220, borderRadius: 110, borderWidth: 1, borderColor: 'rgba(184,243,107,0.14)', right: -90, top: -110 },
+  goalHead: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  goalIcon: { width: 34, height: 34, borderRadius: 11, backgroundColor: C.lime, alignItems: 'center', justifyContent: 'center' },
+  goalName: { fontSize: 15, fontWeight: '700', color: C.white },
+  goalMeta: { fontSize: 12.5, color: C.mistInk, fontVariant: ['tabular-nums'] },
+  months: { position: 'absolute', left: 20, bottom: 18, flexDirection: 'row', alignItems: 'flex-end', gap: 12 },
+  monthCol: { alignItems: 'center', gap: 6 },
+  monthBar: { width: 14, borderRadius: 7 },
+  monthLabel: { fontSize: 10.5, color: C.mistInk },
+  goalDial: { position: 'absolute', right: 20, bottom: 20, width: 76, height: 76, alignItems: 'center', justifyContent: 'center' },
+  goalPct: { position: 'absolute', fontSize: 18, fontWeight: '800', color: C.white },
 });

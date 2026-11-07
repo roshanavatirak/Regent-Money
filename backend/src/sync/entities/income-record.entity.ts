@@ -35,6 +35,14 @@ export class IncomeRecord {
   @Column({ name: 'bank_profile_id', type: 'text', nullable: true })
   bankProfileId: string | null;
 
+  /** `ref_<reference>` or the SMS text hash; makes re-scanning a credit SMS a no-op. */
+  @Column({ name: 'sms_id', type: 'text', nullable: true })
+  smsId?: string | null;
+
+  /** Hash of the SMS text alone. */
+  @Column({ name: 'content_id', type: 'text', nullable: true })
+  contentId?: string | null;
+
   @Column({ name: 'updated_at', type: 'bigint', transformer: {
     to: (value: number) => value ? String(value) : null,
     from: (value: string) => value ? Number(value) : null

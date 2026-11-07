@@ -66,6 +66,19 @@ function syncNativeAuthCredentials(token: string | null, userId?: string | null)
   }
 }
 
+/**
+ * Marks a 429 from the auth API so screens can show a countdown.
+ * Wait time comes from the body (retryAfterSeconds), then the Retry-After header, else 60s.
+ */
+function applyRateLimit(err: any, response: Response, errData: any) {
+  if (response.status !== 429) return;
+  const fromHeader = Number(response.headers?.get?.('Retry-After'));
+  const seconds = Number(errData?.retryAfterSeconds) || (fromHeader > 0 ? fromHeader : 60);
+  err.rateLimited = true;
+  err.retryAfterSeconds = Math.ceil(seconds);
+  err.message = `Too many attempts. Try again in ${Math.ceil(seconds)}s.`;
+}
+
 export const authService = {
   /**
    * Retrieves the saved access token from local MMKV storage
@@ -159,8 +172,11 @@ export const authService = {
     });
 
     if (!response.ok) {
-      const errData = await response.json();
-      throw new Error(errData.message || 'Failed to sign up.');
+      const errData = await response.json().catch(() => ({}));
+      const err: any = new Error(errData.message || 'Failed to sign up.');
+      err.status = response.status;
+      applyRateLimit(err, response, errData);
+      throw err;
     }
 
     const data = await response.json();
@@ -214,6 +230,7 @@ export const authService = {
       err.remainingMinutes = errData.remainingMinutes;
       err.remainingAttempts = errData.attemptsLeft;
       err.tier = errData.tier;
+      applyRateLimit(err, response, errData);
       throw err;
     }
 

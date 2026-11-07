@@ -244,8 +244,13 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
         });
 
         if (res.ok) {
-          useBankStore.getState().addBankProfileState({
-            id: profileId,
+          // After a reinstall the server keeps the existing profile for this account and returns it;
+          // using its id keeps catch-up and old transactions on the same profile (no ghost copy)
+          const saved = await res.json().catch(() => null);
+          const savedId: string = saved?.id || profileId;
+          const store = useBankStore.getState();
+          const profile = {
+            id: savedId,
             bankName: bank.bankName.trim(),
             accountType: bank.accountType || 'Savings',
             accountNumberSuffix: bank.accountNumberSuffix.trim(),
@@ -253,7 +258,12 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
             lastSyncTimestamp: Date.now(),
             smsSenderId: bank.smsSenderId || undefined,
             smsConsent: true,
-          });
+          };
+          if (store.bankProfiles.some((b: any) => b.id === savedId)) {
+            store.updateBankProfileState(profile);
+          } else {
+            store.addBankProfileState(profile);
+          }
         }
       }
 

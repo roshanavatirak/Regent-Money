@@ -1,6 +1,30 @@
 import { Injectable, Logger, BadRequestException, UnauthorizedException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, In, EntityManager } from 'typeorm';
+import { Repository, DataSource, In, EntityManager, Brackets } from 'typeorm';
+import {
+  classifySms,
+  isSameSms,
+  isSmsIdentity,
+  LedgerRow,
+  SAME_SMS_WINDOW_MS,
+  SmsCandidate,
+  smsContentId,
+  smsReviewKeys,
+} from './sms-dedupe.util';
+
+/** One ledger entry taken from a bank SMS, by the live receiver or an inbox re-scan. */
+interface SmsLedgerItem extends SmsCandidate {
+  type: 'debit' | 'credit';
+  merchant: string;
+  category?: string;
+  isSalary?: boolean;
+}
+
+/**
+ * recorded: new row saved. already_recorded: this SMS was stored before (silent no-op).
+ * review: a different SMS that looks like a double payment, user asked. review_pending: already asked.
+ */
+type SmsOutcome = 'recorded' | 'already_recorded' | 'review' | 'review_pending';
 import { BankProfile } from './entities/bank-profile.entity';
 import { Transaction } from './entities/transaction.entity';
 import { BudgetDeclaration } from './entities/budget-declaration.entity';
@@ -123,6 +147,25 @@ export class SyncService implements OnModuleInit {
       `);
       await this.dataSource.query(`
         ALTER TABLE finance.income_records ADD COLUMN IF NOT EXISTS category TEXT;
+      `);
+      // SMS identity on both ledgers, so a re-scanned SMS is recognised instead of flagged as a duplicate
+      await this.dataSource.query(`
+        ALTER TABLE finance.income_records ADD COLUMN IF NOT EXISTS sms_id TEXT;
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE finance.income_records ADD COLUMN IF NOT EXISTS content_id TEXT;
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE finance.transactions ADD COLUMN IF NOT EXISTS content_id TEXT;
+      `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_income_records_user_sms_id ON finance.income_records(user_id, sms_id);
+      `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_income_records_user_content_id ON finance.income_records(user_id, content_id);
+      `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_transactions_user_content_id ON finance.transactions(user_id, content_id);
       `);
       // Savings Goal enrichments
       await this.dataSource.query(`
@@ -427,7 +470,9 @@ export class SyncService implements OnModuleInit {
           seenTx.add(refKey);
         }
       } else if (tx.smsId && tx.smsId.startsWith('sms_')) {
-        const hashKey = `sms_${tx.bankProfileId}_${tx.smsId}`;
+        // Rows with a content_id hold the exact sent time: identical text at another second is another payment
+        const sentSecond = tx.contentId ? `_${Math.floor(Number(tx.timestamp || 0) / 1000)}` : '';
+        const hashKey = `sms_${tx.bankProfileId}_${tx.smsId}${sentSecond}`;
         if (seenTx.has(hashKey)) {
           isDuplicate = true;
         } else {
@@ -736,6 +781,11 @@ export class SyncService implements OnModuleInit {
   }
 
   async syncOcrTransactions(userId: string, data: OcrSyncDto) {
+    // App builds before /sync/sms-catchup send inbox re-scans here. SMS rows carry a text hash;
+    // statement and screenshot rows never do. Route them to SMS rules (outside the lock: it takes its own).
+    if (data.transactions?.length > 0 && data.transactions.every((t) => !!t.contentId)) {
+      return this.syncSmsCatchup(userId, data);
+    }
     return this.withUserLock(userId, async () => {
       this.logger.log(`Syncing OCR transactions for user ${userId}, bank: ${data.bankProfileId || 'unassigned'}`);
       
@@ -2319,6 +2369,348 @@ export class SyncService implements OnModuleInit {
   /**
    * Directly ingests SMS from native Android receiver without React Native overhead.
    */
+  /**
+   * Loads the rows an SMS batch could match: everything carrying one of its identities
+   * (including deleted rows, so a deleted or dismissed transaction never comes back) and
+   * everything stored around its timestamps.
+   */
+  private async loadSmsLedgerRows(
+    userId: string,
+    ledger: 'transactions' | 'income',
+    items: SmsLedgerItem[],
+  ): Promise<{ entities: Map<string, Transaction | IncomeRecord>; rows: LedgerRow[] }> {
+    const keys = new Set<string>();
+    for (const item of items) {
+      for (const k of smsReviewKeys(item)) keys.add(k);
+      const ref = (item.referenceId || '').trim();
+      if (ref) keys.add(ref);
+    }
+    const times = items.map((i) => i.timestamp);
+    const from = Math.min(...times) - SAME_SMS_WINDOW_MS;
+    const to = Math.max(...times) + SAME_SMS_WINDOW_MS;
+    const keyList = Array.from(keys);
+
+    const repo: Repository<Transaction | IncomeRecord> =
+      ledger === 'transactions' ? (this.transactionRepository as any) : (this.incomeRecordRepository as any);
+    const found = await repo
+      .createQueryBuilder('r')
+      .where('r.userId = :userId', { userId })
+      .andWhere(
+        new Brackets((qb) => {
+          qb.where('r.timestamp BETWEEN :from AND :to', { from: String(from), to: String(to) });
+          if (keyList.length > 0) {
+            qb.orWhere('r.smsId IN (:...keys)', { keys: keyList }).orWhere('r.contentId IN (:...keys)', {
+              keys: keyList,
+            });
+          }
+        }),
+      )
+      .getMany();
+
+    const entities = new Map<string, Transaction | IncomeRecord>();
+    const rows: LedgerRow[] = [];
+    for (const entity of found) {
+      let amount: number | null = entity.amount ?? null;
+      let party: string | null =
+        ledger === 'transactions' ? (entity as Transaction).merchant : (entity as IncomeRecord).source;
+      if (entity.encAmount != null) {
+        try {
+          if (ledger === 'transactions') {
+            const dec = await this.fieldCipherService.readTransactionDualRun(userId, entity as Transaction);
+            amount = dec.amount;
+            party = dec.merchant || party;
+          } else {
+            const dec = await this.fieldCipherService.readIncomeDualRun(userId, entity as IncomeRecord);
+            amount = dec.amount;
+            party = dec.source || party;
+          }
+        } catch {}
+      }
+      entities.set(entity.id, entity);
+      rows.push({
+        id: entity.id,
+        amount,
+        timestamp: Number(entity.timestamp),
+        smsId: entity.smsId ?? null,
+        contentId: entity.contentId ?? null,
+        party,
+        bankProfileId: entity.bankProfileId ?? null,
+        isDeleted: !!entity.isDeleted,
+      });
+    }
+    return { entities, rows };
+  }
+
+  /**
+   * The single SMS ingestion path, shared by the live receiver and inbox re-scans.
+   * - Same SMS already stored → silent no-op (and any stale review for it is closed).
+   * - Row stored before SMS identities existed → claimed: the SMS identity is written onto it.
+   * - A different SMS, same amount and merchant within 2 minutes → one duplicate review, asked once.
+   * - Otherwise → new row.
+   * Callers hold the user lock and apply balance changes for the rows returned in `inserted`.
+   */
+  private async ingestSmsItems(
+    userId: string,
+    ledger: 'transactions' | 'income',
+    rawItems: SmsLedgerItem[],
+    options: { status?: string; preloadedRules?: UserMerchantTag[] } = {},
+  ): Promise<{ outcomes: SmsOutcome[]; inserted: (Transaction | IncomeRecord)[]; insertedTotal: number }> {
+    if (rawItems.length === 0) return { outcomes: [], inserted: [], insertedTotal: 0 };
+
+    // Oldest first, so each SMS claims its own legacy row before a later look-alike can
+    const order = rawItems.map((item, idx) => ({ item, idx })).sort((a, b) => a.item.timestamp - b.item.timestamp);
+    const { rows } = await this.loadSmsLedgerRows(userId, ledger, rawItems);
+    const claimed = new Set<string>();
+    const outcomes: SmsOutcome[] = new Array(rawItems.length);
+    const inserted: (Transaction | IncomeRecord)[] = [];
+    let insertedTotal = 0;
+    const recordedKeys: string[] = [];
+    const repo: Repository<any> = ledger === 'transactions' ? this.transactionRepository : this.incomeRecordRepository;
+
+    for (const { item, idx } of order) {
+      const match = classifySms(rows, item, claimed);
+
+      if (match.kind === 'same' || match.kind === 'legacy') {
+        claimed.add(match.row.id);
+        // Write the SMS identity onto the row so future scans match it directly
+        const patch: { smsId?: string; contentId?: string } = {};
+        if (item.contentId && !match.row.contentId) patch.contentId = item.contentId;
+        if (item.smsId && !isSmsIdentity(match.row.smsId)) patch.smsId = item.smsId;
+        if (Object.keys(patch).length > 0) {
+          await repo.update({ id: match.row.id, userId }, patch);
+          if (patch.contentId) match.row.contentId = patch.contentId;
+          if (patch.smsId) match.row.smsId = patch.smsId;
+        }
+        recordedKeys.push(...smsReviewKeys(item));
+        outcomes[idx] = 'already_recorded';
+        continue;
+      }
+
+      if (match.kind === 'duplicate') {
+        const keys = smsReviewKeys(item);
+        const previous = await this.notificationsService.findDuplicateReviews(userId, keys).catch(() => []);
+        if (previous.length > 0) {
+          outcomes[idx] = 'review_pending';
+          continue;
+        }
+        await this.sendSmsDuplicateReview(userId, item, ledger).catch((err) =>
+          this.logger.warn(`Failed to dispatch duplicate alert: ${err.message}`),
+        );
+        outcomes[idx] = 'review';
+        continue;
+      }
+
+      const entity = await this.buildSmsLedgerEntity(userId, ledger, item, options);
+      inserted.push(entity);
+      insertedTotal += item.amount;
+      claimed.add(entity.id);
+      rows.push({
+        id: entity.id,
+        amount: item.amount,
+        timestamp: item.timestamp,
+        smsId: item.smsId ?? null,
+        contentId: item.contentId ?? null,
+        party: item.merchant,
+        bankProfileId: item.bankProfileId ?? null,
+        isDeleted: false,
+      });
+      outcomes[idx] = 'recorded';
+    }
+
+    if (inserted.length > 0) {
+      await repo.save(inserted);
+    }
+    if (recordedKeys.length > 0) {
+      await this.notificationsService.resolveStaleDuplicateReviews(userId, recordedKeys).catch(() => 0);
+    }
+    return { outcomes, inserted, insertedTotal };
+  }
+
+  /** Creates (unsaved) an encrypted ledger row for an SMS, carrying its identity. */
+  private async buildSmsLedgerEntity(
+    userId: string,
+    ledger: 'transactions' | 'income',
+    item: SmsLedgerItem,
+    options: { status?: string; preloadedRules?: UserMerchantTag[]; isDeleted?: boolean; idPrefix?: string } = {},
+  ): Promise<Transaction | IncomeRecord> {
+    const isDeleted = !!options.isDeleted;
+    if (ledger === 'transactions') {
+      const txId = (options.idPrefix || 'tx_sms_') + Math.random().toString(36).substr(2, 9);
+      const category =
+        item.category ||
+        (item.merchant ? await this.classifyCategory(item.merchant, userId, options.preloadedRules) : 'miscellaneous');
+      const enc = await this.fieldCipherService.encryptTransactionFields(userId, txId, {
+        amount: item.amount,
+        merchant: item.merchant || 'Merchant',
+      });
+      const tx = this.transactionRepository.create({
+        id: txId,
+        userId,
+        amount: null as any,
+        category,
+        merchant: null as any,
+        encAmount: enc.encAmount,
+        encMerchant: enc.encMerchant,
+        merchantIdx: enc.merchantIdx,
+        rowVersion: enc.rowVersion,
+        timestamp: item.timestamp,
+        bankProfileId: item.bankProfileId ?? null,
+        smsId: item.smsId || item.contentId || undefined,
+        contentId: item.contentId ?? null,
+        isAnomaly: item.amount > 5000,
+        status: options.status || 'cleared',
+        updatedAt: Date.now(),
+        isDeleted,
+      });
+      return tx;
+    }
+
+    const incId = (options.idPrefix || 'income_sms_') + Math.random().toString(36).substr(2, 9);
+    const enc = await this.fieldCipherService.encryptIncomeFields(userId, incId, {
+      amount: item.amount,
+      source: item.merchant || 'Direct Credit',
+    });
+    return this.incomeRecordRepository.create({
+      id: incId,
+      userId,
+      amount: null as any,
+      source: null as any,
+      encAmount: enc.encAmount,
+      encSource: enc.encSource,
+      sourceIdx: enc.sourceIdx,
+      rowVersion: enc.rowVersion,
+      category: item.category ? item.category.toLowerCase() : item.isSalary ? 'Salary' : 'Other Income',
+      timestamp: item.timestamp,
+      bankProfileId: item.bankProfileId ?? null,
+      smsId: item.smsId || item.contentId || null,
+      contentId: item.contentId ?? null,
+      updatedAt: Date.now(),
+      isDeleted,
+    });
+  }
+
+  /** "Did you pay twice?" for a second, distinct SMS that matches an existing payment. */
+  private async sendSmsDuplicateReview(userId: string, item: SmsLedgerItem, ledger: 'transactions' | 'income') {
+    const timeStr = new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const isCredit = item.type === 'credit';
+    await this.notificationsService.sendNotification(userId, {
+      title: `Potential Duplicate: ₹${item.amount}`,
+      body: isCredit
+        ? `We received another ₹${item.amount} credit from ${item.merchant || 'Direct Credit'} around ${timeStr}. Add this income?`
+        : `We detected another ₹${item.amount} payment to ${item.merchant || 'Merchant'} around ${timeStr}. Was this a second payment?`,
+      type: 'review',
+      payload: {
+        action: 'duplicate_transaction_review',
+        source: 'sms',
+        ledger,
+        transactionData: {
+          amount: item.amount,
+          type: item.type,
+          merchant: item.merchant || (isCredit ? 'Direct Credit' : 'Merchant'),
+          category: item.category,
+          timestamp: item.timestamp,
+          bankProfileId: item.bankProfileId ?? null,
+          smsId: item.smsId || item.contentId,
+          contentId: item.contentId,
+          referenceId: item.referenceId || undefined,
+          source: 'sms',
+        },
+      },
+    });
+  }
+
+  /**
+   * Inbox re-scan (manual 48h sync, 30-day setup, app resume). Uses SMS identity rules,
+   * never statement-upload rules, so re-reading an SMS can't raise a review.
+   */
+  async syncSmsCatchup(userId: string, data: OcrSyncDto) {
+    return this.withUserLock(userId, async () => {
+      const isUnassigned = !data.bankProfileId || data.bankProfileId === 'unassigned';
+      let bank: BankProfile | null = null;
+      if (!isUnassigned) {
+        bank = await this.bankProfileRepository.findOne({
+          where: { id: data.bankProfileId, userId, isDeleted: false },
+        });
+        if (!bank) {
+          throw new BadRequestException('Bank account profile not found.');
+        }
+      }
+      const bankProfileId = bank ? bank.id : null;
+
+      const toItem = (t: OcrSyncDto['transactions'][number]): SmsLedgerItem | null => {
+        const amount = parseFloat(String(t.amount));
+        if (isNaN(amount) || amount <= 0) return null;
+        let timestamp = Number(t.timestamp);
+        if (!timestamp || isNaN(timestamp)) {
+          timestamp = new Date(`${t.date}T${(t.time || '12:00:00').trim()}`).getTime();
+        }
+        if (isNaN(timestamp)) return null;
+        const ref = t.referenceId ? String(t.referenceId).trim() : undefined;
+        return {
+          type: t.type,
+          amount,
+          merchant: t.merchant || '',
+          category: t.category,
+          timestamp,
+          referenceId: ref,
+          smsId: t.smsId || (ref ? `ref_${ref}` : t.contentId),
+          contentId: t.contentId,
+          bankProfileId,
+        };
+      };
+      const items = data.transactions.map(toItem).filter((i): i is SmsLedgerItem => !!i);
+
+      const preloadedRules = await this.userMerchantTagRepository.find({ where: { userId } }).catch(() => []);
+      const debits = await this.ingestSmsItems(
+        userId,
+        'transactions',
+        items.filter((i) => i.type === 'debit'),
+        { preloadedRules },
+      );
+      const credits = await this.ingestSmsItems(
+        userId,
+        'income',
+        items.filter((i) => i.type === 'credit'),
+        { preloadedRules },
+      );
+
+      const addedTransactionsCount = debits.inserted.length;
+      const addedIncomeCount = credits.inserted.length;
+      const all = [...debits.outcomes, ...credits.outcomes];
+
+      if (bank) {
+        if (data.applyBalanceChange === false) {
+          // Balance left as is
+        } else if (data.updatedBalance !== undefined && data.updatedBalance !== null && !isNaN(Number(data.updatedBalance))) {
+          // Newest available balance stated by the bank in the scanned SMS
+          bank.currentBalance = Math.round(parseFloat(String(data.updatedBalance)) * 100) / 100;
+          bank.lastSyncTimestamp = Date.now();
+          bank.updatedAt = Date.now();
+          await this.bankProfileRepository.save(bank);
+        } else if (addedTransactionsCount > 0 || addedIncomeCount > 0) {
+          // Only rows actually inserted move the balance
+          const change = credits.insertedTotal - debits.insertedTotal;
+          if (change !== 0) {
+            bank.currentBalance = Math.round((parseFloat(String(bank.currentBalance || 0)) + change) * 100) / 100;
+            bank.lastSyncTimestamp = Date.now();
+            bank.updatedAt = Date.now();
+            await this.bankProfileRepository.save(bank);
+          }
+        }
+      }
+
+      await this.invalidateUserSyncCache(userId);
+      return {
+        success: true,
+        addedTransactionsCount,
+        addedIncomeCount,
+        alreadyRecordedCount: all.filter((o) => o === 'already_recorded').length,
+        reviewCount: all.filter((o) => o === 'review').length,
+        updatedBalance: bank ? bank.currentBalance : null,
+      };
+    });
+  }
+
   async ingestDirectSms(userId: string, data: DirectSmsDto) {
     return this.withUserLock(userId, async () => {
     this.logger.log(`Direct native SMS ingestion for user ${userId} from ${data.sender}`);
@@ -2377,59 +2769,42 @@ export class SyncService implements OnModuleInit {
     }
 
     const txTime = data.timestamp && !isNaN(Number(data.timestamp)) ? Number(data.timestamp) : Date.now();
-    const parsedDate = new Date(txTime);
-    const startOfDay = new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate(), 0, 0, 0, 0).getTime();
-    const endOfDay = new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate(), 23, 59, 59, 999).getTime();
 
     const incomingRef = parsed.referenceId;
     let directSmsId: string;
+    // Legacy apps send the text; current apps send the phone-computed hash (same algorithm)
+    const contentId = data.contentId || (data.body ? smsContentId(data.body) : undefined);
     if (incomingRef) {
       directSmsId = `ref_${incomingRef}`;
     } else if (data.smsId) {
-      // Phone-computed hash of the message text (same algorithm as below), so the text itself is never sent
       directSmsId = data.smsId;
     } else {
-      const cleanBody = (data.body || '').replace(/\s+/g, ' ').trim();
-      let bodyHash = 0;
-      for (let i = 0; i < cleanBody.length; i++) {
-        bodyHash = ((bodyHash << 5) - bodyHash) + cleanBody.charCodeAt(i);
-        bodyHash |= 0;
-      }
-      directSmsId = `sms_${Math.abs(bodyHash)}`;
+      directSmsId = contentId || smsContentId(data.body || '');
     }
 
+    const smsItem: SmsLedgerItem = {
+      type: parsed.type,
+      amount: parsed.amount,
+      merchant: parsed.merchant || '',
+      isSalary: parsed.isSalary,
+      timestamp: txTime,
+      referenceId: incomingRef,
+      smsId: directSmsId,
+      contentId,
+      bankProfileId: matchedBank ? matchedBank.id : null,
+    };
+
     if (!matchedBank) {
-      // Record transaction into Review Queue (bankProfileId: null) without modifying any bank balances
-      const txId = 'tx_direct_' + Math.random().toString(36).substr(2, 9);
-      const predictedCategory = parsed.merchant
-        ? await this.classifyCategory(parsed.merchant, userId)
-        : 'miscellaneous';
-
-      const enc = await this.fieldCipherService.encryptTransactionFields(
-        userId,
-        txId,
-        { amount: parsed.amount, merchant: parsed.merchant },
-      );
-
-      const newTx = this.transactionRepository.create({
-        id: txId,
-        userId,
-        amount: null as any,
-        category: predictedCategory,
-        merchant: null as any,
-        encAmount: enc.encAmount,
-        encMerchant: enc.encMerchant,
-        merchantIdx: enc.merchantIdx,
-        rowVersion: enc.rowVersion,
-        timestamp: txTime,
-        bankProfileId: null,
-        smsId: directSmsId,
-        isAnomaly: parsed.amount > 5000,
-        status: 'pending_review',
-        updatedAt: Date.now(),
-        isDeleted: false,
-      });
-      await this.transactionRepository.save(newTx);
+      // Review Queue (bankProfileId: null) without touching any bank balance; a retried SMS is still a no-op
+      const { outcomes } = await this.ingestSmsItems(userId, 'transactions', [smsItem], { status: 'pending_review' });
+      if (outcomes[0] !== 'recorded') {
+        return {
+          success: true,
+          duplicate: true,
+          idempotent: outcomes[0] === 'already_recorded',
+          message: outcomes[0] === 'already_recorded' ? 'Transaction already recorded' : 'Potential duplicate queued for review',
+        };
+      }
       await this.invalidateUserSyncCache(userId);
 
       if (parsed.isDebitCard && parsed.type === 'debit' && /^\d{4}$/.test(parsedSuffix) && candidateBanks.length > 0) {
@@ -2451,221 +2826,30 @@ export class SyncService implements OnModuleInit {
       };
     }
 
-    const [existingTxs, existingIncome] = await Promise.all([
-      this.transactionRepository.find({
-        where: { userId, bankProfileId: matchedBank.id },
-      }),
-      this.incomeRecordRepository.find({
-        where: { userId, bankProfileId: matchedBank.id },
-      }),
-    ]);
+    const ledger = parsed.type === 'debit' ? 'transactions' : 'income';
+    const { outcomes } = await this.ingestSmsItems(userId, ledger, [smsItem]);
+    const outcome = outcomes[0];
 
-    for (const tx of existingTxs) {
-      if (tx.encAmount != null) {
-        try {
-          const dec = await this.fieldCipherService.readTransactionDualRun(userId, tx);
-          tx.amount = dec.amount;
-          if (dec.merchant) tx.merchant = dec.merchant;
-        } catch {}
-      }
+    if (outcome === 'already_recorded') {
+      return {
+        success: true,
+        duplicate: true,
+        idempotent: true,
+        message: parsed.type === 'debit' ? 'Transaction already recorded' : 'Income already recorded',
+      };
     }
-    for (const inc of existingIncome) {
-      if (inc.encAmount != null) {
-        try {
-          const dec = await this.fieldCipherService.readIncomeDualRun(userId, inc);
-          inc.amount = dec.amount;
-          if (dec.source) inc.source = dec.source;
-        } catch {}
-      }
+    if (outcome === 'review' || outcome === 'review_pending') {
+      return { success: true, duplicate: true, message: 'Potential duplicate queued for review' };
     }
 
-    let ingested = false;
+    const ingested = true;
     let newBalance = parseFloat(String(matchedBank.currentBalance || 0));
-
-    if (parsed.type === 'debit') {
-      const isAlreadyIngested = existingTxs.some((tx) => {
-        if (incomingRef && (tx.smsId === `ref_${incomingRef}` || (tx as any).referenceId === incomingRef)) {
-          return true;
-        }
-        if (tx.smsId && (tx.smsId === directSmsId || tx.smsId === data.contentId)) {
-          return true;
-        }
-        return false;
-      });
-
-      if (isAlreadyIngested) {
-        return { success: true, duplicate: true, idempotent: true, message: 'Transaction already recorded' };
-      }
-
-      const isDuplicate = existingTxs.some((tx) => {
-        if (incomingRef && tx.smsId && tx.smsId.startsWith('ref_') && tx.smsId !== `ref_${incomingRef}`) {
-          return false;
-        }
-
-        const t = Number(tx.timestamp);
-        const sameAmount = Math.abs(tx.amount - parsed.amount) < 0.01;
-        const isSameDay = (t >= startOfDay && t <= endOfDay) || Math.abs(t - txTime) < 86400000;
-        if (!sameAmount || !isSameDay) return false;
-
-        // 2. Different merchant is NEVER a duplicate
-        const normExisting = (tx.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-        const normIncoming = (parsed.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-        if (normExisting && normIncoming && normExisting !== normIncoming) {
-          return false;
-        }
-
-        // 3. If same merchant and same amount, only duplicate if timestamps are within 5 seconds with same SMS ID
-        return Math.abs(t - txTime) < 5000 && tx.smsId === directSmsId;
-      });
-
-      if (isDuplicate) {
-        // Dispatch interactive review notification rather than dropping silently
-        const timeStr = new Date(txTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        this.notificationsService.sendNotification(userId, {
-          title: `Potential Duplicate: ₹${parsed.amount}`,
-          body: `We detected another ₹${parsed.amount} payment to ${parsed.merchant || 'Merchant'} around ${timeStr}. Was this a second payment?`,
-          type: 'review',
-          payload: {
-            action: 'duplicate_transaction_review',
-            source: 'sms',
-            transactionData: {
-              amount: parsed.amount,
-              type: 'debit',
-              merchant: parsed.merchant || 'Merchant',
-              timestamp: txTime,
-              bankProfileId: matchedBank ? matchedBank.id : null,
-              smsId: directSmsId,
-            },
-          },
-        }).catch((err) => this.logger.warn(`Failed to dispatch duplicate alert: ${err.message}`));
-
-        return { success: true, duplicate: true, message: 'Potential duplicate queued for review' };
-      }
-
-      const txId = 'tx_direct_' + Math.random().toString(36).substr(2, 9);
-      const predictedCategory = parsed.merchant
-        ? await this.classifyCategory(parsed.merchant, userId)
-        : 'miscellaneous';
-
-      const enc = await this.fieldCipherService.encryptTransactionFields(
-        userId,
-        txId,
-        { amount: parsed.amount, merchant: parsed.merchant },
-      );
-
-      const newTx = this.transactionRepository.create({
-        id: txId,
-        userId,
-        amount: null as any,
-        category: predictedCategory,
-        merchant: null as any,
-        encAmount: enc.encAmount,
-        encMerchant: enc.encMerchant,
-        merchantIdx: enc.merchantIdx,
-        rowVersion: enc.rowVersion,
-        timestamp: txTime,
-        bankProfileId: matchedBank.id,
-        smsId: directSmsId,
-        isAnomaly: parsed.amount > 5000,
-        status: 'cleared',
-        updatedAt: Date.now(),
-        isDeleted: false,
-      });
-
-      await this.transactionRepository.save(newTx);
-      if (parsed.availableBalance !== undefined && !isNaN(parsed.availableBalance) && parsed.availableBalance >= 0) {
-        newBalance = parsed.availableBalance;
-      } else {
-        newBalance = newBalance - parsed.amount;
-      }
-      ingested = true;
+    if (parsed.availableBalance !== undefined && !isNaN(parsed.availableBalance) && parsed.availableBalance >= 0) {
+      newBalance = parsed.availableBalance;
+    } else if (parsed.type === 'debit') {
+      newBalance = newBalance - parsed.amount;
     } else {
-      const isAlreadyIngested = existingIncome.some((inc) => {
-        if (incomingRef && ((inc as any).smsId === `ref_${incomingRef}` || (inc as any).referenceId === incomingRef)) {
-          return true;
-        }
-        if ((inc as any).smsId && ((inc as any).smsId === directSmsId || (inc as any).smsId === data.contentId)) {
-          return true;
-        }
-        return false;
-      });
-
-      if (isAlreadyIngested) {
-        return { success: true, duplicate: true, idempotent: true, message: 'Income already recorded' };
-      }
-
-      const isDuplicate = existingIncome.some((inc) => {
-        if (incomingRef && (inc as any).smsId && (inc as any).smsId.startsWith('ref_') && (inc as any).smsId !== `ref_${incomingRef}`) {
-          return false;
-        }
-
-        const t = Number(inc.timestamp);
-        const sameAmount = Math.abs(inc.amount - parsed.amount) < 0.01;
-        const isSameDay = (t >= startOfDay && t <= endOfDay) || Math.abs(t - txTime) < 86400000;
-        if (!sameAmount || !isSameDay) return false;
-
-        const normExisting = (inc.source || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-        const normIncoming = (parsed.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-        if (normExisting && normIncoming && normExisting !== normIncoming) {
-          return false;
-        }
-
-        return Math.abs(t - txTime) < 5000 && (inc as any).smsId === directSmsId;
-      });
-
-      if (isDuplicate) {
-        const timeStr = new Date(txTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        this.notificationsService.sendNotification(userId, {
-          title: `Potential Duplicate: ₹${parsed.amount}`,
-          body: `We detected another ₹${parsed.amount} credit from ${parsed.merchant || 'Direct Credit'} around ${timeStr}. Add this income?`,
-          type: 'review',
-          payload: {
-            action: 'duplicate_transaction_review',
-            source: 'sms',
-            transactionData: {
-              amount: parsed.amount,
-              type: 'credit',
-              merchant: parsed.merchant || 'Direct Credit',
-              timestamp: txTime,
-              bankProfileId: matchedBank ? matchedBank.id : null,
-              smsId: directSmsId,
-            },
-          },
-        }).catch((err) => this.logger.warn(`Failed to dispatch duplicate alert: ${err.message}`));
-
-        return { success: true, duplicate: true, message: 'Potential duplicate queued for review' };
-      }
-
-      const incId = 'income_direct_' + Math.random().toString(36).substr(2, 9);
-      const enc = await this.fieldCipherService.encryptIncomeFields(
-        userId,
-        incId,
-        { amount: parsed.amount, source: parsed.merchant },
-      );
-
-      const newInc = this.incomeRecordRepository.create({
-        id: incId,
-        userId,
-        amount: null as any,
-        source: null as any,
-        encAmount: enc.encAmount,
-        encSource: enc.encSource,
-        sourceIdx: enc.sourceIdx,
-        rowVersion: enc.rowVersion,
-        category: parsed.isSalary ? 'Salary' : 'Other Income',
-        timestamp: txTime,
-        bankProfileId: matchedBank.id,
-        updatedAt: Date.now(),
-        isDeleted: false,
-      });
-
-      await this.incomeRecordRepository.save(newInc);
-      if (parsed.availableBalance !== undefined && !isNaN(parsed.availableBalance) && parsed.availableBalance >= 0) {
-        newBalance = parsed.availableBalance;
-      } else {
-        newBalance += parsed.amount;
-      }
-      ingested = true;
+      newBalance += parsed.amount;
     }
 
     if (ingested && matchedBank) {
@@ -2838,17 +3022,67 @@ export class SyncService implements OnModuleInit {
    * Interactively resolves a potential duplicate transaction flagged during SMS, OCR, or Statement processing.
    */
   async confirmDuplicateTransaction(userId: string, dto: ConfirmDuplicateDto) {
+    return this.withUserLock(userId, () => this.confirmDuplicateTransactionLocked(userId, dto));
+  }
+
+  private async confirmDuplicateTransactionLocked(userId: string, dto: ConfirmDuplicateDto) {
     this.logger.log(`User ${userId} resolving duplicate notification ${dto.notificationId} with decision: ${dto.decision}`);
 
-    if (dto.decision === 'add') {
-      const txData = dto.transactionData;
+    // The server's copy of the review is authoritative; a second tap on an answered review does nothing
+    const stored = dto.notificationId
+      ? await this.notificationsService.findNotification(userId, dto.notificationId).catch(() => null)
+      : null;
+    if (stored?.payload?.resolved) {
+      return { success: true, decision: stored.payload.decision, message: 'This review was already answered.' };
+    }
+    const txData: any = { ...(dto.transactionData || {}), ...(stored?.payload?.transactionData || {}) };
+
+    // Reviews raised from an SMS carry its identity. Storing it with the answer means the same SMS
+    // is recognised on every later scan and the question is never asked again.
+    const smsItem: SmsLedgerItem | null =
+      txData.amount && txData.type && (isSmsIdentity(txData.smsId) || txData.contentId)
+        ? {
+            type: txData.type,
+            amount: parseFloat(String(txData.amount)),
+            merchant: txData.merchant || '',
+            category: txData.category,
+            timestamp: Number(txData.timestamp) || Date.now(),
+            referenceId: txData.referenceId,
+            smsId: isSmsIdentity(txData.smsId) ? txData.smsId : txData.contentId,
+            contentId: txData.contentId,
+            bankProfileId: txData.bankProfileId ?? null,
+          }
+        : null;
+    const smsLedger = smsItem ? (smsItem.type === 'debit' ? 'transactions' : 'income') : null;
+    const smsAlreadyStored = smsItem
+      ? (await this.loadSmsLedgerRows(userId, smsLedger!, [smsItem])).rows.some((row) =>
+          isSameSms(row, smsItem),
+        )
+      : false;
+
+    if (dto.decision === 'ignore' && smsItem && !smsAlreadyStored) {
+      // Dismissal is remembered as a deleted row with the SMS identity: never shown, never re-asked
+      const tombstone = await this.buildSmsLedgerEntity(userId, smsLedger!, smsItem, {
+        isDeleted: true,
+        idPrefix: smsLedger === 'transactions' ? 'tx_dismissed_' : 'income_dismissed_',
+      });
+      if (smsLedger === 'transactions') {
+        await this.transactionRepository.save(tombstone as Transaction);
+      } else {
+        await this.incomeRecordRepository.save(tombstone as IncomeRecord);
+      }
+    }
+
+    if (dto.decision === 'add' && !smsAlreadyStored) {
       if (!txData || !txData.amount || !txData.type) {
         throw new BadRequestException('Transaction details are required to confirm adding this transaction.');
       }
 
       const amount = parseFloat(String(txData.amount));
       let txTime = txData.timestamp && !isNaN(Number(txData.timestamp)) ? Number(txData.timestamp) : Date.now();
-      const uniqueConfirmedSmsId = `user_confirmed_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+      const uniqueConfirmedSmsId =
+        smsItem?.smsId || `user_confirmed_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+      const confirmedContentId = smsItem?.contentId ?? null;
 
       let bank: BankProfile | null = null;
       if (txData.bankProfileId) {
@@ -2860,7 +3094,8 @@ export class SyncService implements OnModuleInit {
       if (txData.type === 'debit') {
         // Prevent timestamp collisions: if an existing transaction already occupies this exact millisecond,
         // offset by +1 second (1000 ms) so the confirmed duplicate sits immediately adjacent to the sister transaction.
-        let collision = await this.transactionRepository.findOne({
+        // An SMS keeps its exact sent time: that time is part of how a re-scan recognises it.
+        let collision = smsItem ? null : await this.transactionRepository.findOne({
           where: { userId, timestamp: txTime, isDeleted: false },
         });
         while (collision) {
@@ -2890,6 +3125,7 @@ export class SyncService implements OnModuleInit {
           timestamp: txTime,
           bankProfileId: bank ? bank.id : null,
           smsId: uniqueConfirmedSmsId,
+          contentId: confirmedContentId,
           isAnomaly: amount > 5000,
           status: 'cleared',
           updatedAt: Date.now(),
@@ -2909,7 +3145,7 @@ export class SyncService implements OnModuleInit {
         }
       } else {
         let incTime = txTime;
-        let collision = await this.incomeRecordRepository.findOne({
+        let collision = smsItem ? null : await this.incomeRecordRepository.findOne({
           where: { userId, timestamp: incTime, isDeleted: false },
         });
         while (collision) {
@@ -2937,6 +3173,8 @@ export class SyncService implements OnModuleInit {
           category: txData.category ? txData.category.toLowerCase() : 'money_received',
           timestamp: incTime,
           bankProfileId: bank ? bank.id : null,
+          smsId: uniqueConfirmedSmsId,
+          contentId: confirmedContentId,
           updatedAt: Date.now(),
           isDeleted: false,
         });

@@ -1,6 +1,8 @@
 package com.regentmoney.intro
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -8,23 +10,27 @@ import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
+import android.graphics.LinearGradient
 import android.graphics.Typeface
 import android.os.Build
 import android.provider.Settings
 import android.util.AttributeSet
 import android.view.Choreographer
 import android.view.View
+import androidx.core.graphics.PathParser
+import com.regentmoney.R
 import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * Native port of src/components/RegentIntro.tsx.
+ * Native launch intro ("Sorted"), drawn on one Canvas in dp units.
  *
- * Everything is drawn on one Canvas in dp units (the canvas is scaled by density),
- * driven by a single 0 → 5000 ms clock. The clock runs off Choreographer frame
- * times rather than a ValueAnimator so it is NOT affected by the system
- * "animator duration scale" (a ValueAnimator would jump straight to the end when
- * animations are turned off, and the intro would just vanish).
+ * Driven by a Choreographer clock rather than a ValueAnimator so it is NOT affected
+ * by the system "animator duration scale" (a ValueAnimator would jump to the end when
+ * animations are off and the intro would just vanish).
+ *
+ * Flow: play to [B.HOLD], wait there until React Native reports ready, then play a
+ * short exit (tile zooms, everything fades) that reveals the app underneath.
  */
 class IntroView @JvmOverloads constructor(
     context: Context,
@@ -32,34 +38,25 @@ class IntroView @JvmOverloads constructor(
     defStyleAttr: Int = 0,
 ) : View(context, attrs, defStyleAttr) {
 
-    /* ---------------- brand ---------------- */
+    /* ---------------- brand (same palette as the app) ---------------- */
 
-    private val BG = Color.parseColor("#fafbfc")
+    private val BG = Color.parseColor("#F3F6F4")
+    private val FOREST = Color.parseColor("#0B3D2C")
+    private val LIME = Color.parseColor("#B8F36B")
+    private val GREEN = Color.parseColor("#16A34A")
+    private val INK = Color.parseColor("#0B1F17")
+    private val BODY = Color.parseColor("#5E7A6C")
+    private val LINE = Color.parseColor("#E1E9E4")
+    private val MIST = Color.parseColor("#E3F2E8")
     private val WHITE = Color.WHITE
-    private val GREEN = Color.parseColor("#2dba4e")
-    private val GREEN_DEEP = Color.parseColor("#1f8f3a")
-    private val MIST = Color.parseColor("#e7f7eb")
-    private val INK = Color.parseColor("#1c252e")
-    private val MUTED = Color.parseColor("#7b8794")
-
-    private class Chip(val label: String, val amount: String, val credit: Boolean)
-
-    private val chipData = listOf(
-        Chip("Coffee", "−₹180", false),
-        Chip("Salary", "+₹52,000", true),
-        Chip("Rent", "−₹15,000", false),
-    )
 
     /* ---------------- state ---------------- */
 
     private val density = resources.displayMetrics.density
     private var timeline: IntroTimeline? = null
-
-    private var blobSize = 0f
-    private var haloSize = 0f
-    private var glowA: Shader? = null
-    private var glowB: Shader? = null
-    private var halo: Shader? = null
+    private var glow: Shader? = null
+    private var sheenShader: Shader? = null
+    private var logo: Bitmap? = null
 
     private var clock = 0f
     private var holdMs = 0f
@@ -69,69 +66,82 @@ class IntroView @JvmOverloads constructor(
     private var isAppReady = false
     private var waitingForApp = false
     private var isDismissing = false
+    private var reduceMotion = false
+    private var exitStartNanos = 0L
+    private var exitProgress = 0f
     private var onFinish: (() -> Unit)? = null
     private val frameCallback = Choreographer.FrameCallback { now -> onFrame(now) }
+    private val exitCallback = Choreographer.FrameCallback { now -> onExitFrame(now) }
 
     /* ---------------- paints (allocated once) ---------------- */
 
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+    private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val chipBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val sheenPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val tileShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = FOREST
+        setShadowLayer(20f, 0f, 12f, withAlpha(FOREST, 0.35f))
+    }
+    private val pillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = WHITE
-        // Approximates the RN chip's elevation: 6 (honoured on hardware canvases from API 28).
-        setShadowLayer(10f, 0f, 4f, withAlpha(INK, 0.16f))
+        setShadowLayer(14f, 0f, 8f, withAlpha(FOREST, 0.14f))
     }
-    private val rupeePaint = textPaint(14f, 800, GREEN, Paint.Align.CENTER)
-    private val labelPaint = textPaint(14f, 700, INK, Paint.Align.LEFT)
-    private val amountPaint = textPaint(14f, 800, INK, Paint.Align.RIGHT)
-    private val fromPaint = textPaint(12f, 400, MUTED, Paint.Align.CENTER).apply { letterSpacing = 0.3f / 12f }
-    private val studioPaint = textPaint(15f, 700, INK, Paint.Align.CENTER).apply { letterSpacing = 0.2f / 15f }
+    private val labelPaint = textPaint(13.5f, 600, INK, Paint.Align.LEFT)
+    private val amountPaint = textPaint(13.5f, 700, INK, Paint.Align.RIGHT)
+    private val fromPaint = textPaint(13f, 400, BODY, Paint.Align.CENTER).apply { letterSpacing = 0.4f / 13f }
+    private val studioPaint = textPaint(16f, 700, INK, Paint.Align.CENTER).apply { letterSpacing = 0.2f / 16f }
 
-    private val chipLayerBounds = RectF(-24f, -24f, CHIP_W + 24f, CHIP_H + 32f)
+    /* ---------------- shapes ---------------- */
 
-    /* ---------------- agent shapes (agent box is 60 × 72) ---------------- */
+    private val tileRect = RectF(-TILE / 2f, -TILE / 2f, TILE / 2f, TILE / 2f)
+    private val tileClip = Path().apply { addRoundRect(tileRect, TILE_R, TILE_R, Path.Direction.CW) }
+    private val ringRect = RectF(-RING_R, -RING_R, RING_R, RING_R)
+    private val pillRect = RectF(0f, 0f, PILL_W, PILL_H)
+    private val tmpRect = RectF()
 
-    private val bodyClip = Path().apply { addCircle(24f, 24f, 24f, Path.Direction.CW) }
-
-    // sprout leaf: 12 × 7 at (30, 7), radii TL 7, TR 1, BR 7, BL 1
-    private val sproutLeafPath = Path().apply {
-        addRoundRect(
-            RectF(30f, 7f, 42f, 14f),
-            floatArrayOf(7f, 7f, 1f, 1f, 7f, 7f, 1f, 1f),
-            Path.Direction.CW,
-        )
-    }
-
-    // smile: 11 × 6 box at (18.5, 28) in body space, 2.4 border with no top edge, bottom radii 5.5
-    private val smilePath = Path().apply {
-        moveTo(19.7f, 28f)
-        lineTo(19.7f, 28.5f)
-        arcTo(RectF(19.7f, 24.2f, 28.3f, 32.8f), 180f, -180f, false)
-        lineTo(28.3f, 28f)
-    }
+    // 24 × 24 line icons
+    private val icons = arrayOf(
+        PathParser.createPathFromPathData("M4 9h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z M17 11h1.5a2.5 2.5 0 0 1 0 5H17"),
+        PathParser.createPathFromPathData("M17 7L7 17 M17 17H7V7"),
+        PathParser.createPathFromPathData("M3 10l9-7 9 7v10a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"),
+    )
+    private val checkPath = PathParser.createPathFromPathData("M5 12.5l4.5 4.5L19 7.5")
 
     init {
         contentDescription = "Regent Money, from RAO Dev Studios"
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
-        // Touch the glyph object now so path parsing happens before the first frame.
-        WordmarkGlyphs.REGENT.size
+        // Parse glyph paths and decode the logo before the first frame.
+        WordmarkGlyphs.ONE_LINE.size
+        logo = try {
+            BitmapFactory.decodeResource(resources, R.drawable.intro_logo, BitmapFactory.Options().apply { inScaled = false })
+        } catch (e: Exception) {
+            null
+        }
     }
 
     /* =================================================================== */
     /* Clock                                                               */
     /* =================================================================== */
 
-    /** Starts the 5 s intro. [onFinish] fires exactly once, on the main thread. */
+    /** Starts the intro. [onFinish] fires exactly once, on the main thread. */
     fun start(onFinish: () -> Unit) {
         this.onFinish = onFinish
         clock = 0f
         holdMs = 0f
         waitingForApp = false
         isDismissing = false
+        exitProgress = 0f
         alpha = 1f
-        if (reduceMotionEnabled()) {
-            clock = HOLD_AT_MS
+        reduceMotion = reduceMotionEnabled()
+        if (reduceMotion) {
+            // Straight to the finished logo, shown for a moment.
+            clock = B.HOLD
             holdMs = 1200f
         }
         running = true
@@ -161,29 +171,37 @@ class IntroView @JvmOverloads constructor(
         if (isAppReady) {
             dismiss()
         } else {
-            clock = HOLD_AT_MS
+            clock = B.HOLD
             waitingForApp = true
             invalidate()
         }
     }
 
-    /** Smoothly crossfades out the native intro overlay directly into React Native. */
+    /** Plays the exit (tile zooms up, everything fades) into React Native, then finishes. */
     fun dismiss() {
         if (isDismissing) return
         isDismissing = true
         running = false
         waitingForApp = false
-        Choreographer.getInstance().removeFrameCallback(frameCallback)
+        val choreographer = Choreographer.getInstance()
+        choreographer.removeFrameCallback(frameCallback)
+        exitStartNanos = 0L
+        exitProgress = 0f
+        choreographer.postFrameCallback(exitCallback)
+    }
 
-        animate()
-            .alpha(0f)
-            .setDuration(280L)
-            .withEndAction {
-                val cb = onFinish
-                onFinish = null
-                cb?.invoke()
-            }
-            .start()
+    private fun onExitFrame(frameTimeNanos: Long) {
+        if (exitStartNanos == 0L) exitStartNanos = frameTimeNanos
+        val duration = if (reduceMotion) 220f else B.EXIT_MS
+        exitProgress = ((frameTimeNanos - exitStartNanos) / 1_000_000f / duration).coerceIn(0f, 1f)
+        invalidate()
+        if (exitProgress >= 1f) {
+            val cb = onFinish
+            onFinish = null
+            cb?.invoke()
+        } else {
+            Choreographer.getInstance().postFrameCallback(exitCallback)
+        }
     }
 
     /** Freeze the clock while the activity is in the background. */
@@ -212,14 +230,15 @@ class IntroView @JvmOverloads constructor(
             }
 
             val nextClock = clock + dt
-            if (nextClock >= HOLD_AT_MS) {
-                clock = HOLD_AT_MS
+            if (nextClock >= B.HOLD) {
+                clock = B.HOLD
                 invalidate()
-                if (isAppReady) {
-                    dismiss()
-                } else {
-                    waitingForApp = true
+                if (holdMs > 0f) {
+                    lastFrameNanos = frameTimeNanos
+                    Choreographer.getInstance().postFrameCallback(frameCallback)
+                    return
                 }
+                if (isAppReady) dismiss() else waitingForApp = true
                 return
             }
             clock = nextClock
@@ -231,7 +250,9 @@ class IntroView @JvmOverloads constructor(
 
     override fun onDetachedFromWindow() {
         running = false
-        Choreographer.getInstance().removeFrameCallback(frameCallback)
+        val choreographer = Choreographer.getInstance()
+        choreographer.removeFrameCallback(frameCallback)
+        choreographer.removeFrameCallback(exitCallback)
         super.onDetachedFromWindow()
     }
 
@@ -248,355 +269,232 @@ class IntroView @JvmOverloads constructor(
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         if (w == 0 || h == 0) return
-        val layout = IntroLayout(w / density, h / density)
-        timeline = IntroTimeline(layout)
-        blobSize = layout.W * 1.5f
-        haloSize = layout.logoW * 1.8f
-        glowA = glowShader(blobSize, 0.10f)
-        glowB = glowShader(blobSize, 0.08f)
-        halo = glowShader(haloSize, 0.16f)
+        timeline = IntroTimeline(IntroLayout(w / density, h / density))
+        glow = RadialGradient(
+            0f, 0f, GLOW_R,
+            intArrayOf(withAlpha(LIME, 0.35f), withAlpha(LIME, 0.12f), withAlpha(LIME, 0f)),
+            floatArrayOf(0f, 0.35f, 0.65f),
+            Shader.TileMode.CLAMP,
+        )
+        sheenShader = LinearGradient(
+            -30f, 0f, 30f, 0f,
+            intArrayOf(Color.TRANSPARENT, Color.argb(42, 255, 255, 255), Color.TRANSPARENT),
+            null,
+            Shader.TileMode.CLAMP,
+        )
     }
-
-    private fun glowShader(size: Float, strength: Float): Shader = RadialGradient(
-        size / 2f, size / 2f, size / 2f,
-        intArrayOf(withAlpha(GREEN, strength), withAlpha(GREEN, strength * 0.35f), withAlpha(GREEN, 0f)),
-        floatArrayOf(0f, 0.55f, 1f),
-        Shader.TileMode.CLAMP,
-    )
 
     /* =================================================================== */
     /* Drawing                                                             */
     /* =================================================================== */
 
     override fun onDraw(canvas: Canvas) {
-        canvas.drawColor(BG)
-        val tl = timeline ?: return
-        val t = clock
-        val exitA = tl.exitOpacity.at(t)
+        val tl = timeline
+        val exitA = 1f - inCubic(exitProgress)
         if (exitA <= 0.002f) return
-
-        canvas.save()
-        canvas.scale(density, density)
-        canvas.translate(0f, tl.exitY.at(t))
         val fading = exitA < 0.998f
         if (fading) canvas.saveLayerAlpha(null, alpha255(exitA))
 
-        drawAmbient(canvas, tl, t)
-        val L = tl.L
-        drawGlow(
-            canvas, halo, haloSize,
-            L.W / 2f - haloSize / 2f, L.top + L.logoH / 2f - haloSize / 2f,
-            tl.haloOpacity.at(t), tl.haloScale.at(t),
-        )
-        drawShadowAndPuffs(canvas, tl, t)
-        drawLogo(canvas, tl, t)
-        drawChips(canvas, tl, t)
-        drawSparkles(canvas, tl, t)
-        drawAgent(canvas, tl, t)
-        drawFooter(canvas, tl, t)
+        canvas.drawColor(BG)
+        if (tl != null) {
+            val t = clock
+            canvas.save()
+            canvas.scale(density, density)
+            drawRings(canvas, tl.L)
+            drawGlow(canvas, tl, t)
+            drawRing(canvas, tl, t)
+            drawHalo(canvas, tl, t)
+            drawTile(canvas, tl, t)
+            drawPills(canvas, tl, t)
+            drawWordmark(canvas, tl, t)
+            drawFooter(canvas, tl, t)
+            canvas.restore()
+        }
 
         if (fading) canvas.restore()
-        canvas.restore()
     }
 
-    /* ---------------- background light ---------------- */
-
-    private fun drawAmbient(canvas: Canvas, tl: IntroTimeline, t: Float) {
-        val a = tl.ambientOpacity.at(t)
-        if (a <= 0.002f) return
-        val L = tl.L
-        val dA = tl.driftA.at(t)
-        val dB = tl.driftB.at(t)
-        drawGlow(canvas, glowA, blobSize, -blobSize * 0.55f + dA, -blobSize * 0.5f + dA, a, 1f)
-        drawGlow(canvas, glowB, blobSize, L.W - blobSize * 0.45f + dB, L.H - blobSize * 0.45f + dB, a, 1f)
+    /** Faint forest rings in the corners, the motif used across the app. */
+    private fun drawRings(canvas: Canvas, L: IntroLayout) {
+        stroke.strokeWidth = 1f
+        stroke.color = withAlpha(FOREST, 0.08f)
+        canvas.drawCircle(L.W - 20f, 10f, 180f, stroke)
+        canvas.drawCircle(L.W - 40f, 20f, 100f, stroke)
+        canvas.drawCircle(-20f, L.H - 20f, 150f, stroke)
     }
 
-    private fun drawGlow(
-        canvas: Canvas, shader: Shader?, size: Float,
-        left: Float, top: Float, opacity: Float, scale: Float,
-    ) {
-        if (shader == null || opacity <= 0.002f || scale <= 0f) return
+    private fun drawGlow(canvas: Canvas, tl: IntroTimeline, t: Float) {
+        val o = tl.glowOpacity.at(t)
+        if (o <= 0.002f) return
+        val s = tl.glowScale.at(t)
         canvas.save()
-        canvas.translate(left, top)
-        if (scale != 1f) canvas.scale(scale, scale, size / 2f, size / 2f)
-        glowPaint.shader = shader
-        glowPaint.alpha = alpha255(opacity)
-        canvas.drawRect(0f, 0f, size, size, glowPaint)
+        canvas.translate(tl.L.cx, tl.L.cy)
+        canvas.scale(s, s)
+        glowPaint.shader = glow
+        glowPaint.alpha = alpha255(o)
+        canvas.drawCircle(0f, 0f, GLOW_R, glowPaint)
         canvas.restore()
     }
 
-    /* ---------------- ground shadow & puffs ---------------- */
-
-    private fun drawShadowAndPuffs(canvas: Canvas, tl: IntroTimeline, t: Float) {
-        val L = tl.L
-        val so = tl.shadowOpacity.at(t)
-        if (so > 0.002f) {
-            canvas.save()
-            canvas.scale(tl.shadowScale.at(t), 1f, L.groundX, L.groundY)
-            fill.color = withAlpha(INK, 0.12f * so)
-            canvas.drawRoundRect(
-                L.groundX - SHADOW_W / 2f, L.groundY - 6f,
-                L.groundX + SHADOW_W / 2f, L.groundY + 6f,
-                6f, 6f, fill,
-            )
-            canvas.restore()
-        }
-        for (p in tl.puffs) {
-            val o = p.opacity.at(t)
-            if (o <= 0.002f) continue
-            fill.color = withAlpha(INK, 0.06f * o)
-            canvas.drawCircle(
-                p.x + p.dx.at(t),
-                p.y - p.size / 2f + p.dy.at(t),
-                p.size / 2f * p.scale.at(t),
-                fill,
-            )
-        }
-    }
-
-    /* ---------------- wordmark ---------------- */
-
-    private fun drawLogo(canvas: Canvas, tl: IntroTimeline, t: Float) {
-        val L = tl.L
-        val S = L.S
-        val dip = tl.dip.at(t)
-
+    private fun drawRing(canvas: Canvas, tl: IntroTimeline, t: Float) {
+        val o = tl.ringOpacity.at(t)
+        if (o <= 0.002f) return
         canvas.save()
-        canvas.translate(L.left, L.top)
-
-        drawWord(
-            canvas, WordmarkGlyphs.REGENT, tl.regent,
-            WordmarkGlyphs.REGENT_CLIP_TOP, WordmarkGlyphs.REGENT_CLIP_H, INK, L, dip, t,
-        )
-        drawWord(
-            canvas, WordmarkGlyphs.MONEY, tl.money,
-            WordmarkGlyphs.MONEY_CLIP_TOP, WordmarkGlyphs.MONEY_CLIP_H, GREEN, L, dip, t,
-        )
-
-        // Notch inside the R: scales from its bottom-left corner.
-        val ns = tl.notchScale.at(t)
-        val no = tl.notchOpacity.at(t)
-        if (ns > 0.001f && no > 0.002f) {
-            val g = WordmarkGlyphs.NOTCH
-            val pivX = g.x * S
-            val pivY = (g.y + g.h) * S
-            canvas.save()
-            canvas.scale(ns, ns, pivX, pivY)
-            canvas.scale(S, S)
-            fill.color = withAlpha(GREEN, no)
-            canvas.drawPath(g.path, fill)
-            canvas.restore()
+        canvas.translate(tl.L.cx, tl.L.cy)
+        stroke.strokeWidth = 2f
+        stroke.color = withAlpha(LINE, o)
+        canvas.drawCircle(0f, 0f, RING_R, stroke)
+        val sweep = tl.ringSweep.at(t) * 360f
+        if (sweep > 0.5f) {
+            stroke.color = withAlpha(FOREST, o)
+            canvas.drawArc(ringRect, -90f, sweep, false, stroke)
         }
-
-        // Leaf on the t: rotates + scales from its bottom-left corner and rides the dip.
-        val ls = tl.leafScale.at(t)
-        val lo = tl.leafOpacity.at(t)
-        if (ls > 0.001f && lo > 0.002f) {
-            val g = WordmarkGlyphs.LEAF
-            val pivX = g.x * S
-            val pivY = (g.y + g.h) * S
-            canvas.save()
-            canvas.translate(0f, dip * 0.3f)
-            canvas.rotate(tl.leafRotate.at(t), pivX, pivY)
-            canvas.scale(ls, ls, pivX, pivY)
-            canvas.scale(S, S)
-            fill.color = withAlpha(GREEN, lo)
-            canvas.drawPath(g.path, fill)
-            canvas.restore()
-        }
-
         canvas.restore()
     }
 
-    private fun drawWord(
-        canvas: Canvas,
-        glyphs: List<Glyph>,
-        tracks: List<GlyphTracks>,
-        clipTop: Float,
-        clipH: Float,
-        color: Int,
-        L: IntroLayout,
-        dip: Float,
-        t: Float,
-    ) {
-        val S = L.S
+    private fun drawHalo(canvas: Canvas, tl: IntroTimeline, t: Float) {
+        val o = tl.haloOpacity.at(t)
+        if (o <= 0.002f) return
+        val s = tl.haloScale.at(t)
         canvas.save()
-        canvas.clipRect(0f, clipTop * S, L.logoW, (clipTop + clipH) * S)
-        for (i in glyphs.indices) {
-            val tr = tracks[i]
-            val o = tr.opacity.at(t)
-            if (o <= 0.002f) continue
-            canvas.save()
-            canvas.translate(0f, tr.y.at(t) + dip * tr.dipWeight)
-            canvas.scale(S, S)
-            fill.color = withAlpha(color, o)
-            canvas.drawPath(glyphs[i].path, fill)
-            canvas.restore()
-        }
+        canvas.translate(tl.L.cx, tl.L.cy)
+        canvas.scale(s, s)
+        stroke.strokeWidth = 1.5f / s
+        stroke.color = withAlpha(FOREST, o)
+        canvas.drawRoundRect(tileRect, TILE_R, TILE_R, stroke)
         canvas.restore()
     }
 
-    /* ---------------- bank-SMS chips ---------------- */
+    private fun drawTile(canvas: Canvas, tl: IntroTimeline, t: Float) {
+        val o = tl.tileOpacity.at(t)
+        if (o <= 0.002f) return
+        val s = tl.tileScale.at(t) * (1f + 0.35f * outCubic(exitProgress))
+        canvas.save()
+        canvas.translate(tl.L.cx, tl.L.cy)
+        canvas.scale(s, s)
+        val layered = o < 0.998f
+        if (layered) canvas.saveLayerAlpha(-TILE, -TILE, TILE, TILE + 24f, alpha255(o))
 
-    private fun drawChips(canvas: Canvas, tl: IntroTimeline, t: Float) {
-        for (i in tl.chips.indices) {
-            val c = tl.chips[i]
-            val o = c.opacity.at(t)
-            if (o <= 0.002f) continue
-            val s = c.scale.at(t)
+        canvas.drawRoundRect(tileRect, TILE_R, TILE_R, tileShadowPaint)
+        canvas.save()
+        canvas.clipPath(tileClip)
+        logo?.let { bmp -> canvas.drawBitmap(bmp, null, tileRect, bitmapPaint) }
+        // light band sweeping across the tile
+        val p = tl.sheen.at(t)
+        if (p > -0.999f && p < 0.999f) {
             canvas.save()
-            // RN rotates/scales around the view centre
-            canvas.translate(c.x.at(t) + CHIP_W / 2f, c.y.at(t) + CHIP_H / 2f)
-            canvas.rotate(c.rotate.at(t))
+            canvas.translate(p * (TILE / 2f + 40f), 0f)
+            canvas.skew(-0.32f, 0f)
+            sheenPaint.shader = sheenShader
+            canvas.drawRect(-30f, -TILE, 30f, TILE, sheenPaint)
+            canvas.restore()
+        }
+        canvas.restore()
+
+        if (layered) canvas.restore()
+        canvas.restore()
+    }
+
+    private fun drawPills(canvas: Canvas, tl: IntroTimeline, t: Float) {
+        for (pill in tl.pills) {
+            val o = pill.opacity.at(t)
+            if (o <= 0.002f) continue
+            val s = pill.scale.at(t)
+            canvas.save()
+            canvas.translate(pill.homeX + pill.dx.at(t), pill.homeY + pill.dy.at(t))
             canvas.scale(s, s)
-            canvas.translate(-CHIP_W / 2f, -CHIP_H / 2f)
+            canvas.translate(-PILL_W / 2f, -PILL_H / 2f)
             val layered = o < 0.998f
-            if (layered) canvas.saveLayerAlpha(chipLayerBounds, alpha255(o))
-            drawChip(canvas, chipData[i])
+            if (layered) canvas.saveLayerAlpha(-20f, -20f, PILL_W + 20f, PILL_H + 28f, alpha255(o))
+            drawPill(canvas, pill, pill.tick.at(t))
             if (layered) canvas.restore()
             canvas.restore()
         }
     }
 
-    private fun drawChip(canvas: Canvas, chip: Chip) {
-        val r = CHIP_H / 2f
-        canvas.drawRoundRect(0f, 0f, CHIP_W, CHIP_H, r, r, chipBgPaint)
-
+    private fun drawPill(canvas: Canvas, pill: PillTracks, tick: Float) {
+        val r = PILL_H / 2f
+        canvas.drawRoundRect(pillRect, r, r, pillPaint)
         stroke.strokeWidth = 1f
-        stroke.color = withAlpha(INK, 0.06f)
-        canvas.drawRoundRect(0.5f, 0.5f, CHIP_W - 0.5f, CHIP_H - 0.5f, r - 0.5f, r - 0.5f, stroke)
+        stroke.color = LINE
+        tmpRect.set(0.5f, 0.5f, PILL_W - 0.5f, PILL_H - 0.5f)
+        canvas.drawRoundRect(tmpRect, r - 0.5f, r - 0.5f, stroke)
 
-        // ₹ icon: 26 × 26 circle, 8 from the left
+        // icon bubble
         fill.color = MIST
-        canvas.drawCircle(21f, r, 13f, fill)
-        canvas.drawText("₹", 21f, centeredBaseline(rupeePaint, r), rupeePaint)
+        canvas.drawCircle(6f + 16f, r, 16f, fill)
+        canvas.save()
+        canvas.translate(22f - 7.5f, r - 7.5f)
+        canvas.scale(15f / 24f, 15f / 24f)
+        stroke.strokeWidth = 2f * 24f / 15f
+        stroke.color = FOREST
+        canvas.drawPath(icons[pill.icon], stroke)
+        canvas.restore()
 
-        canvas.drawText(chip.label, 43f, centeredBaseline(labelPaint, r), labelPaint)
+        labelPaint.color = INK
+        canvas.drawText(pill.label, 46f, centeredBaseline(labelPaint, r), labelPaint)
+        amountPaint.color = if (pill.credit) GREEN else INK
+        canvas.drawText(pill.amount, PILL_W - 14f, centeredBaseline(amountPaint, r), amountPaint)
 
-        amountPaint.color = if (chip.credit) GREEN else INK
-        canvas.drawText(chip.amount, CHIP_W - 14f, centeredBaseline(amountPaint, r), amountPaint)
-    }
-
-    /* ---------------- sparkles ---------------- */
-
-    private fun drawSparkles(canvas: Canvas, tl: IntroTimeline, t: Float) {
-        fill.color = GREEN
-        for (s in tl.sparkles) {
-            val sc = s.scale.at(t)
-            if (sc <= 0.001f) continue
-            val k = sc * s.size / 24f
+        // lime tick badge on the top-right corner
+        if (tick > 0.01f) {
             canvas.save()
-            canvas.translate(s.x, s.y)
-            canvas.rotate(s.rotate.at(t))
-            canvas.scale(k, k)
-            canvas.translate(-12f, -12f)
-            canvas.drawPath(WordmarkGlyphs.SPARKLE, fill)
+            canvas.translate(PILL_W - 4f, 3f)
+            canvas.scale(tick, tick)
+            fill.color = BG
+            canvas.drawCircle(0f, 0f, 12f, fill)
+            fill.color = FOREST
+            canvas.drawCircle(0f, 0f, 10f, fill)
+            canvas.translate(-5f, -5f)
+            canvas.scale(10f / 24f, 10f / 24f)
+            stroke.strokeWidth = 3.5f
+            stroke.color = LIME
+            canvas.drawPath(checkPath, stroke)
             canvas.restore()
         }
     }
 
-    /* ---------------- the money agent ---------------- */
-
-    private fun drawAgent(canvas: Canvas, tl: IntroTimeline, t: Float) {
-        val cx = CW / 2f
-        val size = tl.size.at(t)
-
+    /** "Regent Money" on one line, each traced glyph rising out of the baseline. */
+    private fun drawWordmark(canvas: Canvas, tl: IntroTimeline, t: Float) {
+        val L = tl.L
+        val S = L.S
         canvas.save()
-        canvas.translate(tl.agentX.at(t), tl.agentY(t))
-        // size, tilt and squash pivot on the feet; the flip spins around the middle
-        canvas.scale(size, size, cx, CH)
-        canvas.rotate(tl.flip.at(t), cx, CH / 2f)
-        canvas.rotate(tl.tilt.at(t), cx, CH)
-        canvas.scale(tl.scaleX(t), tl.scaleY(t), cx, CH)
-
-        // arms (pivot at the shoulder = top centre of each 6 × 18 arm)
-        fill.color = GREEN_DEEP
-        drawArm(canvas, 6f, tl.armL.at(t))
-        drawArm(canvas, 48f, tl.armR.at(t))
-
-        // feet
-        canvas.drawRoundRect(16f, 66f, 29f, 72f, 3f, 3f, fill)
-        canvas.drawRoundRect(31f, 66f, 44f, 72f, 3f, 3f, fill)
-
-        // sprout (pivot at the bottom of the stem)
-        canvas.save()
-        canvas.rotate(tl.sprout.at(t), 30f, 22f)
-        canvas.drawRoundRect(28.5f, 12f, 31.5f, 22f, 1.5f, 1.5f, fill)
-        canvas.rotate(-25f, 36f, 10.5f)
-        canvas.drawPath(sproutLeafPath, fill)
-        canvas.restore()
-
-        // body (48 × 48 coin at 6, 20; children are clipped to it)
-        canvas.save()
-        canvas.translate(6f, 20f)
-        canvas.clipPath(bodyClip)
-
-        fill.color = GREEN
-        canvas.drawCircle(24f, 24f, 24f, fill)
-
-        stroke.strokeWidth = 1.5f
-        stroke.color = withAlpha(WHITE, 0.3f)
-        canvas.drawCircle(24f, 24f, 18.25f, stroke)
-
-        canvas.save()
-        canvas.rotate(-30f, 15f, 9f)
-        fill.color = withAlpha(WHITE, 0.45f)
-        canvas.drawRoundRect(9f, 6f, 21f, 12f, 3f, 3f, fill)
-        canvas.restore()
-
-        val blink = tl.blink.at(t)
-        val lx = tl.lookX.at(t)
-        val ly = tl.lookY.at(t)
-        drawEye(canvas, 11f, blink, lx, ly)
-        drawEye(canvas, 26f, blink, lx, ly)
-
-        fill.color = withAlpha(WHITE, 0.3f)
-        canvas.drawRoundRect(6f, 29f, 13f, 33f, 2f, 2f, fill)
-        canvas.drawRoundRect(35f, 29f, 42f, 33f, 2f, 2f, fill)
-
-        val mouth = tl.mouth.at(t).coerceIn(0f, 1f)
-        if (mouth < 0.998f) {
-            stroke.strokeWidth = 2.4f
-            stroke.color = withAlpha(INK, 1f - mouth)
-            canvas.drawPath(smilePath, stroke)
+        canvas.translate(L.wordLeft, L.wordTop)
+        canvas.clipRect(-4f, -4f, L.wordW + 4f, WordmarkGlyphs.ONE_LINE_H * S + 2f)
+        val glyphs = WordmarkGlyphs.ONE_LINE
+        for (i in glyphs.indices) {
+            val tr = tl.glyphs[i]
+            val o = tr.opacity.at(t)
+            if (o <= 0.002f) continue
+            val g = glyphs[i]
+            canvas.save()
+            canvas.translate(0f, tr.y.at(t))
+            canvas.scale(S, S)
+            canvas.translate(g.dx, g.dy)
+            fill.color = withAlpha(if (g.money) GREEN else INK, o)
+            canvas.drawPath(g.glyph.path, fill)
+            canvas.restore()
         }
-        if (mouth > 0.002f) {
-            fill.color = withAlpha(INK, mouth)
-            canvas.drawCircle(24f, 31.5f, 4f, fill)
+        canvas.restore()
+
+        // green notch in the R and leaf on the t, popping in once the word has risen
+        val a = tl.accentScale.at(t)
+        if (a > 0.001f) {
+            canvas.save()
+            canvas.translate(L.wordLeft, L.wordTop)
+            fill.color = GREEN
+            for (g in arrayOf(WordmarkGlyphs.NOTCH, WordmarkGlyphs.LEAF)) {
+                val pivX = g.x * S
+                val pivY = (g.y + g.h) * S
+                canvas.save()
+                canvas.scale(a, a, pivX, pivY)
+                canvas.scale(S, S)
+                canvas.drawPath(g.path, fill)
+                canvas.restore()
+            }
+            canvas.restore()
         }
-
-        canvas.restore() // body
-        canvas.restore() // agent
     }
-
-    private fun drawArm(canvas: Canvas, left: Float, deg: Float) {
-        canvas.save()
-        canvas.rotate(deg, left + 3f, 42f)
-        canvas.drawRoundRect(left, 42f, left + 6f, 60f, 3f, 3f, fill)
-        canvas.restore()
-    }
-
-    /** Eye: 11 × 12 at (left, 15) in body space; blink squashes it vertically around its centre. */
-    private fun drawEye(canvas: Canvas, left: Float, blink: Float, lx: Float, ly: Float) {
-        val ex = left + 5.5f
-        val ey = 21f
-        canvas.save()
-        canvas.scale(1f, blink, ex, ey)
-
-        fill.color = WHITE
-        canvas.drawRoundRect(left, 15f, left + 11f, 27f, 5.5f, 5.5f, fill)
-
-        val px = ex + lx
-        val py = ey + ly
-        fill.color = INK
-        canvas.drawRoundRect(px - 2.75f, py - 3.25f, px + 2.75f, py + 3.25f, 2.75f, 2.75f, fill)
-
-        fill.color = WHITE
-        canvas.drawCircle(px - 2.75f + 2f, py - 3.25f + 2f, 1f, fill)
-        canvas.restore()
-    }
-
-    /* ---------------- footer ---------------- */
 
     private fun drawFooter(canvas: Canvas, tl: IntroTimeline, t: Float) {
         val o = tl.footerOpacity.at(t)
@@ -605,8 +503,7 @@ class IntroView @JvmOverloads constructor(
         val dy = tl.footerY.at(t)
         val studioBaseline = L.H - L.footerBottom - studioPaint.descent() + dy
         val fromBaseline = studioBaseline + studioPaint.ascent() - 2f - fromPaint.descent()
-
-        fromPaint.color = withAlpha(MUTED, o)
+        fromPaint.color = withAlpha(BODY, o)
         studioPaint.color = withAlpha(INK, o)
         canvas.drawText("from", L.W / 2f, fromBaseline, fromPaint)
         canvas.drawText("RAO Dev Studios", L.W / 2f, studioBaseline, studioPaint)
@@ -639,6 +536,6 @@ class IntroView @JvmOverloads constructor(
 
     companion object {
         const val MAX_FRAME_STEP_MS = 100f
-        const val HOLD_AT_MS = 4200f
+        const val GLOW_R = 160f
     }
 }
