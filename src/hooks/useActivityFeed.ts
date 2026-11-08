@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useBankStore, useIncomeStore, useTransactionStore, BankProfileType } from '../store';
 import { resolveBankCode } from '../components/BankIcon';
+import { isCashProfile } from '../services/cashService';
 
 /**
  * Unified credit + debit feed.
@@ -38,12 +39,15 @@ export const maskAccount = (suffix?: string | null) => {
   return digits ? `••${digits}` : '••••';
 };
 
-export const toActivityBank = (b: BankProfileType): ActivityBank => ({
-  id: b.id,
-  code: resolveBankCode(b.bankName, b.smsSenderId),
-  bankName: b.bankName,
-  mask: maskAccount(b.accountNumberSuffix),
-});
+export const toActivityBank = (b: BankProfileType): ActivityBank =>
+  isCashProfile(b)
+    ? { id: b.id, code: 'CASH', bankName: 'Cash', mask: 'Cash' }
+    : {
+        id: b.id,
+        code: resolveBankCode(b.bankName, b.smsSenderId),
+        bankName: b.bankName,
+        mask: maskAccount(b.accountNumberSuffix),
+      };
 
 export const filterActivity = (items: ActivityItem[], filter: ActivityFilter) => {
   if (filter === 'all') return items;

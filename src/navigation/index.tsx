@@ -26,8 +26,16 @@ import {
   PanResponder,
   Animated as RNAnimated,
   NativeModules,
-  InteractionManager,
 } from 'react-native';
+
+const runWhenIdle = (cb: () => void): { cancel: () => void } => {
+  if (typeof (globalThis as any).requestIdleCallback === 'function') {
+    const id = (globalThis as any).requestIdleCallback(cb);
+    return { cancel: () => (globalThis as any).cancelIdleCallback(id) };
+  }
+  const timer = setTimeout(cb, 100);
+  return { cancel: () => clearTimeout(timer) };
+};
 import { NavigationContainer, useFocusEffect, createNavigationContainerRef, useNavigation } from '@react-navigation/native';
 import { createMaterialTopTabNavigator, MaterialTopTabBarProps } from '@react-navigation/material-top-tabs';
 
@@ -139,6 +147,8 @@ import { BudgetScreen } from './BudgetScreen';
 import { CreateBudgetScreen } from './CreateBudgetScreen';
 import { HomeDashboard, DashboardCategory } from './HomeDashboard';
 import { AllTransactionsScreen } from './AllTransactionsScreen';
+import { CashWalletScreen } from './CashWalletScreen';
+import { bankAccountsOnly, getCashProfile } from '../services/cashService';
 import { useActivityFeed } from '../hooks/useActivityFeed';
 import { smsCatchupService } from '../services/smsCatchupService';
 import * as Clipboard from 'expo-clipboard';
@@ -1981,7 +1991,7 @@ const DashboardScreen = () => {
 
   useFocusEffect(
     useCallback(() => {
-      const task = InteractionManager.runAfterInteractions(() => {
+      const task = runWhenIdle(() => {
         sync();
         syncService.fetchAnalytics();
       });
@@ -2036,8 +2046,10 @@ const DashboardScreen = () => {
   );
 
   const handleAddExpense = () => {
-    if (bankProfiles.length > 0) {
-      navigation.navigate('ManualTransaction', { bank: bankProfiles[0], initialType: 'debit' });
+    // Prefer a real bank account; fall back to the cash wallet if that's all there is.
+    const account = bankAccountsOnly(bankProfiles)[0] ?? getCashProfile(bankProfiles);
+    if (account) {
+      navigation.navigate('ManualTransaction', { bank: account, initialType: 'debit' });
     } else {
       setAddBankModalVisible(true);
     }
@@ -2063,7 +2075,8 @@ const DashboardScreen = () => {
         banks={activityBanks}
         categories={categories}
         previousSpentSamePeriod={previousSpentSamePeriod}
-        hasBanks={bankProfiles.length > 0}
+        hasBanks={bankAccountsOnly(bankProfiles).length > 0}
+        hasCash={!!getCashProfile(bankProfiles)}
         smsTrackingOn={isSmsPermissionActive}
         refreshing={refreshing}
         bottomInset={insets.bottom}
@@ -2076,6 +2089,7 @@ const DashboardScreen = () => {
         onOpenCalendar={() => navigation.navigate('FinancialCalendar', { userCreatedAt: user?.createdAt })}
         onOpenBudgets={() => navigation.navigate('Budgets')}
         onOpenGoals={() => navigation.navigate('Goals')}
+        onOpenCash={() => navigation.navigate('CashWallet')}
         onOpenRegent={() => navigation.navigate('Regent')}
         onSetupTracking={() => navigation.navigate('AutoTrackingSetup')}
         onOpenTransaction={(tx) => navigation.navigate('TransactionDetail', { transaction: tx })}
@@ -3549,7 +3563,7 @@ export default function AppNavigator() {
       // Auto-scan recent SMS on Android once session and stores are completely hydrated (only for consumer users)
       if (Platform.OS === 'android') {
         setTimeout(() => {
-          InteractionManager.runAfterInteractions(() => {
+          runWhenIdle(() => {
             const currentUser = useAuthStore.getState().user;
             if (currentUser?.role === 'admin' || currentUser?.role === 'superadmin') return;
             const dynamicHours = smsCatchupService.getDynamicStartupLookback();
@@ -3766,6 +3780,15 @@ export default function AppNavigator() {
                     options={{
                       presentation: 'card',
                       animation: 'slide_from_bottom',
+                      headerShown: false,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="CashWallet"
+                    component={CashWalletScreen}
+                    options={{
+                      presentation: 'card',
+                      animation: 'slide_from_right',
                       headerShown: false,
                     }}
                   />

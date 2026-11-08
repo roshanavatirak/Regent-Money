@@ -36,6 +36,7 @@ import { CategoryIcon } from '../components/CategoryIcon';
 import { TagPaymentModal } from '../components/TagPaymentModal';
 import { getCategory } from '../constants/categories';
 import { BankIcon } from '../components/BankIcon';
+import { isCashProfile } from '../services/cashService';
 import { DateTimePickerSheet } from '../components/DateTimePickerSheet';
 import { format, isSameDay } from 'date-fns';
 
@@ -186,7 +187,9 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
   /* ---------------- Derived values ---------------- */
 
   const parsedAmount = parseFloat(amountStr) || 0;
-  const currentBal = Number(bank?.currentBalance) || 0;
+  // Use the latest balance from the store; the `bank` passed in route params can be a stale copy.
+  const liveBank = bankProfiles.find((b) => b.id === bank?.id) ?? bank;
+  const currentBal = Number(liveBank?.currentBalance) || 0;
   const newBal = type === 'credit' ? currentBal + parsedAmount : currentBal - parsedAmount;
   const overdraw = type === 'debit' && parsedAmount > 0 && newBal < 0;
 
@@ -262,6 +265,7 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
         });
 
         // 2. Immediately update local state optimistically
+        // (The server applies the same change when it receives the outbox entry.)
         useBankStore.getState().updateBankBalance(bank.id, newBal);
 
         const record: any = {
@@ -411,8 +415,8 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
             >
               <BankIcon name={bank.bankName} code="" size={28} />
               <Text style={[styles.bankName, { color: ink }]} numberOfLines={1}>
-                {bank.bankName}
-                <Text style={{ color: muted, fontWeight: '500' }}>  •• {bank.accountNumberSuffix}</Text>
+                {isCashProfile(bank) ? 'Cash in hand' : bank.bankName}
+                {!isCashProfile(bank) && <Text style={{ color: muted, fontWeight: '500' }}>  •• {bank.accountNumberSuffix}</Text>}
               </Text>
               <View style={[styles.pencil, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#F1F5F2' }]}>
                 <Feather name="edit-2" size={13} color={ink} />
@@ -651,7 +655,7 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
             {inr(success.amount)} {success.type === 'debit' ? 'expense added' : 'income added'}
           </Animated.Text>
           <Animated.Text entering={FadeIn.delay(260).duration(300)} style={[styles.successSub, { color: muted }]}>
-            {bank.bankName} •• {bank.accountNumberSuffix} updated
+            {isCashProfile(bank) ? 'Cash in hand' : `${bank.bankName} •• ${bank.accountNumberSuffix}`} updated
           </Animated.Text>
         </Animated.View>
       )}
@@ -684,7 +688,7 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
                     <View style={{ flex: 1, minWidth: 0 }}>
                       <Text style={[styles.bankRowName, { color: ink }]} numberOfLines={1}>{b.bankName}</Text>
                       <Text style={[styles.bankRowSub, { color: muted }]}>
-                        {b.accountType || 'Savings'} ending {b.accountNumberSuffix}
+                        {isCashProfile(b) ? 'Cash in hand' : `${b.accountType || 'Savings'} ending ${b.accountNumberSuffix}`}
                       </Text>
                     </View>
                     <Text style={[styles.bankRowBal, { color: ink }]}>{inr(Number(b.currentBalance) || 0)}</Text>

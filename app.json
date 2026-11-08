@@ -3,7 +3,7 @@
     "name": "Regent Money",
     "slug": "regent-money",
     "scheme": "regentmoney",
-    "version": "1.0.58",
+    "version": "1.0.63",
     "orientation": "portrait",
     "icon": "./assets/appicon.png",
     "notification": {
@@ -47,7 +47,7 @@
       ],
       "predictiveBackGestureEnabled": false,
       "package": "com.regentmoney",
-      "versionCode": 141,
+      "versionCode": 147,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#04190F"

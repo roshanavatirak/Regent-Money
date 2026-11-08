@@ -202,6 +202,12 @@ export function findPairedTransferIds(
         continue;
       }
 
+      // Cash entries are typed in by hand, so a matching amount is a coincidence, not a transfer.
+      // (A real move of money is marked as a self-transfer and excluded by category instead.)
+      if (String(debit.bankProfileId ?? '').startsWith('cash_') || String(credit.bankProfileId ?? '').startsWith('cash_')) {
+        continue;
+      }
+
       const cTime = Number(credit.timestamp) || 0;
       const delta = Math.abs(dTime - cTime);
       if (delta <= maxTimeDeltaMs && delta < minDelta) {

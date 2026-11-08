@@ -1,4 +1,5 @@
-import { Injectable, Logger, BadRequestException, UnauthorizedException, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, UnauthorizedException, OnModuleInit, GoneException } from '@nestjs/common';
+import { isErasedRow } from './erased-rows.util';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, In, EntityManager, Brackets } from 'typeorm';
 import {
@@ -543,6 +544,16 @@ export class SyncService implements OnModuleInit {
     return result;
   }
 
+  /**
+   * A row the 30-day purge erased must not come back from an old device or a stale screen.
+   * New items always get new IDs, so this never blocks real new data.
+   */
+  private async rejectIfErased(table: string, id: string | null | undefined) {
+    if (await isErasedRow(this.dataSource, table, id)) {
+      throw new GoneException('This item was deleted and can no longer be changed.');
+    }
+  }
+
   async createBankProfile(
     userId: string,
     data: {
@@ -558,6 +569,7 @@ export class SyncService implements OnModuleInit {
     },
   ) {
     this.logger.log(`Creating/updating bank profile for user: ${userId} (${data.id})`);
+    await this.rejectIfErased('core.bank_profiles', data.id);
 
     let existing = await this.bankProfileRepository.findOne({
       where: [
@@ -1911,6 +1923,7 @@ export class SyncService implements OnModuleInit {
       entries?: any[];
     },
   ) {
+    await this.rejectIfErased('wealth.savings_goals', dto.id);
     const goalId = dto.id || 'goal_' + Math.random().toString(36).substr(2, 9);
     const initialAmount = parseFloat(String(dto.currentAmount || 0));
     const todayStr = new Date().toISOString().slice(0, 10);
@@ -2276,6 +2289,7 @@ export class SyncService implements OnModuleInit {
       isPaused?: boolean;
     },
   ) {
+    await this.rejectIfErased('finance.budget_declarations', dto.id);
     const budget = this.budgetDeclarationRepository.create({
       id: dto.id || 'budget_' + Math.random().toString(36).substr(2, 9),
       userId,
@@ -3236,6 +3250,52 @@ export class SyncService implements OnModuleInit {
     return { results };
   }
 
+  /** Adds `delta` to an account's balance inside the outbox transaction. */
+  private async adjustBankBalance(m: EntityManager, userId: string, bankProfileId: string, delta: number) {
+    if (!bankProfileId || !Number.isFinite(delta) || delta === 0) return;
+    const now = Date.now();
+    await m.query(
+      `UPDATE core.bank_profiles
+         SET current_balance = ROUND((COALESCE(current_balance, 0) + $3)::numeric, 2),
+             last_sync_timestamp = $4,
+             updated_at = $4
+       WHERE id = $1 AND user_id = $2 AND is_deleted = false`,
+      [bankProfileId, userId, delta, now],
+    );
+  }
+
+  /** Plain amount of an existing outbox row (stored encrypted-only for manual entries). */
+  private async outboxRowAmount(
+    userId: string,
+    entity: string,
+    entityId: string,
+    row: any,
+    rowVersion: bigint,
+  ): Promise<number> {
+    if (row.amount != null && !isNaN(Number(row.amount))) return Math.abs(Number(row.amount));
+    if (!row.enc_amount) return 0;
+    try {
+      if (entity === 'transaction') {
+        const dec = await this.fieldCipherService.decryptTransactionFields(userId, {
+          id: entityId,
+          encAmount: row.enc_amount,
+          encMerchant: row.enc_text,
+          rowVersion,
+        } as any);
+        return Math.abs(Number(dec.amount) || 0);
+      }
+      const dec = await this.fieldCipherService.decryptIncomeFields(userId, {
+        id: entityId,
+        encAmount: row.enc_amount,
+        encSource: row.enc_text,
+        rowVersion,
+      } as any);
+      return Math.abs(Number(dec.amount) || 0);
+    } catch {
+      return 0;
+    }
+  }
+
   private async applyOne(m: EntityManager, userId: string, op: any): Promise<OpResult> {
     if (typeof op?.idemKey !== 'string' || op.idemKey.length < 8 || op.idemKey.length > 64) {
       throw new RejectOp('bad_key');
@@ -3259,10 +3319,16 @@ export class SyncService implements OnModuleInit {
 
     // 2. Lock the row so two devices editing it are serialized, then check ownership.
     const [row] = await m.query(
-      `SELECT user_id, updated_at, row_version, amount, ${spec.textField} as text_field, enc_amount, ${textCol} as enc_text FROM ${spec.table} WHERE id=$1 FOR UPDATE`,
+      `SELECT user_id, updated_at, row_version, amount, ${spec.textField} as text_field, enc_amount, ${textCol} as enc_text, bank_profile_id, is_deleted FROM ${spec.table} WHERE id=$1 FOR UPDATE`,
       [op.entityId],
     );
     if (row && row.user_id !== userId) throw new RejectOp('forbidden');
+
+    // An edit for a row the 30-day purge already erased (e.g. from a phone that was offline
+    // for weeks) is dropped: "applied" so the phone clears it, the next pull removes the local copy.
+    if (!row && (await isErasedRow(m, spec.table, op.entityId))) {
+      return { idemKey: op.idemKey, status: 'applied' };
+    }
 
     // 3. Clamp only the upper bound. Offline edits are legitimately old.
     const now = Date.now();
@@ -3274,6 +3340,9 @@ export class SyncService implements OnModuleInit {
 
     if (op.op === 'delete') {
       if (row) {
+        // Read these before the tombstone write below.
+        const wasDeleted = !!row.is_deleted;
+        const rowBankProfileId: string | null = row.bank_profile_id ?? null;
         const expectedRowVersion = BigInt(row.row_version ?? 1);
         const nextRowVersion = expectedRowVersion + 1n;
         let encAmount: Buffer;
@@ -3309,6 +3378,15 @@ export class SyncService implements OnModuleInit {
           [op.entityId, userId, updatedAt, nextRowVersion.toString(), encAmount, encText, textIdx, expectedRowVersion.toString()],
         );
         if (Array.isArray(res) && res.length === 0) throw new Error('delete_concurrency_race');
+
+        // Same balance effect as deleteTransactionEntry: a removed spend goes back to the
+        // account, a removed income comes off it. Skipped if the row was already deleted.
+        if (!wasDeleted && rowBankProfileId) {
+          const amount = await this.outboxRowAmount(userId, op.entity, op.entityId, row, expectedRowVersion);
+          if (amount) {
+            await this.adjustBankBalance(m, userId, rowBankProfileId, op.entity === 'transaction' ? amount : -amount);
+          }
+        }
       }
       return { idemKey: op.idemKey, status: 'applied' }; // unknown id: nothing to tombstone
     }
@@ -3372,6 +3450,12 @@ export class SyncService implements OnModuleInit {
         [op.entityId, userId, updatedAt, encAmount, encText, textIdx, ...vals],
       );
       if (!ins.length) throw new Error('insert_race'); // another writer took the id: retry, next pass rejects as forbidden
+
+      // Manual entries move the account balance, same as the /sync/manual-transaction path.
+      if (f.bankProfileId) {
+        const amount = Math.abs(Number(f.amount) || 0);
+        await this.adjustBankBalance(m, userId, f.bankProfileId, op.entity === 'transaction' ? -amount : amount);
+      }
     } else {
       const expectedRowVersion = BigInt(row.row_version ?? 1);
       let targetAmount = f.amount;

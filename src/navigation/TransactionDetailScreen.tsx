@@ -42,6 +42,7 @@ import { TagPaymentModal } from '../components/TagPaymentModal';
 import { DateTimePickerSheet } from '../components/DateTimePickerSheet';
 import { CategoryIcon } from '../components/CategoryIcon';
 import { BankIcon } from '../components/BankIcon';
+import { getCashProfile } from '../services/cashService';
 import { getCategory } from '../constants/categories';
 import { tagLearningService } from '../services/tagLearningService';
 import { AddBankModal } from './AddBankModal';
@@ -141,6 +142,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
 
   const transaction: TransactionItem = props.transaction || route?.params?.transaction;
   const bankProfiles = useBankStore((s) => s.bankProfiles);
+  const hasCashWallet = !!getCashProfile(bankProfiles);
 
   const matchedBank = useMemo(() => {
     if (transaction?.bankProfileId) return bankProfiles.find((b) => b.id === transaction.bankProfileId);
@@ -501,6 +503,17 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
             syncService.flushOutbox().catch(() => {});
           }
 
+          // Mirror the server: a deleted spend goes back to the account, a deleted income comes off it.
+          const accountId = transaction.bankProfileId ?? (transaction as any).bank_profile_id;
+          if (accountId) {
+            const acct = useBankStore.getState().bankProfiles.find((b) => b.id === accountId);
+            if (acct) {
+              const cur = Number(acct.currentBalance) || 0;
+              const amt = Math.abs(Number(originalAmount) || 0);
+              useBankStore.getState().updateBankBalance(accountId, Math.round((isCredit ? cur - amt : cur + amt) * 100) / 100);
+            }
+          }
+
           if (isCredit) useIncomeStore.getState().removeIncomeRecordState(transaction.id);
           else useTransactionStore.getState().removeTransactionState(transaction.id);
 
@@ -849,8 +862,10 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
                 })),
                 {
                   id: null as string | null,
-                  title: 'Cash',
-                  sub: 'Not linked to a bank',
+                  // Before the cash wallet existed, "Cash" here meant "not linked". Once the
+                  // wallet exists it is listed above as its own account, so this one is renamed.
+                  title: hasCashWallet ? 'Not linked' : 'Cash',
+                  sub: hasCashWallet ? 'Not tied to any account' : 'Not linked to a bank',
                   icon: (
                     <View style={[styles.cashIcon, { borderColor: line, backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#FFFFFF' }]}>
                       <MaterialCommunityIcons name="cash" size={22} color={muted} />

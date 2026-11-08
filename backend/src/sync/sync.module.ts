@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { SyncService } from './sync.service';
 import { SyncController } from './sync.controller';
+import { TombstonePurgeService } from './tombstone-purge.service';
 import { BankProfile } from './entities/bank-profile.entity';
 import { Transaction } from './entities/transaction.entity';
 import { BudgetDeclaration } from './entities/budget-declaration.entity';
@@ -38,7 +39,7 @@ import { CryptoModule } from '../crypto/crypto.module';
     NotificationsModule,
     CryptoModule,
   ],
-  providers: [SyncService],
+  providers: [SyncService, TombstonePurgeService],
   controllers: [SyncController],
 })
 export class SyncModule {}

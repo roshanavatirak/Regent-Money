@@ -95,6 +95,28 @@ export const BankIcon = ({
   size?: number;
   style?: StyleProp<ViewStyle>;
 }) => {
+  // The cash wallet is stored as an account named "Cash": show a cash icon, not a bank.
+  if (code === 'CASH' || (name || '').trim().toLowerCase() === 'cash') {
+    return (
+      <View
+        style={[
+          {
+            width: size,
+            height: size,
+            borderRadius: size / 2,
+            backgroundColor: '#E3F2E8',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+          },
+          style,
+        ]}
+      >
+        <MaterialCommunityIcons name="cash" size={Math.round(size * 0.58)} color="#0B3D2C" />
+      </View>
+    );
+  }
+
   const resolved = resolveBankCode(name, undefined, code);
   const localSource = LOCAL_SVG_MAP[resolved];
 

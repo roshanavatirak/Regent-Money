@@ -28,6 +28,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Font from 'expo-font';
 import { useTheme, Goal, SavingsEntry, useBankStore, useGoalsStore, showGlobalConfirm } from '../store';
+import { bankAccountsOnly } from '../services/cashService';
 import {
   getGoalPacing,
   goalService,
@@ -607,7 +608,7 @@ export const GoalDetailModal: React.FC<GoalDetailModalProps> = ({ goal, visible,
       sub = 'Linking an account checks your goals never add up to more than it holds.';
       const items: { id: string | null; name: string; sub: string; warn?: boolean; bank?: any }[] = [
         { id: null, name: 'Not linked', sub: 'Track without checking a balance' },
-        ...bankProfiles.map((b) => {
+        ...bankAccountsOnly(bankProfiles).map((b) => {
           const sum = getBankAllocationSummary(b, allGoals);
           const ok = validateBankDeposit(b, allGoals, activeGoal.currentAmount, activeGoal.id).valid;
           return { id: b.id, name: `${b.bankName}${b.accountNumberSuffix ? ` •• ${b.accountNumberSuffix}` : ''}`, sub: formatBankOptionSubtitle(sum), warn: sum.isOverallocated || (!ok && activeGoal.linkedBankId !== b.id), bank: b };

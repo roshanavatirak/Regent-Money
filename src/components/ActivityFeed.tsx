@@ -51,7 +51,7 @@ export const BankAccountBadge = ({ bank, font }: { bank?: ActivityBank; font?: A
   return (
     <View
       style={[badgeStyles.badge, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#F3F6F4' }]}
-      accessibilityLabel={`Account ending ${bank.mask.replace(/•/g, '')}`}
+      accessibilityLabel={bank.code === 'CASH' ? 'Cash' : `Account ending ${bank.mask.replace(/•/g, '')}`}
     >
       <BankIcon code={bank.code} name={bank.bankName} size={16} />
       <Text

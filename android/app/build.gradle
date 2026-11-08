@@ -88,8 +88,8 @@ android {
     compileSdk rootProject.ext.compileSdkVersion
 
     namespace 'com.regentmoney'
-    def appVersionCode = Integer.parseInt(findProperty('versionCode') ?: '141')
-    def appVersionName = findProperty('versionName') ?: '1.0.58'
+    def appVersionCode = Integer.parseInt(findProperty('versionCode') ?: '147')
+    def appVersionName = findProperty('versionName') ?: '1.0.63'
 
     defaultConfig {
         applicationId 'com.regentmoney'
@@ -138,12 +138,17 @@ android {
         }
         release {
             def isReleaseTask = gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') }
-            if (isReleaseTask && signingConfigs.release.storeFile == null) {
-                // Fail loudly instead of silently shipping a debug-signed release build
+            def isEasBuild = (System.getenv('EAS_BUILD') == 'true')
+            if (isReleaseTask && !isEasBuild && signingConfigs.release.storeFile == null) {
+                // Fail loudly instead of silently shipping a debug-signed release build on non-EAS environments
                 throw new GradleException("Release signing is not configured. Create android/keystore.properties " +
                     "(see android/keystore.properties.example) or set REGENT_RELEASE_* environment variables.")
             }
-            signingConfig signingConfigs.release
+            if (signingConfigs.release.storeFile != null) {
+                signingConfig signingConfigs.release
+            } else {
+                signingConfig signingConfigs.debug
+            }
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds

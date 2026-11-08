@@ -9,14 +9,23 @@ dist/
 web-build/
 expo-env.d.ts
 
-# Native
+# Native & Gradle Build Caches
+.gradle/
+android/.gradle/
+android/build/
+android/app/build/
+android/.cxx/
+android/app/.cxx/
 .kotlin/
+android/.kotlin/
 *.orig.*
 *.jks
 *.p8
 *.p12
 *.key
 *.mobileprovision
+*.apk
+*.aab
 
 # Metro
 .metro-health-check*

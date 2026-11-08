@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Local Gradle & C++ build caches (MUST NOT be uploaded to EAS Linux build machine)
+.gradle/
+android/.gradle/
+android/build/
+android/app/build/
+android/.cxx/
+android/app/.cxx/
+android/.kotlin/
+build/
+
+# iOS build artifacts
+ios/build/
+ios/Pods/
+
+# Expo & Web
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Backend (not needed for mobile build)
+backend/
+
+# Non-app directories & documentation
+website/
+marketing/
+docs/
+scratch/
+.claude/
+
+# Temporary and local files
+.env*.local
+*.log
+*.tsbuildinfo
+*.zip
+*.apk
+*.aab
+.DS_Store
+

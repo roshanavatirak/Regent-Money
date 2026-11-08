@@ -26,7 +26,7 @@ import Animated, {
   FadeInDown,
 } from 'react-native-reanimated';
 import Svg, { Path, Circle, Rect, G, Text as SvgText } from 'react-native-svg';
-import { Feather } from '@expo/vector-icons';
+import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFonts } from 'expo-font';
 import {
   BricolageGrotesque_700Bold,
@@ -85,6 +85,8 @@ export interface HomeDashboardProps {
   /** Total spend over the same elapsed days last month. */
   previousSpentSamePeriod?: number;
   hasBanks: boolean;
+  /** True once the cash wallet exists; until then a banner offers to set it up. */
+  hasCash?: boolean;
   smsTrackingOn: boolean;
   refreshing: boolean;
   bottomInset: number;
@@ -97,6 +99,7 @@ export interface HomeDashboardProps {
   onOpenCalendar: () => void;
   onOpenBudgets: () => void;
   onOpenGoals: () => void;
+  onOpenCash?: () => void;
   onOpenRegent: () => void;
   onSetupTracking: () => void;
   onOpenTransaction?: (tx: DashboardTx) => void;
@@ -123,7 +126,7 @@ const BANNER_THEMES = {
 } as const;
 
 type BannerTheme = keyof typeof BANNER_THEMES;
-type BannerArtKind = 'bank' | 'overspend' | 'kept' | 'sms' | 'regent';
+type BannerArtKind = 'bank' | 'overspend' | 'kept' | 'sms' | 'regent' | 'cash';
 
 const BANNER_PALETTE: BannerTheme[] = ['lime', 'lilac', 'amber', 'coral'];
 
@@ -210,6 +213,17 @@ function BannerArt({ kind, theme }: { kind: BannerArtKind; theme: (typeof BANNER
             <Path d="M49.5 64 l2.5 2.5 l4.5 -5" fill="none" stroke={W} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
             <SvgText x={74} y={69} fontSize={13} fontWeight="800" fill={fg} textAnchor="middle">₹</SvgText>
             <Path d={sparkle(84, 32, 8)} fill={W} stroke={fg} strokeWidth={2} />
+          </G>
+        )}
+        {kind === 'cash' && (
+          <G>
+            <Rect x={12} y={40} width={62} height={36} rx={7} fill={fg} transform="rotate(-10 43 58)" />
+            <Rect x={26} y={30} width={62} height={36} rx={7} fill={W} stroke={fg} strokeWidth={2.5} />
+            <Circle cx={57} cy={48} r={10} fill={ring2} stroke={fg} strokeWidth={2.5} />
+            <SvgText x={57} y={53} fontSize={13} fontWeight="800" fill={fg} textAnchor="middle">₹</SvgText>
+            <Circle cx={34} cy={48} r={2.5} fill={fg} />
+            <Circle cx={80} cy={48} r={2.5} fill={fg} />
+            <Path d={sparkle(86, 18, 7)} fill={fg} />
           </G>
         )}
         {kind === 'regent' && (
@@ -663,6 +677,17 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
       });
     }
 
+    if (!props.hasCash && props.onOpenCash) {
+      list.push({
+        key: 'cash',
+        prefer: 'lime',
+        art: 'cash',
+        title: 'Got cash? Add it to your net worth',
+        cta: 'Add cash',
+        onPress: props.onOpenCash,
+      });
+    }
+
     if (Platform.OS === 'android' && !smsTrackingOn) {
       list.push({
         key: 'sms',
@@ -685,7 +710,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
 
     const themes = assignBannerThemes(list.map((b) => b.prefer));
     return list.map((b, i) => ({ ...b, theme: themes[i] }));
-  }, [hasBanks, income, spent, smsTrackingOn, props.onAddBank, props.onSetupTracking, props.onOpenRegent]);
+  }, [hasBanks, income, spent, smsTrackingOn, props.onAddBank, props.onSetupTracking, props.onOpenRegent, props.hasCash, props.onOpenCash]);
 
   const [carouselWidth, setCarouselWidth] = useState(0);
   const bannerWidth = (carouselWidth || screenWidth) - 32 - 36;
@@ -897,13 +922,18 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
       <Animated.View entering={FadeInDown.delay(160).duration(450)} style={styles.quickRow}>
         {[
           { label: 'Add expense', icon: 'plus' as const, onPress: props.onAddExpense, bg: FOREST, fg: LIME },
+          { label: 'Cash', icon: 'credit-card' as const, onPress: props.onOpenCash ?? props.onOpenGoals, bg: isDark ? 'rgba(184, 243, 107, 0.16)' : '#E3F2E8', fg: isDark ? LIME : FOREST },
           { label: 'Calendar', icon: 'calendar' as const, onPress: props.onOpenCalendar, bg: isDark ? 'rgba(59, 130, 246, 0.18)' : '#DCEBFF', fg: isDark ? '#93C5FD' : '#1450A3' },
           { label: 'Budgets', icon: 'pie-chart' as const, onPress: props.onOpenBudgets, bg: isDark ? 'rgba(255, 138, 107, 0.18)' : '#FFE3D6', fg: isDark ? '#FFB29E' : '#A63A12' },
-          { label: 'Goals', icon: 'target' as const, onPress: props.onOpenGoals, bg: isDark ? 'rgba(139, 124, 246, 0.2)' : '#ECE6FF', fg: isDark ? '#C4B8FF' : '#4B2DB8' },
+
         ].map((a) => (
           <PressableScale key={a.label} onPress={a.onPress} style={styles.quickItem} accessibilityLabel={a.label}>
             <View style={[styles.quickTile, { backgroundColor: a.bg }]}>
-              <Feather name={a.icon} size={22} color={a.fg} />
+              {a.label === 'Cash' ? (
+                <MaterialCommunityIcons name="cash" size={26} color={a.fg} />
+              ) : (
+                <Feather name={a.icon} size={22} color={a.fg} />
+              )}
             </View>
             <Text style={styles.quickLabel} numberOfLines={1}>
               {a.label}

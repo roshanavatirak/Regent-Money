@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, useBankStore, useGoalsStore } from '../store';
+import { bankAccountsOnly } from '../services/cashService';
 import {
   GOAL_CATEGORIES,
   GoalCategoryOption,
@@ -70,7 +71,9 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
   const scrollViewRef = useRef<ScrollView>(null);
 
   // Bank Profiles & Goals for envelope accounting
-  const bankProfiles = useBankStore((state) => state.bankProfiles);
+  const allProfiles = useBankStore((state) => state.bankProfiles);
+  // Goals link to bank accounts only for now, not the cash wallet.
+  const bankProfiles = useMemo(() => bankAccountsOnly(allProfiles), [allProfiles]);
   const allGoals = useGoalsStore((state) => state.goals);
 
   // Auto-select first bank account if available and none selected

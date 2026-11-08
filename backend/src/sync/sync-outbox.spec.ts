@@ -29,6 +29,7 @@ import { AiService } from '../ai/ai.service';
 import { RedisService } from '../redis/redis.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { FieldCipherService } from '../crypto/field-cipher.service';
+import { setErasedRowsReady } from './erased-rows.util';
 
 describe('SyncService - Offline Outbox (applyOutbox)', () => {
   let service: SyncService;
@@ -37,6 +38,7 @@ describe('SyncService - Offline Outbox (applyOutbox)', () => {
   let mockIncomeRecords: Map<string, any>;
   let mockBankProfiles: Map<string, any>;
   let invalidateCacheCalls: string[];
+  let erasedIds: Set<string>;
 
   beforeEach(async () => {
     appliedOps = new Map();
@@ -44,6 +46,7 @@ describe('SyncService - Offline Outbox (applyOutbox)', () => {
     mockIncomeRecords = new Map();
     mockBankProfiles = new Map();
     invalidateCacheCalls = [];
+    erasedIds = new Set();
 
     // Pre-populate bank profile for tests
     mockBankProfiles.set('bank_hdfc_123', {
@@ -54,6 +57,11 @@ describe('SyncService - Offline Outbox (applyOutbox)', () => {
     const mockEntityManager = {
       query: jest.fn(async (sql: string, params: any[] = []) => {
         const cleanSql = sql.replace(/\s+/g, ' ').trim();
+
+        // 0. Erased-row lookup (30-day purge)
+        if (cleanSql.includes('FROM finance.erased_rows')) {
+          return erasedIds.has(params[1]) ? [{ '?column?': 1 }] : [];
+        }
 
         // 1. applied_ops INSERT
         if (cleanSql.includes('INSERT INTO finance.applied_ops')) {
@@ -150,6 +158,17 @@ describe('SyncService - Offline Outbox (applyOutbox)', () => {
               row.source = vals[2] ?? row.source;
               row.timestamp = vals[3] ?? row.timestamp;
             }
+            return [{ '?column?': 1 }];
+          }
+          return [];
+        }
+
+        // 7. Account balance change from a manual entry
+        if (cleanSql.includes('UPDATE core.bank_profiles')) {
+          const [id, userId, delta] = params;
+          const bank = mockBankProfiles.get(id);
+          if (bank && bank.user_id === userId) {
+            bank.current_balance = Math.round(((Number(bank.current_balance) || 0) + Number(delta)) * 100) / 100;
             return [{ '?column?': 1 }];
           }
           return [];
@@ -527,5 +546,87 @@ describe('SyncService - Offline Outbox (applyOutbox)', () => {
     expect(inc.enc_source).toEqual(Buffer.from('mock_enc_source'));
     expect(inc.category).toBe('salary');
     expect(inc.amount).toBeUndefined(); // Zero plaintext in DB
+  });
+
+  it('10. Balance: a manual spend and a manual income move the account balance once', async () => {
+    mockBankProfiles.get('bank_hdfc_123').current_balance = 1000;
+    const spend = {
+      idemKey: 'op_balance_spend_010',
+      entity: 'transaction',
+      op: 'upsert',
+      entityId: 'tx_manual_balance_010',
+      payload: { amount: 120, category: 'food', merchant: 'Chai', timestamp: Date.now(), bankProfileId: 'bank_hdfc_123' },
+    };
+    const income = {
+      idemKey: 'op_balance_income_010',
+      entity: 'income',
+      op: 'upsert',
+      entityId: 'inc_manual_balance_010',
+      payload: { amount: 500, category: 'gift', source: 'Gift', timestamp: Date.now(), bankProfileId: 'bank_hdfc_123' },
+    };
+
+    await service.applyOutbox('user_A', [spend, income]);
+    expect(mockBankProfiles.get('bank_hdfc_123').current_balance).toBe(1380);
+
+    // Replaying the same ops must not move the balance again
+    await service.applyOutbox('user_A', [spend, income]);
+    expect(mockBankProfiles.get('bank_hdfc_123').current_balance).toBe(1380);
+  });
+
+  it('11. Balance: deleting a manual spend puts the money back, deleting it twice does not', async () => {
+    mockBankProfiles.get('bank_hdfc_123').current_balance = 880;
+    mockTransactions.set('tx_manual_del_011', {
+      id: 'tx_manual_del_011',
+      user_id: 'user_A',
+      amount: 120,
+      updated_at: 1000,
+      row_version: 1,
+      bank_profile_id: 'bank_hdfc_123',
+      is_deleted: false,
+    });
+    const del = (key: string) => ({
+      idemKey: key,
+      entity: 'transaction',
+      op: 'delete',
+      entityId: 'tx_manual_del_011',
+      payload: { updatedAt: Date.now() },
+    });
+
+    await service.applyOutbox('user_A', [del('op_balance_delete_011a')]);
+    expect(mockBankProfiles.get('bank_hdfc_123').current_balance).toBe(1000);
+
+    await service.applyOutbox('user_A', [del('op_balance_delete_011b')]);
+    expect(mockBankProfiles.get('bank_hdfc_123').current_balance).toBe(1000);
+  });
+
+  it('12. Erased: an old offline edit for a row the 30-day purge erased does not bring it back', async () => {
+    setErasedRowsReady(true);
+    try {
+      erasedIds.add('tx_manual_erased_012');
+      const staleEdit = {
+        idemKey: 'op_erased_edit_012',
+        entity: 'transaction',
+        op: 'upsert',
+        entityId: 'tx_manual_erased_012',
+        payload: { amount: 500, category: 'food', merchant: 'Old edit', timestamp: Date.now() - 40 * 86400000 },
+      };
+      const res = await service.applyOutbox('user_A', [staleEdit]);
+      expect(res.results).toEqual([{ idemKey: 'op_erased_edit_012', status: 'applied' }]);
+      expect(mockTransactions.has('tx_manual_erased_012')).toBe(false);
+
+      // A genuinely new offline transaction (new ID) is still saved
+      const newOffline = {
+        idemKey: 'op_new_offline_012',
+        entity: 'transaction',
+        op: 'upsert',
+        entityId: 'tx_manual_brand_new_012',
+        payload: { amount: 120, category: 'food', merchant: 'Added offline', timestamp: Date.now() - 40 * 86400000 },
+      };
+      const res2 = await service.applyOutbox('user_A', [newOffline]);
+      expect(res2.results[0].status).toBe('applied');
+      expect(mockTransactions.has('tx_manual_brand_new_012')).toBe(true);
+    } finally {
+      setErasedRowsReady(false);
+    }
   });
 });

@@ -618,10 +618,16 @@ export const authService = {
 
     try {
       const { GoogleSignin } = require('@react-native-google-signin/google-signin');
-      const isSignedIn = await GoogleSignin.isSignedIn();
-      if (isSignedIn) {
-        await GoogleSignin.signOut();
-        console.log('[Auth] Signed out from Google Native.');
+      if (GoogleSignin) {
+        const hasSignedIn = typeof GoogleSignin.hasPreviousSignIn === 'function'
+          ? GoogleSignin.hasPreviousSignIn()
+          : typeof GoogleSignin.isSignedIn === 'function'
+            ? await GoogleSignin.isSignedIn()
+            : false;
+        if (hasSignedIn && typeof GoogleSignin.signOut === 'function') {
+          await GoogleSignin.signOut();
+          console.log('[Auth] Signed out from Google Native.');
+        }
       }
     } catch (e: any) {
       console.log('[Auth] Google Native signout failed or not initialized:', e.message);

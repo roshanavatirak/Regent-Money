@@ -26,14 +26,16 @@ export interface LegalDocument {
   sections: LegalSection[];
 }
 
-export const LEGAL_CONTACT = 'privacy@regentmoney.com';
+export const LEGAL_CONTACT = 'roshanawatirak@gmail.com';
 export const LEGAL_PUBLISHER = 'Regent Money by Rao Dev Studios';
 export const PRIVACY_POLICY_URL = 'https://raodevstudios.in/privacy';
+export const TERMS_URL = 'https://raodevstudios.in/terms';
+export const DELETE_ACCOUNT_URL = 'https://raodevstudios.in/regent-money/delete-account';
 
 export const TERMS: LegalDocument = {
   title: 'Terms of service',
-  version: '2.1',
-  effective: 'October 2026',
+  version: '2.2',
+  effective: 'November 2026',
   summary: [
     'Regent tracks your money. It can’t move it.',
     'Insights are for information, not financial advice.',
@@ -44,6 +46,7 @@ export const TERMS: LegalDocument = {
       heading: 'Using Regent',
       paragraphs: [
         'By creating an account or using Regent Money, you agree to these terms and to our privacy policy. If you don’t agree, please don’t use Regent.',
+        'Regent is for people aged 18 and over. By using it, you confirm you are at least 18.',
       ],
     },
     {
@@ -74,7 +77,8 @@ export const TERMS: LegalDocument = {
     {
       heading: 'Your data',
       paragraphs: [
-        `How we collect, use and protect your data is explained in our privacy policy. To delete your account and its data, email ${LEGAL_CONTACT}.`,
+        `How we collect, use and protect your data is explained in our privacy policy (${PRIVACY_POLICY_URL}).`,
+        `To delete your account and its data, go to Settings, then Delete account, or email ${LEGAL_CONTACT} from your registered email address. Full steps: ${DELETE_ACCOUNT_URL}.`,
       ],
     },
     {
@@ -92,7 +96,7 @@ export const TERMS: LegalDocument = {
 
 export const PRIVACY: LegalDocument = {
   title: 'Privacy policy',
-  version: '2.3',
+  version: '2.4',
   effective: 'November 2026',
   summary: [
     'We read only bank messages, on your phone. The message text never leaves it.',
@@ -110,7 +114,8 @@ export const PRIVACY: LegalDocument = {
         },
         { title: 'Files you import', text: 'Statements and screenshots you choose to upload, to find the transactions in them. If a statement PDF is password protected, the password you enter is sent with it only to open that file; on your phone it is kept in the device’s secure keystore.' },
         { title: 'Profile photo', text: 'A photo, if you choose to add one.' },
-        { title: 'Profile details', text: 'Things you add yourself, like date of birth, occupation and income.' },
+        { title: 'Profile details', text: 'Things you add yourself, like date of birth, gender, occupation and income.' },
+        { title: 'Device and security', text: 'A push notification token so we can send you alerts, device details in bug reports you choose to send, and a bot-protection check when you sign in.' },
       ],
     },
     {
@@ -122,27 +127,37 @@ export const PRIVACY: LegalDocument = {
     {
       heading: 'Where it’s stored',
       paragraphs: [
-        'Your data is kept on your phone and in your Regent account on our servers, so it’s there if you change phones. It travels over encrypted connections.',
+        'Your data is kept on your phone and in your Regent account on our servers, so it’s there if you change phones. It travels over encrypted connections, and data on your phone is encrypted with keys held in the Android Keystore.',
+        'We keep your data while your account is active. Transactions you delete are permanently erased from our servers after 30 days.',
       ],
     },
     {
       heading: 'Who we share it with',
       paragraphs: [
         'We never sell your data or share it with advertisers. We use these service providers only to run Regent for you:',
-        'Render (servers and database hosting); Google Gemini, Groq and Mistral (AI processing of Regent chat messages and of statements and screenshots you import, together with the balances and transactions needed to answer); Cloudinary (profile photos); Brevo (account emails such as verification and password reset); Expo and Firebase Cloud Messaging (push notifications); Google Sign-In (if you choose to sign in with Google).',
+        'Render (servers and database hosting); Google Gemini, Groq and Mistral (AI processing of Regent chat messages and of statements and screenshots you import, together with the balances and transactions needed to answer); Cloudinary (profile photos); Brevo and Gmail (account emails such as verification and password reset); Expo and Firebase Cloud Messaging (push notifications); Google Sign-In (if you choose to sign in with Google); Cloudflare Turnstile (bot protection at sign-in).',
+        'Some of these providers may process data outside India.',
       ],
     },
     {
       heading: 'Your choices',
       points: [
-        { title: 'SMS access', text: 'Turn it off any time in your phone’s settings.' },
+        { title: 'SMS access', text: 'Turn off auto-tracking for a bank in the app, or revoke SMS access any time in your phone’s settings.' },
         { title: 'Regent chat', text: 'Clear your conversation from Privacy in the app.' },
-        { title: 'Delete your account', text: `Go to Settings, then Delete account, or email ${LEGAL_CONTACT}. Your account and its data are permanently deleted after 7 days; signing back in before then cancels it.` },
+        { title: 'Delete your account', text: `Go to Settings, then Delete account, or email ${LEGAL_CONTACT} from your registered email address. Your account and its data are permanently deleted after 7 days; signing back in before then cancels it.` },
+        { title: 'Your rights', text: 'Under India’s Digital Personal Data Protection Act, 2023, you can ask for a summary of your data, correct it, erase it, withdraw consent, and nominate someone to act for you.' },
       ],
     },
     {
-      heading: 'Contact',
-      paragraphs: [`Privacy questions or requests: ${LEGAL_CONTACT}`],
+      heading: 'Age',
+      paragraphs: ['Regent is for people aged 18 and over. We don’t knowingly collect data from anyone younger; if you think a minor has an account, contact us and we will delete it.'],
+    },
+    {
+      heading: 'Contact and grievances',
+      paragraphs: [
+        `Privacy questions, requests or complaints: ${LEGAL_CONTACT}. Grievance Officer: Roshan Avatirak, RAO Dev Studios. We aim to reply within 30 days.`,
+        `Full policy: ${PRIVACY_POLICY_URL}`,
+      ],
     },
   ],
 };

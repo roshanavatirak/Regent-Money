@@ -28,6 +28,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import * as Font from 'expo-font';
 import { useTheme, useBankStore, showGlobalConfirm, useSyncStatusStore } from '../store';
+import { bankAccountsOnly } from '../services/cashService';
 import { useSyncDb } from '../services/useSyncDb';
 import { smsCatchupService } from '../services/smsCatchupService';
 import { authService } from '../services/authService';
@@ -234,7 +235,9 @@ export const BanksScreen: React.FC<BanksScreenProps> = ({ AppTopBarComponent, Ad
   const { sync } = useSyncDb();
   const { width } = useWindowDimensions();
 
-  const bankProfiles = useBankStore((s) => s.bankProfiles);
+  const allProfiles = useBankStore((s) => s.bankProfiles);
+  // The cash wallet lives on its own screen; this list is bank accounts only.
+  const bankProfiles = useMemo(() => bankAccountsOnly(allProfiles), [allProfiles]);
   const activeBankModalId = useBankStore((s) => s.activeBankModalId);
   const setActiveBankModalId = useBankStore((s) => s.setActiveBankModalId);
   const syncStatus = useSyncStatusStore((s) => s.status);

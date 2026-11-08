@@ -9,7 +9,7 @@
 // Tokens are single use. Callers remount the widget (change its `key`) after
 // every login / signup attempt to get a fresh one.
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 type WebViewMessageEvent = any;
@@ -83,6 +83,8 @@ export const CloudflareTurnstile: React.FC<CloudflareTurnstileProps> = ({
   style,
 }) => {
   const [status, setStatus] = useState<Status>('loading');
+  const [lastErrorCode, setLastErrorCode] = useState<string | null>(null);
+  const lastErrorLoggedRef = useRef<string | null>(null);
   const html = useMemo(() => buildHtml(TURNSTILE_SITE_KEY, theme), [theme]);
 
   if (!isNativeWebViewAvailable || !WebView) {
@@ -110,9 +112,20 @@ export const CloudflareTurnstile: React.FC<CloudflareTurnstileProps> = ({
       setStatus('ready');
       onExpire?.();
     } else if (msg.type === 'error') {
-      console.warn('[Turnstile] Challenge error:', msg.code);
+      const errCode = String(msg.code || '');
+      if (lastErrorLoggedRef.current !== errCode) {
+        lastErrorLoggedRef.current = errCode;
+        if (errCode === '110200') {
+          console.warn(
+            `[Turnstile] Challenge error 110200: Domain not authorized for sitekey. Ensure "${TURNSTILE_BASE_URL}" is added under Turnstile > Widget > Hostnames in Cloudflare Dashboard.`
+          );
+        } else {
+          console.warn('[Turnstile] Challenge error:', errCode);
+        }
+      }
+      setLastErrorCode(errCode);
       setStatus('error');
-      onError?.(msg.code);
+      onError?.(errCode);
     }
   };
 
@@ -143,7 +156,11 @@ export const CloudflareTurnstile: React.FC<CloudflareTurnstileProps> = ({
         </View>
       )}
       {status === 'error' && (
-        <Text style={styles.errorText}>Security check couldn’t load. Check your connection and try again.</Text>
+        <Text style={styles.errorText}>
+          {lastErrorCode === '110200'
+            ? 'Security verification domain unconfigured. You may still proceed with login.'
+            : 'Security check couldn’t load. Check your connection and try again.'}
+        </Text>
       )}
     </View>
   );

@@ -308,6 +308,7 @@ export const syncService = {
         id: b.id,
         bankName: b.bankName ?? b.bank_name,
         accountNumberSuffix: b.accountNumberSuffix ?? b.account_number_suffix,
+        accountType: b.accountType ?? b.account_type,
         currentBalance: Math.round(parseFloat(String(b.currentBalance ?? b.current_balance ?? 0)) * 100) / 100,
         lastSyncTimestamp: Number(b.lastSyncTimestamp ?? b.last_sync_timestamp ?? 0),
         smsSenderId: b.smsSenderId ?? b.sms_sender_id,
