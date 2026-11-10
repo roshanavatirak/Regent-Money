@@ -1,0 +1,115 @@
+name: Nightly database backup
+
+# Dumps Regent's app data (core, finance and wealth schemas) from Supabase every night,
+# encrypts it with an age public key, and keeps it as a private workflow artifact for 14 days.
+# Only someone holding the matching age private key can read a backup.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   SUPABASE_DB_URL        Supabase "Session pooler" connection string (IPv4), e.g.
+#                          postgresql://postgres.<project-ref>:<password>@aws-0-ap-south-1.pooler.supabase.com:5432/postgres
+#   BACKUP_AGE_PUBLIC_KEY  The public key printed by `age-keygen` (starts with "age1...")
+#
+# Restore steps: docs/restore.md
+
+on:
+  schedule:
+    - cron: '30 20 * * *' # 02:00 IST every night
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: Dump, encrypt and store
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check secrets are set
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          BACKUP_AGE_PUBLIC_KEY: ${{ secrets.BACKUP_AGE_PUBLIC_KEY }}
+        run: |
+          missing=0
+          if [ -z "$SUPABASE_DB_URL" ]; then echo "::error::Secret SUPABASE_DB_URL is not set"; missing=1; fi
+          if [ -z "$BACKUP_AGE_PUBLIC_KEY" ]; then echo "::error::Secret BACKUP_AGE_PUBLIC_KEY is not set"; missing=1; fi
+          case "$BACKUP_AGE_PUBLIC_KEY" in age1*) ;; *) [ -n "$BACKUP_AGE_PUBLIC_KEY" ] && echo "::error::BACKUP_AGE_PUBLIC_KEY must start with age1" && missing=1 ;; esac
+          exit $missing
+
+      - name: Install PostgreSQL 17 client and age
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17 age
+          pg_dump --version
+          age --version
+
+      - name: Dump app schemas
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          pg_dump "$SUPABASE_DB_URL" \
+            --format=custom \
+            --no-owner \
+            --no-privileges \
+            --schema=core \
+            --schema=finance \
+            --schema=wealth \
+            --file=backup.dump
+          ls -lh backup.dump
+
+      - name: Check the dump is complete
+        run: |
+          set -euo pipefail
+          tables=$(pg_restore --list backup.dump | grep -c "TABLE DATA" || true)
+          echo "Tables with data in this backup: $tables"
+          if [ "$tables" -lt 5 ]; then
+            echo "::error::Backup looks incomplete (only $tables tables). Not saving it."
+            exit 1
+          fi
+          for t in core.users finance.transactions finance.income_records; do
+            if ! pg_restore --list backup.dump | grep -q "TABLE DATA ${t%%.*} ${t#*.} "; then
+              echo "::error::Backup is missing $t"
+              exit 1
+            fi
+          done
+
+      - name: Encrypt and delete the plain copy
+        id: encrypt
+        env:
+          BACKUP_AGE_PUBLIC_KEY: ${{ secrets.BACKUP_AGE_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          name="regent-db-$(date -u +%Y-%m-%dT%H%MZ).dump.age"
+          age --encrypt --recipient "$BACKUP_AGE_PUBLIC_KEY" --output "$name" backup.dump
+          shred -u backup.dump
+          ls -lh "$name"
+          echo "file=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Store encrypted backup (14 days)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.encrypt.outputs.file }}
+          path: ${{ steps.encrypt.outputs.file }}
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Summary
+        run: |
+          {
+            echo "### Database backup saved"
+            echo ""
+            echo "- File: \`${{ steps.encrypt.outputs.file }}\`"
+            echo "- Schemas: core, finance, wealth"
+            echo "- Encrypted with age; kept for 14 days"
+            echo "- Restore: see docs/restore.md"
+          } >> "$GITHUB_STEP_SUMMARY"
