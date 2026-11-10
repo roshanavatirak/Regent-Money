@@ -37,12 +37,15 @@ import { mmkvStorage } from '../db/mmkv';
 import { smsPermissionService } from '../services/smsPermissionService';
 import { smsCatchupService } from '../services/smsCatchupService';
 import { bankDiscoveryService, DiscoveredBank } from '../services/bankDiscoveryService';
+import { findLinkedProfile, isLinkedAccount } from '../services/bankMatching';
+import { TRACKING_SETUP_KEY } from '../constants/trackingSetup';
 import { BankIcon } from '../components/BankIcon';
 import { CategoryIcon } from '../components/CategoryIcon';
 import { authService } from '../services/authService';
+import { syncService } from '../services/syncService';
 import { getBackendUrl } from '../config/api';
 
-export const TRACKING_SETUP_KEY = 'has_setup_tracking_v1';
+export { TRACKING_SETUP_KEY };
 
 const BACKEND_URL = getBackendUrl();
 const FOREST = '#0B3D2C';
@@ -87,6 +90,8 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
   const [alreadyLinkedBanks, setAlreadyLinkedBanks] = useState<DiscoveredBank[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [errorText, setErrorText] = useState('');
+  const bankProfiles = useBankStore((state) => state.bankProfiles) || [];
+
   // Accounts the user unchecked; kept in the list so they can be re-added
   const [skippedIds, setSkippedIds] = useState<Set<string>>(new Set());
   // Edit sheet for one account's digits and balance
@@ -118,10 +123,17 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
     transform: [{ scale: 1 + pulse.value * 0.6 }],
   }));
 
+  // Opened from the dashboard card, Main is already underneath: go back to it rather than
+  // stacking a second dashboard. As the first screen after sign-in, replace this one with Main.
+  const goToMain = () => {
+    if (navigation.canGoBack()) navigation.goBack();
+    else navigation.replace('Main');
+  };
+
   const finish = () => {
     mmkvStorage.setBoolean(TRACKING_SETUP_KEY, true);
     smsPermissionService.setPrompted(true);
-    navigation.replace('Main');
+    goToMain();
   };
 
   const allow = async () => {
@@ -141,21 +153,11 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
       const discovered = await bankDiscoveryService.discoverBanksFromSms(720);
       const existingBanks = useBankStore.getState().bankProfiles || [];
 
-      const isBankMatch = (disc: DiscoveredBank, exist: any) => {
-        const discSuffix = (disc.accountNumberSuffix || '').trim();
-        const existSuffix = (exist.accountNumberSuffix || '').trim();
-        const discName = (disc.bankName || '').trim().toLowerCase();
-        const existName = (exist.bankName || '').trim().toLowerCase();
-        const suffixMatch = Boolean(discSuffix && existSuffix && discSuffix === existSuffix);
-        const nameMatch = discName === existName || discName.includes(existName) || existName.includes(discName);
-        return suffixMatch && nameMatch;
-      };
-
       const newDiscovered = (discovered || []).filter(
-        (d) => !existingBanks.some((e: any) => isBankMatch(d, e))
+        (d) => !existingBanks.some((e: any) => isLinkedAccount(d, e))
       );
       const matchedExisting = (discovered || []).filter(
-        (d) => existingBanks.some((e: any) => isBankMatch(d, e))
+        (d) => existingBanks.some((e: any) => isLinkedAccount(d, e))
       );
 
       // If all discovered accounts already match existing profiles, bypass setup!
@@ -164,7 +166,11 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
         smsPermissionService.setPrompted(true);
         const result = await smsCatchupService.reconcile(false, 720);
         setFound(result?.syncedCount ?? 0);
-        navigation.replace('Main');
+        await Promise.all([
+          syncService.sync(true).catch(() => {}),
+          syncService.fetchAnalytics(true).catch(() => {}),
+        ]);
+        goToMain();
         return;
       }
 
@@ -270,6 +276,14 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
       // 2. Strict catch-up reconciliation: only import transactions matching confirmed banks & suffixes!
       const catchup = await smsCatchupService.reconcile(true, 720, undefined, true);
       setFound(catchup?.syncedCount ?? 0);
+
+      // Pre-hydrate: pull cloud transactions and analytics while saving spinner is active
+      // so Dashboard opens immediately with real numbers and zero flash of 0s.
+      await Promise.all([
+        syncService.sync(true).catch(() => {}),
+        syncService.fetchAnalytics(true).catch(() => {}),
+      ]);
+
       setPhase('done');
     } catch (e: any) {
       console.warn('[AutoTrackingSetup] Error saving discovered banks:', e);
@@ -479,7 +493,15 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
                 </View>
                 <View style={[s.listCard, { backgroundColor: surface, borderColor: line, opacity: 0.9 }]}>
                   {alreadyLinkedBanks.map((b, i) => {
-                    const balance = parseFloat(b.currentBalance) || 0;
+                    const matchedProfile = findLinkedProfile(b, bankProfiles);
+                    const balance =
+                      matchedProfile && matchedProfile.currentBalance != null
+                        ? parseFloat(String(matchedProfile.currentBalance))
+                        : (parseFloat(b.currentBalance) || 0);
+                    const displayName = matchedProfile?.bankName || b.bankName;
+                    const displayType = matchedProfile?.accountType || b.accountType;
+                    const displaySuffix = matchedProfile?.accountNumberSuffix || b.accountNumberSuffix;
+
                     return (
                       <View
                         key={b.tempId}
@@ -490,14 +512,14 @@ export const AutoTrackingSetupScreen: React.FC<AutoTrackingSetupScreenProps> = (
                       >
                         <View style={s.bankRowMain}>
                           <View style={[s.logoWrap, { borderColor: line }]}>
-                            <BankIcon code={b.bankCode} name={b.bankName} size={34} />
+                            <BankIcon code={b.bankCode} name={displayName} size={34} />
                           </View>
                           <View style={s.bankRowText}>
                             <Text style={[s.bankRowName, { color: ink }]} numberOfLines={1}>
-                              {b.bankName}
+                              {displayName}
                             </Text>
                             <Text style={[s.bankRowMeta, { color: muted }]} numberOfLines={1}>
-                              {b.accountType} ··{b.accountNumberSuffix}
+                              {displayType} ··{displaySuffix}
                             </Text>
                           </View>
                           <Text style={[s.bankRowBalance, { color: ink }]}>

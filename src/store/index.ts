@@ -473,6 +473,9 @@ export interface AIState {
   chatHistory: ChatMessage[];
   isGeneratingBriefing: boolean;
   isThinking: boolean;
+  /** Id of the saved chat that is open in Regent chat (null = new, not saved yet). */
+  currentChatId: string | null;
+  setCurrentChatId: (id: string | null) => void;
   setWeeklyBriefing: (briefing: string | null) => void;
   setGeneratingBriefing: (val: boolean) => void;
   setThinking: (val: boolean) => void;
@@ -487,6 +490,8 @@ export const useAIStore = create<AIState>((set) => ({
   chatHistory: [],
   isGeneratingBriefing: false,
   isThinking: false,
+  currentChatId: null,
+  setCurrentChatId: (currentChatId) => set({ currentChatId }),
   setWeeklyBriefing: (weeklyBriefing) => set({ weeklyBriefing }),
   setGeneratingBriefing: (isGeneratingBriefing) => set({ isGeneratingBriefing }),
   setThinking: (isThinking) => set({ isThinking }),
@@ -603,11 +608,7 @@ export interface BankProfileType {
   debitCardSuffixes?: string[];
 }
 
-/** Normalises the backend's comma-separated card list. */
-export const parseDebitCardSuffixes = (raw: unknown): string[] =>
-  (Array.isArray(raw) ? raw : String(raw ?? '').split(','))
-    .map((s) => String(s).trim())
-    .filter((s) => /^\d{4}$/.test(s));
+export { parseDebitCardSuffixes } from '../services/bankMatching';
 
 export interface BankState {
   bankProfiles: BankProfileType[];
@@ -1084,16 +1085,29 @@ export const useSecurityStore = create<SecurityState>((set) => ({
 // 11. Sidebar Navigation Store
 export interface SidebarState {
   isOpen: boolean;
-  openSidebar: () => void;
+  /** Show the drawer already in place, without its slide-in (used when returning to it). */
+  instant: boolean;
+  /** Runs once the drawer is on screen. */
+  onShown: (() => void) | null;
+  openSidebar: (opts?: { instant?: boolean; onShown?: () => void }) => void;
   closeSidebar: () => void;
   toggleSidebar: () => void;
+  takeOnShown: () => (() => void) | null;
 }
 
-export const useSidebarStore = create<SidebarState>((set) => ({
+export const useSidebarStore = create<SidebarState>((set, get) => ({
   isOpen: false,
-  openSidebar: () => set({ isOpen: true }),
-  closeSidebar: () => set({ isOpen: false }),
-  toggleSidebar: () => set((state) => ({ isOpen: !state.isOpen })),
+  instant: false,
+  onShown: null,
+  openSidebar: (opts) =>
+    set({ isOpen: true, instant: !!opts?.instant, onShown: opts?.onShown ?? null }),
+  closeSidebar: () => set({ isOpen: false, instant: false }),
+  toggleSidebar: () => set((state) => ({ isOpen: !state.isOpen, instant: false })),
+  takeOnShown: () => {
+    const cb = get().onShown;
+    if (cb) set({ onShown: null });
+    return cb;
+  },
 }));
 
 // 12. Global App Update Store

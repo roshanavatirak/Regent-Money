@@ -28,8 +28,11 @@ import { RedisModule } from './redis/redis.module';
 import { AdminModule } from './admin/admin.module';
 import { AdminAuditLog } from './admin/entities/admin-audit-log.entity';
 import { FeedbackModule } from './feedback/feedback.module';
+import { Feedback } from './feedback/entities/feedback.entity';
 import { UserKey } from './crypto/entities/user-key.entity';
 import { CryptoModule } from './crypto/crypto.module';
+import { ChatHistoryModule } from './chat-history/chat-history.module';
+import { ChatThread } from './chat-history/entities/chat-thread.entity';
 import * as dns from 'dns';
 
 // Helper to resolve host to IPv4 address programmatically
@@ -100,6 +103,8 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
             UserSignals,
             AdminAuditLog,
             UserKey,
+            Feedback,
+            ChatThread,
           ],
           synchronize: false, // Set to false to avoid altering tables automatically, schemas exist
           ssl: getSslConfig(),
@@ -129,6 +134,7 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
     RedisModule,
     FeedbackModule,
     CryptoModule,
+    ChatHistoryModule,
     ScheduleModule.forRoot(),
     ThrottlerModule.forRoot([
       {

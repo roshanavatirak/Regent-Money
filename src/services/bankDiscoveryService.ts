@@ -21,6 +21,20 @@ export interface DiscoveredBank {
   lastSmsDate: number;
 }
 
+const ACCOUNT_NUMBER_RX = /\b(?:a\/c|acct|account|ac)\b[^0-9]{0,25}?[xX*.]*(\d{3,18})\b/gi;
+const CARD_NUMBER_RX = /\bcard\b[^0-9]{0,25}?[xX*.]*(\d{3,18})\b/gi;
+
+const lastFourOf = (rx: RegExp, text: string): string[] =>
+  Array.from(text.matchAll(new RegExp(rx.source, 'gi')), (m) => {
+    const d = m[1].slice(-4);
+    return d.length === 3 ? '0' + d : d;
+  });
+
+/** True when this number appears in the SMS only as a card number, never as an A/c number. */
+export function isCardOnlyNumber(body: string, suffix: string): boolean {
+  return lastFourOf(CARD_NUMBER_RX, body).includes(suffix) && !lastFourOf(ACCOUNT_NUMBER_RX, body).includes(suffix);
+}
+
 /**
  * Extracts distinct bank accounts from a list of raw SMS messages.
  * Pure function so it can be tested without native Android modules.
@@ -66,11 +80,28 @@ export function extractDiscoveredBanksFromMessages(rawMessages: Array<{ address?
 
     // Determine account type
     const lowerBody = body.toLowerCase();
+    const hasCreditCard =
+      lowerBody.includes('credit card') ||
+      lowerBody.includes('credit-card') ||
+      lowerBody.includes('sbi card') ||
+      lowerBody.includes('avl limit') ||
+      lowerBody.includes('credit limit');
+
     let accountType: 'Savings' | 'Current' | 'Credit Card' = 'Savings';
-    if (lowerBody.includes('credit card') || lowerBody.includes('card ending') || lowerBody.includes('card xx') || lowerBody.includes('card no')) {
+    if (hasCreditCard) {
+      // "Credit Card" always wins over "debited", e.g. "Rs 500 debited on your Credit Card"
       accountType = 'Credit Card';
     } else if (lowerBody.includes('current a/c') || lowerBody.includes('current account')) {
       accountType = 'Current';
+    } else {
+      accountType = 'Savings';
+    }
+
+    // Never create a bank account from a card number. If the number came from a "card" phrase
+    // and not an "A/c" phrase, and nothing says it's a credit card, it's a debit card (or a card
+    // of unknown type): skip it. Its account is found from SMS that name the A/c.
+    if (accountType !== 'Credit Card' && (parsed?.isDebitCard || isCardOnlyNumber(body, suffix))) {
+      continue;
     }
 
     const availableBal = parsed?.availableBalance;

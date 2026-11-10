@@ -76,7 +76,8 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "postinstall": "node scripts/fix-gradle-jcenter.js && node scripts/fix-cmake.js && patch-package",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "test:unit": "node --experimental-strip-types --no-warnings --import ./scripts/test/register.mjs --test \"src/**/*.test.ts\""
   },
   "private": true
 }

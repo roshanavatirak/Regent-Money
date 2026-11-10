@@ -107,26 +107,25 @@ test('monthSummary excludes self-transfers from Money In (incomes)', () => {
     { id: 'inc_4', amount: 50000, type: 'credit', category: 'salary', source: 'Acme Corp', timestamp: monthStart + 40 },
   ];
   const res = monthSummary([], incomes, monthStart, new Set(), false, dummyGetColor);
-  // Only the 50000 salary income should be counted in Money In! 2500, 1500, and 1000 self-transfers excluded.
-  assert.strictEqual(res.in, 50000);
+  // Category decides, not the source text: 2500 (Self transfer) and 1000 (flag) are left out;
+  // 1500 is categorised Money in, so it counts even though its text says "own account".
+  assert.strictEqual(res.in, 51500);
 });
 
-test('monthSummary excludes cross-account paired transfers from both Money In and Money Out', () => {
+test('monthSummary never pairs same-amount debit and credit as a transfer by itself', () => {
   const monthStart = 1000000;
-  // User transfers ₹2,500 from HDFC (bank_1) to SBI (bank_2)
   const txs = [
-    { id: 'tx_debit_pair', amount: 2500, type: 'debit', category: 'miscellaneous', bankProfileId: 'bank_1', timestamp: monthStart + 100 },
+    { id: 'tx_debit', amount: 2500, type: 'debit', category: 'money_transfer', bankProfileId: 'bank_1', timestamp: monthStart + 100 },
+    { id: 'tx_self', amount: 700, type: 'debit', category: 'self_transfer', bankProfileId: 'bank_1', timestamp: monthStart + 150 },
     { id: 'tx_coffee', amount: 200, type: 'debit', category: 'food', bankProfileId: 'bank_1', timestamp: monthStart + 200 },
   ];
   const incomes = [
-    { id: 'inc_credit_pair', amount: 2500, type: 'credit', category: 'money_received', bankProfileId: 'bank_2', timestamp: monthStart + 120 },
-    { id: 'inc_bonus', amount: 5000, type: 'credit', category: 'salary', bankProfileId: 'bank_2', timestamp: monthStart + 300 },
+    { id: 'inc_credit', amount: 2500, type: 'credit', category: 'money_received', bankProfileId: 'bank_2', timestamp: monthStart + 120 },
+    { id: 'inc_self', amount: 700, type: 'credit', category: 'self_transfer', bankProfileId: 'bank_2', timestamp: monthStart + 160 },
   ];
 
   const res = monthSummary(txs, incomes, monthStart, new Set(), false, dummyGetColor);
-  // Money Out: Only 200 coffee (2500 transfer debit is excluded!)
-  assert.strictEqual(res.out, 200);
-  // Money In: Only 5000 bonus (2500 transfer credit is excluded!)
-  assert.strictEqual(res.in, 5000);
+  // Only the Self transfer pair (700) is left out
+  assert.strictEqual(res.out, 2700);
+  assert.strictEqual(res.in, 2500);
 });
-

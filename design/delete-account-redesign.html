@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Delete Account Redesign</title>
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@500;600;700&family=Bricolage+Grotesque:wght@700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#E7ECE9;font-family:Figtree,sans-serif;padding:32px 16px}
+.wrap{max-width:1040px;margin:0 auto}
+.title{font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:26px;color:#0B1F17;margin:0 0 4px}
+.sub{color:#5B6B63;font-size:14px;margin:0 0 28px;font-weight:500}
+.grid{display:flex;flex-wrap:wrap;gap:28px;justify-content:center}
+.ph{width:300px;height:610px;border-radius:30px;background:#F3F6F4;position:relative;overflow:hidden;color:#0B1F17;flex:none;box-shadow:0 0 0 8px #0B1F17}
+.dim{position:absolute;inset:0;background:rgba(11,31,23,.45)}
+.sh{position:absolute;left:0;right:0;bottom:0;background:#fff;border-radius:28px 28px 0 0;padding:10px 20px 22px}
+.gr{width:38px;height:4px;border-radius:2px;background:#D5DFD9;margin:0 auto 16px}
+.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+.ib{width:36px;height:36px;border-radius:18px;background:#EEF3F0;display:flex;align-items:center;justify-content:center;color:#0B3D2C;font-size:17px}
+.dots{display:flex;gap:5px}.dots i{width:6px;height:6px;border-radius:3px;background:#D5DFD9}.dots i.on{width:18px;background:#0B3D2C}
+.h{font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:24px;line-height:1.15;letter-spacing:-.4px;margin:0 0 6px;color:#0B1F17}
+.s{font-size:13.5px;color:#5B6B63;margin:0 0 18px;line-height:1.45;font-weight:500}
+.btn{height:50px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14.5px;gap:6px}
+.forest{background:#0B3D2C;color:#fff}.del{background:#C8361D;color:#fff}.ghost{color:#C8361D}.plain{color:#5B6B63}
+.card{background:#F3F6F4;border-radius:22px;padding:6px}
+.step{display:flex;align-items:center;gap:12px;background:#fff;border-radius:16px;padding:11px 12px;margin-bottom:4px}.step:last-child{margin-bottom:0}
+.ic{width:36px;height:36px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:18px;flex:none}
+.k{font-size:11.5px;color:#5B6B63;font-weight:600}.v{font-size:14px;font-weight:700;margin-top:1px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px}
+.chip{padding:10px 14px;border-radius:999px;background:#EEF3F0;font-size:13px;font-weight:600;color:#0B1F17;display:flex;align-items:center;gap:6px}
+.chip.on{background:#0B3D2C;color:#fff}
+.lbl{font-size:12.5px;font-weight:700;color:#0B1F17;margin-bottom:8px}
+.inp{height:52px;border-radius:16px;background:#F3F6F4;border:1.5px solid #0B3D2C;display:flex;align-items:center;padding:0 16px;font-size:16px;letter-spacing:3px}
+.cap{font-size:13px;color:#5B6B63;margin:16px 0 0;text-align:center;font-weight:600}
+.d .ph{background:#24292e;color:#fff}.d .sh{background:#2b3137}.d .gr{background:rgba(255,255,255,.18)}.d .ib{background:rgba(255,255,255,.06);color:#B8F36B}
+.d .h{color:#fff}.d .s,.d .k{color:rgba(250,251,252,.6)}.d .card{background:rgba(255,255,255,.04)}.d .step{background:rgba(255,255,255,.05)}.d .v{color:#fff}
+.d .dots i{background:rgba(255,255,255,.2)}.d .dots i.on{background:#B8F36B}.d .forest{background:#B8F36B;color:#0B3D2C}.d .ghost{color:#FF8A6B}
+.d .chip{background:rgba(255,255,255,.06);color:#fff}.d .chip.on{background:#B8F36B;color:#0B3D2C}
+.d .lbl{color:#fff}.d .inp{background:#1e2227;border-color:#B8F36B;color:#fff}.d .del{background:#E5482C}.d .plain{color:rgba(250,251,252,.6)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<p class="title">Delete account sheet</p>
+<p class="sub">Regent theme · forest, lime, coral · light and dark</p>
+<div class="grid">
+
+<div><div class="ph"><div class="dim"></div><div class="sh">
+<div class="gr"></div>
+<div class="top"><div class="dots"><i class="on"></i><i></i><i></i></div><div class="ib"><i class="ti ti-x"></i></div></div>
+<p class="h">Delete your account?</p>
+<p class="s">You get 7 days to change your mind.</p>
+<div class="card" style="margin-bottom:20px">
+<div class="step"><div class="ic" style="background:#FFF1D6;color:#9A5B00"><i class="ti ti-lock"></i></div><div><div class="k">Today</div><div class="v">Account paused</div></div></div>
+<div class="step"><div class="ic" style="background:#E3F2E8;color:#0B3D2C"><i class="ti ti-rotate-clockwise"></i></div><div><div class="k">Within 7 days</div><div class="v">Log in to restore</div></div></div>
+<div class="step"><div class="ic" style="background:#FFE3D6;color:#A63A12"><i class="ti ti-trash"></i></div><div><div class="k">After 7 days</div><div class="v">Data erased for good</div></div></div>
+</div>
+<div class="btn forest" style="margin-bottom:6px">Keep my account</div>
+<div class="btn ghost">Continue to delete</div>
+</div></div><p class="cap">1 · Overview</p></div>
+
+<div><div class="ph"><div class="dim"></div><div class="sh">
+<div class="gr"></div>
+<div class="top"><div class="ib"><i class="ti ti-arrow-left"></i></div><div class="dots"><i class="on"></i><i class="on"></i><i></i></div><div class="ib"><i class="ti ti-x"></i></div></div>
+<p class="h">What's the reason?</p>
+<p class="s">Pick one. It helps us improve.</p>
+<div class="chips">
+<span class="chip">Switching apps</span><span class="chip">Privacy</span>
+<span class="chip on"><i class="ti ti-check"></i>Bank sync issues</span>
+<span class="chip">Too complicated</span><span class="chip">Goals reached</span>
+<span class="chip">Too many alerts</span><span class="chip">Bugs</span><span class="chip">Other</span>
+</div>
+<div class="btn forest">Continue</div>
+</div></div><p class="cap">2 · Reason</p></div>
+
+<div><div class="ph"><div class="dim"></div><div class="sh">
+<div class="gr"></div>
+<div class="top"><div class="ib"><i class="ti ti-arrow-left"></i></div><div class="dots"><i class="on"></i><i class="on"></i><i></i></div><div class="ib"><i class="ti ti-x"></i></div></div>
+<p class="h">What's the reason?</p>
+<p class="s">Pick one. It helps us improve.</p>
+<div class="chips" style="margin-bottom:12px">
+<span class="chip">Switching apps</span><span class="chip">Privacy</span><span class="chip">Bugs</span>
+<span class="chip on"><i class="ti ti-check"></i>Other</span>
+</div>
+<div style="border-radius:16px;background:#F3F6F4;padding:12px 14px;height:76px;font-size:13.5px;color:#8A9A92;font-weight:500;margin-bottom:6px">Tell us more</div>
+<div style="font-size:11.5px;color:#8A9A92;text-align:right;margin-bottom:14px;font-weight:600">0/300</div>
+<div class="btn forest">Continue</div>
+</div></div><p class="cap">2 · "Other" selected</p></div>
+
+<div><div class="ph"><div class="dim"></div><div class="sh">
+<div class="gr"></div>
+<div class="top"><div class="ib"><i class="ti ti-arrow-left"></i></div><div class="dots"><i class="on"></i><i class="on"></i><i class="on"></i></div><div class="ib"><i class="ti ti-x"></i></div></div>
+<p class="h">Confirm it's you</p>
+<p class="s">You'll be signed out right away.</p>
+<div class="lbl">Password</div>
+<div class="inp">••••••••<i class="ti ti-eye" style="margin-left:auto;font-size:18px;letter-spacing:0;color:#5B6B63"></i></div>
+<div style="font-size:12px;color:#C8361D;font-weight:600;margin:8px 0 18px 4px">Wrong password. Try again.</div>
+<div class="btn del" style="margin-bottom:6px"><i class="ti ti-trash"></i>Delete account</div>
+<div class="btn plain">Cancel</div>
+</div></div><p class="cap">3a · Email user (with error)</p></div>
+
+<div><div class="ph"><div class="dim"></div><div class="sh">
+<div class="gr"></div>
+<div class="top"><div class="ib"><i class="ti ti-arrow-left"></i></div><div class="dots"><i class="on"></i><i class="on"></i><i class="on"></i></div><div class="ib"><i class="ti ti-x"></i></div></div>
+<p class="h">Confirm it's you</p>
+<p class="s">You'll be signed out right away.</p>
+<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:18px;background:#F3F6F4;margin-bottom:22px">
+<div style="width:38px;height:38px;border-radius:19px;background:#fff;border:1px solid #E1E9E4;display:flex;align-items:center;justify-content:center;color:#EA4335;font-size:19px"><i class="ti ti-brand-google"></i></div>
+<div><div class="v">Google account</div><div class="k">you@gmail.com</div></div></div>
+<div class="btn del" style="margin-bottom:6px"><i class="ti ti-trash"></i>Delete account</div>
+<div class="btn plain">Cancel</div>
+</div></div><p class="cap">3b · Google user</p></div>
+
+<div><div class="ph"><div class="dim"></div><div class="sh">
+<div class="gr"></div>
+<div style="width:60px;height:60px;border-radius:20px;background:#FFF1D6;display:flex;align-items:center;justify-content:center;color:#9A5B00;font-size:28px;margin:8px auto 16px"><i class="ti ti-clock"></i></div>
+<p class="h" style="text-align:center">Not available yet</p>
+<p class="s" style="text-align:center;margin-bottom:22px">You restored this account recently. You can delete it from <b style="color:#0B1F17">16 Nov 2026</b>.</p>
+<div class="btn forest">Got it</div>
+</div></div><p class="cap">Cooldown</p></div>
+
+<div class="d"><div class="ph"><div class="dim"></div><div class="sh">
+<div class="gr"></div>
+<div class="top"><div class="dots"><i class="on"></i><i></i><i></i></div><div class="ib"><i class="ti ti-x"></i></div></div>
+<p class="h">Delete your account?</p>
+<p class="s">You get 7 days to change your mind.</p>
+<div class="card" style="margin-bottom:20px">
+<div class="step"><div class="ic" style="background:rgba(255,194,77,.16);color:#FFC24D"><i class="ti ti-lock"></i></div><div><div class="k">Today</div><div class="v">Account paused</div></div></div>
+<div class="step"><div class="ic" style="background:rgba(184,243,107,.16);color:#B8F36B"><i class="ti ti-rotate-clockwise"></i></div><div><div class="k">Within 7 days</div><div class="v">Log in to restore</div></div></div>
+<div class="step"><div class="ic" style="background:rgba(255,138,107,.18);color:#FFB29E"><i class="ti ti-trash"></i></div><div><div class="k">After 7 days</div><div class="v">Data erased for good</div></div></div>
+</div>
+<div class="btn forest" style="margin-bottom:6px">Keep my account</div>
+<div class="btn ghost">Continue to delete</div>
+</div></div><p class="cap">Dark · Overview</p></div>
+
+<div class="d"><div class="ph"><div class="dim"></div><div class="sh">
+<div class="gr"></div>
+<div class="top"><div class="ib"><i class="ti ti-arrow-left"></i></div><div class="dots"><i class="on"></i><i class="on"></i><i></i></div><div class="ib"><i class="ti ti-x"></i></div></div>
+<p class="h">What's the reason?</p>
+<p class="s">Pick one. It helps us improve.</p>
+<div class="chips">
+<span class="chip">Switching apps</span><span class="chip">Privacy</span>
+<span class="chip on"><i class="ti ti-check"></i>Bank sync issues</span>
+<span class="chip">Too complicated</span><span class="chip">Goals reached</span>
+<span class="chip">Too many alerts</span><span class="chip">Bugs</span><span class="chip">Other</span>
+</div>
+<div class="btn forest">Continue</div>
+</div></div><p class="cap">Dark · Reason</p></div>
+
+<div class="d"><div class="ph"><div class="dim"></div><div class="sh">
+<div class="gr"></div>
+<div class="top"><div class="ib"><i class="ti ti-arrow-left"></i></div><div class="dots"><i class="on"></i><i class="on"></i><i class="on"></i></div><div class="ib"><i class="ti ti-x"></i></div></div>
+<p class="h">Confirm it's you</p>
+<p class="s">You'll be signed out right away.</p>
+<div class="lbl">Password</div>
+<div class="inp">••••••••<i class="ti ti-eye" style="margin-left:auto;font-size:18px;letter-spacing:0;color:rgba(250,251,252,.6)"></i></div>
+<div style="height:26px"></div>
+<div class="btn del" style="margin-bottom:6px"><i class="ti ti-trash"></i>Delete account</div>
+<div class="btn plain">Cancel</div>
+</div></div><p class="cap">Dark · Confirm</p></div>
+
+</div>
+</div>
+</body>
+</html>

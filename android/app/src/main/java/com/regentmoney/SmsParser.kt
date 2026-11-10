@@ -56,8 +56,8 @@ object SmsParser {
     private val CARD_WORD = Regex("\\b(?:credit|debit)\\s*card\\b")
     private val CREDIT_WORDS = Regex("\\b(?:credited|received|refunded|deposited|transferred\\s*from|trf\\s*from|\\bcr\\b|inward\\s*remittance|cashback\\s*received|money\\s*received|added\\s*to\\s*(?:your\\s*)?(?:a\\/c|account))\\b", I)
     private val DEBIT_WORDS = Regex("\\b(?:debited|debit|sent|paid|spent|withdrawn|used\\s*for|used\\s*at|purchase\\s*of|transferred\\s*to|trf\\s*to|\\bdr\\b|txn\\s*of|transaction\\s*of|transaction\\s*on|txn\\s*on|done\\s*at|done\\s*on|done\\s*for|charged|payment\\s*of|payment\\s*to|vpa\\s*debited|deducted|auto-debit|auto-debited|money\\s*sent)\\b", I)
-    private val BALANCE = Regex("(?:avl\\s*bal(?:ance)?|available\\s*balance|avail\\s*bal|clear\\s*bal|total\\s*bal|closing\\s*bal|ledger\\s*bal|\\bbal(?:ance)?\\s*(?:is)?)\\s*[:\\-]?\\s*(?:rs\\.?|inr|₹)?\\s*([\\d,]+(?:\\.\\d{1,2})?)", I)
-    private val BALANCE_MASK = Regex("(?:avl\\s*bal|available\\s*balance|avail\\s*bal|bal|balance|clear\\s*bal|total\\s*bal|closing\\s*bal|ledger\\s*bal|limit)[:\\s]*(?:rs\\.?|inr|₹)?\\s*[\\d,]+(?:\\.\\d{1,2})?", I)
+    private val BALANCE = Regex("(?:avl\\s*bal(?:ance)?|available\\s*balance|avail\\s*bal|clear\\s*bal|total\\s*bal|closing\\s*bal|ledger\\s*bal|\\bbal(?:ance)?\\s*(?:is)?)(?:\\s*(?:in|of|for)\\s+(?:your\\s+)?(?:a\\/c|acct|account|ac)\\.?\\s*(?:no\\.?\\s*)?[xX*.]*\\d+\\s*(?:is)?)?\\s*[:\\-]?\\s*(?:rs\\.?|inr|₹)?\\s*([\\d,]+(?:\\.\\d{1,2})?)", I)
+    private val BALANCE_MASK = Regex("(?:avl\\s*bal|available\\s*balance|avail\\s*bal|bal|balance|clear\\s*bal|total\\s*bal|closing\\s*bal|ledger\\s*bal|limit)(?:\\s*(?:in|of|for)\\s+(?:your\\s+)?(?:a\\/c|acct|account|ac)\\.?\\s*(?:no\\.?\\s*)?[xX*.]*\\d+\\s*(?:is)?)?[:\\s]*(?:rs\\.?|inr|₹)?\\s*[\\d,]+(?:\\.\\d{1,2})?", I)
     private val AMOUNT_REGEXES = listOf(
         Regex("(?:debited|credited|paid|sent|withdrawn|spent|used\\s*for|charge|towards|payment\\s*of|txn\\s*of|transaction\\s*of|deducted)\\s*(?:by|for|with|of)?\\s*[:\\-\\s]*(?:rs\\.?|inr|₹)?\\s*([\\d,]+(?:\\.\\d{1,2})?)", I),
         Regex("(?:rs\\.?|inr|₹)\\s*([\\d,]+(?:\\.\\d{1,2})?)", I),
@@ -159,7 +159,8 @@ object SmsParser {
         if (amount == null) return null
 
         // 5. Account suffix
-        val accountSuffix = extractAccountSuffix(clean)
+        // Money paid into a credit card belongs to the card, not the account it came from
+        val accountSuffix = extractAccountSuffix(clean, type == "credit" && CREDIT_CARD_HINT.containsMatchIn(clean))
 
         // 6. Merchant / counterparty. A refund names the original merchant the way a debit does.
         val isReversal = type == "credit" && REVERSAL.containsMatchIn(textWithoutCard)
@@ -333,16 +334,46 @@ object SmsParser {
         return CARD_SUFFIX.findAll(cleanText).any { it.groupValues[1].takeLast(4) == suffix }
     }
 
-    private val SUFFIX = Regex("\\b(?:a\\/c|acct|account|ac|card)\\b[^0-9]{0,25}?([xX*.]*)(\\d{3,18})\\b", I)
+    private val SUFFIX = Regex("\\b(?:(a\\/c|acct|account|ac)|(card))\\b[^0-9]{0,25}?([xX*.]*)(\\d{3,18})\\b", I)
     private val SUFFIX_BEFORE_VERB = Regex("\\b([xX*.]*)(\\d{4,18})\\s*(?:debited|credited|-credited|-debited)\\b", I)
 
-    /** Account or card suffix; a masked match (X6090, **1234, ...4020) wins over bare digits. */
-    fun extractAccountSuffix(cleanText: String): String {
-        var candidates = SUFFIX.findAll(cleanText).map { it.groupValues[2].takeLast(4) to it.groupValues[1].isNotEmpty() }.toList()
+    private data class SuffixCandidate(val suffix: String, val hasMask: Boolean, val isAccount: Boolean)
+
+    /** Account or card suffix; bank accounts (a/c, acct, account) win over card numbers unless preferCard (a payment into a credit card). */
+    fun extractAccountSuffix(cleanText: String, preferCard: Boolean = false): String {
+        var candidates = SUFFIX.findAll(cleanText).map {
+            val isAccount = it.groupValues[1].isNotEmpty()
+            val hasMask = it.groupValues[3].isNotEmpty()
+            val digits = it.groupValues[4]
+            SuffixCandidate(digits.takeLast(4), hasMask, isAccount)
+        }.toList()
+
         if (candidates.isEmpty()) {
-            candidates = SUFFIX_BEFORE_VERB.findAll(cleanText).map { it.groupValues[2].takeLast(4) to it.groupValues[1].isNotEmpty() }.toList()
+            candidates = SUFFIX_BEFORE_VERB.findAll(cleanText).map {
+                val hasMask = it.groupValues[1].isNotEmpty()
+                val digits = it.groupValues[2]
+                SuffixCandidate(digits.takeLast(4), hasMask, isAccount = true)
+            }.toList()
         }
+
         if (candidates.isEmpty()) return "XXXX"
-        return (candidates.firstOrNull { it.second } ?: candidates.first()).first
+
+        // "Payment received on your Credit Card XX1234 from A/c XX5039": the card is the account
+        if (preferCard) {
+            val cards = candidates.filter { !it.isAccount }
+            if (cards.isNotEmpty()) return (cards.firstOrNull { it.hasMask } ?: cards.first()).suffix
+        }
+
+        val accountCandidates = candidates.filter { it.isAccount }
+        if (accountCandidates.isNotEmpty()) {
+            return (accountCandidates.firstOrNull { it.hasMask } ?: accountCandidates.first()).suffix
+        }
+
+        val cardCandidates = candidates.filter { !it.isAccount }
+        if (cardCandidates.isNotEmpty()) {
+            return (cardCandidates.firstOrNull { it.hasMask } ?: cardCandidates.first()).suffix
+        }
+
+        return candidates.first().suffix
     }
 }

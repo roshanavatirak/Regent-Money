@@ -16,6 +16,7 @@ export const NOTE_MAX = 2048;
 export const AAD_TABLE = {
   transactions: 'transactions',
   incomeRecords: 'income_records',
+  chatThreads: 'chat_threads',
 } as const;
 
 /**
@@ -27,6 +28,8 @@ export const AAD_COLUMN = {
   merchant: 'merchant',
   note: 'note',
   source: 'source',
+  chatTitle: 'title',
+  chatMessages: 'messages',
 } as const;
 
 export type RandomSource = (size: number) => Buffer;

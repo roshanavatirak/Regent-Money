@@ -65,8 +65,13 @@ describe('Financial SMS Parser & Bank Attribution Engine', () => {
     });
 
     it('should prioritize masked suffix when multiple account matches exist', () => {
+      const msg = 'Dear Customer, account 123456789 transfer to a/c XX4020';
+      expect(extractAccountSuffix(msg)).toBe('4020');
+    });
+
+    it('should prioritize bank account number over card number', () => {
       const msg = 'Dear Customer, account 123456789 used for transaction on card X6090';
-      expect(extractAccountSuffix(msg)).toBe('6090');
+      expect(extractAccountSuffix(msg)).toBe('6789');
     });
 
     it('should return XXXX when no account pattern is found', () => {

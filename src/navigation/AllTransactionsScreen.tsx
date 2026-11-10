@@ -13,7 +13,7 @@ import { useTheme } from '../store';
 import { getCategory } from '../constants/categories';
 import { ActivityFilterChips, ActivityRow, ActivityFonts, relativeDay } from '../components/ActivityFeed';
 import { ActivityFilter, ActivityItem, filterActivity, useActivityFeed } from '../hooks/useActivityFeed';
-import { isExcludedFromBudget, findPairedTransferIds } from '../utils/budget';
+import { isExcludedFromBudget } from '../utils/budget';
 
 const formatINR = (value: number) =>
   `₹${Math.abs(value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
@@ -41,23 +41,17 @@ export const AllTransactionsScreen = () => {
   const isBankFilter = typeof filter !== 'string';
   const filtered = useMemo(() => filterActivity(items, filter), [items, filter]);
 
-  const pairedTransferIds = useMemo(() => {
-    const debits = filtered.filter((i) => i.type !== 'credit');
-    const credits = filtered.filter((i) => i.type === 'credit');
-    return findPairedTransferIds(debits, credits);
-  }, [filtered]);
-
   const totals = useMemo(() => {
     let moneyIn = 0;
     let moneyOut = 0;
     for (const tx of filtered) {
-      if (pairedTransferIds.has(tx.id) || isExcludedFromBudget(tx)) continue;
+      if (isExcludedFromBudget(tx)) continue;
       const amt = Math.abs(parseFloat(String(tx.amount)) || 0);
       if (tx.type === 'credit') moneyIn += amt;
       else moneyOut += amt;
     }
     return { moneyIn, moneyOut };
-  }, [filtered, pairedTransferIds]);
+  }, [filtered]);
 
   const sections = useMemo(() => {
     const out: { title: string; data: ActivityItem[] }[] = [];

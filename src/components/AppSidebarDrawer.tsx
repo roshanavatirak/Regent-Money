@@ -68,7 +68,19 @@ export const AppSidebarDrawer: React.FC = () => {
   /* ---------------- Open / close animation ---------------- */
 
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && useSidebarStore.getState().instant) {
+      // Returning to the drawer: show it fully open in the first frame, no slide.
+      slide.stopAnimation();
+      fade.stopAnimation();
+      slide.setValue(0);
+      fade.setValue(1);
+      if (mounted) {
+        // Already on screen (Modal onShow won't fire again), so run the callback now.
+        useSidebarStore.getState().takeOnShown()?.();
+      } else {
+        setMounted(true);
+      }
+    } else if (isOpen) {
       setMounted(true);
       slide.setValue(-drawerWidth);
       Animated.parallel([
@@ -154,7 +166,14 @@ export const AppSidebarDrawer: React.FC = () => {
       if (navigationRef.isReady()) fn();
     }, delay);
   };
-  const nav = (name: string, params?: any) => go(() => (navigationRef.navigate as any)(name, params));
+  // Screens opened from here are tagged `fromSidebar`, so going back reopens this drawer
+  // (see sidebarReturnListeners in navigation/index.tsx). Tab switches inside Main are not tagged.
+  // Close and open in the same moment: the drawer slides away while the screen slides in.
+  const nav = (name: string, params?: any) => {
+    closeSidebar();
+    if (!navigationRef.isReady()) return;
+    (navigationRef.navigate as any)(name, name === 'Main' ? params : { ...(params || {}), fromSidebar: true });
+  };
 
   const handleLogout = () => {
     showGlobalConfirm({
@@ -230,7 +249,15 @@ export const AppSidebarDrawer: React.FC = () => {
   let itemIndex = 0;
 
   return (
-    <Modal visible transparent animationType="none" statusBarTranslucent navigationBarTranslucent onRequestClose={closeSidebar}>
+    <Modal
+      visible
+      transparent
+      animationType="none"
+      statusBarTranslucent
+      navigationBarTranslucent
+      onRequestClose={closeSidebar}
+      onShow={() => useSidebarStore.getState().takeOnShown()?.()}
+    >
       <View style={styles.overlay}>
         {/* Tap anywhere outside to close */}
         <Animated.View style={[StyleSheet.absoluteFill, styles.backdrop, { opacity: fade }]}>

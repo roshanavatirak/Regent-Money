@@ -367,11 +367,11 @@ export function getBudgetPeriodRange(
 }
 
 /**
- * Detect if a transaction is a self-transfer or credit card bill payment
- * (Strictly excluded to prevent double counting in budgets)
+ * Transactions left out of budgets and Money in / out are decided by category only
+ * (Self transfer, Borrow & Lend) or by the user's manual exclusion. See utils/budget.ts.
  */
-import { isExcludedFromBudget, findPairedTransferIds } from '../utils/budget';
-export { isExcludedFromBudget, findPairedTransferIds };
+import { isExcludedFromBudget } from '../utils/budget';
+export { isExcludedFromBudget };
 
 /**
  * Category alias dictionary to link various transaction spend tags/categories

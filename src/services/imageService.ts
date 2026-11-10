@@ -65,3 +65,27 @@ export const pickImageFromDevice = async (): Promise<string | null> => {
     return null;
   }
 };
+
+export const pickScreenshot = async (): Promise<string | null> => {
+  try {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: false,
+      quality: 0.7,
+      base64: true,
+    });
+
+    if (result.canceled || !result.assets || result.assets.length === 0) {
+      return null;
+    }
+
+    const asset = result.assets[0];
+    if (asset.base64) {
+      return `data:image/jpeg;base64,${asset.base64}`;
+    }
+    return asset.uri;
+  } catch (err: any) {
+    console.warn('[ImageService] Failed to pick screenshot:', err?.message || err);
+    return null;
+  }
+};

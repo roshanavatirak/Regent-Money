@@ -1,5 +1,5 @@
 import { toMinor, fromMinor } from './money';
-import { isExcludedFromBudget, findPairedTransferIds } from './budget';
+import { isExcludedFromBudget } from './budget';
 import type { DashboardCategory } from '../navigation/HomeDashboard';
 
 const toLabel = (key: string): string =>
@@ -17,7 +17,7 @@ export interface MonthSummaryResult {
 /**
  * Single-pass integer-paise month summary calculation.
  * Immune to IEEE-754 floating point drift during aggregation.
- * Strictly excludes self-transfers (single-leg & paired cross-account legs) from Money In & Money Out.
+ * Leaves out only what isExcludedFromBudget says (Self transfer category, Borrow & Lend, manual exclusions).
  */
 export function monthSummary(
   txs: any[],
@@ -35,9 +35,6 @@ export function monthSummary(
   const prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0).getTime();
   const prevEnd = new Date(now.getFullYear(), now.getMonth() - 1, currentDay, 23, 59, 59, 999).getTime();
 
-  // 1. Identify paired cross-account transfer legs (e.g. transfer between user's own accounts)
-  const pairedTransferIds = findPairedTransferIds(txs, incomes);
-
   let outMinor = 0;
   let inMinor = 0;
   let prevSamePeriodMinor = 0;
@@ -50,7 +47,6 @@ export function monthSummary(
       !tx ||
       tx.isDeleted ||
       tx.type === 'credit' ||
-      pairedTransferIds.has(tx.id) ||
       isExcludedFromBudget(tx)
     ) continue;
     const ts = Number(tx.timestamp);
@@ -71,7 +67,6 @@ export function monthSummary(
       !inc ||
       inc.isDeleted ||
       Number(inc.timestamp) < monthStart ||
-      pairedTransferIds.has(inc.id) ||
       isExcludedFromBudget(inc)
     ) continue;
     if (activeBankIds.size > 0 && inc.bankProfileId && !activeBankIds.has(inc.bankProfileId)) continue;

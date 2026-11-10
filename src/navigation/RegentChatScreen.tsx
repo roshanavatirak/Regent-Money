@@ -56,6 +56,8 @@ import { useSyncDb } from '../services/useSyncDb';
 import { askChatbot, ChatMessage } from '../services/aiService';
 import { sanitizeTransactions } from '../services/sanitizer';
 import { FormattedChatMessage } from '../components/FormattedChatMessage';
+import { ChatHistoryDrawer } from '../components/ChatHistoryDrawer';
+import { chatHistory as savedChats, newChatId } from '../services/chatHistoryService';
 import { mmkvStorage } from '../db/mmkv';
 import { EXECUTIVE_PROMPT_SETS, getWeeklySetIndex } from '../constants/executivePrompts';
 import { getSessionGreeting } from '../constants/aiGreetings';
@@ -540,6 +542,10 @@ export const RegentChatScreen: React.FC = () => {
   const clearChatHistory = useAIStore((s) => s.clearChatHistory);
   const isThinking = useAIStore((s) => s.isThinking);
   const setThinking = useAIStore((s) => s.setThinking);
+  const currentChatId = useAIStore((s) => s.currentChatId);
+  const setCurrentChatId = useAIStore((s) => s.setCurrentChatId);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [openedFromHistory, setOpenedFromHistory] = useState(false);
 
   const user = useAuthStore((s) => s.user);
   const bankProfiles = useBankStore((s) => s.bankProfiles);
@@ -567,6 +573,23 @@ export const RegentChatScreen: React.FC = () => {
   useEffect(() => {
     if (user?.name) setGreeting(getSessionGreeting(user.name));
   }, [user?.name]);
+
+  // Saved chats: show the cached list at once, then sync in the background.
+  useEffect(() => {
+    savedChats.hydrate();
+    savedChats.refresh();
+  }, [user?.id]);
+
+  // Save the open chat after each reply (not while Regent is still answering).
+  useEffect(() => {
+    if (isThinking || chatHistory.length === 0) return;
+    let id = useAIStore.getState().currentChatId;
+    if (!id) {
+      id = newChatId();
+      setCurrentChatId(id);
+    }
+    savedChats.save(id, chatHistory);
+  }, [chatHistory, isThinking]);
 
   useFocusEffect(
     useCallback(() => {
@@ -665,6 +688,7 @@ export const RegentChatScreen: React.FC = () => {
 
     setInput('');
     setEditingIndex(null);
+    setOpenedFromHistory(false);
     Keyboard.dismiss();
 
     let queryHistory: ChatMessage[];
@@ -732,7 +756,8 @@ export const RegentChatScreen: React.FC = () => {
         ),
       };
 
-      const response = await askChatbot(query, queryHistory, context);
+      // Only the last few messages go to the AI, so long chats don't cost more tokens.
+      const response = await askChatbot(query, queryHistory.slice(-8), context);
       addChatMessage({ role: 'assistant', content: response, timestamp: Date.now() });
     } catch (e) {
       console.error(e);
@@ -747,21 +772,42 @@ export const RegentChatScreen: React.FC = () => {
     }
   };
 
+  // The current chat is already saved in history, so starting a new one needs no confirmation.
   const newChat = () => {
-    if (chatHistory.length === 0) return;
-    showGlobalConfirm({
-      title: 'Start a new chat?',
-      message: 'This clears the current conversation with Regent.',
-      confirmText: 'New chat',
-      cancelText: 'Cancel',
-      icon: 'edit-3',
-      onConfirm: () => {
-        clearChatHistory();
-        setEditingIndex(null);
-        setInput('');
-        initialCountRef.current = 0;
-      },
-    });
+    clearChatHistory();
+    setCurrentChatId(null);
+    setOpenedFromHistory(false);
+    setEditingIndex(null);
+    setInput('');
+    initialCountRef.current = 0;
+    setHistoryOpen(false);
+  };
+
+  const openSavedChat = async (id: string) => {
+    if (isThinking) return;
+    if (id === currentChatId) {
+      setHistoryOpen(false);
+      return;
+    }
+    try {
+      const messages = await savedChats.loadMessages(id);
+      setEditingIndex(null);
+      setInput('');
+      setCurrentChatId(id);
+      setChatHistory(messages);
+      setOpenedFromHistory(true);
+      initialCountRef.current = messages.length;
+      setHistoryOpen(false);
+      setTimeout(() => listRef.current?.scrollToEnd({ animated: false }), 60);
+    } catch (e: any) {
+      showGlobalConfirm({
+        title: 'Couldn’t open this chat',
+        message: e?.message || 'Check your connection and try again.',
+        confirmText: 'OK',
+        icon: 'alert-triangle',
+        onConfirm: () => {},
+      });
+    }
   };
 
   const copy = async (text: string, index: number) => {
@@ -811,9 +857,9 @@ export const RegentChatScreen: React.FC = () => {
       <View style={[styles.header, chatHistory.length > 0 && styles.headerDivider]}>
         <Pressable
           style={styles.headerLeft}
-          onPress={() => useSidebarStore.getState().openSidebar()}
+          onPress={() => setHistoryOpen(true)}
           accessibilityRole="button"
-          accessibilityLabel="Open menu"
+          accessibilityLabel="Open chat history"
         >
           <TreeCoin size={34} ring={P.line} />
           <View>
@@ -1072,9 +1118,21 @@ export const RegentChatScreen: React.FC = () => {
               </Pressable>
             </Animated.View>
           </View>
-          <Text style={styles.disclaimer}>Regent can make mistakes. Check important numbers.</Text>
+          <Text style={styles.disclaimer}>
+            {openedFromHistory
+              ? 'Saved chat. Numbers update when you continue.'
+              : 'Regent can make mistakes. Check important numbers.'}
+          </Text>
         </View>
       </KeyboardAvoidingView>
+
+      <ChatHistoryDrawer
+        visible={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        currentChatId={currentChatId}
+        onSelect={openSavedChat}
+        onNewChat={newChat}
+      />
     </View>
   );
 };

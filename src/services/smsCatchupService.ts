@@ -427,8 +427,15 @@ export const smsCatchupService = {
         }
       }
 
-      if (totalIngested > 0) {
-        console.log(`[SMS Catch-up] Reconciled and synced ${totalIngested} missing transactions.`);
+      const localTxs = useTransactionStore.getState().transactions || [];
+      const needsInitialHydration = localTxs.length === 0;
+
+      if (totalIngested > 0 || needsInitialHydration) {
+        if (totalIngested > 0) {
+          console.log(`[SMS Catch-up] Reconciled and synced ${totalIngested} missing transactions.`);
+        } else {
+          console.log('[SMS Catch-up] Local transaction store is empty on startup/reinstall; pulling cloud database.');
+        }
         await syncService.sync(true);
       } else if (targetBankId) {
         // Trigger a background sync to keep states consistent

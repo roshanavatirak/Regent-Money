@@ -10,6 +10,7 @@ import {
   parseDebitCardSuffixes,
 } from '../store';
 import { mmkvStorage } from '../db/mmkv';
+import { TRACKING_SETUP_KEY } from '../constants/trackingSetup';
 import { getBackendUrl } from '../config/api';
 import { notificationService } from './notificationService';
 import { tokenStore } from './tokenStore';
@@ -19,6 +20,7 @@ import { outbox, isOutboxEnabled } from '../db/outbox';
 const BACKEND_URL = getBackendUrl();
 
 let isSyncing = false;
+let syncInFlight: Promise<void> | null = null;
 let isFlushingOutbox = false;
 
 export const syncService = {
@@ -165,7 +167,18 @@ export const syncService = {
    * Fetches all financial data directly from NestJS and updates the in-memory Zustand stores.
    * Uses Stale-While-Revalidate: only sets loading state if store has no cached data.
    */
-  async sync(force = false): Promise<void> {
+  sync(force = false): Promise<void> {
+    // A second caller waits for the sync already running instead of returning at once, so
+    // "await sync()" always means the stores hold the server's data (the first-screen hold relies on it)
+    if (!syncInFlight) {
+      syncInFlight = this.runSync(force).finally(() => {
+        syncInFlight = null;
+      });
+    }
+    return syncInFlight;
+  },
+
+  async runSync(force = false): Promise<void> {
     if (isSyncing) return;
 
     const user = useAuthStore.getState().user;
@@ -318,6 +331,9 @@ export const syncService = {
         debitCardSuffixes: parseDebitCardSuffixes(b.debitCardSuffixes ?? b.debit_card_suffixes),
       }));
       useBankStore.getState().setBankProfiles(mappedBanks);
+      if (mappedBanks.length > 0) {
+        mmkvStorage.setBoolean(TRACKING_SETUP_KEY, true);
+      }
 
       // 5. Map Income Records (Credits)
       const rawIncome = (data.incomeRecords || []).filter(

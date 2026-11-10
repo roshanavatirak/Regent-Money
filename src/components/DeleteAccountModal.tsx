@@ -1,17 +1,19 @@
-import React, { useState, useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   Modal,
-  ScrollView,
-  TouchableOpacity,
+  Pressable,
   TextInput,
   ActivityIndicator,
   Platform,
   KeyboardAvoidingView,
+  ScrollView,
 } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Font from 'expo-font';
 import { useTheme, useAuthStore, showGlobalAlert } from '../store';
 import { authService } from '../services/authService';
 
@@ -20,21 +22,24 @@ interface DeleteAccountModalProps {
   onClose: () => void;
 }
 
+const FOREST = '#0B3D2C';
+const LIME = '#B8F36B';
+
 const DELETION_REASONS = [
-  { code: 'SWITCHING_ALTERNATIVE', label: 'Found another finance app or alternative' },
-  { code: 'PRIVACY_SECURITY', label: 'Concerns regarding data privacy & security' },
-  { code: 'BANK_SYNC_ISSUES', label: 'Difficulty connecting or syncing bank accounts' },
-  { code: 'COMPLEX_UI', label: 'App is too complicated or difficult to use' },
-  { code: 'GOALS_ACHIEVED', label: 'Financial goals achieved / Starting fresh' },
-  { code: 'TOO_MANY_NOTIFS', label: 'Too many notifications or alert interruptions' },
-  { code: 'BUGS_CRASHES', label: 'Experiencing technical bugs or frequent crashes' },
-  { code: 'OTHER', label: 'Other (please specify below)' },
+  { code: 'SWITCHING_ALTERNATIVE', label: 'Switching apps' },
+  { code: 'PRIVACY_SECURITY', label: 'Privacy' },
+  { code: 'BANK_SYNC_ISSUES', label: 'Bank sync issues' },
+  { code: 'COMPLEX_UI', label: 'Too complicated' },
+  { code: 'GOALS_ACHIEVED', label: 'Goals reached' },
+  { code: 'TOO_MANY_NOTIFS', label: 'Too many alerts' },
+  { code: 'BUGS_CRASHES', label: 'Bugs' },
+  { code: 'OTHER', label: 'Other' },
 ];
 
-export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
-  visible,
-  onClose,
-}) => {
+type FeatherName = keyof typeof Feather.glyphMap;
+
+export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({ visible, onClose }) => {
+  const insets = useSafeAreaInsets();
   const { colors, isDark } = useTheme();
   const user = useAuthStore((state) => state.user);
 
@@ -43,10 +48,60 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
   const [customFeedback, setCustomFeedback] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [passwordFocused, setPasswordFocused] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // 7-day cooldown check: User cannot delete within 7 days of recent restoration
+  const font = {
+    display: Font.isLoaded('BricolageGrotesque_800ExtraBold') ? 'BricolageGrotesque_800ExtraBold' : undefined,
+    body: Font.isLoaded('Figtree_500Medium') ? 'Figtree_500Medium' : undefined,
+    semi: Font.isLoaded('Figtree_600SemiBold') ? 'Figtree_600SemiBold' : undefined,
+    bold: Font.isLoaded('Figtree_700Bold') ? 'Figtree_700Bold' : undefined,
+  };
+  const ff = (family: string | undefined, weight: '500' | '600' | '700' | '800') =>
+    family ? { fontFamily: family } : { fontWeight: weight };
+
+  const p = {
+    ink: colors.text,
+    muted: colors.textSecondary,
+    faint: colors.textTertiary,
+    surface: colors.card,
+    soft: isDark ? 'rgba(255,255,255,0.06)' : '#EEF3F0',
+    well: isDark ? 'rgba(255,255,255,0.04)' : '#F3F6F4',
+    tile: isDark ? 'rgba(255,255,255,0.05)' : '#FFFFFF',
+    input: isDark ? colors.inputBackground : '#F3F6F4',
+    grabber: isDark ? 'rgba(255,255,255,0.18)' : '#D5DFD9',
+    primary: isDark ? LIME : FOREST,
+    onPrimary: isDark ? FOREST : '#FFFFFF',
+    iconBtn: isDark ? LIME : FOREST,
+    danger: isDark ? '#E5482C' : '#C8361D',
+    dangerText: isDark ? '#FF8A6B' : '#C8361D',
+  };
+
+  const timeline: { key: string; label: string; icon: FeatherName; bg: string; fg: string }[] = [
+    {
+      key: 'Today',
+      label: 'Account paused',
+      icon: 'lock',
+      bg: isDark ? 'rgba(255,194,77,0.16)' : '#FFF1D6',
+      fg: isDark ? '#FFC24D' : '#9A5B00',
+    },
+    {
+      key: 'Within 7 days',
+      label: 'Log in to restore',
+      icon: 'rotate-ccw',
+      bg: isDark ? 'rgba(184,243,107,0.16)' : '#E3F2E8',
+      fg: isDark ? LIME : FOREST,
+    },
+    {
+      key: 'After 7 days',
+      label: 'Data erased for good',
+      icon: 'trash-2',
+      bg: isDark ? 'rgba(255,138,107,0.18)' : '#FFE3D6',
+      fg: isDark ? '#FFB29E' : '#A63A12',
+    },
+  ];
+
   const isCooldownActive = useMemo(() => {
     if (!user?.deletionCooldownUntil) return false;
     return Date.now() < user.deletionCooldownUntil;
@@ -60,6 +115,8 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
       year: 'numeric',
     });
   }, [user?.deletionCooldownUntil]);
+
+  const isEmailUser = user?.authProvider === 'email';
 
   const resetState = () => {
     setStep(1);
@@ -77,30 +134,28 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
     onClose();
   };
 
-  const handleNextFromStep1 = () => {
-    if (isCooldownActive) return;
+  const goTo = (next: 1 | 2 | 3) => {
     setErrorMsg(null);
-    setStep(2);
+    setStep(next);
   };
 
   const handleNextFromStep2 = () => {
     if (!selectedReason) {
-      setErrorMsg('Please select a reason before continuing.');
+      setErrorMsg('Pick a reason to continue.');
       return;
     }
     if (selectedReason === 'OTHER' && customFeedback.trim().length < 5) {
-      setErrorMsg('Please provide at least 5 characters of feedback.');
+      setErrorMsg('Add at least 5 characters.');
       return;
     }
-    setErrorMsg(null);
-    setStep(3);
+    goTo(3);
   };
 
   const handleConfirmDeletion = async () => {
     if (!selectedReason) return;
 
-    if (user?.authProvider === 'email' && !password.trim()) {
-      setErrorMsg('Please enter your account password to confirm.');
+    if (isEmailUser && !password.trim()) {
+      setErrorMsg('Enter your password.');
       return;
     }
 
@@ -114,653 +169,439 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
         password ? password.trim() : undefined,
       );
 
-      handleClose();
+      resetState();
+      onClose();
 
-      // Log out session cleanly
       await authService.logOut();
 
       showGlobalAlert(
-        'Account Scheduled for Deletion',
-        'Your account has been deactivated and scheduled for permanent deletion in 7 days.\n\nChanged your mind? Simply log back in anytime within the next 7 days with the same credentials to cancel deletion and restore your data.',
+        'Account scheduled for deletion',
+        'Log back in within 7 days to restore it.',
       );
     } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to schedule account deletion. Please try again.');
+      setErrorMsg(err?.message || "Couldn't delete your account. Try again.");
       setLoading(false);
     }
   };
 
   if (!visible) return null;
 
+  /* ---------------- Shared pieces ---------------- */
+
+  const IconButton = ({
+    icon,
+    onPress,
+    label,
+  }: {
+    icon: FeatherName;
+    onPress: () => void;
+    label: string;
+  }) => (
+    <Pressable
+      onPress={onPress}
+      disabled={loading}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      hitSlop={8}
+      style={({ pressed }) => [styles.iconBtn, { backgroundColor: p.soft, opacity: pressed ? 0.7 : 1 }]}
+    >
+      <Feather name={icon} size={17} color={p.iconBtn} />
+    </Pressable>
+  );
+
+  const Dots = () => (
+    <View style={styles.dots}>
+      {[1, 2, 3].map((i) => (
+        <View
+          key={i}
+          style={[
+            styles.dot,
+            { backgroundColor: i <= step ? p.primary : p.grabber },
+            i === step && styles.dotActive,
+          ]}
+        />
+      ))}
+    </View>
+  );
+
+  const Button = ({
+    label,
+    onPress,
+    variant,
+    icon,
+    disabled,
+    busy,
+  }: {
+    label: string;
+    onPress: () => void;
+    variant: 'primary' | 'danger' | 'dangerText' | 'plain';
+    icon?: FeatherName;
+    disabled?: boolean;
+    busy?: boolean;
+  }) => {
+    const bg = variant === 'primary' ? p.primary : variant === 'danger' ? p.danger : 'transparent';
+    const fg =
+      variant === 'primary'
+        ? p.onPrimary
+        : variant === 'danger'
+          ? '#FFFFFF'
+          : variant === 'dangerText'
+            ? p.dangerText
+            : p.muted;
+    return (
+      <Pressable
+        onPress={onPress}
+        disabled={disabled || busy}
+        accessibilityRole="button"
+        style={({ pressed }) => [
+          styles.btn,
+          { backgroundColor: bg, opacity: disabled ? 0.45 : pressed ? 0.85 : 1 },
+        ]}
+      >
+        {busy ? (
+          <ActivityIndicator size="small" color={fg} />
+        ) : (
+          <>
+            {icon ? <Feather name={icon} size={16} color={fg} style={{ marginRight: 6 }} /> : null}
+            <Text style={[styles.btnText, { color: fg }, ff(font.bold, '700')]}>{label}</Text>
+          </>
+        )}
+      </Pressable>
+    );
+  };
+
+  const Title = ({ children, center }: { children: string; center?: boolean }) => (
+    <Text
+      style={[
+        styles.title,
+        { color: p.ink, textAlign: center ? 'center' : 'left' },
+        ff(font.display, '800'),
+      ]}
+    >
+      {children}
+    </Text>
+  );
+
+  const Subtitle = ({ children, center }: { children: React.ReactNode; center?: boolean }) => (
+    <Text
+      style={[
+        styles.subtitle,
+        { color: p.muted, textAlign: center ? 'center' : 'left' },
+        ff(font.body, '500'),
+      ]}
+    >
+      {children}
+    </Text>
+  );
+
+  const ErrorLine = () =>
+    errorMsg ? (
+      <Text style={[styles.errorText, { color: p.dangerText }, ff(font.semi, '600')]}>{errorMsg}</Text>
+    ) : null;
+
+  /* ---------------- Screens ---------------- */
+
+  const renderCooldown = () => (
+    <View>
+      <View
+        style={[
+          styles.heroIcon,
+          { backgroundColor: isDark ? 'rgba(255,194,77,0.16)' : '#FFF1D6' },
+        ]}
+      >
+        <Feather name="clock" size={26} color={isDark ? '#FFC24D' : '#9A5B00'} />
+      </View>
+      <Title center>Not available yet</Title>
+      <Subtitle center>
+        You restored this account recently. You can delete it from{' '}
+        <Text style={[{ color: p.ink }, ff(font.bold, '700')]}>{cooldownDateStr}</Text>.
+      </Subtitle>
+      <Button label="Got it" variant="primary" onPress={handleClose} />
+    </View>
+  );
+
+  const renderOverview = () => (
+    <View>
+      <View style={styles.topRow}>
+        <Dots />
+        <IconButton icon="x" onPress={handleClose} label="Close" />
+      </View>
+      <Title>Delete your account?</Title>
+      <Subtitle>You get 7 days to change your mind.</Subtitle>
+
+      <View style={[styles.timeline, { backgroundColor: p.well }]}>
+        {timeline.map((t) => (
+          <View key={t.key} style={[styles.timelineRow, { backgroundColor: p.tile }]}>
+            <View style={[styles.timelineIcon, { backgroundColor: t.bg }]}>
+              <Feather name={t.icon} size={17} color={t.fg} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.timelineKey, { color: p.muted }, ff(font.semi, '600')]}>{t.key}</Text>
+              <Text style={[styles.timelineValue, { color: p.ink }, ff(font.bold, '700')]}>{t.label}</Text>
+            </View>
+          </View>
+        ))}
+      </View>
+
+      <Button label="Keep my account" variant="primary" onPress={handleClose} />
+      <View style={{ height: 6 }} />
+      <Button label="Continue to delete" variant="dangerText" onPress={() => goTo(2)} />
+    </View>
+  );
+
+  const renderReason = () => (
+    <View>
+      <View style={styles.topRow}>
+        <IconButton icon="arrow-left" onPress={() => goTo(1)} label="Back" />
+        <Dots />
+        <IconButton icon="x" onPress={handleClose} label="Close" />
+      </View>
+      <Title>What's the reason?</Title>
+      <Subtitle>Pick one. It helps us improve.</Subtitle>
+
+      <View style={styles.chips}>
+        {DELETION_REASONS.map((r) => {
+          const on = selectedReason === r.code;
+          return (
+            <Pressable
+              key={r.code}
+              onPress={() => {
+                setSelectedReason(r.code);
+                setErrorMsg(null);
+              }}
+              accessibilityRole="radio"
+              accessibilityState={{ selected: on }}
+              style={({ pressed }) => [
+                styles.chip,
+                { backgroundColor: on ? p.primary : p.soft, opacity: pressed ? 0.8 : 1 },
+              ]}
+            >
+              {on ? <Feather name="check" size={14} color={p.onPrimary} style={{ marginRight: 5 }} /> : null}
+              <Text style={[styles.chipText, { color: on ? p.onPrimary : p.ink }, ff(font.semi, '600')]}>
+                {r.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {selectedReason === 'OTHER' ? (
+        <View style={{ marginBottom: 14 }}>
+          <TextInput
+            style={[styles.feedback, { backgroundColor: p.input, color: p.ink }, ff(font.body, '500')]}
+            multiline
+            placeholder="Tell us more"
+            placeholderTextColor={p.faint}
+            value={customFeedback}
+            onChangeText={(t) => {
+              setCustomFeedback(t);
+              setErrorMsg(null);
+            }}
+            maxLength={300}
+            autoFocus
+          />
+          <Text style={[styles.counter, { color: p.faint }, ff(font.semi, '600')]}>
+            {customFeedback.length}/300
+          </Text>
+        </View>
+      ) : null}
+
+      <ErrorLine />
+      <Button label="Continue" variant="primary" disabled={!selectedReason} onPress={handleNextFromStep2} />
+    </View>
+  );
+
+  const renderConfirm = () => (
+    <View>
+      <View style={styles.topRow}>
+        <IconButton icon="arrow-left" onPress={() => goTo(2)} label="Back" />
+        <Dots />
+        <IconButton icon="x" onPress={handleClose} label="Close" />
+      </View>
+      <Title>Confirm it's you</Title>
+      <Subtitle>You'll be signed out right away.</Subtitle>
+
+      {isEmailUser ? (
+        <View style={{ marginBottom: 18 }}>
+          <Text style={[styles.label, { color: p.ink }, ff(font.bold, '700')]}>Password</Text>
+          <View
+            style={[
+              styles.passwordWrap,
+              {
+                backgroundColor: p.input,
+                borderColor: errorMsg ? p.dangerText : passwordFocused ? p.primary : 'transparent',
+              },
+            ]}
+          >
+            <TextInput
+              style={[styles.passwordInput, { color: p.ink }, ff(font.semi, '600')]}
+              secureTextEntry={!showPassword}
+              placeholder="Your password"
+              placeholderTextColor={p.faint}
+              value={password}
+              onChangeText={(t) => {
+                setPassword(t);
+                setErrorMsg(null);
+              }}
+              onFocus={() => setPasswordFocused(true)}
+              onBlur={() => setPasswordFocused(false)}
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!loading}
+              returnKeyType="done"
+              onSubmitEditing={handleConfirmDeletion}
+            />
+            <Pressable
+              onPress={() => setShowPassword((v) => !v)}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+            >
+              <Feather name={showPassword ? 'eye-off' : 'eye'} size={18} color={p.muted} />
+            </Pressable>
+          </View>
+          <ErrorLine />
+        </View>
+      ) : (
+        <View style={{ marginBottom: 18 }}>
+          <View style={[styles.googleRow, { backgroundColor: p.well }]}>
+            <View style={[styles.googleLogo, { borderColor: isDark ? 'transparent' : '#E1E9E4' }]}>
+              <Ionicons name="logo-google" size={18} color="#EA4335" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.timelineValue, { color: p.ink }, ff(font.bold, '700')]}>Google account</Text>
+              <Text
+                style={[styles.timelineKey, { color: p.muted, marginTop: 1 }, ff(font.semi, '600')]}
+                numberOfLines={1}
+              >
+                {user?.email || 'Signed in with Google'}
+              </Text>
+            </View>
+          </View>
+          <ErrorLine />
+        </View>
+      )}
+
+      <Button
+        label="Delete account"
+        icon="trash-2"
+        variant="danger"
+        busy={loading}
+        onPress={handleConfirmDeletion}
+      />
+      <View style={{ height: 6 }} />
+      <Button label="Cancel" variant="plain" disabled={loading} onPress={handleClose} />
+    </View>
+  );
+
   return (
     <Modal
       visible={visible}
       transparent
-      animationType="fade"
+      animationType="slide"
       statusBarTranslucent
       navigationBarTranslucent
       onRequestClose={handleClose}
     >
-      <View style={styles.backdrop}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={styles.keyboardWrap}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.backdrop}
+      >
+        <Pressable style={StyleSheet.absoluteFill} onPress={handleClose} accessibilityLabel="Close" />
+        <View
+          style={[
+            styles.sheet,
+            { backgroundColor: p.surface, paddingBottom: Math.max(insets.bottom, 16) + 8 },
+          ]}
         >
-          <View
-            style={[
-              styles.modalCard,
-              {
-                backgroundColor: isDark ? '#141824' : '#FFFFFF',
-                borderColor: isDark ? 'rgba(239, 68, 68, 0.3)' : 'rgba(239, 68, 68, 0.2)',
-              },
-            ]}
+          <View style={[styles.grabber, { backgroundColor: p.grabber }]} />
+          <ScrollView
+            bounces={false}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
           >
-            {/* Header */}
-            <View style={styles.header}>
-              <View style={styles.headerLeft}>
-                <View style={styles.alertIconWrap}>
-                  <Feather name="alert-triangle" size={18} color="#EF4444" />
-                </View>
-                <View>
-                  <Text style={[styles.headerTitle, { color: colors.text }]}>
-                    {step === 1
-                      ? 'Delete Account'
-                      : step === 2
-                      ? 'Why Are You Leaving?'
-                      : 'Final Confirmation'}
-                  </Text>
-                  <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]}>
-                    Step {step} of 3
-                  </Text>
-                </View>
-              </View>
-              <TouchableOpacity
-                onPress={handleClose}
-                disabled={loading}
-                style={[styles.closeBtn, { backgroundColor: isDark ? '#1F2437' : '#F3F4F6' }]}
-                activeOpacity={0.7}
-              >
-                <Feather name="x" size={16} color={colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
-
-            {/* Error Banner */}
-            {errorMsg ? (
-              <View style={styles.errorBanner}>
-                <Feather name="alert-circle" size={14} color="#EF4444" style={{ marginRight: 6 }} />
-                <Text style={styles.errorText}>{errorMsg}</Text>
-              </View>
-            ) : null}
-
-            {/* Step 1: Information & 7-Day Grace Disclosure */}
-            {step === 1 && (
-              <ScrollView style={styles.scrollArea} showsVerticalScrollIndicator={false}>
-                {isCooldownActive ? (
-                  <View style={styles.cooldownBanner}>
-                    <Feather name="clock" size={18} color="#F59E0B" style={{ marginRight: 10 }} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.cooldownTitle}>Deletion Locked (Cooldown Active)</Text>
-                      <Text style={styles.cooldownDesc}>
-                        You recently restored this account. To prevent accidental abuse, account deletion is unavailable during the 7-day cooldown period until {cooldownDateStr}.
-                      </Text>
-                    </View>
-                  </View>
-                ) : null}
-
-                <Text style={[styles.sectionHeading, { color: colors.text }]}>
-                  What happens when you delete your account:
-                </Text>
-
-                <View
-                  style={[
-                    styles.infoCard,
-                    {
-                      backgroundColor: isDark ? '#1A2035' : '#F9FAFB',
-                      borderColor: colors.border,
-                    },
-                  ]}
-                >
-                  <View style={styles.infoRow}>
-                    <Feather name="calendar" size={16} color="#3B82F6" style={styles.infoIcon} />
-                    <View style={styles.infoContent}>
-                      <Text style={[styles.infoTitle, { color: colors.text }]}>
-                        7-Day Recovery Grace Period
-                      </Text>
-                      <Text style={[styles.infoDesc, { color: colors.textSecondary }]}>
-                        Your account will not be erased immediately. It enters a 7-day scheduled deletion window during which your data remains safely frozen.
-                      </Text>
-                    </View>
-                  </View>
-
-                  <View style={styles.infoRow}>
-                    <Feather name="rotate-ccw" size={16} color="#10B981" style={styles.infoIcon} />
-                    <View style={styles.infoContent}>
-                      <Text style={[styles.infoTitle, { color: colors.text }]}>
-                        Instant Self-Service Restore
-                      </Text>
-                      <Text style={[styles.infoDesc, { color: colors.textSecondary }]}>
-                        If you change your mind, simply log back in with your credentials within 7 days. Deletion will be instantly cancelled and all your data restored.
-                      </Text>
-                    </View>
-                  </View>
-
-                  <View style={styles.infoRow}>
-                    <Feather name="trash-2" size={16} color="#EF4444" style={styles.infoIcon} />
-                    <View style={styles.infoContent}>
-                      <Text style={[styles.infoTitle, { color: colors.text }]}>
-                        Permanent Purge After 7 Days
-                      </Text>
-                      <Text style={[styles.infoDesc, { color: colors.textSecondary }]}>
-                        After 7 days have passed without login, our automated system permanently and irreversibly purges your transaction history, budgets, bank profiles, and personal data.
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-
-                <View style={styles.btnRow}>
-                  <TouchableOpacity
-                    style={[styles.btnSecondary, { borderColor: colors.border }]}
-                    onPress={handleClose}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={[styles.btnSecondaryText, { color: colors.text }]}>Keep Account</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[
-                      styles.btnDanger,
-                      isCooldownActive && { opacity: 0.5, backgroundColor: '#6B7280' },
-                    ]}
-                    onPress={handleNextFromStep1}
-                    disabled={isCooldownActive}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={styles.btnDangerText}>
-                      {isCooldownActive ? 'Cooldown Active' : 'Continue'}
-                    </Text>
-                    {!isCooldownActive && (
-                      <Feather name="chevron-right" size={15} color="#FFFFFF" style={{ marginLeft: 4 }} />
-                    )}
-                  </TouchableOpacity>
-                </View>
-              </ScrollView>
-            )}
-
-            {/* Step 2: Survey Reason Selection */}
-            {step === 2 && (
-              <ScrollView style={styles.scrollArea} showsVerticalScrollIndicator={false}>
-                <Text style={[styles.sectionHeading, { color: colors.text, marginBottom: 12 }]}>
-                  Please let us know why you wish to delete your account:
-                </Text>
-
-                {DELETION_REASONS.map((reason) => {
-                  const isSelected = selectedReason === reason.code;
-                  return (
-                    <TouchableOpacity
-                      key={reason.code}
-                      style={[
-                        styles.radioItem,
-                        {
-                          backgroundColor: isDark ? '#1A2035' : '#F9FAFB',
-                          borderColor: isSelected ? '#EF4444' : colors.border,
-                        },
-                      ]}
-                      onPress={() => {
-                        setSelectedReason(reason.code);
-                        setErrorMsg(null);
-                      }}
-                      activeOpacity={0.8}
-                    >
-                      <View
-                        style={[
-                          styles.radioCircle,
-                          {
-                            borderColor: isSelected ? '#EF4444' : colors.textTertiary,
-                            backgroundColor: isSelected ? '#EF4444' : 'transparent',
-                          },
-                        ]}
-                      >
-                        {isSelected && <View style={styles.radioInnerDot} />}
-                      </View>
-                      <Text style={[styles.radioLabel, { color: colors.text }]}>
-                        {reason.label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-
-                {/* Optional Expandable Feedback for 'OTHER' */}
-                {selectedReason === 'OTHER' && (
-                  <View style={styles.customFeedbackWrap}>
-                    <Text style={[styles.customFeedbackLabel, { color: colors.textSecondary }]}>
-                      Please describe your reason (min 5 characters):
-                    </Text>
-                    <TextInput
-                      style={[
-                        styles.customInput,
-                        {
-                          backgroundColor: isDark ? '#1F2437' : '#F3F4F6',
-                          color: colors.text,
-                          borderColor: colors.border,
-                        },
-                      ]}
-                      multiline
-                      numberOfLines={3}
-                      placeholder="Tell us what we could have done better..."
-                      placeholderTextColor={colors.textTertiary}
-                      value={customFeedback}
-                      onChangeText={setCustomFeedback}
-                      maxLength={300}
-                    />
-                    <Text style={[styles.charCount, { color: colors.textTertiary }]}>
-                      {customFeedback.length}/300
-                    </Text>
-                  </View>
-                )}
-
-                <View style={styles.btnRow}>
-                  <TouchableOpacity
-                    style={[styles.btnSecondary, { borderColor: colors.border }]}
-                    onPress={() => setStep(1)}
-                    activeOpacity={0.8}
-                  >
-                    <Feather name="chevron-left" size={15} color={colors.text} style={{ marginRight: 4 }} />
-                    <Text style={[styles.btnSecondaryText, { color: colors.text }]}>Back</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[
-                      styles.btnDanger,
-                      !selectedReason && { opacity: 0.5 },
-                    ]}
-                    onPress={handleNextFromStep2}
-                    disabled={!selectedReason}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={styles.btnDangerText}>Next: Verification</Text>
-                    <Feather name="chevron-right" size={15} color="#FFFFFF" style={{ marginLeft: 4 }} />
-                  </TouchableOpacity>
-                </View>
-              </ScrollView>
-            )}
-
-            {/* Step 3: Password / Verification & Execute */}
-            {step === 3 && (
-              <ScrollView style={styles.scrollArea} showsVerticalScrollIndicator={false}>
-                <View style={styles.warningBox}>
-                  <Feather name="alert-triangle" size={16} color="#DC2626" style={{ marginRight: 8, marginTop: 2 }} />
-                  <Text style={styles.warningBoxText}>
-                    Final Confirmation: You will be logged out immediately. Your account will be permanently erased after 7 days unless you log back in.
-                  </Text>
-                </View>
-
-                {user?.authProvider === 'email' ? (
-                  <View style={styles.fieldWrap}>
-                    <Text style={[styles.fieldLabel, { color: colors.text }]}>
-                      Enter your password to confirm:
-                    </Text>
-                    <View
-                      style={[
-                        styles.passwordInputWrap,
-                        {
-                          backgroundColor: isDark ? '#1F2437' : '#F3F4F6',
-                          borderColor: colors.border,
-                        },
-                      ]}
-                    >
-                      <TextInput
-                        style={[styles.passwordInput, { color: colors.text }]}
-                        secureTextEntry={!showPassword}
-                        placeholder="Current account password"
-                        placeholderTextColor={colors.textTertiary}
-                        value={password}
-                        onChangeText={(t) => {
-                          setPassword(t);
-                          setErrorMsg(null);
-                        }}
-                        autoCapitalize="none"
-                      />
-                      <TouchableOpacity
-                        onPress={() => setShowPassword(!showPassword)}
-                        style={styles.eyeBtn}
-                      >
-                        <Feather
-                          name={showPassword ? 'eye-off' : 'eye'}
-                          size={16}
-                          color={colors.textSecondary}
-                        />
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                ) : (
-                  <View
-                    style={[
-                      styles.oauthInfoCard,
-                      {
-                        backgroundColor: isDark ? '#1F2437' : '#F3F4F6',
-                        borderColor: colors.border,
-                      },
-                    ]}
-                  >
-                    <Ionicons name="logo-google" size={18} color="#EA4335" style={{ marginRight: 8 }} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.oauthTitle, { color: colors.text }]}>Google Account Authorization</Text>
-                      <Text style={[styles.oauthDesc, { color: colors.textSecondary }]}>
-                        Signed in as {user?.email || 'Google User'}. Tap the button below to authorize scheduling 7-day account deletion.
-                      </Text>
-                    </View>
-                  </View>
-                )}
-
-                <View style={styles.btnRow}>
-                  <TouchableOpacity
-                    style={[styles.btnSecondary, { borderColor: colors.border }]}
-                    onPress={() => setStep(2)}
-                    disabled={loading}
-                    activeOpacity={0.8}
-                  >
-                    <Feather name="chevron-left" size={15} color={colors.text} style={{ marginRight: 4 }} />
-                    <Text style={[styles.btnSecondaryText, { color: colors.text }]}>Back</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[styles.btnConfirmDanger, loading && { opacity: 0.7 }]}
-                    onPress={handleConfirmDeletion}
-                    disabled={loading}
-                    activeOpacity={0.85}
-                  >
-                    {loading ? (
-                      <ActivityIndicator size="small" color="#FFFFFF" />
-                    ) : (
-                      <>
-                        <Feather name="trash-2" size={15} color="#FFFFFF" style={{ marginRight: 6 }} />
-                        <Text style={styles.btnDangerText}>Schedule Deletion</Text>
-                      </>
-                    )}
-                  </TouchableOpacity>
-                </View>
-              </ScrollView>
-            )}
-          </View>
-        </KeyboardAvoidingView>
-      </View>
+            {isCooldownActive
+              ? renderCooldown()
+              : step === 1
+                ? renderOverview()
+                : step === 2
+                  ? renderReason()
+                  : renderConfirm()}
+          </ScrollView>
+        </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 };
 
 const styles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.75)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 16,
-  },
-  keyboardWrap: {
-    width: '100%',
-    maxWidth: 480,
-    maxHeight: '90%',
-  },
-  modalCard: {
-    borderRadius: 20,
-    borderWidth: 1,
-    padding: 20,
-    maxHeight: '100%',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 16,
-    paddingBottom: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(150, 150, 150, 0.15)',
-  },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  alertIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(239, 68, 68, 0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  headerTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  headerSubtitle: {
-    fontSize: 11,
-    marginTop: 1,
-  },
-  closeBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  errorBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(239, 68, 68, 0.12)',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
-    marginBottom: 14,
-  },
-  errorText: {
-    fontSize: 12,
-    color: '#EF4444',
-    flex: 1,
-    fontWeight: '500',
-  },
-  cooldownBanner: {
-    flexDirection: 'row',
-    backgroundColor: 'rgba(245, 158, 11, 0.12)',
-    padding: 12,
-    borderRadius: 12,
-    marginBottom: 14,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.3)',
-  },
-  cooldownTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#F59E0B',
-    marginBottom: 2,
-  },
-  cooldownDesc: {
-    fontSize: 11,
-    color: '#D97706',
-    lineHeight: 16,
-  },
-  scrollArea: {
-    maxHeight: 460,
-  },
-  sectionHeading: {
-    fontSize: 13,
-    fontWeight: '700',
-    marginBottom: 10,
-  },
-  infoCard: {
-    borderRadius: 14,
-    borderWidth: 1,
-    padding: 14,
-    marginBottom: 16,
-  },
-  infoRow: {
-    flexDirection: 'row',
-    marginBottom: 14,
-  },
-  infoIcon: {
-    marginRight: 12,
-    marginTop: 2,
-  },
-  infoContent: {
-    flex: 1,
-  },
-  infoTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    marginBottom: 2,
-  },
-  infoDesc: {
-    fontSize: 11,
-    lineHeight: 16,
-  },
-  radioItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    marginBottom: 8,
-  },
-  radioCircle: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    borderWidth: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  radioInnerDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#FFFFFF',
-  },
-  radioLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    flex: 1,
-  },
-  customFeedbackWrap: {
-    marginTop: 6,
-    marginBottom: 12,
-  },
-  customFeedbackLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    marginBottom: 6,
-  },
-  customInput: {
-    borderWidth: 1,
-    borderRadius: 10,
-    padding: 10,
-    fontSize: 12,
-    textAlignVertical: 'top',
-    minHeight: 64,
-  },
-  charCount: {
-    fontSize: 10,
-    textAlign: 'right',
-    marginTop: 4,
-  },
-  warningBox: {
-    flexDirection: 'row',
-    backgroundColor: 'rgba(239, 68, 68, 0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.25)',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 16,
-  },
-  warningBoxText: {
-    fontSize: 12,
-    color: '#EF4444',
-    lineHeight: 18,
-    flex: 1,
-    fontWeight: '500',
-  },
-  fieldWrap: {
-    marginBottom: 16,
-  },
-  fieldLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    marginBottom: 6,
-  },
-  passwordInputWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-  },
-  passwordInput: {
-    flex: 1,
-    height: 42,
-    fontSize: 13,
-  },
-  eyeBtn: {
-    padding: 6,
-  },
-  oauthInfoCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 16,
-  },
-  oauthTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    marginBottom: 2,
-  },
-  oauthDesc: {
-    fontSize: 11,
-    lineHeight: 16,
-  },
-  btnRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 10,
+  backdrop: { flex: 1, backgroundColor: 'rgba(7, 17, 13, 0.55)', justifyContent: 'flex-end' },
+  sheet: {
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: 20,
     paddingTop: 10,
+    maxHeight: '92%',
   },
-  btnSecondary: {
+  grabber: { width: 40, height: 5, borderRadius: 3, alignSelf: 'center', marginBottom: 16 },
+
+  topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 },
+  iconBtn: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
+  dots: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  dot: { width: 6, height: 6, borderRadius: 3 },
+  dotActive: { width: 18 },
+
+  title: { fontSize: 25, lineHeight: 30, letterSpacing: -0.4, marginBottom: 6 },
+  subtitle: { fontSize: 14, lineHeight: 20, marginBottom: 20 },
+
+  timeline: { borderRadius: 22, padding: 6, gap: 4, marginBottom: 20 },
+  timelineRow: { flexDirection: 'row', alignItems: 'center', borderRadius: 16, paddingVertical: 11, paddingHorizontal: 12, gap: 12 },
+  timelineIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  timelineKey: { fontSize: 12 },
+  timelineValue: { fontSize: 14.5, marginTop: 1 },
+
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 18 },
+  chip: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 15, borderRadius: 999 },
+  chipText: { fontSize: 13.5 },
+
+  feedback: { borderRadius: 16, padding: 14, minHeight: 84, fontSize: 14, textAlignVertical: 'top' },
+  counter: { fontSize: 11.5, textAlign: 'right', marginTop: 6 },
+
+  label: { fontSize: 13, marginBottom: 8 },
+  passwordWrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    paddingVertical: 11,
+    height: 54,
+    borderRadius: 16,
+    borderWidth: 1.5,
     paddingHorizontal: 16,
-    borderRadius: 12,
   },
-  btnSecondaryText: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  btnDanger: {
-    flexDirection: 'row',
+  passwordInput: { flex: 1, fontSize: 15, height: '100%' },
+
+  googleRow: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 18, padding: 12 },
+  googleLogo: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#EF4444',
-    paddingVertical: 11,
-    paddingHorizontal: 18,
-    borderRadius: 12,
   },
-  btnConfirmDanger: {
-    flexDirection: 'row',
+
+  errorText: { fontSize: 12.5, marginTop: 8, marginLeft: 4, marginBottom: 4 },
+
+  heroIcon: {
+    width: 62,
+    height: 62,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#DC2626',
-    paddingVertical: 11,
-    paddingHorizontal: 18,
-    borderRadius: 12,
+    alignSelf: 'center',
+    marginTop: 6,
+    marginBottom: 16,
   },
-  btnDangerText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#FFFFFF',
-  },
+
+  btn: { height: 52, borderRadius: 999, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  btnText: { fontSize: 15 },
 });

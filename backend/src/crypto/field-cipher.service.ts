@@ -191,6 +191,28 @@ export class FieldCipherService implements OnModuleDestroy {
   }
 
   /**
+   * Encrypts a free-text field (e.g. a chat title or a chat's messages) under the user's active key.
+   * The row id, table and column are bound into the AAD, so a value can't be moved to another row.
+   */
+  async encryptText(userId: string, table: string, column: string, rowId: string, text: string): Promise<Buffer> {
+    const session = await this.getActiveKey(userId);
+    const ctx: FieldContext = { userId, table, column, rowId, rowVersion: 1n };
+    return encryptField(session.kEnc, session.keyVersion, Buffer.from(text, 'utf8'), ctx);
+  }
+
+  /** Decrypts a value written by encryptText. Throws DecryptionTamperingException if it fails. */
+  async decryptText(userId: string, table: string, column: string, rowId: string, env: Buffer): Promise<string> {
+    try {
+      const keyVersion = env.readUInt32BE(4);
+      const session = await this.getKeySession(userId, keyVersion);
+      const ctx: FieldContext = { userId, table, column, rowId, rowVersion: 1n };
+      return decryptField(() => session.kEnc, env, ctx).toString('utf8');
+    } catch (err) {
+      throw new DecryptionTamperingException(rowId, table, err);
+    }
+  }
+
+  /**
    * Encrypts all fields for a Transaction entity.
    * If expectedRowVersion is provided, increments row_version by 1; otherwise defaults to 1.
    * Invariant: ALL encrypted fields are encrypted under the new row_version in the same call.

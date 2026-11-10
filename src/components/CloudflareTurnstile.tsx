@@ -10,7 +10,8 @@
 // every login / signup attempt to get a fresh one.
 
 import React, { useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Feather } from '@expo/vector-icons';
 
 type WebViewMessageEvent = any;
 let WebView: any = null;
@@ -38,6 +39,8 @@ const TURNSTILE_SITE_KEY = process.env.EXPO_PUBLIC_TURNSTILE_SITE_KEY || '0x4AAA
 const TURNSTILE_BASE_URL = process.env.EXPO_PUBLIC_TURNSTILE_BASE_URL || 'https://app.regentmoney.com';
 
 const WIDGET_HEIGHT = 70;
+// Turnstile can grow (an interactive challenge). The WebView follows its height up to this.
+const MAX_WIDGET_HEIGHT = 420;
 
 const buildHtml = (siteKey: string, theme: string) => `<!doctype html>
 <html>
@@ -53,6 +56,13 @@ const buildHtml = (siteKey: string, theme: string) => `<!doctype html>
 <div id="cf"></div>
 <script>
   function send(msg) { window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify(msg)); }
+  var lastH = 0;
+  function reportHeight() {
+    var h = Math.ceil(document.getElementById('cf').getBoundingClientRect().height);
+    if (h && h !== lastH) { lastH = h; send({ type: 'height', h: h }); }
+  }
+  if (window.ResizeObserver) { new ResizeObserver(reportHeight).observe(document.getElementById('cf')); }
+  setInterval(reportHeight, 500);
   window.rmOnLoad = function () {
     try {
       turnstile.render('#cf', {
@@ -83,6 +93,9 @@ export const CloudflareTurnstile: React.FC<CloudflareTurnstileProps> = ({
   style,
 }) => {
   const [status, setStatus] = useState<Status>('loading');
+  const [attempt, setAttempt] = useState(0);
+  const [height, setHeight] = useState(WIDGET_HEIGHT);
+  const dark = theme === 'dark';
   const [lastErrorCode, setLastErrorCode] = useState<string | null>(null);
   const lastErrorLoggedRef = useRef<string | null>(null);
   const html = useMemo(() => buildHtml(TURNSTILE_SITE_KEY, theme), [theme]);
@@ -104,7 +117,9 @@ export const CloudflareTurnstile: React.FC<CloudflareTurnstileProps> = ({
     } catch {
       return;
     }
-    if (msg.type === 'ready') setStatus(s => (s === 'loading' ? 'ready' : s));
+    if (msg.type === 'height' && typeof msg.h === 'number') {
+      setHeight(Math.min(MAX_WIDGET_HEIGHT, Math.max(WIDGET_HEIGHT, msg.h + 8)));
+    } else if (msg.type === 'ready') setStatus(s => (s === 'loading' ? 'ready' : s));
     else if (msg.type === 'token' && typeof msg.token === 'string') {
       setStatus('verified');
       onVerify(msg.token);
@@ -129,9 +144,58 @@ export const CloudflareTurnstile: React.FC<CloudflareTurnstileProps> = ({
     }
   };
 
+  const retry = () => {
+    lastErrorLoggedRef.current = null;
+    setLastErrorCode(null);
+    setHeight(WIDGET_HEIGHT);
+    setStatus('loading');
+    setAttempt(a => a + 1);
+    onExpire?.();
+  };
+
+  // On failure Turnstile shows its own "Troubleshoot" panel, which doesn't fit a phone
+  // layout. Hide the widget and show our own short message with a retry instead.
+  if (status === 'error') {
+    const notSetUp = lastErrorCode === '110200';
+    return (
+      <View style={[styles.wrapper, style]}>
+        <View
+          style={[
+            styles.errorCard,
+            { backgroundColor: dark ? 'rgba(255,138,107,0.10)' : '#FFF4F1', borderColor: dark ? 'rgba(255,138,107,0.28)' : '#F6D3CA' },
+          ]}
+        >
+          <View style={[styles.errorIcon, { backgroundColor: dark ? 'rgba(255,138,107,0.18)' : '#FDE4DF' }]}>
+            <Feather name="shield-off" size={17} color={dark ? '#FF8A6B' : '#B42E17'} />
+          </View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={[styles.errorTitle, { color: dark ? '#FFFFFF' : '#0B1F17' }]}>Security check failed</Text>
+            <Text style={[styles.errorBody, { color: dark ? 'rgba(250,251,252,0.66)' : '#5B6B63' }]}>
+              {notSetUp ? 'Not set up for this app yet.' : 'Check your connection.'}
+            </Text>
+          </View>
+          <Pressable
+            onPress={retry}
+            accessibilityRole="button"
+            accessibilityLabel="Try the security check again"
+            hitSlop={6}
+            style={({ pressed }) => [
+              styles.retryBtn,
+              { backgroundColor: dark ? '#B8F36B' : '#0B3D2C', opacity: pressed ? 0.85 : 1 },
+            ]}
+          >
+            <Feather name="rotate-cw" size={13} color={dark ? '#0B3D2C' : '#B8F36B'} />
+            <Text style={[styles.retryText, { color: dark ? '#0B3D2C' : '#FFFFFF' }]}>Retry</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.wrapper, style]}>
       <WebView
+        key={attempt}
         source={{ html, baseUrl: TURNSTILE_BASE_URL }}
         originWhitelist={['*']}
         onMessage={onMessage}
@@ -146,21 +210,14 @@ export const CloudflareTurnstile: React.FC<CloudflareTurnstileProps> = ({
         overScrollMode="never"
         setSupportMultipleWindows={false}
         style={styles.webview}
-        containerStyle={styles.webviewContainer}
+        containerStyle={[styles.webviewContainer, { height }]}
         androidLayerType="hardware"
       />
       {status === 'loading' && (
         <View style={styles.overlay} pointerEvents="none">
-          <ActivityIndicator size="small" color="#0B3D2C" />
-          <Text style={styles.overlayText}>Loading security check…</Text>
+          <ActivityIndicator size="small" color={dark ? '#B8F36B' : '#0B3D2C'} />
+          <Text style={[styles.overlayText, dark && { color: 'rgba(250,251,252,0.66)' }]}>Loading security check…</Text>
         </View>
-      )}
-      {status === 'error' && (
-        <Text style={styles.errorText}>
-          {lastErrorCode === '110200'
-            ? 'Security verification domain unconfigured. You may still proceed with login.'
-            : 'Security check couldn’t load. Check your connection and try again.'}
-        </Text>
       )}
     </View>
   );
@@ -183,6 +240,29 @@ const styles = StyleSheet.create({
   },
   overlayText: { fontSize: 13, color: '#5E7A6C' },
   errorText: { marginTop: 6, fontSize: 12, color: '#C92A2A', textAlign: 'center' },
+  errorCard: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderWidth: 1,
+    borderRadius: 18,
+    paddingVertical: 12,
+    paddingLeft: 12,
+    paddingRight: 10,
+  },
+  errorIcon: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  errorTitle: { fontSize: 14, fontWeight: '700' },
+  errorBody: { fontSize: 12.5, marginTop: 1 },
+  retryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    height: 34,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+  },
+  retryText: { fontSize: 13, fontWeight: '700' },
 });
 
 export default CloudflareTurnstile;

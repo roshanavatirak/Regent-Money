@@ -41,7 +41,7 @@ import { createMaterialTopTabNavigator, MaterialTopTabBarProps } from '@react-na
 
 import { navigationRef } from './navigationRef';
 export { navigationRef };
-import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { createNativeStackNavigator, NativeStackNavigationOptions } from '@react-navigation/native-stack';
 import * as Font from 'expo-font';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -116,6 +116,7 @@ import {
   useAppUpdateStore,
   useTermsModalStore,
   usePrivacyModalStore,
+  useSyncStatusStore,
 } from '../store';
 import { biometricService } from '../services/biometricService';
 import { BiometricLockOverlay } from '../components/BiometricLockOverlay';
@@ -1963,7 +1964,7 @@ const TransactionRowItem = React.memo(({ tx, styles }: { tx: any; styles: any })
 });
 
 const DashboardScreen = () => {
-  const { isDark } = useTheme();
+  const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
   const { sync } = useSyncDb();
@@ -1976,12 +1977,31 @@ const DashboardScreen = () => {
   const snapshots = useAnalyticsStore((state) => state.snapshots);
   const incomeFromAnalytics = useAnalyticsStore((state) => state.incomeCurrentMonth);
   const { items: activity, banks: activityBanks } = useActivityFeed();
+  const lastSyncedAt = useSyncStatusStore((state) => state.lastSyncedAt);
 
   const [refreshing, setRefreshing] = useState(false);
   const [addBankModalVisible, setAddBankModalVisible] = useState(false);
   const [netWorthModalVisible, setNetWorthModalVisible] = useState(false);
   const [notificationsVisible, setNotificationsVisible] = useState(false);
   const [isSmsPermissionActive, setIsSmsPermissionActive] = useState(true);
+  const [initialWaitTimedOut, setInitialWaitTimedOut] = useState(false);
+
+  // If this device has NEVER completed a sync from the server (e.g. fresh reinstall/login),
+  // and local arrays are empty, hold a clean loading state for up to 2.5s while initial sync finishes.
+  const isAwaitingFirstSync =
+    lastSyncedAt === null &&
+    transactions.length === 0 &&
+    bankProfiles.length === 0 &&
+    !initialWaitTimedOut;
+
+  useEffect(() => {
+    if (isAwaitingFirstSync) {
+      const timer = setTimeout(() => {
+        setInitialWaitTimedOut(true);
+      }, 2500);
+      return () => clearTimeout(timer);
+    }
+  }, [isAwaitingFirstSync]);
 
   useEffect(() => {
     if (Platform.OS === 'android') {
@@ -2054,6 +2074,14 @@ const DashboardScreen = () => {
       setAddBankModalVisible(true);
     }
   };
+
+  if (isAwaitingFirstSync) {
+    return (
+      <View style={{ flex: 1, backgroundColor: isDark ? colors.background : '#F3F6F4', justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="small" color={isDark ? '#B8F36B' : '#0B3D2C'} />
+      </View>
+    );
+  }
 
   return (
     <View style={{ flex: 1, paddingTop: insets.top }}>
@@ -2743,6 +2771,51 @@ const TabProfileScreen = () => <ProfileScreen AppTopBarComponent={AppTopBar} />;
 // ----------------------------------------------------
 const Tab = createMaterialTopTabNavigator();
 const Stack = createNativeStackNavigator();
+
+/**
+ * Screens opened from the sidebar get `fromSidebar: true` in their params.
+ * They open in the same moment the drawer closes. Going back (back button or Android
+ * back key) puts the drawer back on screen fully open first, then removes the screen
+ * underneath it without a slide-out, so you land straight on the drawer.
+ */
+const sidebarAwareOptions =
+  (animation: NativeStackNavigationOptions['animation']) =>
+  ({ route }: { route: { params?: object } }): NativeStackNavigationOptions => ({
+    presentation: 'card',
+    headerShown: false,
+    animation,
+    // A swipe-back gesture can't be redirected to the sidebar, so it is off for these screens.
+    gestureEnabled: !(route.params as { fromSidebar?: boolean } | undefined)?.fromSidebar,
+  });
+
+// Route keys whose back action we already redirected, so the re-dispatched action goes through.
+const sidebarReturning = new Set<string>();
+
+const sidebarReturnListeners = ({ navigation, route }: { navigation: any; route: { key: string; params?: object } }) => ({
+  beforeRemove: (e: { preventDefault: () => void; data: { action: any } }) => {
+    const fromSidebar = (route.params as { fromSidebar?: boolean } | undefined)?.fromSidebar;
+    const type = e.data.action?.type;
+    // Only a real "back" reopens the sidebar; logout resets and other navigation don't.
+    if (!fromSidebar || (type !== 'GO_BACK' && type !== 'POP')) return;
+    if (sidebarReturning.has(route.key)) {
+      sidebarReturning.delete(route.key);
+      return;
+    }
+    e.preventDefault();
+    sidebarReturning.add(route.key);
+    navigation.setOptions({ animation: 'none' });
+    // Put the drawer on screen first (already open, no slide), then remove this screen
+    // underneath it, so the dashboard never shows in between.
+    let done = false;
+    const leave = () => {
+      if (done) return;
+      done = true;
+      navigation.dispatch(e.data.action);
+    };
+    useSidebarStore.getState().openSidebar({ instant: true, onShown: leave });
+    setTimeout(leave, 250); // fallback if the drawer's onShow never fires
+  },
+});
 
 interface TabItemConfig {
   label: string;
@@ -3480,6 +3553,39 @@ export default function AppNavigator() {
   const bankProfiles = useBankStore((state) => state.bankProfiles) || [];
   const hasBankProfiles = bankProfiles.length > 0;
 
+  // Signed in on Android with no local accounts and setup not done: the accounts may still be on
+  // their way from the server (fresh sign-in, reinstall). Hold the first screen until the first
+  // sync answers (max 3.5s) so an existing user isn't sent to setup. Worked out during render,
+  // so the setup screen never mounts for a frame before the spinner.
+  const [initialSyncDoneFor, setInitialSyncDoneFor] = useState<string | null>(null);
+  const initialSyncPending =
+    Platform.OS === 'android' &&
+    !!user?.id &&
+    !hasSetupTracking &&
+    !hasBankProfiles &&
+    initialSyncDoneFor !== user.id;
+
+  useEffect(() => {
+    if (!initialSyncPending || !user?.id) return;
+    const uid = user.id;
+    let active = true;
+    const done = () => {
+      if (active) setInitialSyncDoneFor(uid);
+    };
+    const timer = setTimeout(done, 3500);
+    syncService
+      .sync()
+      .catch(() => {})
+      .finally(() => {
+        clearTimeout(timer);
+        done();
+      });
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [initialSyncPending, user?.id]);
+
   useEffect(() => {
     if (hasBankProfiles && !hasSetupTracking) {
       mmkvStorage.setBoolean(TRACKING_SETUP_KEY, true);
@@ -3622,7 +3728,7 @@ export default function AppNavigator() {
     };
   }, []);
 
-  if (isLoading && splashFinished) {
+  if ((isLoading || initialSyncPending) && splashFinished) {
     return (
       <View style={{ flex: 1, backgroundColor: colors.background, justifyContent: 'center', alignItems: 'center' }}>
         <StatusBar style={colors.statusBar} />
@@ -3674,7 +3780,7 @@ export default function AppNavigator() {
               }
             }}
           >
-            <Stack.Navigator screenOptions={{ headerShown: false }}>
+            <Stack.Navigator screenOptions={{ headerShown: false }} screenListeners={sidebarReturnListeners}>
               {user === null ? (
                 <>
                   {!hasSeenOnboarding ? (
@@ -3700,11 +3806,7 @@ export default function AppNavigator() {
                   <Stack.Screen
                     name="AdminDashboard"
                     component={AdminDashboardScreen}
-                    options={{
-                      presentation: 'card',
-                      animation: 'slide_from_right',
-                      headerShown: false,
-                    }}
+                    options={sidebarAwareOptions('slide_from_right')}
                   />
                   <Stack.Screen
                     name="EditProfile"
@@ -3718,20 +3820,12 @@ export default function AppNavigator() {
                   <Stack.Screen
                     name="AppSettings"
                     component={SettingsScreen}
-                    options={{
-                      presentation: 'card',
-                      animation: 'slide_from_right',
-                      headerShown: false,
-                    }}
+                    options={sidebarAwareOptions('slide_from_right')}
                   />
                   <Stack.Screen
                     name="PrivacyCenter"
                     component={PrivacyCenterScreen}
-                    options={{
-                      presentation: 'card',
-                      animation: 'slide_from_right',
-                      headerShown: false,
-                    }}
+                    options={sidebarAwareOptions('slide_from_right')}
                   />
                 </>
               ) : (
@@ -3813,47 +3907,27 @@ export default function AppNavigator() {
                   <Stack.Screen
                     name="AppSettings"
                     component={SettingsScreen}
-                    options={{
-                      presentation: 'card',
-                      animation: 'slide_from_right',
-                      headerShown: false,
-                    }}
+                    options={sidebarAwareOptions('slide_from_right')}
                   />
                   <Stack.Screen
                     name="AdminDashboard"
                     component={AdminDashboardScreen}
-                    options={{
-                      presentation: 'card',
-                      animation: 'slide_from_right',
-                      headerShown: false,
-                    }}
+                    options={sidebarAwareOptions('slide_from_right')}
                   />
                   <Stack.Screen
                     name="PrivacyCenter"
                     component={PrivacyCenterScreen}
-                    options={{
-                      presentation: 'card',
-                      animation: 'slide_from_right',
-                      headerShown: false,
-                    }}
+                    options={sidebarAwareOptions('slide_from_right')}
                   />
                   <Stack.Screen
                     name="SuggestFeature"
                     component={SuggestFeatureScreen}
-                    options={{
-                      presentation: 'card',
-                      animation: 'slide_from_right',
-                      headerShown: false,
-                    }}
+                    options={sidebarAwareOptions('slide_from_right')}
                   />
                   <Stack.Screen
                     name="ReportBug"
                     component={ReportBugScreen}
-                    options={{
-                      presentation: 'card',
-                      animation: 'slide_from_right',
-                      headerShown: false,
-                    }}
+                    options={sidebarAwareOptions('slide_from_right')}
                   />
                   <Stack.Screen
                     name="BudgetScreen"
@@ -3876,20 +3950,12 @@ export default function AppNavigator() {
                   <Stack.Screen
                     name="FinancialCalendar"
                     component={FinancialCalendarScreen}
-                    options={{
-                      presentation: 'card',
-                      animation: 'slide_from_bottom',
-                      headerShown: false,
-                    }}
+                    options={sidebarAwareOptions('slide_from_bottom')}
                   />
                   <Stack.Screen
                     name="BorrowLend"
                     component={BorrowLendScreen}
-                    options={{
-                      presentation: 'card',
-                      animation: 'slide_from_right',
-                      headerShown: false,
-                    }}
+                    options={sidebarAwareOptions('slide_from_right')}
                   />
                   <Stack.Screen
                     name="PersonDetail"

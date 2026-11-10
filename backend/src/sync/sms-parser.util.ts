@@ -141,7 +141,7 @@ export const parseSMS = (sender: string, body: string): ParsedTransaction | null
 
   // 3.5. Extract Authoritative Available / Closing Balance if explicitly mentioned in SMS
   let availableBalance: number | undefined;
-  const balanceRx = /(?:avl\s*bal(?:ance)?|available\s*balance|avail\s*bal|clear\s*bal|total\s*bal|closing\s*bal|ledger\s*bal|\bbal(?:ance)?\s*(?:is)?)\s*[:\-]?\s*(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d{1,2})?)/i;
+  const balanceRx = /(?:avl\s*bal(?:ance)?|available\s*balance|avail\s*bal|clear\s*bal|total\s*bal|closing\s*bal|ledger\s*bal|\bbal(?:ance)?\s*(?:is)?)(?:\s*(?:in|of|for)\s+(?:your\s+)?(?:a\/c|acct|account|ac)\.?\s*(?:no\.?\s*)?[xX*.]*\d+\s*(?:is)?)?\s*[:\-]?\s*(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d{1,2})?)/i;
   const balMatch = clean.match(balanceRx);
   if (balMatch && balMatch[1]) {
     const parsedBal = parseFloat(balMatch[1].replace(/,/g, ''));
@@ -152,7 +152,7 @@ export const parseSMS = (sender: string, body: string): ParsedTransaction | null
 
   // 4. Extract Amount (Mask available/ledger balance to prevent picking up balance amount)
   const maskedForBalance = clean.replace(
-    /(?:avl\s*bal|available\s*balance|avail\s*bal|bal|balance|clear\s*bal|total\s*bal|closing\s*bal|ledger\s*bal|limit)[:\s]*(?:rs\.?|inr|₹)?\s*[\d,]+(?:\.\d{1,2})?/gi,
+    /(?:avl\s*bal|available\s*balance|avail\s*bal|bal|balance|clear\s*bal|total\s*bal|closing\s*bal|ledger\s*bal|limit)(?:\s*(?:in|of|for)\s+(?:your\s+)?(?:a\/c|acct|account|ac)\.?\s*(?:no\.?\s*)?[xX*.]*\d+\s*(?:is)?)?[:\s]*(?:rs\.?|inr|₹)?\s*[\d,]+(?:\.\d{1,2})?/gi,
     '[BALANCE_MASK]',
   );
 
@@ -188,7 +188,8 @@ export const parseSMS = (sender: string, body: string): ParsedTransaction | null
 
   // 5. Extract Account Number / Suffix
   // Matches: "A/C X4020", "Debit Card X6090", "A/C **9876", "Card ending with 4567", "A/c ...4020", "AC 5039"
-  const accountSuffix = extractAccountSuffix(clean);
+  // Money paid into a credit card belongs to the card, not the account it came from
+  const accountSuffix = extractAccountSuffix(clean, type === 'credit' && CREDIT_CARD_HINT.test(clean));
 
   // 6. Extract Merchant / Beneficiary / Counterparty
   let merchant = '';
@@ -431,18 +432,22 @@ export function isDebitCardSuffix(cleanText: string, suffix: string): boolean {
 
 /**
  * Extracts account or card suffix with strict word boundaries and digit groups.
- * Scans all candidate matches in the SMS and prioritizes masked patterns (e.g. X6090, **1234, ...4020).
+ * Prioritizes bank account numbers (a/c, acct, account) over card numbers, except when
+ * preferCard is set (a payment into a credit card), where the card number wins.
+ * Within each category, prioritizes masked patterns (e.g. X6090, **1234, ...4020).
  */
-export function extractAccountSuffix(cleanText: string): string {
-  const rx = /\b(?:a\/c|acct|account|ac|card)\b[^0-9]{0,25}?([xX*.]*)(\d{3,18})\b/gi;
-  const candidates: Array<{ suffix: string; hasMask: boolean }> = [];
+export function extractAccountSuffix(cleanText: string, preferCard = false): string {
+  const rx = /\b(?:(a\/c|acct|account|ac)|(card))\b[^0-9]{0,25}?([xX*.]*)(\d{3,18})\b/gi;
+  const candidates: Array<{ suffix: string; hasMask: boolean; isAccount: boolean }> = [];
   let m: RegExpExecArray | null;
   while ((m = rx.exec(cleanText)) !== null) {
-    const mask = m[1] || '';
-    const digits = m[2];
+    const isAccount = Boolean(m[1]);
+    const mask = m[3] || '';
+    const digits = m[4];
     candidates.push({
       suffix: digits.slice(-4),
       hasMask: mask.length > 0,
+      isAccount,
     });
   }
 
@@ -453,14 +458,33 @@ export function extractAccountSuffix(cleanText: string): string {
       candidates.push({
         suffix: m[2].slice(-4),
         hasMask: (m[1] || '').length > 0,
+        isAccount: true,
       });
     }
   }
 
   if (candidates.length === 0) return 'XXXX';
-  // Prefer the match with a mask (e.g. X6090, **1234, ...4020) over bare numbers
-  const maskedCandidate = candidates.find((c) => c.hasMask);
-  return maskedCandidate ? maskedCandidate.suffix : candidates[0].suffix;
+
+  // "Payment received on your Credit Card XX1234 from A/c XX5039": the card is the account
+  if (preferCard) {
+    const cards = candidates.filter((c) => !c.isAccount);
+    if (cards.length > 0) return (cards.find((c) => c.hasMask) || cards[0]).suffix;
+  }
+
+  // Bank account numbers (a/c, acct, account) take precedence over card numbers
+  const accountCandidates = candidates.filter((c) => c.isAccount);
+  if (accountCandidates.length > 0) {
+    const masked = accountCandidates.find((c) => c.hasMask);
+    return masked ? masked.suffix : accountCandidates[0].suffix;
+  }
+
+  const cardCandidates = candidates.filter((c) => !c.isAccount);
+  if (cardCandidates.length > 0) {
+    const masked = cardCandidates.find((c) => c.hasMask);
+    return masked ? masked.suffix : cardCandidates[0].suffix;
+  }
+
+  return candidates[0].suffix;
 }
 
 // Mirrors DEFAULT_BANK_SENDERS in the Android SmsReceiver.

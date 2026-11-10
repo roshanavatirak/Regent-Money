@@ -375,6 +375,84 @@
       },
       "smsId": "sms_346515541",
       "contentId": "sms_346515541"
+    },
+    {
+      "sender": "VM-KOTAKB",
+      "body": "Kotak Bank: Rs 256.00 debited on your Debit Card ending 1479 on 04-Nov-26 at SWIGGY. Avail Bal in A/c XX5039 is Rs 1,420.50.",
+      "otp": false,
+      "expected": {
+        "amount": 256,
+        "type": "debit",
+        "merchant": "Swiggy",
+        "accountSuffix": "5039",
+        "bankName": "Kotak",
+        "isSalary": false,
+        "availableBalance": 1420.5
+      },
+      "smsId": "sms_894580336",
+      "contentId": "sms_894580336"
+    },
+    {
+      "sender": "AX-HDFCBK",
+      "body": "Rs 500.00 debited on your HDFC Bank Credit Card ending 8899 on 04-Nov-26 at SHELL. Avl Limit: Rs 45,000.00.",
+      "otp": false,
+      "expected": {
+        "amount": 500,
+        "type": "debit",
+        "merchant": "SHELL",
+        "accountSuffix": "8899",
+        "bankName": "HDFC",
+        "isSalary": false
+      },
+      "smsId": "sms_735850567",
+      "contentId": "sms_735850567"
+    },
+    {
+      "sender": "AX-HDFCBK",
+      "body": "Payment of Rs 5,000.00 received on your HDFC Bank Credit Card XX1234 from A/c XX5039. Thank you.",
+      "otp": false,
+      "expected": {
+        "amount": 5000,
+        "type": "credit",
+        "merchant": "Credits",
+        "accountSuffix": "1234",
+        "bankName": "HDFC",
+        "isSalary": false
+      },
+      "smsId": "sms_415473457",
+      "contentId": "sms_415473457"
+    },
+    {
+      "sender": "VM-KOTAKB",
+      "body": "Rs 5,000.00 debited from A/c XX5039 towards Credit Card XX1234 payment on 04-Nov-26.",
+      "otp": false,
+      "expected": {
+        "amount": 5000,
+        "type": "debit",
+        "merchant": "Spends",
+        "accountSuffix": "5039",
+        "bankName": "Kotak",
+        "isSalary": false
+      },
+      "smsId": "sms_1906072894",
+      "contentId": "sms_1906072894"
+    },
+    {
+      "sender": "VM-KOTAKB",
+      "body": "Kotak Bank: Rs 256.00 debited on your Debit Card ending 1479 at SWIGGY on 04-Nov-26. Avl Bal Rs 18,287.00",
+      "otp": false,
+      "expected": {
+        "amount": 256,
+        "type": "debit",
+        "merchant": "Swiggy",
+        "accountSuffix": "1479",
+        "bankName": "Kotak",
+        "isSalary": false,
+        "availableBalance": 18287,
+        "isDebitCard": true
+      },
+      "smsId": "sms_671842755",
+      "contentId": "sms_671842755"
     }
   ]
 }
