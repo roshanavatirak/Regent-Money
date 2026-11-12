@@ -36,6 +36,54 @@ const LABEL_W = 84;
 const LABEL_H = 34;
 const LABEL_GAP = 8;
 
+/* Category name drawn inside a petal (SVG text never wraps or shortens on its own). */
+const NAME_SIZE = 11;
+const NAME_CHAR_W = NAME_SIZE * 0.52; // average width of a semibold character, slightly generous
+const NAME_LINE_H = 12;
+
+/**
+ * Lines for a petal's name so it stays inside the petal: the full name on one line,
+ * else split onto two lines at a space, else shortened with "…". Same size and style.
+ * Geometry is relative to the chart centre; the name's last line sits 14 above the text spot.
+ */
+function fitPetalName(label: string, p: { textR: number; mid: number; a0: number; a1: number; radius: number }): string[] {
+  const rad = (p.mid * Math.PI) / 180;
+  const tx = p.textR * Math.cos(rad);
+  const ty = p.textR * Math.sin(rad);
+  const halfWedge = (p.a1 - p.a0) / 2 - 1.5;
+  const inPetal = (x: number, y: number) => {
+    const r = Math.hypot(x, y);
+    if (r < INNER + 2 || r > p.radius - 3) return false;
+    const off = ((((Math.atan2(y, x) * 180) / Math.PI - p.mid) % 360) + 540) % 360 - 180;
+    return Math.abs(off) <= halfWedge;
+  };
+  const fits = (lines: string[]) =>
+    lines.every((line, i) => {
+      const baseline = ty - 14 - (lines.length - 1 - i) * NAME_LINE_H;
+      const half = (line.length * NAME_CHAR_W) / 2;
+      const top = baseline - NAME_SIZE * 0.8;
+      const bottom = baseline + 2;
+      return [
+        [tx - half, top],
+        [tx + half, top],
+        [tx - half, bottom],
+        [tx + half, bottom],
+      ].every(([x, y]) => inPetal(x, y));
+    });
+
+  if (fits([label])) return [label];
+  const words = label.split(' ').filter(Boolean);
+  for (let k = words.length - 1; k >= 1; k--) {
+    const lines = [words.slice(0, k).join(' '), words.slice(k).join(' ')];
+    if (fits(lines)) return lines;
+  }
+  for (let n = label.length - 1; n >= 3; n--) {
+    const short = `${label.slice(0, n).trimEnd()}…`;
+    if (fits([short])) return [short];
+  }
+  return [`${label.slice(0, 3)}…`];
+}
+
 const formatINR = (value: number) =>
   `₹${Math.abs(value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 
@@ -108,8 +156,11 @@ export const SpendingPetalCard = ({
       // Name + amount + % fit inside a petal when it is long and wide enough at the text spot.
       const textR = INNER + (radius - INNER) * 0.6;
       const labelInside = radius - INNER >= 62 && (textR * wedge * Math.PI) / 180 >= 60;
+      const a0 = mid - wedge / 2;
+      const a1 = mid + wedge / 2;
       return {
         ...c,
+        nameLines: labelInside ? fitPetalName(c.label, { textR, mid, a0, a1, radius }) : [c.label],
         color,
         pct: total > 0 ? Math.round((c.value / total) * 100) : 0,
         radius,
@@ -117,8 +168,8 @@ export const SpendingPetalCard = ({
         labelInside,
         pctInside: !labelInside && radius - INNER >= 26,
         mid,
-        a0: mid - wedge / 2,
-        a1: mid + wedge / 2,
+        a0,
+        a1,
         change: changeVs(c.value, c.previousValue),
       };
     });
@@ -239,9 +290,19 @@ export const SpendingPetalCard = ({
                       <Path d={petalPath(r, p.a0, p.a1)} fill={p.color} />
                       {p.labelInside ? (
                         <G>
-                          <SvgText x={t.x} y={t.y - 14} fill={FOREST} fontSize={11} fontWeight="600" textAnchor="middle">
-                            {p.label}
-                          </SvgText>
+                          {p.nameLines.map((line, li) => (
+                            <SvgText
+                              key={`n${li}`}
+                              x={t.x}
+                              y={t.y - 14 - (p.nameLines.length - 1 - li) * NAME_LINE_H}
+                              fill={FOREST}
+                              fontSize={NAME_SIZE}
+                              fontWeight="600"
+                              textAnchor="middle"
+                            >
+                              {line}
+                            </SvgText>
+                          ))}
                           <SvgText x={t.x} y={t.y + 3} fill={FOREST} fontSize={14} fontWeight="800" textAnchor="middle">
                             {amount(p.value)}
                           </SvgText>

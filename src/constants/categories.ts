@@ -181,6 +181,21 @@ export interface ResolvedCategory extends CategoryDef {
 const titleCase = (s: string) =>
   s.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
 
+// Names of categories the user made in Budgets (ids like "custom_haircut_mhx2k9a1").
+// The budget store keeps this up to date; see registerBudgetCategoryLabels.
+const budgetCategoryLabels = new Map<string, string>();
+
+/** Called by the budget store so payments tagged with a budget category show its real name. */
+export const registerBudgetCategoryLabels = (cats: ({ id?: string; label?: string } | null | undefined)[]) => {
+  cats.forEach((c) => {
+    if (c?.id && c.label) budgetCategoryLabels.set(normalize(c.id), c.label);
+  });
+};
+
+/** "custom_haircut_mhx2k9a1" → "Haircut" when the budget's own name isn't known on this phone. */
+const budgetIdLabel = (norm: string) =>
+  titleCase(norm.replace(/^custom_/, '').replace(/_(?=[a-z0-9]*\d)[a-z0-9]{6,10}$/, ''));
+
 /** Resolve any stored category/tag string into a full category definition. */
 export const getCategory = (key?: string): ResolvedCategory => {
   const norm = normalize(key);
@@ -194,7 +209,9 @@ export const getCategory = (key?: string): ResolvedCategory => {
   }
   return {
     id: norm,
-    label: titleCase((key || '').trim()),
+    label: norm.startsWith('custom_')
+      ? budgetCategoryLabels.get(norm) ?? budgetIdLabel(norm)
+      : titleCase((key || '').trim()),
     family: 'other',
     group: 'other',
     icon: 'tag-outline',

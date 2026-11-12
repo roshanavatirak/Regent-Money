@@ -66,6 +66,18 @@ object WordmarkGlyphs {
         REGENT.map { PlacedGlyph(it, 0f, 0f, money = false) } +
             MONEY.map { PlacedGlyph(it, MONEY_DX, MONEY_DY, money = true) }
 
+    /*
+     * The intro now draws the wordmark as text in the brand font (Bricolage Grotesque
+     * ExtraBold, same as BrandWordmark in the app). The traced shapes above keep only the
+     * layout box (ONE_LINE_W / ONE_LINE_H) and the baseline the text sits on.
+     */
+    const val WORD_REGENT = "Regent"
+    const val WORD_MONEY = "Money"
+    /** R e g e n t M o n e y: one rise animation per letter. */
+    const val LETTER_COUNT = 11
+    /** Baseline of the one-line wordmark, in wordmark units (the old glyphs sat on y 134). */
+    const val BASELINE_Y = 134f
+
     /** Four-point sparkle in a 24 × 24 box. */
     val SPARKLE: Path = PathParser.createPathFromPathData(
         "M12 0C13 7 17 11 24 12C17 13 13 17 12 24C11 17 7 13 0 12C7 11 11 7 12 0Z"

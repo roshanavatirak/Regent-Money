@@ -198,6 +198,7 @@ export const AppSidebarDrawer: React.FC = () => {
           items: [
             { key: 'dash', label: 'Console', icon: 'grid', onPress: () => nav('AdminDashboard') },
             { key: 'email_config', label: 'Email', icon: 'mail', onPress: () => nav('AdminEmailConfig') },
+            { key: 'home_cards', label: 'Home cards', icon: 'layout', onPress: () => nav('AdminHomeCards') },
             { key: 'users', label: 'Users', icon: 'users', onPress: () => nav('AdminUsers') },
             { key: 'logs', label: 'Audit logs', icon: 'activity', onPress: () => nav('AdminLogs') },
             { key: 'asettings', label: 'Admin settings', icon: 'sliders', onPress: () => nav('AdminSettings') },

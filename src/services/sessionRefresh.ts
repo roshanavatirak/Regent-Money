@@ -15,6 +15,7 @@ import { NativeModules, Platform } from 'react-native';
 import { BACKEND_URL, getBackendUrl } from '../config/api';
 import { tokenStore } from './tokenStore';
 import type { SessionTokens } from './tokenStore';
+import { reportHomeCardsHeader } from '../features/homeCards/homeCardsSignal';
 
 const REFRESH_EARLY_MS = 2 * 60 * 1000;
 
@@ -120,37 +121,45 @@ export function installAuthFetch() {
 
   globalThis.fetch = (async (input: any, init?: any) => {
     const url = typeof input === 'string' ? input : input?.url || String(input);
-    if (!isBackendRequest(url) || url.includes('/auth/refresh')) {
-      return originalFetch!(input, init);
-    }
-
-    const headers = new Headers(init?.headers || (typeof input === 'object' && input?.headers) || undefined);
-    if (!headers.has('Authorization')) {
-      return originalFetch!(input, init);
-    }
-
-    // 1. Refresh early if needed, then always send the newest token
-    await ensureFreshAccessToken();
-    const current = tokenStore.getAccessToken();
-    if (current) headers.set('Authorization', `Bearer ${current}`);
-
-    let res = await originalFetch!(input, { ...init, headers });
-
-    // 2. Expired anyway (phone clock off, app was asleep): refresh once and retry.
-    //    Cancelled by the server (logged out elsewhere, banned): sign out here too.
-    if (res.status === 401 && tokenStore.getRefreshToken()) {
-      const body = await res.clone().json().catch(() => ({}));
-      if (body?.code === 'SESSION_REVOKED') {
-        onSessionEnded?.();
-      } else if (body?.code === 'TOKEN_EXPIRED') {
-        const result = await refreshSession();
-        if (result === 'ok') {
-          const next = tokenStore.getAccessToken();
-          if (next) headers.set('Authorization', `Bearer ${next}`);
-          res = await originalFetch!(input, { ...init, headers });
-        }
-      }
-    }
+    if (!isBackendRequest(url)) return originalFetch!(input, init);
+    const res = await authedFetch(url, input, init);
+    // The live Home cards version rides on every backend response (see homeCardsSignal)
+    reportHomeCardsHeader(res);
     return res;
   }) as typeof fetch;
+}
+
+async function authedFetch(url: string, input: any, init?: any): Promise<Response> {
+  if (url.includes('/auth/refresh')) {
+    return originalFetch!(input, init);
+  }
+
+  const headers = new Headers(init?.headers || (typeof input === 'object' && input?.headers) || undefined);
+  if (!headers.has('Authorization')) {
+    return originalFetch!(input, init);
+  }
+
+  // 1. Refresh early if needed, then always send the newest token
+  await ensureFreshAccessToken();
+  const current = tokenStore.getAccessToken();
+  if (current) headers.set('Authorization', `Bearer ${current}`);
+
+  let res = await originalFetch!(input, { ...init, headers });
+
+  // 2. Expired anyway (phone clock off, app was asleep): refresh once and retry.
+  //    Cancelled by the server (logged out elsewhere, banned): sign out here too.
+  if (res.status === 401 && tokenStore.getRefreshToken()) {
+    const body = await res.clone().json().catch(() => ({}));
+    if (body?.code === 'SESSION_REVOKED') {
+      onSessionEnded?.();
+    } else if (body?.code === 'TOKEN_EXPIRED') {
+      const result = await refreshSession();
+      if (result === 'ok') {
+        const next = tokenStore.getAccessToken();
+        if (next) headers.set('Authorization', `Bearer ${next}`);
+        res = await originalFetch!(input, { ...init, headers });
+      }
+    }
+  }
+  return res;
 }

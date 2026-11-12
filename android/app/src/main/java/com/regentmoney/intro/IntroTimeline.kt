@@ -208,9 +208,12 @@ class IntroTimeline(val L: IntroLayout) {
 
     /* --- wordmark ------------------------------------------------------ */
 
-    /** Every glyph rises out of its line, left to right, 35 ms apart. */
-    val glyphs: List<GlyphTracks> = WordmarkGlyphs.ONE_LINE.mapIndexed { i, g ->
-        val hide = (WordmarkGlyphs.ONE_LINE_H - g.top) * L.S + 2f
+    /**
+     * Every letter of "Regent Money" rises out of its line, left to right, 35 ms apart.
+     * Each starts a full line-height down, so it is hidden below the clip until it rises.
+     */
+    val glyphs: List<GlyphTracks> = (0 until WordmarkGlyphs.LETTER_COUNT).map { i ->
+        val hide = L.wordH + 2f
         val start = B.WORD + i * 35f
         GlyphTracks(
             y = track(k(0, hide), k(start, hide), k(start + 520f, 0, outExpo)),

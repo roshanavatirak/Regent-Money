@@ -42,7 +42,8 @@ import { User } from '../users/entities/user.entity';
 import { OcrSyncDto } from './dto/ocr-sync.dto';
 import { ManualTransactionDto } from './dto/manual-transaction.dto';
 import { ConfirmDuplicateDto } from './dto/confirm-duplicate.dto';
-import { PDFExtract, PDFExtractOptions } from 'pdf.js-extract';
+import type { PDFExtractOptions } from 'pdf.js-extract';
+import { loadPdfExtract } from './pdf-extract.loader';
 import { AiService } from '../ai/ai.service';
 import { parseSMS, detectBankFromSender, isBankSmsSender, ParsedTransaction } from './sms-parser.util';
 import { DirectSmsDto } from './dto/direct-sms.dto';
@@ -403,6 +404,16 @@ export class SyncService implements OnModuleInit {
       `);
       await this.dataSource.query(`
         CREATE INDEX IF NOT EXISTS idx_user_merchant_lookup ON finance.user_merchant_tags(user_id, merchant_normalized);
+      `);
+      // Tags the user created themselves ("Your tags"), so every device shows the same list
+      await this.dataSource.query(`
+        CREATE TABLE IF NOT EXISTS finance.user_custom_tags (
+          user_id UUID NOT NULL,
+          name_normalized TEXT NOT NULL,
+          name TEXT NOT NULL,
+          created_at BIGINT NOT NULL,
+          PRIMARY KEY (user_id, name_normalized)
+        );
       `);
       // Budget declarations column migrations
       await this.dataSource.query(`
@@ -1011,6 +1022,50 @@ export class SyncService implements OnModuleInit {
 
     return tx;
   }
+
+  /** Custom tags the user created, oldest first. */
+  async getCustomTags(userId: string): Promise<{ name: string }[]> {
+    const rows = await this.dataSource.query(
+      `SELECT name FROM finance.user_custom_tags WHERE user_id = $1 ORDER BY created_at ASC LIMIT $2`,
+      [userId, SyncService.MAX_CUSTOM_TAGS],
+    );
+    return rows.map((r: any) => ({ name: r.name }));
+  }
+
+  /**
+   * Saves custom tags (one or many). Names are matched without case, so "Haircut" and
+   * "haircut" are one tag; an existing tag keeps its first spelling. Returns the full list.
+   */
+  async addCustomTags(userId: string, names: unknown): Promise<{ name: string }[]> {
+    const list = (Array.isArray(names) ? names : [names])
+      .map((n) => (typeof n === 'string' ? n.replace(/\s+/g, ' ').trim() : ''))
+      .filter((n) => n.length >= 2 && n.length <= SyncService.MAX_CUSTOM_TAG_LENGTH)
+      .slice(0, SyncService.MAX_CUSTOM_TAGS);
+    if (!list.length) throw new BadRequestException('Tag names must be 2 to 40 characters.');
+
+    const [{ count }] = await this.dataSource.query(
+      `SELECT COUNT(*)::int AS count FROM finance.user_custom_tags WHERE user_id = $1`,
+      [userId],
+    );
+    let room = SyncService.MAX_CUSTOM_TAGS - Number(count);
+    const now = Date.now();
+    for (const name of list) {
+      if (room <= 0) break;
+      // A name that already exists is skipped and doesn't use up room
+      const inserted = await this.dataSource.query(
+        `INSERT INTO finance.user_custom_tags (user_id, name_normalized, name, created_at)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (user_id, name_normalized) DO NOTHING
+         RETURNING name`,
+        [userId, name.toLowerCase(), name, now],
+      );
+      if (inserted.length) room--;
+    }
+    return this.getCustomTags(userId);
+  }
+
+  private static readonly MAX_CUSTOM_TAGS = 100;
+  private static readonly MAX_CUSTOM_TAG_LENGTH = 40;
 
   async saveMerchantTagRule(userId: string, merchant: string, tag: string) {
     if (!merchant || !tag) return null;
@@ -1758,6 +1813,7 @@ export class SyncService implements OnModuleInit {
   }
 
   private async extractTextFromPdfBuffer(buffer: Buffer, password?: string): Promise<string> {
+    const PDFExtract = await loadPdfExtract();
     const pdfExtract = new PDFExtract();
     const options: PDFExtractOptions = { password };
 

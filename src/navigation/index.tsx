@@ -122,6 +122,7 @@ import { biometricService } from '../services/biometricService';
 import { BiometricLockOverlay } from '../components/BiometricLockOverlay';
 import { AppSidebarDrawer } from '../components/AppSidebarDrawer';
 import { AdminEmailConfigScreen } from '../features/admin/AdminEmailConfigScreen';
+import { AdminHomeCardsScreen } from '../features/admin/AdminHomeCardsScreen';
 import { DashboardSkeleton } from '../components/DashboardSkeleton';
 import { BrandWordmark } from '../components/BrandWordmark';
 import { StatusBar } from 'expo-status-bar';
@@ -3247,6 +3248,11 @@ export default function AppNavigator() {
                   <Stack.Screen
                     name="AdminEmailConfig"
                     component={AdminEmailConfigScreen}
+                    options={sidebarAwareOptions('slide_from_right')}
+                  />
+                  <Stack.Screen
+                    name="AdminHomeCards"
+                    component={AdminHomeCardsScreen}
                     options={sidebarAwareOptions('slide_from_right')}
                   />
                   <Stack.Screen

@@ -147,6 +147,20 @@ export class SyncController {
     return this.syncService.getUserMerchantTagRules(userId);
   }
 
+  /** The user's own tags ("Your tags" in the tag sheet), shared by all their devices. */
+  @Get('custom-tags')
+  @HttpCode(HttpStatus.OK)
+  async getCustomTags(@Req() req: any) {
+    return this.syncService.getCustomTags(req.user.id);
+  }
+
+  /** Adds one tag ({ name }) or several ({ names: [...] }); returns the full list. */
+  @Post('custom-tags')
+  @HttpCode(HttpStatus.OK)
+  async addCustomTags(@Req() req: any, @Body() body: { name?: string; names?: string[] }) {
+    return this.syncService.addCustomTags(req.user.id, body?.names ?? body?.name);
+  }
+
   @Post('ocr-sync')
   @HttpCode(HttpStatus.OK)
   async syncOcrTransactions(

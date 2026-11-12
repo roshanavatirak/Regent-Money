@@ -5,6 +5,7 @@ import { txShards, incShards, migrateBlobToShards } from '../db/shards';
 import { useColorScheme } from 'react-native';
 import { migrateGoalsV1toV2 } from '../features/goals/services/goalsMigration';
 import type { Goal, SavingsEntry } from '../features/goals/services/goalPacingService';
+import { registerBudgetCategoryLabels } from '../constants/categories';
 
 // Ensure one-time partition of legacy single blobs into monthly shards
 migrateBlobToShards();
@@ -325,6 +326,22 @@ export const useBudgetStore = create<BudgetState>((set) => ({
       return { budgets: updated };
     }),
 }));
+
+/**
+ * Categories made in Budgets: the ones saved on this phone plus those carried by synced
+ * budgets (so a category made on another phone shows up here too). Used by the tag sheet.
+ */
+export const budgetCustomCategoriesOf = (s: Pick<BudgetState, 'customCategories' | 'budgets'>): BudgetCustomCategory[] => {
+  const byId = new Map<string, BudgetCustomCategory>();
+  for (const c of [...(s.customCategories || []), ...(s.budgets || []).map((b) => b.customCategoryDef)]) {
+    if (c?.id?.startsWith('custom_') && c.label && !byId.has(c.id)) byId.set(c.id, c);
+  }
+  return [...byId.values()];
+};
+
+// Lets getCategory() show "Haircut" (not an id) for payments tagged with a budget category
+registerBudgetCategoryLabels(budgetCustomCategoriesOf(useBudgetStore.getState()));
+useBudgetStore.subscribe((s) => registerBudgetCategoryLabels(budgetCustomCategoriesOf(s)));
 
 export type { Goal, SavingsEntry };
 

@@ -17,6 +17,8 @@ import android.provider.Settings
 import android.util.AttributeSet
 import android.view.Choreographer
 import android.view.View
+import android.graphics.Rect
+import androidx.core.content.res.ResourcesCompat
 import androidx.core.graphics.PathParser
 import com.regentmoney.R
 import kotlin.math.min
@@ -76,6 +78,43 @@ class IntroView @JvmOverloads constructor(
     /* ---------------- paints (allocated once) ---------------- */
 
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+
+    /* Wordmark: "Regent Money" in the brand font, same as BrandWordmark in the app. */
+    private val brandFont: Typeface = try {
+        ResourcesCompat.getFont(context, R.font.bricolage_grotesque_extrabold) ?: Typeface.DEFAULT_BOLD
+    } catch (e: Exception) {
+        Typeface.DEFAULT_BOLD
+    }
+    private val wordPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        typeface = brandFont
+        letterSpacing = -0.3f / 19f // BrandWordmark: -0.3 at size 19
+    }
+
+    private class Letter(val text: String, val x: Float, val money: Boolean)
+
+    private var letters: List<Letter> = emptyList()
+    private var lettersForWidth = -1f
+    /** Baseline and height of the text, measured from the top of the wordmark box. */
+    private var wordBaseline = 0f
+    private var wordBoxH = 0f
+
+    /** Sizes the text to the wordmark width and places each letter (once per layout). */
+    private fun layoutLetters(wordW: Float) {
+        if (wordW == lettersForWidth) return
+        val full = "${WordmarkGlyphs.WORD_REGENT} ${WordmarkGlyphs.WORD_MONEY}"
+        wordPaint.textSize = 100f
+        wordPaint.textSize = 100f * wordW / wordPaint.measureText(full)
+        val bounds = Rect()
+        wordPaint.getTextBounds(full, 0, full.length, bounds)
+        wordBaseline = -bounds.top.toFloat()
+        wordBoxH = bounds.height().toFloat()
+        val moneyStart = WordmarkGlyphs.WORD_REGENT.length + 1
+        letters = full.indices
+            .filter { full[it] != ' ' }
+            // Measuring the whole prefix keeps the font's own spacing and kerning
+            .map { i -> Letter(full[i].toString(), wordPaint.measureText(full, 0, i), i >= moneyStart) }
+        lettersForWidth = wordW
+    }
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
@@ -454,46 +493,24 @@ class IntroView @JvmOverloads constructor(
         }
     }
 
-    /** "Regent Money" on one line, each traced glyph rising out of the baseline. */
+    /** "Regent Money" on one line in the brand font, each letter rising out of the baseline. */
     private fun drawWordmark(canvas: Canvas, tl: IntroTimeline, t: Float) {
         val L = tl.L
-        val S = L.S
+        layoutLetters(L.wordW)
+        // The timeline hides each letter one box-height down; stretch that to this text's height
+        val rise = (wordBoxH + 2f) / (L.wordH + 2f)
         canvas.save()
         canvas.translate(L.wordLeft, L.wordTop)
-        canvas.clipRect(-4f, -4f, L.wordW + 4f, WordmarkGlyphs.ONE_LINE_H * S + 2f)
-        val glyphs = WordmarkGlyphs.ONE_LINE
-        for (i in glyphs.indices) {
+        canvas.clipRect(-4f, -4f, L.wordW + 4f, wordBoxH + 2f)
+        for (i in letters.indices) {
             val tr = tl.glyphs[i]
             val o = tr.opacity.at(t)
             if (o <= 0.002f) continue
-            val g = glyphs[i]
-            canvas.save()
-            canvas.translate(0f, tr.y.at(t))
-            canvas.scale(S, S)
-            canvas.translate(g.dx, g.dy)
-            fill.color = withAlpha(if (g.money) GREEN else INK, o)
-            canvas.drawPath(g.glyph.path, fill)
-            canvas.restore()
+            val letter = letters[i]
+            wordPaint.color = withAlpha(if (letter.money) GREEN else INK, o)
+            canvas.drawText(letter.text, letter.x, wordBaseline + tr.y.at(t) * rise, wordPaint)
         }
         canvas.restore()
-
-        // green notch in the R and leaf on the t, popping in once the word has risen
-        val a = tl.accentScale.at(t)
-        if (a > 0.001f) {
-            canvas.save()
-            canvas.translate(L.wordLeft, L.wordTop)
-            fill.color = GREEN
-            for (g in arrayOf(WordmarkGlyphs.NOTCH, WordmarkGlyphs.LEAF)) {
-                val pivX = g.x * S
-                val pivY = (g.y + g.h) * S
-                canvas.save()
-                canvas.scale(a, a, pivX, pivY)
-                canvas.scale(S, S)
-                canvas.drawPath(g.path, fill)
-                canvas.restore()
-            }
-            canvas.restore()
-        }
     }
 
     private fun drawFooter(canvas: Canvas, tl: IntroTimeline, t: Float) {

@@ -1,4 +1,5 @@
 import { apiFetch } from './apiClient';
+import type { HomeCard } from '../features/homeCards/schema';
 
 export interface AdminUserItem {
   id: string;
@@ -139,6 +140,52 @@ export interface EmailAudienceEstimate {
   remainingToday: number;
   dailyLimit: number;
   fallbackAvailable?: number;
+}
+
+
+export interface HomeCardsRelease {
+  version: number;
+  note: string | null;
+  publishedBy: string | null;
+  publishedAt: string;
+  count: number;
+}
+
+export interface HomeCardsAdminState {
+  draft: HomeCard[];
+  rev: number;
+  draftUpdatedAt: string | null;
+  liveVersion: number;
+  live: HomeCard[];
+  releases: HomeCardsRelease[];
+}
+
+/** Error from the cards API, with the server's list of problems when there are several. */
+export class HomeCardsError extends Error {
+  status: number;
+  code?: string;
+  problems: string[];
+  constructor(message: string, status: number, code?: string, problems: string[] = []) {
+    super(message);
+    this.status = status;
+    this.code = code;
+    this.problems = problems;
+  }
+}
+
+async function homeCardsCall<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  const res = await apiFetch(`/admin/home-cards${path}`, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const list: string[] = Array.isArray(json?.message) ? json.message : [];
+    const msg = list[0] || (typeof json?.message === 'string' ? json.message : `Request failed (${res.status})`);
+    throw new HomeCardsError(msg, res.status, json?.code, list);
+  }
+  return json as T;
 }
 
 export const adminService = {
@@ -403,4 +450,17 @@ export const adminService = {
     }
     return json;
   },
+
+  /* ---------------- Home cards ---------------- */
+
+  getHomeCards: () => homeCardsCall<HomeCardsAdminState>(''),
+
+  saveHomeCardsDraft: (cards: HomeCard[], rev: number) =>
+    homeCardsCall<{ rev: number; cards: HomeCard[] }>('/draft', 'PUT', { cards, rev }),
+
+  publishHomeCards: (cards: HomeCard[], baseVersion: number, note?: string) =>
+    homeCardsCall<{ version: number; rev: number; cards: HomeCard[] }>('/publish', 'POST', { cards, baseVersion, note }),
+
+  rollbackHomeCards: (version: number, baseVersion: number) =>
+    homeCardsCall<{ version: number; rev: number; cards: HomeCard[] }>(`/rollback/${version}`, 'POST', { baseVersion }),
 };

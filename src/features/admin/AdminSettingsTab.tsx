@@ -39,6 +39,7 @@ export const AdminSettingsTab: React.FC = () => {
   const setTheme = useThemeStore((s) => s.setTheme);
   const navigation = useNavigation<any>();
   const openEmailPage = () => navigation.navigate('AdminEmailConfig');
+  const openHomeCards = () => navigation.navigate('AdminHomeCards');
   const user = useAuthStore((s) => s.user);
   const { biometricsEnabled, setBiometricsEnabled, autoLockTimeout, setAutoLockTimeout } = useSecurityStore();
 
@@ -214,6 +215,20 @@ export const AdminSettingsTab: React.FC = () => {
             <View style={{ flex: 1 }}>
               <Text style={titleText}>Email</Text>
               <Text style={subText}>Daily limits and test sends</Text>
+            </View>
+            <Feather name="chevron-right" size={18} color={p.muted} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.row, { borderTopWidth: 1, borderTopColor: p.divider }]}
+            onPress={openHomeCards}
+            activeOpacity={0.7}
+          >
+            <IconTile tint={p.tint.green}>
+              <Feather name="layout" size={18} color={p.tint.green.fg} />
+            </IconTile>
+            <View style={{ flex: 1 }}>
+              <Text style={titleText}>Home cards</Text>
+              <Text style={subText}>Cards in the user Home carousel</Text>
             </View>
             <Feather name="chevron-right" size={18} color={p.muted} />
           </TouchableOpacity>

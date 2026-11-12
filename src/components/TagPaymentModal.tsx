@@ -23,7 +23,7 @@ import {
 } from '../constants/categories';
 import { CategoryIcon } from './CategoryIcon';
 import { tagLearningService } from '../services/tagLearningService';
-import { usePeerStore } from '../store';
+import { usePeerStore, useBudgetStore, budgetCustomCategoriesOf } from '../store';
 
 interface TagPaymentModalProps {
   visible: boolean;
@@ -59,6 +59,29 @@ export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
   const [errorText, setErrorText] = useState('');
   const [rememberForPayee, setRememberForPayee] = useState(false);
 
+  // Categories made in Budgets. Tagging with one (its id, e.g. custom_haircut_…) is what makes
+  // that budget count the payment.
+  const budgetCustom = useBudgetStore((s) => s.customCategories);
+  const budgets = useBudgetStore((s) => s.budgets);
+  const budgetCats = useMemo(
+    () =>
+      budgetCustomCategoriesOf({ customCategories: budgetCustom, budgets })
+        // The server keeps a payment's category to 40 characters; longer ids would be refused
+        .filter((c) => c.id.length <= 40),
+    [budgetCustom, budgets],
+  );
+  // A plain tag with the same name as a budget category would be a second "Haircut" tile
+  const visibleCustomTags = useMemo(() => {
+    const taken = new Set(budgetCats.map((c) => c.label.toLowerCase()));
+    return customTags.filter((t) => !taken.has(t.toLowerCase()));
+  }, [customTags, budgetCats]);
+
+  // Tags can arrive from the user's other devices while the sheet is open
+  useEffect(() => {
+    if (!visible) return;
+    return tagLearningService.onCustomTagsChanged(setCustomTags);
+  }, [visible]);
+
   useEffect(() => {
     if (visible) {
       setCurrent(selectedTag || 'miscellaneous');
@@ -85,9 +108,13 @@ export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
     const q = query.trim().toLowerCase();
     return {
       builtIn: searchCategories(query),
-      custom: customTags.filter((t) => t.toLowerCase().includes(q)),
+      budget: budgetCats.filter((c) => c.label.toLowerCase().includes(q)),
+      custom: visibleCustomTags.filter((t) => t.toLowerCase().includes(q)),
     };
-  }, [query, customTags]);
+  }, [query, visibleCustomTags, budgetCats]);
+  const resultCount = searchResults
+    ? searchResults.builtIn.length + searchResults.budget.length + searchResults.custom.length
+    : 0;
 
   const handleCreate = (name: string = newTag) => {
     const clean = name.trim();
@@ -99,9 +126,15 @@ export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
       setErrorText('Use at least 2 characters.');
       return;
     }
-    const updated = tagLearningService.addCustomTag(clean);
-    setCustomTags(updated);
-    setCurrent(clean.toLowerCase());
+    // Same name as a budget category: use that, so the budget counts this payment
+    const budgetMatch = budgetCats.find((c) => c.label.toLowerCase() === clean.toLowerCase());
+    if (budgetMatch) {
+      setCurrent(budgetMatch.id);
+    } else {
+      const updated = tagLearningService.addCustomTag(clean);
+      setCustomTags(updated);
+      setCurrent(clean.toLowerCase());
+    }
     setQuery('');
     setIsCreating(false);
     setNewTag('');
@@ -213,7 +246,7 @@ export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
           >
             {searchResults ? (
               <>
-                {searchResults.builtIn.length + searchResults.custom.length === 0 ? (
+                {resultCount === 0 ? (
                   <Text style={[styles.emptyText, { color: muted }]}>
                     No tag called "{query.trim()}". Create it below.
                   </Text>
@@ -222,6 +255,7 @@ export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
                     <Text style={[styles.groupTitle, { color: muted }]}>Results</Text>
                     <View style={styles.grid}>
                       {searchResults.builtIn.map((c) => renderTile(c.id, c.label))}
+                      {searchResults.budget.map((c) => renderTile(c.id, c.label))}
                       {searchResults.custom.map((t) => renderTile(t.toLowerCase(), getCategory(t).label))}
                     </View>
                   </>
@@ -263,7 +297,8 @@ export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
 
                 <Text style={[styles.groupTitle, { color: muted }]}>Your tags</Text>
                 <View style={styles.grid}>
-                  {customTags.map((t) => renderTile(t.toLowerCase(), getCategory(t).label))}
+                  {budgetCats.map((c) => renderTile(c.id, c.label))}
+                  {visibleCustomTags.map((t) => renderTile(t.toLowerCase(), getCategory(t).label))}
                   {renderTile('miscellaneous', 'Misc')}
                   <Pressable
                     onPress={() => {
@@ -292,7 +327,7 @@ export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
             )}
 
             {/* Create a tag */}
-            {(isCreating || (searchResults && searchResults.builtIn.length + searchResults.custom.length === 0)) && (
+            {(isCreating || (searchResults && resultCount === 0)) && (
               <View style={{ paddingHorizontal: 16, marginTop: 8 }}>
                 <View
                   style={[

@@ -1,0 +1,843 @@
+<title>Home Cards Studio</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: admin console — left rail (live cards + 10 templates), centre phone preview, right inspector. Second tab = engineering blueprint. */
+:root{
+  --bg:#F2F6F1; --surface:#FFFFFF; --surface-2:#E8EFE8; --fg:#10231B; --muted:#5A6F64; --line:#D7E2D9;
+  --accent:#0B3D2C; --accent-fg:#B8F36B; --soft:#E3F2E8; --soft-fg:#0B3D2C;
+  --ok:#15803D; --ok-bg:#DCF5E3; --warn:#9A5B00; --warn-bg:#FFF1D6; --bad:#B42318; --bad-bg:#FDE4E1; --info:#1450A3; --info-bg:#DCEBFF;
+  --phone:#0E1512; --code-bg:#0B1F17; --code-fg:#D7EBDD;
+  --display:"Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body:"Figtree", "Segoe UI", system-ui, sans-serif;
+  --mono:"JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#08130E; --surface:#0F1F18; --surface-2:#152A21; --fg:#E4EFE8; --muted:#8EA79A; --line:#1F3A2E;
+  --accent:#B8F36B; --accent-fg:#0B3D2C; --soft:#173527; --soft-fg:#B8F36B;
+  --ok:#6EE79A; --ok-bg:#123522; --warn:#FFC266; --warn-bg:#3A2A0C; --bad:#FF9C8F; --bad-bg:#3E1612; --info:#93C5FD; --info-bg:#132A47;
+  --phone:#000000; --code-bg:#050D09; --code-fg:#CFE6D7; color-scheme:dark;}}
+:root[data-theme="dark"]{
+  --bg:#08130E; --surface:#0F1F18; --surface-2:#152A21; --fg:#E4EFE8; --muted:#8EA79A; --line:#1F3A2E;
+  --accent:#B8F36B; --accent-fg:#0B3D2C; --soft:#173527; --soft-fg:#B8F36B;
+  --ok:#6EE79A; --ok-bg:#123522; --warn:#FFC266; --warn-bg:#3A2A0C; --bad:#FF9C8F; --bad-bg:#3E1612; --info:#93C5FD; --info-bg:#132A47;
+  --phone:#000000; --code-bg:#050D09; --code-fg:#CFE6D7; color-scheme:dark;}
+
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--body);font-size:14px;line-height:1.45}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--surface)}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+.wrap{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+
+/* top bar */
+.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--surface);border-bottom:1px solid var(--line)}
+.top-in{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;padding-block:12px;max-width:1440px;margin:0 auto}
+.brand{display:flex;align-items:center;gap:10px;margin-right:auto}
+.logo{width:34px;height:34px;border-radius:10px;background:#0B3D2C;display:grid;place-items:center;color:#B8F36B;font:800 17px var(--display)}
+.brand h1{margin:0;font:700 18px/1.1 var(--display);letter-spacing:-.3px}
+.brand small{display:block;color:var(--muted);font-size:12px}
+.tabs{display:flex;background:var(--surface-2);border-radius:999px;padding:3px}
+.tabs button{border:0;background:none;padding:7px 14px;border-radius:999px;font-weight:600;color:var(--muted)}
+.tabs button[aria-selected="true"]{background:var(--surface);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.pubbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.state{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;padding:6px 10px;border-radius:999px;background:var(--ok-bg);color:var(--ok)}
+.state.dirty{background:var(--warn-bg);color:var(--warn)}
+.state i{width:7px;height:7px;border-radius:50%;background:currentColor}
+.btn{border:1px solid var(--line);background:var(--surface);padding:8px 14px;border-radius:10px;font-weight:600}
+.btn:hover{background:var(--surface-2)}
+.btn.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.btn.primary:hover{filter:brightness(1.08)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.danger{color:var(--bad);border-color:var(--bad-bg);background:var(--bad-bg)}
+.btn.sm{padding:5px 10px;font-size:12.5px;border-radius:8px}
+
+/* studio grid */
+main{max-width:1440px;margin:0 auto;padding-block:20px 60px}
+.studio{display:grid;grid-template-columns:minmax(300px,380px) minmax(360px,1fr) minmax(320px,400px);gap:20px;align-items:start}
+@media (max-width:1180px){.studio{grid-template-columns:minmax(0,1fr) minmax(0,1fr)} .col-phone{grid-column:2;grid-row:1} .col-left{grid-column:1;grid-row:1 / span 2} .col-ed{grid-column:2}}
+@media (max-width:760px){.studio{grid-template-columns:minmax(0,1fr)} .col-phone,.col-left,.col-ed{grid-column:1;grid-row:auto}}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px;min-width:0}
+.col{display:flex;flex-direction:column;gap:16px;min-width:0}
+.ph{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:12px}
+.ph h2{margin:0;font:700 16px var(--display);letter-spacing:-.2px}
+.ph span{color:var(--muted);font-size:12.5px}
+.eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+
+/* live list */
+.live{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.li{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:8px 8px 8px 10px;border-radius:12px;border:1px solid transparent;cursor:pointer}
+.li:hover{background:var(--surface-2)}
+.li.sel{border-color:var(--accent);background:var(--soft)}
+.li.off .li-t{opacity:.5;text-decoration:line-through}
+.sw-dot{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;overflow:hidden}
+.sw-dot svg{width:28px;height:28px}
+.li-t{font-weight:600;font-size:13px;line-height:1.25;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.li-m{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.chip{font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:999px;background:var(--surface-2);color:var(--muted);white-space:nowrap}
+.chip.new{background:var(--info-bg);color:var(--info)}
+.chip.edit{background:var(--warn-bg);color:var(--warn)}
+.chip.live{background:var(--ok-bg);color:var(--ok)}
+.chip.hid{background:var(--bad-bg);color:var(--bad)}
+.li-act{display:flex;align-items:center;gap:2px}
+.ib{border:0;background:none;width:26px;height:26px;border-radius:7px;display:grid;place-items:center;color:var(--muted)}
+.ib:hover{background:var(--surface);color:var(--fg)}
+.ib:disabled{opacity:.3}
+.toggle{position:relative;width:34px;height:20px;flex:none}
+.toggle input{position:absolute;inset:0;opacity:0;margin:0;cursor:pointer;z-index:1}
+.toggle span{position:absolute;inset:0;border-radius:999px;background:var(--line);transition:.15s}
+.toggle span::after{content:"";position:absolute;width:14px;height:14px;left:3px;top:3px;border-radius:50%;background:#fff;transition:.15s}
+.toggle input:checked+span{background:var(--ok)}
+.toggle input:checked+span::after{left:17px}
+.toggle input:focus-visible+span{outline:2px solid var(--accent);outline-offset:2px}
+
+/* templates */
+.tgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.tpl{border:1px solid var(--line);border-radius:14px;padding:8px;background:var(--surface);display:flex;flex-direction:column;gap:8px;position:relative;min-width:0}
+.tpl.on{border-color:var(--ok)}
+.mini{width:100%;aspect-ratio:300/150;overflow:hidden;border-radius:12px;position:relative;max-width:100%}
+.mini .hc{position:absolute;left:0;top:0;width:300px;transform-origin:top left}
+.tpl-f{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.tpl-n{font-weight:700;font-size:12.5px;line-height:1.2}
+.tpl-r{font-size:11px;color:var(--muted)}
+.tick{position:absolute;top:12px;right:12px;width:24px;height:24px;border-radius:50%;background:var(--ok);color:#fff;display:grid;place-items:center;box-shadow:0 0 0 3px var(--surface);z-index:2}
+
+/* home card (mirrors HomeDashboard banner: 150h, r24, p18, title 20/24 66%) */
+.hc{position:relative;height:150px;border-radius:24px;padding:18px;overflow:hidden;flex:none;text-align:left}
+.hc-title{font:800 20px/24px var(--display);letter-spacing:-.3px;max-width:66%;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;position:relative}
+.hc-cta{position:absolute;left:18px;bottom:16px;display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:9px 14px;font:700 12px var(--body);white-space:nowrap;max-width:62%;overflow:hidden;text-overflow:ellipsis}
+.hc-art{position:absolute;right:4px;bottom:6px;width:108px;height:108px;display:grid;place-items:center}
+.hc-art .b1{position:absolute;width:120px;height:120px;border-radius:50%;right:-26px;bottom:-34px;opacity:.85}
+.hc-art .b2{position:absolute;width:46px;height:46px;border-radius:50%;left:-4px;top:-2px;opacity:.7}
+.hc-art svg{position:relative}
+
+/* phone */
+.col-phone{position:sticky;top:calc(env(safe-area-inset-top,0px) + 80px)}
+@media (max-width:1180px){.col-phone{position:static}}
+.stage{display:flex;flex-direction:column;align-items:center;gap:14px}
+.phone{width:356px;max-width:100%;border-radius:44px;background:var(--phone);padding:9px;box-shadow:0 30px 60px -30px rgba(11,61,44,.45)}
+.screen{border-radius:36px;background:#F4F6F3;overflow:hidden;height:600px;position:relative;color:#10231B}
+.sb{display:flex;justify-content:space-between;padding:12px 24px 0;font:600 12px var(--body)}
+.hdr{display:flex;align-items:center;gap:10px;padding:14px 16px 0}
+.hdr .av{width:38px;height:38px;border-radius:12px;background:#0B3D2C;color:#B8F36B;display:grid;place-items:center;font:800 15px var(--display)}
+.hdr small{display:block;font-size:11px;color:#5A6F64}
+.hdr b{font:700 16px var(--display)}
+.hero{margin:14px 16px 0;border-radius:24px;background:#0B3D2C;color:#fff;padding:16px;position:relative;overflow:hidden}
+.hero small{color:#B5CEC1;font-size:11.5px}
+.hero .amt{font:800 30px var(--display);letter-spacing:-1px;font-variant-numeric:tabular-nums}
+.hero .pill{display:inline-block;background:#B8F36B;color:#0B3D2C;font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:999px}
+.hero::after{content:"";position:absolute;width:180px;height:180px;border-radius:50%;border:1.5px solid rgba(184,243,107,.3);right:-70px;top:-90px}
+.car{overflow:hidden;padding-top:16px}
+.track{display:flex;gap:12px;padding:0 16px;transition:transform .5s cubic-bezier(.2,.8,.2,1)}
+.track .hc{width:270px;cursor:pointer}
+.track .hc.sel{box-shadow:inset 0 0 0 3px rgba(255,255,255,.75)}
+.dots{display:flex;justify-content:center;gap:6px;padding-top:12px;min-height:18px}
+.dots button{width:6px;height:6px;border-radius:3px;border:0;padding:0;background:#C4CEC7;transition:.2s}
+.dots button.on{width:20px;background:#0B3D2C}
+.quick{display:flex;justify-content:space-around;padding:18px 16px 0}
+.quick div{display:flex;flex-direction:column;align-items:center;gap:6px;font-size:10.5px;font-weight:600;color:#3B4F45}
+.quick i{width:48px;height:48px;border-radius:50%;display:block}
+.empty-car{margin:16px;height:150px;border-radius:24px;border:2px dashed #C4CEC7;display:grid;place-items:center;color:#5A6F64;font-weight:600;font-size:13px;text-align:center;padding:16px}
+.sim{width:100%}
+.sim-g{display:flex;flex-wrap:wrap;gap:6px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.seg button{border:0;background:var(--surface);padding:6px 10px;font-size:12.5px;font-weight:600;color:var(--muted)}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed="true"]{background:var(--soft);color:var(--soft-fg)}
+.pchip{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:5px 10px;font-size:12.5px;font-weight:600;color:var(--muted);display:inline-flex;align-items:center;gap:6px}
+.pchip[aria-pressed="true"]{background:var(--soft);color:var(--soft-fg);border-color:transparent}
+.note{font-size:12.5px;color:var(--muted)}
+.warnbox{font-size:12.5px;background:var(--warn-bg);color:var(--warn);padding:8px 10px;border-radius:10px}
+
+/* editor */
+.ed{display:flex;flex-direction:column;gap:18px}
+.ed-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.ed-head h3{margin:2px 0 0;font:700 18px var(--display);letter-spacing:-.2px}
+.ed-prev .hc{width:100%;max-width:340px}
+.f{display:flex;flex-direction:column;gap:6px}
+.f label,.f .lab{font-weight:600;font-size:12.5px;display:flex;justify-content:space-between;gap:8px}
+.f label em,.f .lab em{font-style:normal;color:var(--muted);font-weight:500;font-variant-numeric:tabular-nums}
+.in{width:100%;border:1px solid var(--line);background:var(--bg);border-radius:10px;padding:9px 11px;min-width:0}
+textarea.in{resize:vertical;min-height:64px}
+.in:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--soft)}
+.in.err{border-color:var(--bad)}
+.errt{color:var(--bad);font-size:12px}
+.vars{display:flex;flex-wrap:wrap;gap:4px}
+.vars button{border:1px dashed var(--line);background:none;border-radius:6px;padding:2px 7px;font:500 11.5px var(--mono);color:var(--muted)}
+.vars button:hover{color:var(--fg);border-color:var(--muted)}
+.arts{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}
+.arts button{border:1px solid var(--line);border-radius:10px;background:var(--surface-2);aspect-ratio:1;padding:2px;display:grid;place-items:center}
+.arts button svg{width:100%;height:100%}
+.arts button[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent)}
+.swatches{display:flex;flex-wrap:wrap;gap:8px}
+.swatches button{width:36px;height:36px;border-radius:50%;border:2px solid var(--surface);box-shadow:0 0 0 1px var(--line);display:grid;place-items:center;font-size:10px;font-weight:700}
+.swatches button[aria-pressed="true"]{box-shadow:0 0 0 2px var(--accent)}
+.cust{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.cust label{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;border:1px solid var(--line);border-radius:10px;padding:6px 8px}
+.cust input[type=color]{width:28px;height:28px;border:0;padding:0;background:none;border-radius:6px}
+.row2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.hint{font-size:12px;color:var(--muted)}
+.contrast{font-size:12px;font-weight:600}
+.danger-zone{border-top:1px solid var(--line);padding-top:14px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.empty{color:var(--muted);text-align:center;padding:40px 10px}
+
+/* history */
+.hist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.hist li{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:8px 0;border-top:1px solid var(--line);font-size:12.5px}
+.hist li:first-child{border-top:0}
+.hist b{font-family:var(--mono);font-weight:500}
+
+/* modal */
+.modal{position:fixed;inset:0;background:rgba(5,15,10,.55);display:grid;place-items:center;z-index:20;padding:16px}
+.sheet{background:var(--surface);border-radius:20px;max-width:520px;width:100%;padding:22px;max-height:90vh;overflow:auto;box-shadow:0 30px 80px rgba(0,0,0,.35)}
+.sheet h2{margin:0 0 4px;font:700 21px var(--display);letter-spacing:-.3px;text-wrap:balance}
+.chg{list-style:none;margin:14px 0;padding:0;display:flex;flex-direction:column;gap:8px}
+.chg li{display:grid;grid-template-columns:76px 1fr;gap:10px;align-items:start;font-size:13px}
+.chg .k{font-size:11px;font-weight:700;padding:3px 0;border-radius:6px;text-align:center}
+.k.Added,.k.Resumed{background:var(--ok-bg);color:var(--ok)} .k.Removed{background:var(--bad-bg);color:var(--bad)}
+.k.Edited,.k.Reordered{background:var(--warn-bg);color:var(--warn)} .k.Paused{background:var(--surface-2);color:var(--muted)}
+.reach{background:var(--surface-2);border-radius:12px;padding:12px;font-size:12.5px;display:flex;flex-direction:column;gap:6px}
+.ack{display:flex;gap:8px;align-items:flex-start;margin:14px 0 4px;font-size:13px}
+.ack input{margin-top:3px;accent-color:var(--ok)}
+.sheet-f{display:flex;justify-content:flex-end;gap:8px;margin-top:16px;flex-wrap:wrap}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:#0B3D2C;color:#fff;padding:11px 16px;border-radius:12px;font-weight:600;font-size:13px;z-index:30;box-shadow:0 10px 30px rgba(0,0,0,.25);max-width:calc(100% - 32px)}
+
+/* blueprint */
+.bp{max-width:1040px;margin:0 auto;display:flex;flex-direction:column;gap:20px}
+.bp h2{font:700 24px var(--display);letter-spacing:-.4px;margin:0 0 6px;text-wrap:balance}
+.bp h3{font:700 16px var(--display);margin:0 0 8px}
+.bp p{margin:0 0 10px;max-width:72ch}
+.bp .lead{color:var(--muted);font-size:15px}
+.flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;counter-reset:s}
+.flow div{background:var(--surface-2);border-radius:12px;padding:12px;font-size:13px;counter-increment:s}
+.flow div::before{content:counter(s);display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--accent);color:var(--accent-fg);font-weight:700;font-size:12px;margin-bottom:6px}
+.flow b{display:block;margin-bottom:2px}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+table{border-collapse:collapse;width:100%;font-size:13px;min-width:560px}
+th,td{text-align:left;padding:9px 12px;border-top:1px solid var(--line);vertical-align:top}
+thead th{border-top:0;background:var(--surface-2);font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+code,.mono{font-family:var(--mono);font-size:12.5px}
+td code{background:var(--surface-2);padding:1px 5px;border-radius:5px}
+pre{background:var(--code-bg);color:var(--code-fg);border-radius:12px;padding:14px;overflow-x:auto;font:12.5px/1.55 var(--mono);margin:0}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:16px}
+ul.chk{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
+.method{font:600 11px var(--mono);padding:2px 6px;border-radius:5px;background:var(--info-bg);color:var(--info)}
+.method.p{background:var(--ok-bg);color:var(--ok)} .method.d{background:var(--bad-bg);color:var(--bad)} .method.u{background:var(--warn-bg);color:var(--warn)}
+@media (prefers-reduced-motion:reduce){.track,.dots button,.toggle span,.toggle span::after{transition:none}}
+</style>
+
+<header class="top">
+  <div class="top-in wrap">
+    <div class="brand"><div class="logo">R</div><div><h1>Home Cards Studio</h1><small>Admin · cards on the user Home screen</small></div></div>
+    <div class="tabs" role="tablist">
+      <button role="tab" id="tab-studio" aria-selected="true">Studio</button>
+      <button role="tab" id="tab-bp" aria-selected="false">How it ships</button>
+    </div>
+    <div class="pubbar">
+      <span class="state" id="state"><i></i><span id="stateTxt">Live · v12</span></span>
+      <button class="btn" id="discard" hidden>Discard changes</button>
+      <button class="btn primary" id="publish" disabled>Review &amp; publish</button>
+    </div>
+  </div>
+</header>
+
+<main class="wrap" id="v-studio">
+  <div class="studio">
+    <section class="col col-left">
+      <div class="panel">
+        <div class="ph"><h2>On the Home screen</h2><span id="liveCount"></span></div>
+        <ul class="live" id="live"></ul>
+        <p class="note" style="margin:10px 0 0">Top of the list shows first. Tap a card to edit. Use the switch to pause a card without deleting it.</p>
+      </div>
+      <div class="panel">
+        <div class="ph"><h2>Standard templates</h2><span>10 ready to use</span></div>
+        <div class="tgrid" id="tpls"></div>
+      </div>
+      <div class="panel">
+        <div class="ph"><h2>Publish history</h2><span>Example entries</span></div>
+        <ul class="hist" id="hist"></ul>
+      </div>
+    </section>
+
+    <section class="col col-phone">
+      <div class="panel stage">
+        <div class="ph" style="width:100%;margin:0"><h2>Live preview</h2><span id="showing"></span></div>
+        <div class="phone"><div class="screen">
+          <div class="sb"><span>9:41</span><span>5G ▮▮▮</span></div>
+          <div class="hdr"><div class="av">R</div><div><small>Good evening</small><b>Aarav</b></div></div>
+          <div class="hero"><small>Net worth</small><div class="amt">₹2,48,310<span style="font-size:18px;color:#B5CEC1">.40</span></div><span class="pill">↗ 4.2% since October</span></div>
+          <div id="carHost"></div>
+          <div class="quick"><div><i style="background:#0B3D2C"></i>Add expense</div><div><i style="background:#E3F2E8"></i>Cash</div><div><i style="background:#DCEBFF"></i>Calendar</div><div><i style="background:#FFE3D6"></i>Budgets</div></div>
+        </div></div>
+        <div class="sim">
+          <div class="eyebrow" style="margin-bottom:8px">Preview as a user who…</div>
+          <div class="sim-g" id="sim"></div>
+          <div id="capNote" style="margin-top:10px"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="col col-ed">
+      <div class="panel ed" id="editor"></div>
+    </section>
+  </div>
+</main>
+
+<main class="wrap" id="v-bp" hidden>
+  <div class="bp">
+    <div class="panel">
+      <div class="eyebrow">Today</div>
+      <h2>The cards are hard-coded in the app</h2>
+      <p class="lead">The carousel is built inside <code>banners</code> in <code>src/navigation/HomeDashboard.tsx</code> (around line 738). Six cards exist, each with a fixed title, button, illustration and a condition. Changing a word or a colour means a new build and a Play Store update.</p>
+      <div class="tbl"><table>
+        <thead><tr><th>Card</th><th>Shows when</th><th>Colour asked for</th><th>Button does</th></tr></thead>
+        <tbody>
+          <tr><td>Link your first bank</td><td><code>!hasBanks</code></td><td>amber</td><td><code>onAddBank</code></td></tr>
+          <tr><td>You spent ₹x for every ₹1</td><td><code>income &gt; 0 &amp;&amp; spent &gt; income</code></td><td>coral</td><td>scroll to breakdown</td></tr>
+          <tr><td>You kept x% this month</td><td><code>income &gt; 0</code> and not overspent</td><td>lime</td><td>scroll to breakdown</td></tr>
+          <tr><td>Got cash?</td><td><code>!hasCash</code></td><td>lime</td><td><code>onOpenCash</code></td></tr>
+          <tr><td>Track every rupee without typing</td><td>Android and SMS tracking off</td><td>lilac</td><td><code>onSetupTracking</code></td></tr>
+          <tr><td>Ask Regent</td><td>always</td><td>lime</td><td><code>onOpenRegent</code></td></tr>
+        </tbody>
+      </table></div>
+      <p class="note" style="margin-top:10px">Colours then pass through <code>assignBannerThemes()</code>, which swaps a colour when two neighbours (including last→first, since it loops) would match. The strip auto-advances every 4.5 s and pauses when Home is off screen.</p>
+    </div>
+
+    <div class="panel">
+      <div class="eyebrow">Proposed</div>
+      <h2>Server decides what to show, the app decides who sees it</h2>
+      <p>The 10 illustrations stay bundled in the app, so no images are downloaded. Everything else (text, colour, order, button action, targeting rule, schedule, on/off) comes from the backend as a published release. The rule is checked on the phone, so balances and SMS data never leave the device.</p>
+      <div class="flow">
+        <div><b>Admin edits a draft</b>Kept as one JSON row. Saving the draft is one <code>UPDATE</code>. Users see nothing yet.</div>
+        <div><b>Publish = one transaction</b>Inserts immutable release v13 and the audit log in Postgres, then swaps the server's in-memory copy. Nothing is deleted, so there is no invalidation race.</div>
+        <div><b>Version rides along</b>Calls the app already makes (<code>/app/version-check</code> at launch, <code>/sync</code> incl. its 304s) get a header <code>X-Home-Cards: 13</code>. Zero extra requests.</div>
+        <div><b>Fetch only on change</b>Phone has v12 and sees 13: one <code>GET /home-cards/13</code>, served from memory, cached forever because v13 never changes.</div>
+        <div><b>Phone filters &amp; renders</b>Checks platform, schedule and rule against local data, fills <code>{{tokens}}</code>, renders the carousel.</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="eyebrow">Why this design</div>
+      <h2>The version number is the cache key</h2>
+      <p>A release never changes after it's published, so nothing ever needs invalidating. Publishing just moves the pointer from 12 to 13. A phone that already has 13 never asks again, and a phone with 12 asks exactly once.</p>
+      <div class="tbl"><table>
+        <thead><tr><th>Per month, estimated</th><th>Redis cache-aside<br>(delete on change, refill, 30-day TTL)</th><th>Chosen: version pointer<br>(phone cache → server memory → Postgres)</th></tr></thead>
+        <tbody>
+          <tr><td>Requests to Render for cards</td><td>~1,500,000 (every Home open)</td><td><b>~80,000</b> (one per user per publish)</td></tr>
+          <tr><td>Upstash commands (free cap 500k)</td><td>~1,500,000, so the cap is hit in about 10 days</td><td><b>0</b>, no Redis needed</td></tr>
+          <tr><td>Supabase queries</td><td>1 per publish if refill is single-flight, else a burst</td><td><b>1 per server start</b> + admin saves</td></tr>
+          <tr><td>Added latency per card load</td><td>Render → Upstash HTTPS round trip</td><td>none (phone cache; server memory on change)</td></tr>
+          <tr><td>Risk of stale cards</td><td>Yes: a refill that read the old row can land after the delete and stay 30 days</td><td>No: versions are immutable, nothing is deleted</td></tr>
+          <tr><td>Time for users to see a change</td><td>next Home open</td><td>next sync or app launch (silent push for instant)</td></tr>
+        </tbody>
+      </table></div>
+      <p class="note" style="margin-top:10px">Assumes 10,000 daily users opening the app 5 times a day, 8 publishes a month and one server instance. At 100,000 daily users the chosen design still needs no Redis: card fetches grow only with publishes, not with app opens.</p>
+    </div>
+
+    <div class="panel">
+      <div class="eyebrow">Architecture decision</div>
+      <h2>No new Redis. Three cache layers, each cheaper than the one behind it</h2>
+      <p>This is the pattern behind remote-config services such as Firebase Remote Config and LaunchDarkly: an immutable, versioned config, a tiny "current version" signal, and clients that cache locally and download only on change.</p>
+      <div class="tbl"><table>
+        <thead><tr><th>Layer</th><th>Serves</th><th>Cost per hit</th><th>Refreshed by</th></tr></thead>
+        <tbody>
+          <tr><td><b>Phone storage</b></td><td>every Home open (≈99.9%)</td><td>nothing leaves the phone</td><td>a higher <code>X-Home-Cards</code> number</td></tr>
+          <tr><td><b>Server memory</b></td><td>one fetch per phone per publish</td><td>a pointer read, pre-gzipped bytes</td><td>publish, or boot</td></tr>
+          <tr><td><b>Postgres</b> (source of truth)</td><td>server boot, admin saves, publish</td><td>one PK lookup</td><td>admins</td></tr>
+        </tbody>
+      </table></div>
+      <h3 style="margin-top:16px">Options considered</h3>
+      <div class="tbl"><table>
+        <thead><tr><th>Option</th><th>Verdict</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr><td>Redis cache-aside, 30-day TTL</td><td>Rejected</td><td>Load grows with every app open; free cap gone in ~10 days; stale-refill race.</td></tr>
+          <tr><td>New dedicated Upstash for cards</td><td>Not needed now</td><td>With one server, memory is the cache. Use the existing Redis only if you run 2+ instances (below).</td></tr>
+          <tr><td>Firebase Remote Config</td><td>Good alternative</td><td>Free and CDN-backed, but needs the React Native Firebase native SDK (not in the app today) and its publish API from the backend. More moving parts than this feature needs.</td></tr>
+          <tr><td>Static JSON on a CDN (Supabase Storage)</td><td>Upgrade path</td><td>If card fetches ever become a measurable load, publish also uploads <code>home-cards/v13.json</code>; the header points to it and Render serves nothing.</td></tr>
+          <tr><td><b>Version pointer, memory + Postgres</b></td><td><b>Chosen</b></td><td>Zero steady-state cost, no new service, no invalidation logic, survives Render sleeping and restarts.</td></tr>
+        </tbody>
+      </table></div>
+      <h3 style="margin-top:16px">Limits that keep anything from running out</h3>
+      <ul class="chk">
+        <li><b>Single-flight load:</b> on boot or a memory miss, concurrent requests share one Postgres query instead of each running their own.</li>
+        <li><b>Jittered fetch:</b> a phone that sees a new version waits a random 0–30 s before downloading, so a publish never becomes a spike.</li>
+        <li><b>Throttle:</b> <code>/home-cards/:version</code> sits behind the existing throttler (10 per user per minute); publish is limited to 1 per 30 s.</li>
+        <li><b>Backoff:</b> if the fetch fails, the phone keeps its cached cards and retries on the next header, never in a loop.</li>
+        <li><b>Size caps:</b> 12 cards per release, 70/22-character text, release under 16 KB, last 20 releases kept.</li>
+        <li><b>Fails safe:</b> server down or Postgres down means phones keep showing their cached cards, or the bundled six.</li>
+      </ul>
+    </div>
+
+    <div class="two">
+      <div class="panel">
+        <h3>Database (Postgres, <code>core</code> schema)</h3>
+<pre>-- one row: the admin's working copy
+CREATE TABLE core.home_card_draft (
+  id          smallint PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  cards       jsonb NOT NULL,      -- same shape as a release
+  rev         int  NOT NULL DEFAULT 0,  -- stops two admins overwriting each other
+  updated_by  uuid REFERENCES core.users(id),
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- immutable published snapshots; never updated, only inserted
+CREATE TABLE core.home_card_releases (
+  version       int PRIMARY KEY,   -- the cache key
+  cards         jsonb NOT NULL,
+  note          text,
+  published_by  uuid REFERENCES core.users(id),
+  published_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- server start: the only read users ever cause
+SELECT version, cards FROM core.home_card_releases
+ORDER BY version DESC LIMIT 1;          -- PK index, &lt;1 ms
+
+-- save draft (optimistic lock)
+UPDATE core.home_card_draft SET cards=$1, rev=rev+1, updated_by=$2, updated_at=now()
+WHERE id=1 AND rev=$3;                  -- 0 rows = someone else saved first
+
+-- publish, in one transaction
+INSERT INTO core.home_card_releases(version,cards,note,published_by)
+SELECT COALESCE(MAX(version),0)+1, $1, $2, $3 FROM core.home_card_releases
+RETURNING version;                      -- PK clash = concurrent publish, retry
+DELETE FROM core.home_card_releases WHERE version &lt;= $v - 20;  -- keep 20 for rollback</pre>
+        <p class="note" style="margin-top:10px">Per-card rows aren't needed: the admin always saves and publishes the whole list, which is under 10 KB. Ship as a TypeORM migration next to <code>1730000007000-AddServerChangedAt.ts</code> (the app runs with <code>synchronize: false</code>).</p>
+      </div>
+      <div class="panel">
+        <h3>What the app receives</h3>
+<pre id="payload"></pre>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>API</h3>
+      <div class="tbl"><table>
+        <thead><tr><th>Route</th><th>Who</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td>header <code>X-Home-Cards: 13</code></td><td>added to existing responses</td><td>Set by a tiny global interceptor from a number in memory, on <code>/app/version-check</code> and every <code>/sync</code> reply including 304s. Costs nothing.</td></tr>
+          <tr><td><span class="method">GET</span> <code>/home-cards/:version</code></td><td>any signed-in user</td><td>If <code>:version</code> is the live one: the pre-gzipped string from memory with <code>Cache-Control: private, max-age=31536000, immutable</code>. If it's old: <code>404</code>, and the app keeps what it has until the next header.</td></tr>
+          <tr><td><span class="method">GET</span> <code>/admin/home-cards</code></td><td>admin</td><td>Draft, its <code>rev</code>, and the live version. One query.</td></tr>
+          <tr><td><span class="method u">PUT</span> <code>/admin/home-cards/draft</code></td><td>admin</td><td>Save the whole list with <code>rev</code>. Called when the admin taps Save, not on every keystroke. <code>409</code> if another admin saved first.</td></tr>
+          <tr><td><span class="method p">POST</span> <code>/admin/home-cards/publish</code></td><td>admin</td><td>Validate, insert the release, write <code>admin_audit_log</code>, then replace the in-memory copy. Throttled to 1 per 30 s.</td></tr>
+          <tr><td><span class="method p">POST</span> <code>/admin/home-cards/rollback/:version</code></td><td>admin</td><td>Copies an old release into a new version number, so phones on the old number still see a change.</td></tr>
+        </tbody>
+      </table></div>
+      <p class="note" style="margin-top:10px">Admin routes sit in the existing <code>AdminController</code>, already guarded by <code>JwtAuthGuard</code> + <code>AdminGuard</code>. The admin UI is a new tab next to Broadcast in <code>src/features/admin</code>.</p>
+    </div>
+
+    <div class="two">
+      <div class="panel">
+        <h3>App side (<code>useHomeCards()</code>)</h3>
+        <ul class="chk">
+          <li>Render the cached release from storage immediately. Home never waits on the network.</li>
+          <li>Read <code>X-Home-Cards</code> from responses the app already receives. Only when it's higher than the stored version, fetch <code>/home-cards/:version</code> once in the background. No timers, no polling, no fetch on Home focus.</li>
+          <li>No cache and offline: fall back to a bundled default list that equals today's six cards, so behaviour is unchanged on day one.</li>
+          <li>Map <code>action.to</code> to the props HomeDashboard already has: <code>onAddBank</code>, <code>onSetupTracking</code>, <code>onOpenCash</code>, <code>onOpenRegent</code>, <code>onOpenBudgets</code>, <code>onOpenGoals</code>, <code>onOpenCalendar</code>, breakdown scroll.</li>
+          <li>Rules run locally: <code>no_bank</code>, <code>sms_off</code>, <code>no_cash</code>, <code>overspent</code>, <code>saved</code>, <code>no_budget</code>, <code>always</code>.</li>
+          <li>Keep <code>assignBannerThemes()</code> for preset colours. Custom colours are used as sent.</li>
+          <li>Show at most 6 cards after filtering.</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <h3>Guard rails</h3>
+        <ul class="chk">
+          <li>Unknown <code>art</code>, <code>action</code> or <code>rule</code> (an older app build): skip that card, never crash. <code>min_app_version</code> hides cards that need a newer build.</li>
+          <li>Bad hex colour: fall back to the lime preset. Publish is blocked when text contrast is below 4.5:1.</li>
+          <li>External links only over <code>https</code> and only to an allow-listed domain list held on the server.</li>
+          <li>Titles over 70 characters or buttons over 22 are rejected by the API and the database.</li>
+          <li>Every publish and rollback is recorded with the admin's id, the version and the change list.</li>
+          <li>Start and end dates are checked on the phone, so no cron job runs and nothing is republished when a card starts or ends. Expired cards are dropped at publish time.</li>
+          <li>Only if the backend ever runs on 2+ instances: publish also does <code>SET hc:ver 13</code> in the existing Redis, and each instance reads it every 5 min (about 8,600 commands a month per instance), reloading from Postgres only when it changed. No second Redis database.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div class="modal" id="modal" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="mTitle">
+    <h2 id="mTitle"></h2>
+    <p class="note" id="mSub" style="margin:0"></p>
+    <ul class="chg" id="mList"></ul>
+    <div class="reach">
+      <div><b>Reaches users without an app update.</b> Phones pick it up the next time Home opens, within about 5 minutes.</div>
+      <div id="mReach"></div>
+    </div>
+    <div class="f" style="margin-top:14px"><label for="mNote">Release note <em>optional</em></label><input class="in" id="mNote" maxlength="80" placeholder="Diwali budget push"></div>
+    <label class="ack"><input type="checkbox" id="mAck"> I checked these cards in the preview for Android and iOS users.</label>
+    <div class="sheet-f"><button class="btn" id="mCancel">Keep editing</button><button class="btn primary" id="mGo" disabled></button></div>
+  </div>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+(function(){
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const clone=o=>JSON.parse(JSON.stringify(o));
+const W='#FFFFFF';
+const sp=(cx,cy,r)=>`M${cx} ${cy-r} Q${cx} ${cy} ${cx+r} ${cy} Q${cx} ${cy} ${cx} ${cy+r} Q${cx} ${cy} ${cx-r} ${cy} Q${cx} ${cy} ${cx} ${cy-r} Z`;
+
+/* ---------- colour presets (first four are the app's BANNER_THEMES) ---------- */
+const THEMES={
+  lime:{name:'Lime',bg:'#B8F36B',fg:'#0B3D2C',ctaBg:'#0B3D2C',ctaFg:'#FFFFFF',ring:'#D3F8A3',ring2:'#A4E752'},
+  lilac:{name:'Lilac',bg:'#C9B8FF',fg:'#1C0F4A',ctaBg:'#1C0F4A',ctaFg:'#FFFFFF',ring:'#DCD0FF',ring2:'#B9A5FF'},
+  amber:{name:'Amber',bg:'#FFB020',fg:'#2B1700',ctaBg:'#2B1700',ctaFg:'#FFFFFF',ring:'#FFD27A',ring2:'#FFC24D'},
+  coral:{name:'Coral',bg:'#FF8A6B',fg:'#3A0D00',ctaBg:'#3A0D00',ctaFg:'#FFFFFF',ring:'#FFB29E',ring2:'#FF7552'},
+  sky:{name:'Sky',bg:'#9FD4FF',fg:'#062A4A',ctaBg:'#062A4A',ctaFg:'#FFFFFF',ring:'#C6E6FF',ring2:'#7EC1FA'},
+  forest:{name:'Forest',bg:'#0B3D2C',fg:'#EAF7EF',ctaBg:'#B8F36B',ctaFg:'#0B3D2C',ring:'#124B37',ring2:'#1D6148'},
+};
+const AUTO_PALETTE=['lime','lilac','amber','coral','sky'];
+const hex2=h=>{const c=h.replace('#','');return[0,2,4].map(i=>parseInt(c.substr(i,2),16))};
+const mix=(a,b,t)=>{const A=hex2(a),B=hex2(b);return'#'+A.map((v,i)=>Math.round(v+(B[i]-v)*t).toString(16).padStart(2,'0')).join('')};
+const lum=h=>{const[r,g,b]=hex2(h).map(v=>{v/=255;return v<=.03928?v/12.92:Math.pow((v+.055)/1.055,2.4)});return .2126*r+.7152*g+.0722*b};
+const contrast=(a,b)=>{const x=lum(a),y=lum(b);return(Math.max(x,y)+.05)/(Math.min(x,y)+.05)};
+
+/* ---------- illustrations: the 6 from the app + 4 new in the same style ---------- */
+function art(kind,t,size=104){
+  const{fg,ring,ring2}=t; let g='';
+  const R=(x,y,w,h,rx,f,s)=>`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rx}" fill="${f}"${s?` stroke="${fg}" stroke-width="${s}"`:''}/>`;
+  const C=(x,y,r,f,s)=>`<circle cx="${x}" cy="${y}" r="${r}" fill="${f}"${s?` stroke="${fg}" stroke-width="${s}"`:''}/>`;
+  const T=(x,y,fs,txt)=>`<text x="${x}" y="${y}" font-size="${fs}" font-weight="800" fill="${fg}" text-anchor="middle" font-family="Figtree, sans-serif">${txt}</text>`;
+  const P=(d,f,s,extra='')=>`<path d="${d}" fill="${f}"${s?` stroke="${fg}" stroke-width="${s}"`:''} ${extra}/>`;
+  const L=(d,s)=>`<path d="${d}" fill="none" stroke="${fg}" stroke-width="${s}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  switch(kind){
+    case'bank':g=P('M18 42 L52 20 L86 42 Z',fg)+R(20,42,64,6,2,fg)+[26,41,56,71].map(x=>R(x,51,7,24,2,W,2.5)).join('')+R(16,76,72,8,3,fg)+C(52,33,4,ring2)+C(84,22,12,ring2,2.5)+T(84,27.5,15,'₹');break;
+    case'overspend':g=R(14,42,62,44,10,fg)+R(52,54,28,20,6,ring2,2.5)+C(63,64,3.5,fg)+L('M24 42 L34 30 L58 42',3)+C(66,24,10,W,2.5)+T(66,28.5,12,'₹')+C(86,12,7,W,2.5)+L('M50 20 l-6 -4 M54 12 l-2 -7 M80 34 l7 3',2.5);break;
+    case'kept':g=R(16,62,14,22,4,fg)+R(36,50,14,34,4,fg)+R(56,38,14,46,4,W,2.5)+L('M14 50 L36 34 L50 40 L80 14',4)+L('M68 13 L81 13 L81 26',4)+P(sp(86,46,8),W,2)+P(sp(22,26,5),fg);break;
+    case'sms':g=R(24,10,42,78,10,fg)+R(28.5,18,33,60,5,W)+R(33,25,22,9,4.5,ring)+R(33,38,16,9,4.5,ring)+R(40,52,50,24,12,ring2,2.5)+C(53,64,7,fg)+`<path d="M49.5 64 l2.5 2.5 l4.5 -5" fill="none" stroke="${W}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`+T(74,69,13,'₹')+P(sp(84,32,8),W,2);break;
+    case'cash':g=`<rect x="12" y="40" width="62" height="36" rx="7" fill="${fg}" transform="rotate(-10 43 58)"/>`+R(26,30,62,36,7,W,2.5)+C(57,48,10,ring2,2.5)+T(57,53,13,'₹')+C(34,48,2.5,fg)+C(80,48,2.5,fg)+P(sp(86,18,7),fg);break;
+    case'regent':g=R(10,30,62,44,16,fg)+P('M24 70 L20 86 L40 72 Z',fg)+[28,41,54].map(x=>C(x,52,4.5,W)).join('')+P(sp(80,24,14),ring2,2.5,'stroke-linejoin="round"')+P(sp(90,50,6),W,2)+P(sp(62,12,4),fg);break;
+    case'budget':g=C(44,56,30,fg)+P('M44 56 L44 26 A30 30 0 0 1 73 63 Z',W,2.5,'stroke-linejoin="round"')+C(44,56,11,ring2,2.5)+R(70,14,24,14,7,ring2,2.5)+T(82,25,10,'₹')+P(sp(86,46,7),W,2);break;
+    case'goal':g=C(44,56,30,fg)+C(44,56,21,W)+C(44,56,13,fg)+C(44,56,5,ring2)+L('M44 56 L80 20',4)+L('M72 14 L82 18 L86 28',3.5)+P(sp(20,22,6),W,2)+P(sp(86,58,5),fg);break;
+    case'bills':g=R(16,24,58,58,10,W,2.5)+`<path d="M16 34 a10 10 0 0 1 10 -10 h38 a10 10 0 0 1 10 10 v8 h-58 Z" fill="${fg}"/>`+R(28,16,5,14,2.5,fg)+R(57,16,5,14,2.5,fg)+[[28,52],[41,52],[54,52],[28,65],[41,65]].map(([x,y])=>R(x,y,8,8,2,ring)).join('')+R(54,65,8,8,2,fg)+C(78,72,13,ring2,2.5)+T(78,77,14,'!');break;
+    case'refer':g=R(20,46,58,38,6,fg)+R(15,34,68,15,5,W,2.5)+R(44,34,10,50,2,ring2,2.5)+L('M49 34 C 40 20, 26 24, 34 34',3)+L('M49 34 C 58 20, 72 24, 64 34',3)+C(84,18,11,W,2.5)+T(84,22.5,12,'₹')+P(sp(14,20,6),fg);break;
+  }
+  return`<svg width="${size}" height="${size}" viewBox="0 0 100 100" aria-hidden="true">${g}</svg>`;
+}
+const ARTS=[['bank','Bank'],['sms','Phone & SMS'],['cash','Cash'],['regent','Chat'],['overspend','Wallet'],['kept','Growth'],['budget','Budget'],['goal','Target'],['bills','Calendar'],['refer','Gift']];
+
+/* ---------- rules, actions, tokens ---------- */
+const RULES={always:'Everyone',no_bank:'No bank linked',sms_off:'SMS tracking off',no_cash:'No cash wallet',overspent:'Spent more than earned',saved:'Saved money this month',no_budget:'No budget yet'};
+const ACTIONS={add_bank:'Add bank',setup_tracking:'Turn on SMS tracking',open_cash:'Open cash wallet',open_regent:'Open Regent chat',breakdown:'Scroll to spending breakdown',open_budgets:'Open budgets',open_goals:'Open goals',open_calendar:'Open calendar',invite:'Share invite link',url:'Open a web link'};
+const TOKENS={'{{first_name}}':'Aarav','{{spent_per_rupee}}':'1.24','{{kept_pct}}':'18','{{month}}':'November'};
+const fillT=s=>String(s).replace(/\{\{\w+\}\}/g,m=>TOKENS[m]??m);
+
+/* ---------- the 10 standard templates ---------- */
+const TPL={
+  bank:{name:'Link a bank',title:'Link your first bank account to see your real balance',cta:'Add bank',art:'bank',theme:'amber',action:'add_bank',rule:'no_bank',platform:'all'},
+  overspend:{name:'Overspend alert',title:'You spent ₹{{spent_per_rupee}} for every ₹1 you earned',cta:'See where it went',art:'overspend',theme:'coral',action:'breakdown',rule:'overspent',platform:'all'},
+  kept:{name:'Savings win',title:'You kept {{kept_pct}}% of what you earned this month',cta:'See breakdown',art:'kept',theme:'lime',action:'breakdown',rule:'saved',platform:'all'},
+  cash:{name:'Add cash',title:'Got cash? Add it to your net worth',cta:'Add cash',art:'cash',theme:'lime',action:'open_cash',rule:'no_cash',platform:'all'},
+  sms:{name:'Auto-tracking',title:'Track every rupee without typing',cta:'Turn on auto-tracking',art:'sms',theme:'lilac',action:'setup_tracking',rule:'sms_off',platform:'android'},
+  regent:{name:'Ask Regent',title:'Ask Regent where your money went this month',cta:'Ask Regent',art:'regent',theme:'lime',action:'open_regent',rule:'always',platform:'all'},
+  budget:{name:'Start a budget',title:'Set a monthly budget and get a nudge before you overspend',cta:'Create budget',art:'budget',theme:'sky',action:'open_budgets',rule:'no_budget',platform:'all'},
+  goal:{name:'Savings goal',title:'Saving for something? Start a goal and watch it fill up',cta:'Start a goal',art:'goal',theme:'amber',action:'open_goals',rule:'always',platform:'all'},
+  bills:{name:'Bill reminders',title:'Never miss a due date. See every bill on your calendar',cta:'Open calendar',art:'bills',theme:'coral',action:'open_calendar',rule:'always',platform:'all'},
+  refer:{name:'Invite friends',title:'Invite a friend to Regent Money',cta:'Share invite',art:'refer',theme:'lilac',action:'invite',rule:'always',platform:'all'},
+};
+const fromTpl=(key,id)=>{const t=TPL[key];return{id:id||key,template:key,title:t.title,cta:t.cta,art:t.art,theme:t.theme,custom:{bg:'#0B3D2C',fg:'#FFFFFF',ctaBg:'#B8F36B',ctaFg:'#0B3D2C'},action:t.action,url:'',rule:t.rule,platform:t.platform,enabled:true,start:'',end:''}};
+
+/* what production shows today */
+const SEED=['bank','overspend','kept','cash','sms','regent'].map(k=>fromTpl(k));
+const FIELDS={title:'title',cta:'button text',art:'illustration',theme:'colour',custom:'colour',action:'button action',url:'link',rule:'audience',platform:'platform',start:'start date',end:'end date',enabled:'on/off'};
+
+/* ---------- state ---------- */
+let S={draft:clone(SEED),published:clone(SEED),version:12,history:[
+  {v:12,at:'4 Nov 2026, 18:20',by:'Admin',note:'Cash wallet card',snap:clone(SEED)},
+  {v:11,at:'21 Oct 2026, 11:02',by:'Admin',note:'Ask Regent copy update',snap:clone(SEED.filter(c=>c.id!=='cash'))},
+]};
+let sel='sms', idx=0, confirmDel=false;
+let sim={platform:'android',hasBank:false,smsOn:false,hasCash:false,month:'overspent',hasBudget:false};
+const KEY='home-cards-studio-v1';
+try{const s=JSON.parse(localStorage.getItem(KEY)||'null');if(s&&s.draft&&s.published)S=s}catch(e){}
+const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}};
+
+const themeOf=(c,override)=>{
+  if(c.theme==='custom'){const u=c.custom;return{bg:u.bg,fg:u.fg,ctaBg:u.ctaBg,ctaFg:u.ctaFg,ring:mix(u.bg,'#FFFFFF',.3),ring2:mix(u.bg,'#000000',.1)}}
+  return THEMES[override||c.theme]||THEMES.lime;
+};
+const today=new Date().toISOString().slice(0,10);
+function schedState(c){if(c.start&&c.start>today)return'scheduled';if(c.end&&c.end<today)return'expired';return'on'}
+function ruleOk(c){
+  if(c.platform!=='all'&&c.platform!==sim.platform)return false;
+  switch(c.rule){case'no_bank':return!sim.hasBank;case'sms_off':return!sim.smsOn;case'no_cash':return!sim.hasCash;
+    case'overspent':return sim.month==='overspent';case'saved':return sim.month==='saved';case'no_budget':return!sim.hasBudget;default:return true}
+}
+function errorsOf(c){const e={};if(!c.title.trim())e.title='Add a title. Cards without one can’t be published.';if(!c.cta.trim())e.cta='Add button text.';
+  if(c.action==='url'&&!/^https:\/\/[^\s]+\.[^\s]+/.test(c.url))e.url='Use a full https:// link.';
+  if(c.start&&c.end&&c.end<c.start)e.end='End date is before the start date.';
+  const t=themeOf(c);if(contrast(t.bg,t.fg)<4.5)e.contrast='Title text is hard to read on this background.';
+  if(contrast(t.ctaBg,t.ctaFg)<4.5)e.contrast2='Button text is hard to read on the button colour.';return e}
+/* port of assignBannerThemes() */
+function visibleCards(){
+  const list=S.draft.filter(c=>c.enabled&&schedState(c)==='on'&&ruleOk(c)).slice(0,6);
+  const out=[];
+  list.forEach((c,i)=>{
+    if(c.theme==='custom'||c.theme==='forest'){out.push(c.theme==='custom'?'custom:'+c.id:'forest');return}
+    const prev=out[i-1],wrap=i>0&&i===list.length-1;
+    const ok=t=>t!==prev&&!(wrap&&t===out[0]),unused=t=>!out.includes(t),pref=c.theme;
+    out.push((ok(pref)&&unused(pref)&&pref)||AUTO_PALETTE.find(t=>ok(t)&&unused(t))||(ok(pref)&&pref)||AUTO_PALETTE.find(ok)||pref);
+  });
+  return list.map((c,i)=>({c,shown:out[i].startsWith('custom')?null:out[i]}));
+}
+function diff(){
+  const P=new Map(S.published.map(c=>[c.id,c])),D=new Map(S.draft.map(c=>[c.id,c])),out=[];
+  S.draft.forEach(c=>{const p=P.get(c.id);if(!p){out.push({k:'Added',c});return}
+    let f=Object.keys(FIELDS).filter(k=>JSON.stringify(p[k])!==JSON.stringify(c[k]));
+    if(c.theme!=='custom')f=f.filter(k=>k!=='custom');
+    if(f.length===1&&f[0]==='enabled')out.push({k:c.enabled?'Resumed':'Paused',c});
+    else if(f.length)out.push({k:'Edited',c,f:[...new Set(f.filter(k=>k!=='enabled').map(k=>FIELDS[k]))]});});
+  S.published.forEach(p=>{if(!D.has(p.id))out.push({k:'Removed',c:p})});
+  const a=S.published.filter(p=>D.has(p.id)).map(p=>p.id).join(),b=S.draft.filter(c=>P.has(c.id)).map(c=>c.id).join();
+  if(a!==b)out.push({k:'Reordered'});
+  return out;
+}
+
+/* ---------- card markup ---------- */
+function cardHTML(c,shown,extra=''){
+  const t=themeOf(c,shown);
+  return`<div class="hc ${extra}" data-id="${esc(c.id)}" style="background:${t.bg};color:${t.fg}">
+    <div class="hc-art"><div class="b1" style="background:${t.ring}"></div><div class="b2" style="background:${t.ring2}"></div>${art(c.art,t)}</div>
+    <div class="hc-title">${esc(fillT(c.title))||'<span style="opacity:.5">Card title</span>'}</div>
+    <div class="hc-cta" style="background:${t.ctaBg};color:${t.ctaFg}">${esc(c.cta)||'Button'} <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></div>
+  </div>`;
+}
+const fitMini=()=>document.querySelectorAll('.mini').forEach(m=>{const hc=m.firstElementChild;if(hc)hc.style.transform=`scale(${m.clientWidth/300})`});
+
+/* ---------- render: live list ---------- */
+const ICO={up:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18 15l-6-6-6 6"/></svg>',dn:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',tick:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>'};
+function renderList(){
+  const d=diff(),byId=new Map(d.filter(x=>x.c).map(x=>[x.c.id,x.k]));
+  const vis=new Set(visibleCards().map(v=>v.c.id));
+  $('#live').innerHTML=S.draft.map((c,i)=>{
+    const t=themeOf(c),k=byId.get(c.id),ss=schedState(c),e=Object.keys(errorsOf(c)).length;
+    const chips=[];
+    if(k==='Added')chips.push('<span class="chip new">New</span>');else if(k==='Edited'||k==='Paused'||k==='Resumed')chips.push('<span class="chip edit">Changed</span>');else chips.push('<span class="chip live">Live</span>');
+    chips.push(`<span class="chip">${esc(RULES[c.rule])}</span>`);
+    if(c.platform!=='all')chips.push(`<span class="chip">${c.platform==='android'?'Android':'iOS'} only</span>`);
+    if(ss==='scheduled')chips.push(`<span class="chip new">Starts ${esc(c.start)}</span>`);
+    if(ss==='expired')chips.push('<span class="chip hid">Expired</span>');
+    if(e)chips.push('<span class="chip hid">Needs a fix</span>');
+    else if(c.enabled&&ss==='on'&&!vis.has(c.id))chips.push('<span class="chip">Hidden for this preview user</span>');
+    return`<li class="li ${c.id===sel?'sel':''} ${c.enabled?'':'off'}" data-id="${esc(c.id)}">
+      <div class="sw-dot" style="background:${t.bg}">${art(c.art,t,28)}</div>
+      <div style="min-width:0"><div class="li-t">${esc(fillT(c.title))||'Untitled card'}</div><div class="li-m">${chips.join('')}</div></div>
+      <div class="li-act">
+        <button class="ib" data-mv="-1" ${i===0?'disabled':''} aria-label="Move up">${ICO.up}</button>
+        <button class="ib" data-mv="1" ${i===S.draft.length-1?'disabled':''} aria-label="Move down">${ICO.dn}</button>
+        <label class="toggle" title="${c.enabled?'Showing':'Paused'}"><input type="checkbox" ${c.enabled?'checked':''} aria-label="Show this card"><span></span></label>
+      </div></li>`;
+  }).join('')||'<li class="empty">No cards. Users will see an empty strip, so the app hides it. Add one from the templates below.</li>';
+  $('#liveCount').textContent=`${S.draft.filter(c=>c.enabled).length} on · ${S.draft.length} total`;
+}
+$('#live').addEventListener('click',e=>{
+  const li=e.target.closest('.li');if(!li)return;const id=li.dataset.id,i=S.draft.findIndex(c=>c.id===id);
+  if(e.target.closest('.toggle')){return}
+  const mv=e.target.closest('[data-mv]');
+  if(mv){const j=i+Number(mv.dataset.mv);[S.draft[i],S.draft[j]]=[S.draft[j],S.draft[i]];commit();return}
+  sel=id;confirmDel=false;renderAll();
+});
+$('#live').addEventListener('change',e=>{
+  if(!e.target.matches('.toggle input'))return;const id=e.target.closest('.li').dataset.id;
+  const c=S.draft.find(x=>x.id===id);c.enabled=e.target.checked;commit();
+});
+
+/* ---------- render: templates ---------- */
+function renderTpls(){
+  $('#tpls').innerHTML=Object.entries(TPL).map(([k,t])=>{
+    const on=S.draft.some(c=>c.template===k&&c.enabled), any=S.draft.some(c=>c.template===k);
+    const c=fromTpl(k);
+    return`<div class="tpl ${on?'on':''}">
+      ${on?`<span class="tick" title="Showing on Home">${ICO.tick}</span>`:''}
+      <div class="mini">${cardHTML(c)}</div>
+      <div class="tpl-f"><div style="min-width:0"><div class="tpl-n">${esc(t.name)}</div><div class="tpl-r">${on?'Showing now':any?'Added, paused':esc(RULES[t.rule])}</div></div>
+      <button class="btn sm" data-add="${k}">${any?'Add again':'Add'}</button></div></div>`;
+  }).join('');
+  fitMini();
+}
+$('#tpls').addEventListener('click',e=>{
+  const b=e.target.closest('[data-add]');if(!b)return;const k=b.dataset.add;
+  let id=k,n=2;while(S.draft.some(c=>c.id===id))id=`${k}-${n++}`;
+  S.draft.unshift(fromTpl(k,id));sel=id;idx=0;confirmDel=false;commit(true);
+  toast(`Added “${TPL[k].name}” to the top. Publish to send it to users.`);
+});
+
+/* ---------- render: phone ---------- */
+function renderPhone(){
+  const v=visibleCards();
+  if(idx>=v.length)idx=0;
+  $('#carHost').innerHTML=v.length?`<div class="car"><div class="track" id="track">${v.map(({c,shown})=>cardHTML(c,shown,c.id===sel?'sel':'')).join('')}</div></div>
+    <div class="dots">${v.length>1?v.map((_,i)=>`<button class="${i===idx?'on':''}" data-dot="${i}" aria-label="Card ${i+1}"></button>`).join(''):''}</div>`
+    :`<div class="empty-car">No card matches this user, so the strip is hidden.</div>`;
+  moveTrack();
+  $('#showing').textContent=`${v.length} card${v.length===1?'':'s'} for this user`;
+  const over=S.draft.filter(c=>c.enabled&&schedState(c)==='on'&&ruleOk(c)).length;
+  $('#capNote').innerHTML=over>6?`<div class="warnbox">${over} cards match this user. The app shows the first 6, so the last ${over-6} won’t appear.</div>`:'';
+}
+function moveTrack(){const t=$('#track');if(t)t.style.transform=`translateX(${-idx*282}px)`;document.querySelectorAll('.dots button').forEach((b,i)=>b.classList.toggle('on',i===idx))}
+$('#carHost').addEventListener('click',e=>{
+  const d=e.target.closest('[data-dot]');if(d){idx=+d.dataset.dot;moveTrack();return}
+  const hc=e.target.closest('.hc');if(hc){sel=hc.dataset.id;confirmDel=false;idx=visibleCards().findIndex(v=>v.c.id===sel);renderAll()}
+});
+let hover=false;const ph=document.querySelector('.phone');ph.addEventListener('mouseenter',()=>hover=true);ph.addEventListener('mouseleave',()=>hover=false);
+const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+setInterval(()=>{if(hover||reduce||document.hidden)return;const n=visibleCards().length;if(n<2)return;idx=(idx+1)%n;moveTrack()},4500);
+
+function renderSim(){
+  const P=(k,v,l)=>`<button class="pchip" data-s="${k}" data-v="${v}" aria-pressed="${sim[k]===v}">${l}</button>`;
+  $('#sim').innerHTML=`
+    <span class="seg">${['android','ios'].map(p=>`<button data-s="platform" data-v="${p}" aria-pressed="${sim.platform===p}">${p==='android'?'Android':'iOS'}</button>`).join('')}</span>
+    <span class="seg">${[['overspent','Overspent'],['saved','Saved'],['none','No income']].map(([v,l])=>`<button data-s="month" data-v="${v}" aria-pressed="${sim.month===v}">${l}</button>`).join('')}</span>
+    ${P('hasBank',!sim.hasBank,(sim.hasBank?'✓ ':'')+'Has a bank')}${P('smsOn',!sim.smsOn,(sim.smsOn?'✓ ':'')+'SMS tracking on')}${P('hasCash',!sim.hasCash,(sim.hasCash?'✓ ':'')+'Has cash wallet')}${P('hasBudget',!sim.hasBudget,(sim.hasBudget?'✓ ':'')+'Has a budget')}`;
+  document.querySelectorAll('#sim .pchip').forEach(b=>b.setAttribute('aria-pressed',String(sim[b.dataset.s])));
+}
+$('#sim').addEventListener('click',e=>{const b=e.target.closest('[data-s]');if(!b)return;const k=b.dataset.s;
+  sim[k]=(k==='platform'||k==='month')?b.dataset.v:!sim[k];idx=0;renderSim();renderPhone();renderList()});
+
+/* ---------- render: editor ---------- */
+function renderEditor(){
+  const c=S.draft.find(x=>x.id===sel);const ed=$('#editor');
+  if(!c){ed.innerHTML='<div class="empty">Pick a card on the left, or add one from the templates.</div>';return}
+  const e=errorsOf(c),shown=visibleCards().find(v=>v.c.id===c.id)?.shown;
+  const swapped=shown&&c.theme!=='custom'&&shown!==c.theme;
+  ed.innerHTML=`
+    <div class="ed-head"><div><div class="eyebrow">Editing · from “${esc(TPL[c.template].name)}”</div><h3>${esc(c.cta)||'Untitled card'}</h3></div>
+      <label class="toggle" title="Show on Home"><input type="checkbox" id="f-on" ${c.enabled?'checked':''} aria-label="Show this card"><span></span></label></div>
+    <div class="ed-prev" id="edPrev">${cardHTML(c)}</div>
+
+    <div class="f"><label for="f-title">Title <em id="cT">${c.title.length}/70</em></label>
+      <textarea class="in ${e.title?'err':''}" id="f-title" maxlength="70" rows="2">${esc(c.title)}</textarea>
+      <div class="vars">${Object.keys(TOKENS).map(t=>`<button data-tok="${t}" title="Shows as ${TOKENS[t]} in preview">${t}</button>`).join('')}</div>
+      <div class="errt" id="eT">${e.title||''}</div></div>
+
+    <div class="f"><label for="f-cta">Button text <em id="cC">${c.cta.length}/22</em></label>
+      <input class="in ${e.cta?'err':''}" id="f-cta" maxlength="22" value="${esc(c.cta)}"><div class="errt" id="eC">${e.cta||''}</div></div>
+
+    <div class="f"><div class="lab">Illustration</div>
+      <div class="arts">${ARTS.map(([k,l])=>`<button data-art="${k}" aria-pressed="${c.art===k}" title="${l}" style="background:${themeOf(c).bg}">${art(k,themeOf(c),48)}</button>`).join('')}</div></div>
+
+    <div class="f"><div class="lab">Colour</div>
+      <div class="swatches">${Object.entries(THEMES).map(([k,t])=>`<button data-th="${k}" aria-pressed="${c.theme===k}" title="${t.name}" aria-label="${t.name}" style="background:${t.bg}"></button>`).join('')}
+        <button data-th="custom" aria-pressed="${c.theme==='custom'}" title="Custom" aria-label="Custom colours" style="background:conic-gradient(#FF8A6B,#FFB020,#B8F36B,#9FD4FF,#C9B8FF,#FF8A6B)"></button></div>
+      ${c.theme==='custom'?`<div class="cust">${[['bg','Background'],['fg','Text'],['ctaBg','Button'],['ctaFg','Button text']].map(([k,l])=>`<label><input type="color" data-cu="${k}" value="${c.custom[k]}">${l}</label>`).join('')}</div>`:''}
+      <div class="contrast" id="cx" style="color:${e.contrast||e.contrast2?'var(--bad)':'var(--ok)'}">${e.contrast||e.contrast2||'Text contrast passes ('+contrast(themeOf(c).bg,themeOf(c).fg).toFixed(1)+':1)'}</div>
+      ${swapped?`<div class="hint">In this preview it shows as ${THEMES[shown].name}, because the card next to it is also ${THEMES[c.theme].name}. The app does this automatically.</div>`:''}</div>
+
+    <div class="f"><label for="f-act">When tapped</label>
+      <select class="in" id="f-act">${Object.entries(ACTIONS).map(([k,l])=>`<option value="${k}" ${c.action===k?'selected':''}>${l}</option>`).join('')}</select>
+      ${c.action==='url'?`<input class="in ${e.url?'err':''}" id="f-url" placeholder="https://regentmoney.in/diwali" value="${esc(c.url)}"><div class="errt" id="eU">${e.url||''}</div>`:''}</div>
+
+    <div class="f"><div class="lab">Who sees it</div>
+      <div class="row2">
+        <select class="in" id="f-plat" aria-label="Platform">${[['all','Android and iOS'],['android','Android only'],['ios','iOS only']].map(([k,l])=>`<option value="${k}" ${c.platform===k?'selected':''}>${l}</option>`).join('')}</select>
+        <select class="in" id="f-rule" aria-label="Audience">${Object.entries(RULES).map(([k,l])=>`<option value="${k}" ${c.rule===k?'selected':''}>${l}</option>`).join('')}</select>
+      </div><div class="hint">Checked on the phone with the user’s own data. Nothing is sent to the server.</div></div>
+
+    <div class="f"><div class="lab">Schedule <em>optional</em></div>
+      <div class="row2"><input class="in" type="date" id="f-start" value="${esc(c.start)}" aria-label="Start date"><input class="in ${e.end?'err':''}" type="date" id="f-end" value="${esc(c.end)}" aria-label="End date"></div>
+      <div class="errt">${e.end||''}</div></div>
+
+    <div class="danger-zone">${confirmDel
+      ?`<span style="font-weight:600;font-size:13px">Remove this card? It stays live until you publish.</span><button class="btn sm danger" id="delYes">Remove</button><button class="btn sm" id="delNo">Cancel</button>`
+      :`<button class="btn sm" id="dup">Duplicate</button>${S.published.some(p=>p.id===c.id)&&JSON.stringify(S.published.find(p=>p.id===c.id))!==JSON.stringify(c)?'<button class="btn sm" id="revert">Undo changes to this card</button>':''}<button class="btn sm danger" id="del" style="margin-left:auto">Remove card</button>`}</div>`;
+}
+const cur=()=>S.draft.find(x=>x.id===sel);
+function softUpdate(){ // keep focus while typing
+  const c=cur(),e=errorsOf(c);$('#edPrev').innerHTML=cardHTML(c);
+  $('#cT').textContent=`${c.title.length}/70`;$('#cC').textContent=`${c.cta.length}/22`;
+  $('#eT').textContent=e.title||'';$('#eC').textContent=e.cta||'';$('#f-title').classList.toggle('err',!!e.title);$('#f-cta').classList.toggle('err',!!e.cta);
+  if($('#eU')){$('#eU').textContent=e.url||'';$('#f-url').classList.toggle('err',!!e.url)}
+  save();renderList();renderPhone();renderTpls();renderBar();
+}
+$('#editor').addEventListener('input',e=>{
+  const c=cur();if(!c)return;const id=e.target.id;
+  if(id==='f-title')c.title=e.target.value;else if(id==='f-cta')c.cta=e.target.value;else if(id==='f-url')c.url=e.target.value.trim();
+  else if(e.target.dataset.cu){c.custom[e.target.dataset.cu]=e.target.value;const er=errorsOf(c);$('#edPrev').innerHTML=cardHTML(c);
+    const cx=$('#cx');cx.textContent=er.contrast||er.contrast2||'Text contrast passes ('+contrast(themeOf(c).bg,themeOf(c).fg).toFixed(1)+':1)';cx.style.color=er.contrast||er.contrast2?'var(--bad)':'var(--ok)';
+    save();renderList();renderPhone();renderBar();return}
+  else return;
+  softUpdate();
+});
+$('#editor').addEventListener('change',e=>{
+  const c=cur();if(!c)return;const id=e.target.id;
+  const map={'f-act':'action','f-plat':'platform','f-rule':'rule','f-start':'start','f-end':'end'};
+  if(id==='f-on'){c.enabled=e.target.checked;commit();return}
+  if(e.target.dataset.cu){renderEditor();return}
+  if(map[id]){c[map[id]]=e.target.value;commit()}
+});
+$('#editor').addEventListener('click',e=>{
+  const c=cur();if(!c)return;const b=e.target.closest('button');if(!b)return;
+  if(b.dataset.art){c.art=b.dataset.art;commit();return}
+  if(b.dataset.th){c.theme=b.dataset.th;commit();return}
+  if(b.dataset.tok){const ta=$('#f-title'),s=ta.selectionStart??ta.value.length;const v=ta.value.slice(0,s)+b.dataset.tok+ta.value.slice(ta.selectionEnd??s);
+    if(v.length<=70){ta.value=v;c.title=v;softUpdate();ta.focus();ta.selectionStart=ta.selectionEnd=s+b.dataset.tok.length}return}
+  if(b.id==='del'){confirmDel=true;renderEditor();return}
+  if(b.id==='delNo'){confirmDel=false;renderEditor();return}
+  if(b.id==='delYes'){const i=S.draft.findIndex(x=>x.id===sel);S.draft.splice(i,1);sel=S.draft[Math.max(0,i-1)]?.id;confirmDel=false;commit();toast('Card removed from the draft. Publish to remove it for users.');return}
+  if(b.id==='revert'){const p=S.published.find(x=>x.id===c.id);Object.assign(c,clone(p));commit();return}
+  if(b.id==='dup'){let id=c.template,n=2;while(S.draft.some(x=>x.id===id))id=`${c.template}-${n++}`;const cp=clone(c);cp.id=id;
+    S.draft.splice(S.draft.indexOf(c)+1,0,cp);sel=id;commit();toast('Duplicated. Change the copy so users don’t see the same card twice.')}
+});
+
+/* ---------- publish bar + modal ---------- */
+function renderBar(){
+  const d=diff(),bad=S.draft.filter(c=>c.enabled&&Object.keys(errorsOf(c)).length).length;
+  $('#state').classList.toggle('dirty',d.length>0);
+  $('#stateTxt').textContent=d.length?`${d.length} unpublished change${d.length>1?'s':''}`:`Live · v${S.version}`;
+  $('#discard').hidden=!d.length;
+  const p=$('#publish');p.disabled=!d.length||bad>0;p.textContent=bad?`Fix ${bad} card${bad>1?'s':''} to publish`:'Review & publish';
+  $('#hist').innerHTML=S.history.slice(0,5).map((h,i)=>`<li><div><b>v${h.v}</b> · ${esc(h.note||'No note')}<div class="note">${esc(h.at)} · ${esc(h.by)}</div></div>${i===0?'<span class="chip live">Live</span>':`<button class="btn sm" data-rb="${h.v}">Load into draft</button>`}</li>`).join('');
+}
+$('#hist').addEventListener('click',e=>{const b=e.target.closest('[data-rb]');if(!b)return;const h=S.history.find(x=>x.v==b.dataset.rb);
+  S.draft=clone(h.snap);sel=S.draft[0]?.id;commit();toast(`v${h.v} loaded into the draft. Publish to roll back.`)});
+$('#discard').addEventListener('click',()=>{S.draft=clone(S.published);sel=S.draft[0]?.id;commit();toast('Draft reset to what users see now.')});
+
+function openModal(){
+  const d=diff(),n=S.version+1;
+  $('#mTitle').textContent=`Publish ${d.length} change${d.length>1?'s':''} as v${n}?`;
+  $('#mSub').textContent='Here is everything that changes on the Home screen.';
+  $('#mList').innerHTML=d.map(x=>`<li><span class="k ${x.k}">${x.k}</span><span>${x.c?`<b>${esc(fillT(x.c.title))}</b>${x.f?`<br><span class="note">${esc(x.f.join(', '))}</span>`:''}`:'New card order: '+S.draft.filter(c=>c.enabled).map(c=>esc(c.cta)).join(' → ')}</span></li>`).join('');
+  const on=S.draft.filter(c=>c.enabled);
+  $('#mReach').innerHTML=`After publishing, ${on.length} card${on.length===1?'':'s'} ${on.length===1?'is':'are'} on. Each user sees only the ones whose audience matches them, up to 6.`;
+  $('#mAck').checked=false;$('#mNote').value='';$('#mGo').disabled=true;$('#mGo').textContent=`Publish v${n}`;
+  $('#modal').hidden=false;$('#mAck').focus();
+}
+$('#publish').addEventListener('click',openModal);
+$('#mCancel').addEventListener('click',()=>$('#modal').hidden=true);
+$('#modal').addEventListener('click',e=>{if(e.target.id==='modal')$('#modal').hidden=true});
+document.addEventListener('keydown',e=>{if(e.key==='Escape')$('#modal').hidden=true});
+$('#mAck').addEventListener('change',e=>$('#mGo').disabled=!e.target.checked);
+$('#mGo').addEventListener('click',()=>{
+  S.version++;S.published=clone(S.draft);
+  const at=new Date().toLocaleString('en-IN',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false});
+  S.history.unshift({v:S.version,at,by:'You',note:$('#mNote').value.trim(),snap:clone(S.draft)});
+  $('#modal').hidden=true;commit();renderPayload();
+  toast(`v${S.version} is live. Users see it the next time they open Home.`);
+});
+
+/* ---------- payload sample ---------- */
+function renderPayload(){
+  const cards=S.published.filter(c=>c.enabled).map(c=>{const o={id:c.id,title:c.title,cta:c.cta,art:c.art,
+    theme:c.theme==='custom'?{...c.custom}:{preset:c.theme},action:c.action==='url'?{type:'url',href:c.url}:{type:'route',to:c.action},rule:c.rule,platform:c.platform};
+    if(c.start)o.startsAt=c.start;if(c.end)o.endsAt=c.end;return o});
+  $('#payload').textContent='GET /sync  →  304   X-Home-Cards: '+S.version+'\n(phone has '+(S.version-1)+', so it fetches once)\n\nGET /home-cards/'+S.version+'  →  200\nCache-Control: private, max-age=31536000, immutable\n\n'+JSON.stringify({version:S.version,maxVisible:6,cards},null,2);
+}
+
+/* ---------- misc ---------- */
+let tt;function toast(m){const t=$('#toast');t.textContent=m;t.hidden=false;clearTimeout(tt);tt=setTimeout(()=>t.hidden=true,3200)}
+function commit(){save();renderAll()}
+function renderAll(){renderList();renderTpls();renderPhone();renderEditor();renderBar()}
+['studio','bp'].forEach(v=>$('#tab-'+v).addEventListener('click',()=>{
+  $('#tab-studio').setAttribute('aria-selected',v==='studio');$('#tab-bp').setAttribute('aria-selected',v==='bp');
+  $('#v-studio').hidden=v!=='studio';$('#v-bp').hidden=v!=='bp';if(v==='bp')renderPayload();window.scrollTo(0,0);
+}));
+addEventListener('resize',fitMini);
+if(!S.draft.some(c=>c.id===sel))sel=S.draft[0]?.id;
+renderSim();renderAll();renderPayload();
+if(document.fonts)document.fonts.ready.then(fitMini);
+})();
+</script>

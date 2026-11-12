@@ -6,13 +6,75 @@ import {
 } from '../constants/transactionTags';
 import { authService } from './authService';
 import { getBackendUrl } from '../config/api';
+import { getCategory } from '../constants/categories';
+import { cleanTagName, isCustomTagName, mergeTagNames } from './customTagNames';
 
 const LEARNED_TAGS_STORAGE_KEY = 'user_merchant_tags_map';
 const CUSTOM_TAGS_STORAGE_KEY = 'user_custom_transaction_tags';
 
+/** True when the name already has a built-in tile (Food, Misc, …). */
+const isBuiltIn = (name: string) => !getCategory(name).isCustom;
+
 class TagLearningService {
   private learnedMap: Record<string, string> | null = null;
   private customTags: string[] | null = null;
+  private customTagListeners = new Set<(tags: string[]) => void>();
+
+  /** Lets an open tag sheet refresh when tags arrive from another device. */
+  onCustomTagsChanged(fn: (tags: string[]) => void): () => void {
+    this.customTagListeners.add(fn);
+    return () => {
+      this.customTagListeners.delete(fn);
+    };
+  }
+
+  private setCustomTags(next: string[]) {
+    this.customTags = next;
+    try {
+      mmkvStorage.setObject(CUSTOM_TAGS_STORAGE_KEY, next);
+    } catch (e) {
+      console.warn('[TagLearningService] Failed to save custom tags:', e);
+    }
+    const copy = [...next];
+    this.customTagListeners.forEach((fn) => fn(copy));
+  }
+
+  /** Sends tag names to the server so the user's other devices get them. Best effort. */
+  private async pushCustomTags(names: string[]): Promise<boolean> {
+    if (!names.length) return true;
+    try {
+      const token = authService.getAccessToken();
+      if (!token) return false;
+      const res = await fetch(`${getBackendUrl()}/sync/custom-tags`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ names }),
+      });
+      return res.ok;
+    } catch (e) {
+      console.warn('[TagLearningService] Failed to send custom tags:', e);
+      return false;
+    }
+  }
+
+  /**
+   * Two-way merge of "Your tags": downloads the server's list, adds anything new here,
+   * and uploads tags made on this phone that the server doesn't have yet (e.g. made offline).
+   */
+  private async syncCustomTags(token: string, backendUrl: string, ruleTags: string[]): Promise<void> {
+    const res = await fetch(`${backendUrl}/sync/custom-tags`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) return;
+    const rows = await res.json();
+    const serverNames: string[] = Array.isArray(rows) ? rows.map((r: any) => cleanTagName(r?.name)).filter(Boolean) : [];
+
+    // Tags used in saved payee rules count too ("Always tag Das Mobi as Google Play Console")
+    const { merged } = mergeTagNames(this.customTags!, [...serverNames, ...ruleTags], isBuiltIn);
+    if (merged.length !== this.customTags!.length) this.setCustomTags(merged);
+
+    const onServer = new Set(serverNames.map((n) => n.toLowerCase()));
+    const missing = merged.filter((n) => !onServer.has(n.toLowerCase()));
+    await this.pushCustomTags(missing);
+  }
 
   /**
    * Initializes in-memory cache from MMKV
@@ -185,20 +247,24 @@ class TagLearningService {
       const res = await fetch(`${BACKEND_URL}/sync/merchant-tag-rules`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!res.ok) return;
-      const rules = await res.json();
-      if (Array.isArray(rules)) {
-        let updated = false;
-        rules.forEach((r: any) => {
-          if (r.merchantNormalized && r.tag) {
-            this.learnedMap![r.merchantNormalized] = r.tag;
-            updated = true;
+      const ruleTags: string[] = [];
+      if (res.ok) {
+        const rules = await res.json();
+        if (Array.isArray(rules)) {
+          let updated = false;
+          rules.forEach((r: any) => {
+            if (r.merchantNormalized && r.tag) {
+              this.learnedMap![r.merchantNormalized] = r.tag;
+              ruleTags.push(r.tag);
+              updated = true;
+            }
+          });
+          if (updated) {
+            mmkvStorage.setObject(LEARNED_TAGS_STORAGE_KEY, this.learnedMap!);
           }
-        });
-        if (updated) {
-          mmkvStorage.setObject(LEARNED_TAGS_STORAGE_KEY, this.learnedMap!);
         }
       }
+      await this.syncCustomTags(token, BACKEND_URL, ruleTags);
     } catch (e) {
       console.warn('[TagLearningService] Failed to sync rules from backend:', e);
     }
@@ -209,7 +275,8 @@ class TagLearningService {
    */
   getCustomTags(): string[] {
     this.ensureInitialized();
-    return [...this.customTags!];
+    // Older versions could save a built-in name (e.g. "Misc") here; it already has its own tile
+    return this.customTags!.filter((t) => isCustomTagName(t, isBuiltIn));
   }
 
   /**
@@ -217,17 +284,15 @@ class TagLearningService {
    */
   addCustomTag(newTag: string): string[] {
     this.ensureInitialized();
-    const clean = newTag.trim();
-    if (!clean) return this.getCustomTags();
+    const clean = cleanTagName(newTag);
+    // Built-in names (Food, Misc…) and budget category ids already have their own tiles
+    if (!isCustomTagName(clean, isBuiltIn)) return this.getCustomTags();
 
-    const exists = this.customTags!.some(t => t.toLowerCase() === clean.toLowerCase());
-    if (!exists) {
-      this.customTags!.push(clean);
-      try {
-        mmkvStorage.setObject(CUSTOM_TAGS_STORAGE_KEY, this.customTags!);
-      } catch (e) {
-        console.warn('[TagLearningService] Failed to save custom tag:', e);
-      }
+    const { merged, added } = mergeTagNames(this.customTags!, [clean], isBuiltIn);
+    if (added.length) {
+      this.setCustomTags(merged);
+      // Saved here first; if this fails (offline) the next sync uploads it
+      void this.pushCustomTags(added);
     }
     return this.getCustomTags();
   }

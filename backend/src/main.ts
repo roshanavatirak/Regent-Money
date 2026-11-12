@@ -1,5 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { HomeCardsService } from './home-cards/home-cards.service';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import * as dns from 'dns';
 import { timingSafeEqual } from 'crypto';
@@ -36,6 +37,15 @@ async function bootstrap() {
   const photoRoutes = /^\/(auth\/upload-avatar|feedback)(\/|$)/;
   app.use((req: any, res: any, next: any) => (photoRoutes.test(req.path) ? photoJson : smallJson)(req, res, next));
   app.use(urlencoded({ extended: true, limit: '1mb' }));
+
+  // Home carousel version on every response (a number read from memory). Phones compare it
+  // with the version they hold and download /home-cards/:version only when it went up.
+  const homeCards = app.get(HomeCardsService);
+  app.use((req: any, res: any, next: any) => {
+    const v = homeCards.version;
+    if (v > 0) res.setHeader('X-Home-Cards', String(v));
+    next();
+  });
 
   // Cloudflare Origin Authentication (Connection ②):
   // Enforces X-Origin-Auth only when CF_ORIGIN_SECRET is configured in environment.
@@ -115,6 +125,7 @@ async function bootstrap() {
       'x-origin-auth',
       'Access-Control-Request-Private-Network',
     ],
+    exposedHeaders: ['X-Home-Cards'],
     credentials: true,
   });
 
