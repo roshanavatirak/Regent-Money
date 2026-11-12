@@ -16,12 +16,98 @@ import { notificationService } from './notificationService';
 import { tokenStore } from './tokenStore';
 import { apiFetch } from './apiClient';
 import { outbox, isOutboxEnabled } from '../db/outbox';
+import { mergeChangedRows, deltaLooksComplete, shouldAskForChangesOnly } from '../utils/syncMerge';
 
 const BACKEND_URL = getBackendUrl();
 
 let isSyncing = false;
 let syncInFlight: Promise<void> | null = null;
 let isFlushingOutbox = false;
+/** When the last sync finished successfully (ms). Used to skip syncs on quick tab switches. */
+let lastSyncSuccessAt = 0;
+/** Screens re-check the server at most this often when they come into view. */
+export const FOCUS_SYNC_MIN_GAP_MS = 60_000;
+let lastNotificationsFetchAt = 0;
+
+/**
+ * Render's server takes 30-60 s to start after a deploy or restart. Until the server has
+ * answered once in this app session (or after a request timed out), wait up to 60 s instead
+ * of 12 s, so the first open after a deploy loads instead of failing.
+ */
+const NORMAL_TIMEOUT_MS = 12_000;
+const WAKE_UP_TIMEOUT_MS = 60_000;
+/** After this long without an answer, show "Connecting…". */
+const SLOW_NOTICE_AFTER_MS = 4_000;
+let serverReached = false;
+let slowRequests = 0;
+
+export const requestTimeoutMs = () => (serverReached ? NORMAL_TIMEOUT_MS : WAKE_UP_TIMEOUT_MS);
+
+/**
+ * Wraps one server request: picks the timeout, shows "Connecting…" if it's slow, and
+ * remembers whether the server is awake.
+ */
+async function withServerPatience<T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    try {
+      controller.abort();
+    } catch { }
+  }, requestTimeoutMs());
+  let shownSlow = false;
+  const slowId = setTimeout(() => {
+    shownSlow = true;
+    slowRequests++;
+    useSyncStatusStore.getState().setConnecting(true);
+  }, SLOW_NOTICE_AFTER_MS);
+
+  try {
+    const result = await run(controller.signal);
+    serverReached = true;
+    return result;
+  } catch (err) {
+    // Timed out or no network: be patient again on the next try
+    serverReached = false;
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+    clearTimeout(slowId);
+    if (shownSlow) {
+      slowRequests = Math.max(0, slowRequests - 1);
+      if (slowRequests === 0) useSyncStatusStore.getState().setConnecting(false);
+    }
+  }
+}
+
+/**
+ * The account that is logging in. Set while its data loads, before it becomes the signed-in
+ * user, so the dashboard can appear already filled in (no ₹0 flash).
+ */
+let loggingInUser: { id: string; role?: string | null } | null = null;
+const currentUser = (): any => useAuthStore.getState().user || loggingInUser;
+
+/** The server's version of this user's data from the last full sync (sent back as If-None-Match). */
+const etagKey = (userId: string) => `sync_etag_v1_${userId}`;
+/** Where this phone's last pull ended (a server time), and when it last downloaded everything. */
+const cursorKey = (userId: string) => `sync_cursor_v1_${userId}`;
+const fullSyncAtKey = (userId: string) => `sync_full_at_v1_${userId}`;
+/**
+ * If the self-check fails on two changed-only pulls in a row, this phone stops asking for
+ * changes only for a day (each failure costs a second, full download).
+ */
+const deltaMissKey = (userId: string) => `sync_delta_miss_v1_${userId}`;
+const deltaPausedUntilKey = (userId: string) => `sync_delta_paused_until_v1_${userId}`;
+const DELTA_PAUSE_MS = 24 * 60 * 60 * 1000;
+export const clearSyncEtag = (userId?: string | null) => {
+  if (userId) {
+    mmkvStorage.delete(etagKey(userId));
+    // Without these the next pull downloads everything, which is the safe default
+    mmkvStorage.delete(cursorKey(userId));
+    mmkvStorage.delete(fullSyncAtKey(userId));
+    mmkvStorage.delete(deltaMissKey(userId));
+    mmkvStorage.delete(deltaPausedUntilKey(userId));
+  }
+};
 
 export const syncService = {
   /**
@@ -35,36 +121,31 @@ export const syncService = {
       return;
     }
 
-    const user = useAuthStore.getState().user;
+    const user = currentUser();
     const token = tokenStore.getAccessToken();
     if (!user || !token || user.role === 'admin' || user.role === 'superadmin') return;
 
     const baseUrl = getBackendUrl();
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => {
-      try {
-        controller.abort();
-      } catch { }
-    }, 12000);
 
     try {
-      const [snapshotsRes, incomeRes] = await Promise.all([
-        apiFetch('/sync/net-worth-snapshots', {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          signal: controller.signal,
-        }),
-        apiFetch('/sync/income-records', {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          signal: controller.signal,
-        }),
-      ]);
-      clearTimeout(timeoutId);
+      const [snapshotsRes, incomeRes] = await withServerPatience((signal) =>
+        Promise.all([
+          apiFetch('/sync/net-worth-snapshots', {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            signal,
+          }),
+          apiFetch('/sync/income-records', {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            signal,
+          }),
+        ]),
+      );
 
       if (snapshotsRes.ok) {
         const data = await snapshotsRes.json();
@@ -93,7 +174,6 @@ export const syncService = {
 
       useAnalyticsStore.getState().setLastFetchTime(now);
     } catch (e: any) {
-      clearTimeout(timeoutId);
       if (e?.name !== 'AbortError' && !e?.message?.includes?.('abort')) {
         console.warn('[Sync] Analytics offline fallback:', e?.message || e);
       }
@@ -107,7 +187,7 @@ export const syncService = {
   async flushOutbox(): Promise<void> {
     if (!isOutboxEnabled() || isFlushingOutbox) return;
 
-    const user = useAuthStore.getState().user;
+    const user = currentUser();
     const token = tokenStore.getAccessToken();
     if (!user || !token || user.role === 'admin' || user.role === 'superadmin') return;
 
@@ -167,6 +247,30 @@ export const syncService = {
    * Fetches all financial data directly from NestJS and updates the in-memory Zustand stores.
    * Uses Stale-While-Revalidate: only sets loading state if store has no cached data.
    */
+  /**
+   * For screens that sync when they come into view: skips the sync if the data is less
+   * than a minute old, so quick tab switches don't reload everything. Pull-to-refresh
+   * and saves keep calling sync(), which always runs.
+   */
+  syncIfStale(maxAgeMs = FOCUS_SYNC_MIN_GAP_MS): Promise<void> {
+    if (syncInFlight) return syncInFlight;
+    if (Date.now() - lastSyncSuccessAt < maxAgeMs) return Promise.resolve();
+    return this.sync();
+  },
+
+  /**
+   * Loads everything the dashboard shows (transactions, banks, budgets, goals, income and
+   * net-worth history) for an account that has just logged in, before it is signed in.
+   */
+  async loadForLogin(profile: { id: string; role?: string | null }): Promise<void> {
+    loggingInUser = profile;
+    try {
+      await Promise.all([this.sync(true), this.fetchAnalytics(true)]);
+    } finally {
+      loggingInUser = null;
+    }
+  },
+
   sync(force = false): Promise<void> {
     // A second caller waits for the sync already running instead of returning at once, so
     // "await sync()" always means the stores hold the server's data (the first-screen hold relies on it)
@@ -181,7 +285,7 @@ export const syncService = {
   async runSync(force = false): Promise<void> {
     if (isSyncing) return;
 
-    const user = useAuthStore.getState().user;
+    const user = currentUser();
     if (!user || user.role === 'admin' || user.role === 'superadmin') {
       return;
     }
@@ -204,32 +308,102 @@ export const syncService = {
     }
 
     const baseUrl = getBackendUrl();
-    const syncController = new AbortController();
-    const syncTimeoutId = setTimeout(() => {
-      try {
-        syncController.abort();
-      } catch { }
-    }, 12000);
 
     try {
       // Trigger analytics and notifications fetch concurrently
       this.fetchAnalytics(force).catch(() => { });
-      notificationService.fetchNotifications().catch(() => { });
+      // Notifications: at most once a minute unless forced (pushes refresh them directly)
+      if (force || Date.now() - lastNotificationsFetchAt >= FOCUS_SYNC_MIN_GAP_MS) {
+        lastNotificationsFetchAt = Date.now();
+        notificationService.fetchNotifications().catch(() => { });
+      }
 
-      const response = await apiFetch('/sync', {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        signal: syncController.signal,
+      // Ask "did anything change?" only when this phone already holds data to keep.
+      // A forced sync (pull-to-refresh) always downloads everything.
+      const savedEtag = mmkvStorage.getString(etagKey(user.id));
+      const hasLocalData =
+        existingTxs.length > 0 ||
+        useBankStore.getState().bankProfiles.length > 0 ||
+        useBudgetStore.getState().budgets.length > 0 ||
+        useGoalsStore.getState().goals.length > 0;
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (savedEtag && hasLocalData && !force) headers['If-None-Match'] = savedEtag;
+
+      // Ask for "only what changed since my last pull" when this phone has a cursor, data to
+      // apply the changes to, and downloaded everything within the last day. Otherwise (and
+      // on pull-to-refresh) download everything.
+      const savedCursor = mmkvStorage.getNumber(cursorKey(user.id));
+      const deltaPaused = Date.now() < (mmkvStorage.getNumber(deltaPausedUntilKey(user.id)) || 0);
+      const askChangesOnly = !deltaPaused && shouldAskForChangesOnly({
+        force,
+        cursor: savedCursor,
+        lastFullSyncAt: mmkvStorage.getNumber(fullSyncAtKey(user.id)),
+        hasLocalData,
+        now: Date.now(),
       });
-      clearTimeout(syncTimeoutId);
+      const syncPath = askChangesOnly ? `/sync?since=${Math.floor(savedCursor as number)}` : '/sync';
+
+      const response = await withServerPatience((signal) =>
+        apiFetch(syncPath, {
+          method: 'GET',
+          headers,
+          signal,
+        }),
+      );
+
+      if (response.status === 304) {
+        // Nothing changed on the server: keep what's on the phone.
+        useSyncStatusStore.getState().setSyncStatus('success', null);
+        lastSyncSuccessAt = Date.now();
+        return;
+      }
 
       if (!response.ok) {
         throw new Error(`Sync API returned status ${response.status}`);
       }
 
-      const data = await response.json();
+      let newEtag = response.headers.get('ETag');
+      let data = await response.json();
+
+      // Changed-only reply: check it before using it. The server says how many transactions
+      // and credits it holds; if this phone would end up with a different number, a change
+      // was missed or the phone's copy was incomplete, so download everything instead.
+      const pendingIds = outbox.pendingEntityIds(user.id);
+      if (data?.delta === true) {
+        const complete =
+          deltaLooksComplete({
+            existingIds: existingTxs.map((t: any) => t?.id),
+            changedIds: (data.transactions || []).map((t: any) => t?.id),
+            deletedIds: data.deletedTransactionIds,
+            localOnlyIds: pendingIds,
+            serverTotal: data.totals?.transactions,
+          }) &&
+          deltaLooksComplete({
+            existingIds: (useIncomeStore.getState().incomeRecords || []).map((i: any) => i?.id),
+            changedIds: (data.incomeRecords || []).map((i: any) => i?.id),
+            deletedIds: data.deletedIncomeIds,
+            localOnlyIds: pendingIds,
+            serverTotal: data.totals?.incomeRecords,
+          });
+        if (complete) {
+          mmkvStorage.delete(deltaMissKey(user.id));
+        } else {
+          const misses = (mmkvStorage.getNumber(deltaMissKey(user.id)) || 0) + 1;
+          if (misses >= 2) {
+            mmkvStorage.setNumber(deltaPausedUntilKey(user.id), Date.now() + DELTA_PAUSE_MS);
+            mmkvStorage.delete(deltaMissKey(user.id));
+          } else {
+            mmkvStorage.setNumber(deltaMissKey(user.id), misses);
+          }
+          const full = await withServerPatience((signal) =>
+            apiFetch('/sync', { method: 'GET', headers: { 'Content-Type': 'application/json' }, signal }),
+          );
+          if (!full.ok) throw new Error(`Sync API returned status ${full.status}`);
+          newEtag = full.headers.get('ETag');
+          data = await full.json();
+        }
+      }
+      const isDelta = data?.delta === true;
 
       // 1. Map Transactions and deduplicate any duplicates
       const sortedTxs = [...(data.transactions || [])].sort((a: any, b: any) => b.timestamp - a.timestamp);
@@ -272,8 +446,14 @@ export const syncService = {
         });
       }
 
+      // Changed-only reply: what the phone had, minus deleted rows, with changed rows replaced
+      if (isDelta) {
+        const merged = mergeChangedRows(existingTxs as any[], mappedTxs, data.deletedTransactionIds);
+        mappedTxs.length = 0;
+        mappedTxs.push(...merged);
+      }
+
       // Preserve local pending offline transactions not yet reflected on the server
-      const pendingIds = outbox.pendingEntityIds(user.id);
       const serverTxIds = new Set(mappedTxs.map((t) => t.id).filter(Boolean));
       const localPendingTxs = existingTxs.filter(
         (t) => t && t.id && pendingIds.has(t.id) && !serverTxIds.has(t.id),
@@ -282,6 +462,14 @@ export const syncService = {
         (a, b) => Number(b.timestamp) - Number(a.timestamp),
       );
       useTransactionStore.getState().setTransactions(finalTxs);
+
+      // Reconcile Borrow & Lend ledger with synced transactions (e.g. Lent to friend)
+      try {
+        const { usePeerStore } = require('../store/peerStore');
+        usePeerStore.getState().reconcileWithTransactions(finalTxs);
+      } catch (peerErr) {
+        console.warn('[Sync] Peer ledger reconciliation notice:', peerErr);
+      }
 
       // 2. Map Budgets
       const mappedBudgets = (data.budgets || []).map((b: any) => ({
@@ -353,6 +541,11 @@ export const syncService = {
 
       // Preserve local pending offline income records not yet reflected on the server
       const existingIncome = useIncomeStore.getState().incomeRecords;
+      if (isDelta) {
+        const merged = mergeChangedRows(existingIncome as any[], mappedIncome, data.deletedIncomeIds);
+        mappedIncome.length = 0;
+        mappedIncome.push(...merged);
+      }
       const serverIncIds = new Set(mappedIncome.map((i: any) => i.id).filter(Boolean));
       const localPendingIncome = (existingIncome || []).filter(
         (i: any) => i && i.id && pendingIds.has(i.id) && !serverIncIds.has(i.id),
@@ -362,8 +555,19 @@ export const syncService = {
       );
       useIncomeStore.getState().setIncomeRecords(finalIncome);
       useSyncStatusStore.getState().setSyncStatus('success', null);
+      lastSyncSuccessAt = Date.now();
+      // Remember the version only after everything above was stored
+      if (newEtag) mmkvStorage.setString(etagKey(user.id), newEtag);
+      else clearSyncEtag(user.id);
+      // Same for the cursor. A server without changed-only sync sends none: forget ours.
+      if (typeof data.cursor === 'number' && data.cursor > 0) {
+        mmkvStorage.setNumber(cursorKey(user.id), data.cursor);
+        if (!isDelta) mmkvStorage.setNumber(fullSyncAtKey(user.id), Date.now());
+      } else {
+        mmkvStorage.delete(cursorKey(user.id));
+        mmkvStorage.delete(fullSyncAtKey(user.id));
+      }
     } catch (err: any) {
-      clearTimeout(syncTimeoutId);
       useSyncStatusStore.getState().setSyncStatus('error', err?.message || 'Server currently unreachable');
       if (err?.name !== 'AbortError' && !err?.message?.includes?.('abort')) {
         console.warn('[Sync] Server currently unreachable, keeping offline cache active:', err?.message || err);

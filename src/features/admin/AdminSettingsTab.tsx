@@ -1,39 +1,50 @@
 import React from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Switch,
-  Alert,
-  Platform,
-} from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
-import { useTheme, useAuthStore, useSecurityStore, useThemeStore, showGlobalConfirm } from '../../store';
+import { useAuthStore, useSecurityStore, useThemeStore, showGlobalConfirm } from '../../store';
 import { authService } from '../../services/authService';
 import { biometricService } from '../../services/biometricService';
 import { getBackendUrl } from '../../config/api';
+import {
+  useAdminTheme,
+  ff,
+  AdminHeader,
+  IconTile,
+  Pill,
+  Segmented,
+  SectionLabel,
+  HeroRings,
+  FOREST,
+  FOREST_RAISED,
+  LIME,
+  MIST,
+  MONO,
+} from './adminTheme';
+
+const getInitials = (name?: string | null, email?: string | null) => {
+  if (name && name.trim()) {
+    const parts = name.trim().split(/\s+/);
+    if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+    return parts[0].slice(0, 2).toUpperCase();
+  }
+  if (email) return email.slice(0, 2).toUpperCase();
+  return 'AD';
+};
 
 export const AdminSettingsTab: React.FC = () => {
   const insets = useSafeAreaInsets();
-  const { colors, isDark } = useTheme();
+  const { p, font, isDark } = useAdminTheme();
   const setTheme = useThemeStore((s) => s.setTheme);
+  const navigation = useNavigation<any>();
+  const openEmailPage = () => navigation.navigate('AdminEmailConfig');
   const user = useAuthStore((s) => s.user);
-
-  const {
-    biometricsEnabled,
-    setBiometricsEnabled,
-    autoLockTimeout,
-    setAutoLockTimeout,
-  } = useSecurityStore();
+  const { biometricsEnabled, setBiometricsEnabled, autoLockTimeout, setAutoLockTimeout } = useSecurityStore();
 
   const handleToggleBiometrics = async (enable: boolean) => {
     if (!enable) {
-      const auth = await biometricService.authenticate(
-        'Confirm your fingerprint or face to turn off biometric lock'
-      );
+      const auth = await biometricService.authenticate('Confirm your fingerprint or face to turn off biometric lock');
       if (auth.success) {
         setBiometricsEnabled(false);
         authService.updateSecuritySettings({ biometricsEnabled: false, autoLockTimeout });
@@ -82,210 +93,164 @@ export const AdminSettingsTab: React.FC = () => {
     });
   };
 
-  const getInitials = (name?: string | null, email?: string | null) => {
-    if (name && name.trim()) {
-      const parts = name.trim().split(' ');
-      if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
-      return parts[0].slice(0, 2).toUpperCase();
-    }
-    if (email) return email.slice(0, 2).toUpperCase();
-    return 'AD';
+  const switchProps = {
+    trackColor: { false: isDark ? 'rgba(255,255,255,0.18)' : '#CBD5E1', true: isDark ? LIME : FOREST },
+    thumbColor: isDark ? '#FFFFFF' : '#FFFFFF',
+    ios_backgroundColor: isDark ? 'rgba(255,255,255,0.18)' : '#CBD5E1',
   };
 
+  const titleText = [{ fontSize: 15, color: p.text }, ff(font.bodySemi, '600')];
+  const subText = [{ fontSize: 12, color: p.muted, marginTop: 2 }, ff(font.body, '500')];
+
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Top Header */}
-      <View
-        style={[
-          styles.header,
-          {
-            paddingTop: Math.max(insets.top, 16) + 8,
-            backgroundColor: isDark ? 'rgba(22, 27, 34, 0.95)' : colors.card,
-            borderBottomColor: colors.border,
-          },
-        ]}
-      >
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.headerTitle, { color: colors.text }]}>Admin Settings</Text>
-          <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]}>
-            Security, appearance & administrative session
-          </Text>
-        </View>
-      </View>
+    <View style={[styles.container, { backgroundColor: p.bg }]}>
+      <AdminHeader title="Settings" subtitle="Your profile, security and console details" />
 
       <ScrollView
-        contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 90 }}
+        contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: insets.bottom + 110 }}
+        showsVerticalScrollIndicator={false}
       >
-        {/* Admin Profile Card */}
-        <View
-          style={[
-            styles.profileCard,
-            {
-              backgroundColor: isDark ? 'rgba(255,255,255,0.03)' : colors.card,
-              borderColor: colors.border,
-            },
-          ]}
-        >
-          <View style={[styles.avatarCircle, { backgroundColor: 'rgba(234, 179, 8, 0.15)', borderColor: '#EAB308' }]}>
-            <Text style={styles.avatarText}>{getInitials(user?.name, user?.email)}</Text>
-          </View>
-          <View style={{ flex: 1, marginLeft: 14 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Text style={[styles.profileName, { color: colors.text }]}>
-                {user?.name || 'Administrator'}
-              </Text>
-              <View style={styles.badgeGold}>
-                <Text style={styles.badgeGoldText}>
-                  {user?.role?.toUpperCase() || 'ADMIN'}
-                </Text>
-              </View>
+        {/* Profile */}
+        <View style={styles.profile}>
+          <HeroRings big={220} small={130} />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+            <View style={styles.avatar}>
+              <Text style={[{ fontSize: 22, color: FOREST }, ff(font.display, '800')]}>{getInitials(user?.name, user?.email)}</Text>
             </View>
-            <Text style={[styles.profileEmail, { color: colors.textSecondary }]}>
-              {user?.email || 'admin@regentmoney.com'}
-            </Text>
-            <Text style={[styles.profileId, { color: colors.textTertiary }]}>
-              ID: {user?.id ? `${user.id.slice(0, 16)}...` : 'Active Admin'}
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Text style={[{ fontSize: 20, color: '#FFFFFF', flexShrink: 1 }, ff(font.displayBold, '700')]} numberOfLines={1}>
+                  {user?.name || 'Administrator'}
+                </Text>
+                <Pill tint={{ bg: 'rgba(184,243,107,0.16)', fg: LIME }} label={(user?.role || 'admin').toUpperCase()} font={font} small />
+              </View>
+              <Text style={[{ fontSize: 13, color: MIST, marginTop: 2 }, ff(font.body, '500')]} numberOfLines={1}>
+                {user?.email || '—'}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.idChip}>
+            <Text style={[{ fontSize: 12, color: MIST }, ff(font.body, '500')]}>Admin ID</Text>
+            <Text style={{ fontFamily: MONO, fontSize: 12, color: '#FFFFFF' }} numberOfLines={1}>
+              {user?.id ? `${user.id.slice(0, 16)}…` : '—'}
             </Text>
           </View>
         </View>
 
-        {/* Section: Interface & Theme */}
-        <Text style={[styles.sectionTitle, { color: colors.text }]}>Interface</Text>
-        <View
-          style={[
-            styles.cardGroup,
-            {
-              backgroundColor: isDark ? 'rgba(255,255,255,0.03)' : colors.card,
-              borderColor: colors.border,
-            },
-          ]}
-        >
-          <View style={styles.settingRow}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
-              <View style={[styles.iconWrap, { backgroundColor: 'rgba(59, 130, 246, 0.12)' }]}>
-                <Feather name={isDark ? 'moon' : 'sun'} size={18} color="#3B82F6" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.settingLabel, { color: colors.text }]}>Dark Mode</Text>
-                <Text style={[styles.settingSub, { color: colors.textSecondary }]}>
-                  {isDark ? 'High-contrast dark theme enabled' : 'Clean light theme enabled'}
-                </Text>
-              </View>
+        {/* Appearance */}
+        <SectionLabel>Appearance</SectionLabel>
+        <View style={[styles.group, { backgroundColor: p.card, borderColor: p.line }]}>
+          <View style={styles.row}>
+            <IconTile tint={p.tint.blue}>
+              <Feather name={isDark ? 'moon' : 'sun'} size={18} color={p.tint.blue.fg} />
+            </IconTile>
+            <View style={{ flex: 1 }}>
+              <Text style={titleText}>Dark mode</Text>
+              <Text style={subText}>{isDark ? 'Dark theme is on' : 'Light theme is on'}</Text>
             </View>
             <Switch
               value={isDark}
               onValueChange={() => setTheme(isDark ? 'light' : 'dark')}
-              trackColor={{ false: '#767577', true: '#2dba4e' }}
-              thumbColor="#FFFFFF"
+              accessibilityLabel="Dark mode"
+              {...switchProps}
             />
           </View>
         </View>
 
-        {/* Section: Security */}
-        <Text style={[styles.sectionTitle, { color: colors.text }]}>Security Controls</Text>
-        <View
-          style={[
-            styles.cardGroup,
-            {
-              backgroundColor: isDark ? 'rgba(255,255,255,0.03)' : colors.card,
-              borderColor: colors.border,
-            },
-          ]}
-        >
-          <View style={styles.settingRow}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
-              <View style={[styles.iconWrap, { backgroundColor: 'rgba(16, 185, 129, 0.12)' }]}>
-                <Ionicons name="finger-print" size={20} color="#10B981" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.settingLabel, { color: colors.text }]}>Biometric Lock</Text>
-                <Text style={[styles.settingSub, { color: colors.textSecondary }]}>
-                  Require fingerprint / Face ID to unlock console
-                </Text>
-              </View>
+        {/* Security */}
+        <SectionLabel>Security</SectionLabel>
+        <View style={[styles.group, { backgroundColor: p.card, borderColor: p.line }]}>
+          <View style={[styles.row, { borderBottomWidth: 1, borderBottomColor: p.divider }]}>
+            <IconTile tint={p.tint.green}>
+              <Ionicons name="finger-print" size={20} color={p.tint.green.fg} />
+            </IconTile>
+            <View style={{ flex: 1 }}>
+              <Text style={titleText}>Biometric lock</Text>
+              <Text style={subText}>Fingerprint or Face ID to open console</Text>
             </View>
             <Switch
               value={biometricsEnabled}
               onValueChange={handleToggleBiometrics}
-              trackColor={{ false: '#767577', true: '#2dba4e' }}
-              thumbColor="#FFFFFF"
+              accessibilityLabel="Biometric lock"
+              {...switchProps}
             />
           </View>
-
-          <View style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: colors.border }]}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
-              <View style={[styles.iconWrap, { backgroundColor: 'rgba(234, 179, 8, 0.12)' }]}>
-                <Feather name="clock" size={18} color="#EAB308" />
-              </View>
+          <View style={{ paddingVertical: 14 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <IconTile tint={p.tint.amber}>
+                <Feather name="clock" size={18} color={p.tint.amber.fg} />
+              </IconTile>
               <View style={{ flex: 1 }}>
-                <Text style={[styles.settingLabel, { color: colors.text }]}>Auto-Lock Timeout</Text>
-                <Text style={[styles.settingSub, { color: colors.textSecondary }]}>
-                  Lock app after {autoLockTimeout} minute(s) in background
+                <Text style={titleText}>Auto-lock</Text>
+                <Text style={subText}>
+                  Locks after {autoLockTimeout} {autoLockTimeout === 1 ? 'minute' : 'minutes'} in background
                 </Text>
               </View>
             </View>
-            <View style={styles.timeoutOptions}>
-              {([1, 5, 10] as const).map((t) => (
-                <TouchableOpacity
-                  key={t}
-                  onPress={() => setAutoLockTimeout(t)}
-                  style={[
-                    styles.timeoutPill,
-                    {
-                      backgroundColor: autoLockTimeout === t ? colors.accent : 'transparent',
-                      borderColor: autoLockTimeout === t ? colors.accent : colors.border,
-                    },
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.timeoutText,
-                      { color: autoLockTimeout === t ? '#FFFFFF' : colors.textSecondary },
-                    ]}
-                  >
-                    {t}m
-                  </Text>
-                </TouchableOpacity>
-              ))}
+            <Segmented<'1' | '5' | '10'>
+              style={{ marginTop: 12, backgroundColor: p.soft }}
+              value={String(autoLockTimeout) as '1' | '5' | '10'}
+              onChange={(v) => setAutoLockTimeout(Number(v) as 1 | 5 | 10)}
+              options={[
+                { id: '1', label: '1 min' },
+                { id: '5', label: '5 min' },
+                { id: '10', label: '10 min' },
+              ]}
+            />
+          </View>
+        </View>
+
+        {/* Communications & Mail */}
+        <SectionLabel>Communications & Mail</SectionLabel>
+        <View style={[styles.group, { backgroundColor: p.card, borderColor: p.line }]}>
+          <TouchableOpacity
+            style={styles.row}
+            onPress={openEmailPage}
+            activeOpacity={0.7}
+          >
+            <IconTile tint={p.tint.lilac}>
+              <Feather name="mail" size={18} color={p.tint.lilac.fg} />
+            </IconTile>
+            <View style={{ flex: 1 }}>
+              <Text style={titleText}>Email</Text>
+              <Text style={subText}>Daily limits and test sends</Text>
+            </View>
+            <Feather name="chevron-right" size={18} color={p.muted} />
+          </TouchableOpacity>
+        </View>
+
+        {/* System */}
+        <SectionLabel>System</SectionLabel>
+        <View style={[styles.group, { backgroundColor: p.card, borderColor: p.line }]}>
+          <View style={[styles.infoRow, { borderBottomWidth: 1, borderBottomColor: p.divider }]}>
+            <Text style={[{ fontSize: 14, color: p.sub }, ff(font.body, '500')]}>Console version</Text>
+            <Text style={[{ fontSize: 14, color: p.text }, ff(font.bodySemi, '600')]}>v1.0.51 · Build 134</Text>
+          </View>
+          <View style={[styles.infoRow, { borderBottomWidth: 1, borderBottomColor: p.divider }]}>
+            <Text style={[{ fontSize: 14, color: p.sub }, ff(font.body, '500')]}>API endpoint</Text>
+            <View style={[styles.codeChip, { backgroundColor: p.bg }]}>
+              <Text style={{ fontFamily: MONO, fontSize: 12, color: p.text }} numberOfLines={1}>
+                {getBackendUrl().replace(/^https?:\/\//, '')}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.infoRow}>
+            <Text style={[{ fontSize: 14, color: p.sub }, ff(font.body, '500')]}>Security model</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: p.success }} />
+              <Text style={[{ fontSize: 13, color: p.link }, ff(font.bodyBold, '700')]}>Role-guarded · HMAC</Text>
             </View>
           </View>
         </View>
 
-        {/* Section: System Metadata */}
-        <Text style={[styles.sectionTitle, { color: colors.text }]}>System Diagnostic</Text>
-        <View
-          style={[
-            styles.cardGroup,
-            {
-              backgroundColor: isDark ? 'rgba(255,255,255,0.03)' : colors.card,
-              borderColor: colors.border,
-            },
-          ]}
-        >
-          <View style={styles.diagnosticRow}>
-            <Text style={[styles.diagLabel, { color: colors.textSecondary }]}>Console Version</Text>
-            <Text style={[styles.diagValue, { color: colors.text }]}>v1.0.51 (Build 134)</Text>
-          </View>
-          <View style={[styles.diagnosticRow, { borderTopWidth: 1, borderTopColor: colors.border }]}>
-            <Text style={[styles.diagLabel, { color: colors.textSecondary }]}>API Endpoint</Text>
-            <Text style={[styles.diagValue, { color: colors.text }]} numberOfLines={1}>
-              {getBackendUrl()}
-            </Text>
-          </View>
-          <View style={[styles.diagnosticRow, { borderTopWidth: 1, borderTopColor: colors.border }]}>
-            <Text style={[styles.diagLabel, { color: colors.textSecondary }]}>Security Architecture</Text>
-            <Text style={[styles.diagValue, { color: '#10B981' }]}>Role-Guarded + HMAC Anonymized</Text>
-          </View>
-        </View>
-
-        {/* Sign Out Button */}
         <TouchableOpacity
-          style={[styles.logoutBtn, { borderColor: 'rgba(239, 68, 68, 0.3)' }]}
+          style={[styles.logout, { borderColor: p.dangerLine, backgroundColor: p.card }]}
           onPress={handleLogout}
-          activeOpacity={0.7}
+          activeOpacity={0.75}
+          accessibilityRole="button"
         >
-          <Feather name="log-out" size={18} color="#EF4444" style={{ marginRight: 8 }} />
-          <Text style={styles.logoutBtnText}>End Administrative Session</Text>
+          <Feather name="log-out" size={18} color={p.danger} />
+          <Text style={[{ fontSize: 15, color: p.danger }, ff(font.bodyBold, '700')]}>Sign out of admin console</Text>
         </TouchableOpacity>
       </ScrollView>
     </View>
@@ -293,150 +258,32 @@ export const AdminSettingsTab: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  header: {
-    paddingHorizontal: 16,
-    paddingBottom: 14,
-    borderBottomWidth: 1,
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: '800',
-    letterSpacing: -0.3,
-  },
-  headerSubtitle: {
-    fontSize: 12,
-    fontWeight: '500',
-    marginTop: 2,
-  },
-  profileCard: {
+  container: { flex: 1 },
+  profile: { backgroundColor: FOREST, borderRadius: 28, padding: 20, overflow: 'hidden' },
+  avatar: { width: 60, height: 60, borderRadius: 30, backgroundColor: LIME, alignItems: 'center', justifyContent: 'center' },
+  idChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
+    justifyContent: 'space-between',
+    gap: 12,
+    marginTop: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: FOREST_RAISED,
     borderRadius: 16,
-    borderWidth: 1,
-    marginBottom: 20,
   },
-  avatarCircle: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    borderWidth: 1.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarText: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#EAB308',
-  },
-  profileName: {
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  badgeGold: {
-    backgroundColor: 'rgba(234, 179, 8, 0.18)',
-    borderWidth: 1,
-    borderColor: 'rgba(234, 179, 8, 0.4)',
-    paddingHorizontal: 6,
-    paddingVertical: 1,
-    borderRadius: 4,
-  },
-  badgeGoldText: {
-    color: '#EAB308',
-    fontSize: 9,
-    fontWeight: '800',
-  },
-  profileEmail: {
-    fontSize: 12,
-    fontWeight: '500',
-    marginTop: 2,
-  },
-  profileId: {
-    fontSize: 10,
-    fontWeight: '500',
-    marginTop: 2,
-  },
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 8,
-    marginTop: 4,
-  },
-  cardGroup: {
-    borderRadius: 14,
-    borderWidth: 1,
-    marginBottom: 18,
-    overflow: 'hidden',
-  },
-  settingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: 14,
-  },
-  iconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  settingLabel: {
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  settingSub: {
-    fontSize: 11,
-    fontWeight: '500',
-    marginTop: 2,
-  },
-  timeoutOptions: {
-    flexDirection: 'row',
-    gap: 4,
-  },
-  timeoutPill: {
-    paddingHorizontal: 7,
-    paddingVertical: 4,
-    borderRadius: 6,
-    borderWidth: 1,
-  },
-  timeoutText: {
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  diagnosticRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: 12,
-  },
-  diagLabel: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  diagValue: {
-    fontSize: 12,
-    fontWeight: '700',
-    maxWidth: '60%',
-  },
-  logoutBtn: {
+  group: { borderRadius: 24, borderWidth: 1, paddingHorizontal: 16 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14 },
+  infoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingVertical: 14 },
+  codeChip: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, maxWidth: '60%' },
+  logout: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(239, 68, 68, 0.08)',
+    gap: 8,
+    height: 54,
+    borderRadius: 999,
     borderWidth: 1,
-    paddingVertical: 14,
-    borderRadius: 14,
-    marginTop: 10,
-  },
-  logoutBtnText: {
-    color: '#EF4444',
-    fontSize: 14,
-    fontWeight: '700',
+    marginTop: 22,
   },
 });

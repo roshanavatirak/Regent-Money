@@ -60,6 +60,12 @@ export interface PeerState {
   // Pending settlements (UPI intents)
   addPendingSettlement: (settlement: Omit<PendingSettlement, 'id' | 'createdAt'>) => void;
   matchPendingSettlement: (id: string) => void;
+
+  // Rehydration & transaction reconciliation
+  rehydrate: () => void;
+  reconcileWithTransactions: (
+    txs: Array<{ id: string; category?: string; amount?: number | string; timestamp?: number | string; merchant?: string; note?: string }>
+  ) => void;
 }
 
 const cleanPayeeName = (raw: string): string => {
@@ -73,14 +79,36 @@ const cleanPayeeName = (raw: string): string => {
 };
 
 const tagToKind = (tag: string): EntryKind | null => {
-  switch (tag) {
+  const norm = (tag || '').toLowerCase().trim();
+  switch (norm) {
     case 'peer_lent':
+    case 'peer_lend':
+    case 'lent':
+    case 'lent to friend':
+    case 'udhaar':
+    case 'udhaar_diya':
+    case 'gave_to_friend':
       return 'LEND';
     case 'peer_borrow_repaid':
+    case 'repaid friend':
+    case 'repaid_friend':
+    case 'borrow_repaid':
+    case 'borrow_back':
+    case 'repaid_borrowed':
       return 'REPAY_PAID';
     case 'peer_lent_repaid':
+    case 'friend repaid':
+    case 'lent_repaid':
+    case 'lent_back':
+    case 'received_back':
+    case 'udhaar_wapas':
       return 'REPAY_RECEIVED';
     case 'peer_borrowed':
+    case 'peer_borrow':
+    case 'borrow':
+    case 'borrowed':
+    case 'udhaar_liya':
+    case 'took_from_friend':
       return 'BORROW';
     default:
       return null;
@@ -302,5 +330,55 @@ export const usePeerStore = create<PeerState>((set, get) => ({
     );
     mmkvStorage.setObject('cache_peer_pending_settlements', updated);
     set({ pendingSettlements: updated });
+  },
+
+  rehydrate: () => {
+    set({
+      contacts: loadCached<Contact[]>('cache_peer_contacts', []),
+      entries: loadCached<PeerEntry[]>('cache_peer_entries', []),
+      storedAllocations: loadCached<StoredAllocation[]>('cache_peer_allocations', []),
+      pendingSettlements: loadCached<PendingSettlement[]>('cache_peer_pending_settlements', []),
+    });
+  },
+
+  reconcileWithTransactions: (txs) => {
+    if (!Array.isArray(txs) || txs.length === 0) return;
+    const txMap = new Map<string, any>();
+    for (const t of txs) {
+      if (t && t.id) txMap.set(t.id, t);
+    }
+
+    // 1. Soft-delete any existing txn-based peer entries whose transaction no longer exists or was uncategorized
+    const currentEntries = get().entries;
+    for (const e of currentEntries) {
+      if (!e.deletedAt && e.source?.type === 'txn' && e.source?.txnId) {
+        const matchingTx = txMap.get(e.source.txnId);
+        if (!matchingTx || !tagToKind(matchingTx.category)) {
+          get().softDeletePeerEntry(e.id);
+        }
+      }
+    }
+
+    // 2. Upsert/reconcile all transactions that are peer-related
+    for (const t of txs) {
+      if (!t || !t.id) continue;
+      const cat = String(t.category || '').toLowerCase().trim();
+      const kind = tagToKind(cat);
+      if (kind) {
+        let ts = Number(t.timestamp);
+        if (isNaN(ts) || ts <= 0) {
+          ts = t.timestamp ? new Date(t.timestamp).getTime() : Date.now();
+          if (isNaN(ts)) ts = Date.now();
+        }
+        const d = new Date(ts);
+        const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+        const rawMerchant = (t.merchant || '').trim();
+        const isPlaceholder = ['peer_lent', 'peer_borrowed', 'peer_lend', 'peer_borrow_repaid', 'peer_lent_repaid', 'lent to friend', 'borrowed', 'misc', 'uncategorized'].includes(rawMerchant.toLowerCase());
+        const merchant = !isPlaceholder && rawMerchant ? rawMerchant : (t.note?.trim() || 'Friend');
+
+        get().syncWithTransactionTag(t.id, cat, Number(t.amount || 0), dateStr, merchant);
+      }
+    }
   },
 }));

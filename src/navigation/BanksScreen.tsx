@@ -232,7 +232,7 @@ export const BanksScreen: React.FC<BanksScreenProps> = ({ AppTopBarComponent, Ad
   const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
-  const { sync } = useSyncDb();
+  const { sync, syncIfStale } = useSyncDb();
   const { width } = useWindowDimensions();
 
   const allProfiles = useBankStore((s) => s.bankProfiles);
@@ -277,11 +277,11 @@ export const BanksScreen: React.FC<BanksScreenProps> = ({ AppTopBarComponent, Ad
 
   useFocusEffect(
     useCallback(() => {
-      sync();
+      syncIfStale();
       if (Platform.OS === 'android') {
         smsCatchupService.reconcile(false, smsCatchupService.getDynamicStartupLookback()).catch(() => { });
       }
-    }, [sync])
+    }, [syncIfStale])
   );
 
   const onRefresh = useCallback(async () => {

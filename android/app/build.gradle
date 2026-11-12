@@ -88,8 +88,8 @@ android {
     compileSdk rootProject.ext.compileSdkVersion
 
     namespace 'com.regentmoney'
-    def appVersionCode = Integer.parseInt(findProperty('versionCode') ?: '147')
-    def appVersionName = findProperty('versionName') ?: '1.0.63'
+    def appVersionCode = Integer.parseInt(findProperty('versionCode') ?: '148')
+    def appVersionName = findProperty('versionName') ?: '1.0.64'
 
     defaultConfig {
         applicationId 'com.regentmoney'

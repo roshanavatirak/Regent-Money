@@ -10,5 +10,14 @@ export const useSyncDb = () => {
     }
   }, []);
 
-  return { sync };
+  /** For focus effects: skips when the data is under a minute old. */
+  const syncIfStale = useCallback(async () => {
+    try {
+      await syncService.syncIfStale();
+    } catch (error) {
+      console.warn('[useSyncDb] Offline sync notice:', error);
+    }
+  }, []);
+
+  return { sync, syncIfStale };
 };

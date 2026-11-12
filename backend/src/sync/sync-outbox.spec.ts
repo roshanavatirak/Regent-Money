@@ -1,3 +1,4 @@
+jest.mock('@nestjs/schedule', () => ({ Cron: () => () => undefined, CronExpression: {} }));
 jest.mock('pdf.js-extract', () => ({
   PDFExtract: class {
     extract = jest.fn();
@@ -597,6 +598,37 @@ describe('SyncService - Offline Outbox (applyOutbox)', () => {
 
     await service.applyOutbox('user_A', [del('op_balance_delete_011b')]);
     expect(mockBankProfiles.get('bank_hdfc_123').current_balance).toBe(1000);
+  });
+
+  it('11b. Balance: editing the amount moves the balance by the difference, a category-only edit does not', async () => {
+    mockBankProfiles.get('bank_hdfc_123').current_balance = 880;
+    mockTransactions.set('tx_manual_edit_011', {
+      id: 'tx_manual_edit_011',
+      user_id: 'user_A',
+      amount: 120,
+      updated_at: 1000,
+      row_version: 1,
+      bank_profile_id: 'bank_hdfc_123',
+      is_deleted: false,
+    });
+    const edit = (key: string, payload: Record<string, unknown>) => ({
+      idemKey: key,
+      entity: 'transaction',
+      op: 'upsert',
+      entityId: 'tx_manual_edit_011',
+      payload: { ...payload, updatedAt: Date.now() },
+    });
+
+    // 120 was spent; it is corrected to 50, so 70 goes back to the account
+    await service.applyOutbox('user_A', [edit('op_balance_edit_011a', { amount: 50, category: 'food', merchant: 'Chai' })]);
+    expect(mockBankProfiles.get('bank_hdfc_123').current_balance).toBe(950);
+
+    // (this test's fake database doesn't keep the saved amount, so set what the real one holds)
+    mockTransactions.get('tx_manual_edit_011').amount = 50;
+
+    // Same amount, new category: the balance stays where it is
+    await service.applyOutbox('user_A', [edit('op_balance_edit_011b', { amount: 50, category: 'travel', merchant: 'Chai' })]);
+    expect(mockBankProfiles.get('bank_hdfc_123').current_balance).toBe(950);
   });
 
   it('12. Erased: an old offline edit for a row the 30-day purge erased does not bring it back', async () => {

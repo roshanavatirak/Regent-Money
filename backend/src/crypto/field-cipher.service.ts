@@ -176,6 +176,19 @@ export class FieldCipherService implements OnModuleDestroy {
     }
 
     const plaintextDek = await this.kmsService.unwrapDek(userId, keyRecord.edek, keyRecord.kmsKeyArn);
+
+    // Upgrade a key still wrapped the old way to the secret master key. The key itself does
+    // not change, so nothing already encrypted needs touching. Only the stored wrapper is
+    // replaced, and only if it is still the one we just read.
+    if (this.kmsService.needsRewrap?.(keyRecord.edek)) {
+      try {
+        const rewrapped = this.kmsService.rewrapDek(userId, plaintextDek);
+        await this.userKeyRepo.update({ userId, keyVersion, edek: keyRecord.edek }, { edek: rewrapped });
+      } catch (err: any) {
+        this.logger.warn(`Could not upgrade key wrapping for user ${userId} v${keyVersion}: ${err?.message || err}`);
+      }
+    }
+
     const session: UserKeySession = {
       userId,
       keyVersion,

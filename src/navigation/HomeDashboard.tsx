@@ -23,7 +23,6 @@ import Animated, {
   withDelay,
   withSpring,
   Easing,
-  FadeInDown,
 } from 'react-native-reanimated';
 import Svg, { Path, Circle, Rect, G, Text as SvgText } from 'react-native-svg';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -38,6 +37,7 @@ import {
   Figtree_700Bold,
 } from '@expo-google-fonts/figtree';
 import { useTheme, useSyncStatusStore } from '../store';
+import { useIsFocused } from '@react-navigation/native';
 import { isExcludedFromBudget } from '../services/budgetService';
 import { CategoryIcon } from '../components/CategoryIcon';
 import { ActivityFilterChips, ActivityRow } from '../components/ActivityFeed';
@@ -460,6 +460,106 @@ interface DayPoint {
   topMerchant?: string;
 }
 
+type CarouselBanner = {
+  key: string;
+  title: string;
+  cta: string;
+  art: BannerArtKind;
+  theme: BannerTheme;
+  onPress?: () => void;
+};
+
+/**
+ * Auto-advancing banner strip. Keeps its own index and timer, so a slide only redraws
+ * this strip (not the whole Home screen), and it pauses while Home is off screen.
+ */
+const BannerCarousel = React.memo(function BannerCarousel({
+  banners,
+  styles,
+  screenWidth,
+}: {
+  banners: CarouselBanner[];
+  styles: any;
+  screenWidth: number;
+}) {
+  const isFocused = useIsFocused();
+  const [carouselWidth, setCarouselWidth] = useState(0);
+  const bannerWidth = (carouselWidth || screenWidth) - 32 - 36;
+  const bannerStep = bannerWidth + 12;
+  const [bannerIndex, setBannerIndex] = useState(0);
+  const bannerScrollRef = useRef<ScrollView>(null);
+  const userDragging = useRef(false);
+
+  useEffect(() => {
+    if (!isFocused || banners.length < 2) return;
+    const timer = setInterval(() => {
+      if (userDragging.current) return;
+      setBannerIndex((prev) => {
+        const next = (prev + 1) % banners.length;
+        bannerScrollRef.current?.scrollTo({ x: next * bannerStep, animated: true });
+        return next;
+      });
+    }, 4500);
+    return () => clearInterval(timer);
+  }, [isFocused, banners.length, bannerStep]);
+
+  // Keep the index valid if the number of banners changes
+  useEffect(() => {
+    if (bannerIndex >= banners.length) setBannerIndex(0);
+  }, [banners.length]);
+
+  const onBannerScrollEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const idx = Math.round(e.nativeEvent.contentOffset.x / bannerStep);
+    setBannerIndex(Math.min(Math.max(idx, 0), banners.length - 1));
+    userDragging.current = false;
+  };
+
+  return (
+    <View onLayout={(e: LayoutChangeEvent) => setCarouselWidth(e.nativeEvent.layout.width)}>
+      <ScrollView
+        ref={bannerScrollRef}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        snapToInterval={bannerStep}
+        decelerationRate="fast"
+        contentContainerStyle={{ paddingHorizontal: 16, gap: 12, paddingTop: 20 }}
+        onScrollBeginDrag={() => {
+          userDragging.current = true;
+        }}
+        onMomentumScrollEnd={onBannerScrollEnd}
+      >
+        {banners.map((b) => {
+          const t = BANNER_THEMES[b.theme];
+          return (
+            <PressableScale
+              key={b.key}
+              onPress={b.onPress}
+              style={[styles.banner, { width: bannerWidth, backgroundColor: t.bg }]}
+              accessibilityLabel={b.title}
+            >
+              <BannerArt kind={b.art} theme={t} />
+              <Text style={[styles.bannerTitle, { color: t.fg }]} numberOfLines={3}>
+                {b.title}
+              </Text>
+              <View style={[styles.bannerCta, { backgroundColor: t.ctaBg }]}>
+                <Text style={[styles.bannerCtaText, { color: t.ctaFg }]}>{b.cta}</Text>
+                <Feather name="chevron-right" size={13} color={t.ctaFg} />
+              </View>
+            </PressableScale>
+          );
+        })}
+      </ScrollView>
+      {banners.length > 1 && (
+        <View style={styles.dots}>
+          {banners.map((b, i) => (
+            <View key={b.key} style={[styles.dot, i === bannerIndex && styles.dotActive]} />
+          ))}
+        </View>
+      )}
+    </View>
+  );
+});
+
 export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
   const {
     userName,
@@ -712,31 +812,6 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
     return list.map((b, i) => ({ ...b, theme: themes[i] }));
   }, [hasBanks, income, spent, smsTrackingOn, props.onAddBank, props.onSetupTracking, props.onOpenRegent, props.hasCash, props.onOpenCash]);
 
-  const [carouselWidth, setCarouselWidth] = useState(0);
-  const bannerWidth = (carouselWidth || screenWidth) - 32 - 36;
-  const bannerStep = bannerWidth + 12;
-  const [bannerIndex, setBannerIndex] = useState(0);
-  const bannerScrollRef = useRef<ScrollView>(null);
-  const userDragging = useRef(false);
-
-  useEffect(() => {
-    if (banners.length < 2) return;
-    const timer = setInterval(() => {
-      if (userDragging.current) return;
-      setBannerIndex((prev) => {
-        const next = (prev + 1) % banners.length;
-        bannerScrollRef.current?.scrollTo({ x: next * bannerStep, animated: true });
-        return next;
-      });
-    }, 4500);
-    return () => clearInterval(timer);
-  }, [banners.length, bannerStep]);
-
-  const onBannerScrollEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const idx = Math.round(e.nativeEvent.contentOffset.x / bannerStep);
-    setBannerIndex(Math.min(Math.max(idx, 0), banners.length - 1));
-    userDragging.current = false;
-  };
 
   /* ---------------- Render ---------------- */
 
@@ -789,7 +864,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
       </View>
 
       {/* Hero net worth card */}
-      <Animated.View entering={FadeInDown.duration(450)}>
+      <Animated.View>
         <PressableScale onPress={props.onOpenNetWorth} style={styles.hero} accessibilityLabel="Open net worth details">
           <View onLayout={(e: LayoutChangeEvent) => setHeroWidth(e.nativeEvent.layout.width)}>
             <View style={[styles.heroRing, { width: 240, height: 240, borderRadius: 120, right: -90, top: -110 }]} />
@@ -868,58 +943,13 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
         </PressableScale>
       </Animated.View>
 
-      {/* Banner carousel */}
-      <Animated.View
-        entering={FadeInDown.delay(90).duration(450)}
-        onLayout={(e: LayoutChangeEvent) => setCarouselWidth(e.nativeEvent.layout.width)}
-      >
-        <ScrollView
-          ref={bannerScrollRef}
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          snapToInterval={bannerStep}
-          decelerationRate="fast"
-          contentContainerStyle={{ paddingHorizontal: 16, gap: 12, paddingTop: 20 }}
-          onScrollBeginDrag={() => {
-            userDragging.current = true;
-          }}
-          onMomentumScrollEnd={onBannerScrollEnd}
-        >
-          {banners.map((b) => {
-            const t = BANNER_THEMES[b.theme];
-            return (
-              <PressableScale
-                key={b.key}
-                onPress={b.onPress}
-                style={[styles.banner, { width: bannerWidth, backgroundColor: t.bg }]}
-                accessibilityLabel={b.title}
-              >
-                <BannerArt kind={b.art} theme={t} />
-                <Text style={[styles.bannerTitle, { color: t.fg }]} numberOfLines={3}>
-                  {b.title}
-                </Text>
-                <View style={[styles.bannerCta, { backgroundColor: t.ctaBg }]}>
-                  <Text style={[styles.bannerCtaText, { color: t.ctaFg }]}>{b.cta}</Text>
-                  <Feather name="chevron-right" size={13} color={t.ctaFg} />
-                </View>
-              </PressableScale>
-            );
-          })}
-        </ScrollView>
-        {banners.length > 1 && (
-          <View style={styles.dots}>
-            {banners.map((b, i) => (
-              <View
-                key={b.key}
-                style={[styles.dot, i === bannerIndex && styles.dotActive]}
-              />
-            ))}
-          </View>
-        )}
+      {/* Banner carousel: its own component, so its timer doesn't redraw the whole dashboard */}
+      <Animated.View>
+        <BannerCarousel banners={banners} styles={styles} screenWidth={screenWidth} />
       </Animated.View>
 
       {/* Quick actions */}
-      <Animated.View entering={FadeInDown.delay(160).duration(450)} style={styles.quickRow}>
+      <Animated.View style={styles.quickRow}>
         {[
           { label: 'Add expense', icon: 'plus' as const, onPress: props.onAddExpense, bg: FOREST, fg: LIME },
           { label: 'Cash', icon: 'credit-card' as const, onPress: props.onOpenCash ?? props.onOpenGoals, bg: isDark ? 'rgba(184, 243, 107, 0.16)' : '#E3F2E8', fg: isDark ? LIME : FOREST },
@@ -943,7 +973,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
       </Animated.View>
 
       {/* Daily spending histogram */}
-      <Animated.View entering={FadeInDown.delay(230).duration(450)} style={styles.card}>
+      <Animated.View style={styles.card}>
         <View style={styles.cardHeaderRow}>
           <View style={{ flex: 1, marginRight: 12 }}>
             <Text style={styles.cardTitle}>{chartMode === 'month' ? 'Daily spending' : 'This week'}</Text>
@@ -1054,7 +1084,6 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
       {/* Where it went */}
       {categories.length > 0 && (
         <Animated.View
-          entering={FadeInDown.delay(300).duration(450)}
           style={[styles.card, styles.petalCard]}
           onLayout={(e) => {
             breakdownY.current = e.nativeEvent.layout.y;
@@ -1075,7 +1104,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
       )}
 
       {/* Recent */}
-      <Animated.View entering={FadeInDown.delay(370).duration(450)} style={[styles.card, { paddingBottom: 6 }]}>
+      <Animated.View style={[styles.card, { paddingBottom: 6 }]}>
         <View style={styles.cardHeaderRow}>
           <Text style={styles.cardTitle}>{filterLabel ? `Recent in ${filterLabel}` : 'Recent'}</Text>
           {filterLabel ? (

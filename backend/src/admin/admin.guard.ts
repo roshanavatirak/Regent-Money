@@ -24,7 +24,7 @@ export class AdminGuard implements CanActivate {
     const cacheKey = `user:role:${userId}`;
     let role: string | null = null;
     try {
-      role = await this.redisService.get(cacheKey);
+      role = await this.redisService.get(cacheKey, { l1TtlMs: 60_000 });
     } catch {
       role = null;
     }
@@ -42,7 +42,7 @@ export class AdminGuard implements CanActivate {
       const resolvedRole: string = rows[0].role || 'user';
       role = resolvedRole;
       // Cache role for 60 seconds
-      await this.redisService.set(cacheKey, resolvedRole, 60).catch(() => {});
+      await this.redisService.set(cacheKey, resolvedRole, 60, { l1TtlMs: 60_000 }).catch(() => {});
     }
 
     if (role !== 'admin' && role !== 'superadmin') {

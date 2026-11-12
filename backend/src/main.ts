@@ -27,9 +27,15 @@ async function bootstrap() {
     }),
   );
 
-  // Increase payload limits for base64 image uploads to Cloudinary (up to 25MB)
-  app.use(json({ limit: '25mb' }));
-  app.use(urlencoded({ extended: true, limit: '25mb' }));
+  // Request bodies are read into memory before login is checked, and this server has 512 MB.
+  // So JSON is capped at 2 MB, except the two routes that carry photos as text (profile photo,
+  // feedback screenshots), which get 12 MB. Statement and screenshot files are uploaded as
+  // files and have their own limits in SyncController.
+  const smallJson = json({ limit: '2mb' });
+  const photoJson = json({ limit: '12mb' });
+  const photoRoutes = /^\/(auth\/upload-avatar|feedback)(\/|$)/;
+  app.use((req: any, res: any, next: any) => (photoRoutes.test(req.path) ? photoJson : smallJson)(req, res, next));
+  app.use(urlencoded({ extended: true, limit: '1mb' }));
 
   // Cloudflare Origin Authentication (Connection ②):
   // Enforces X-Origin-Auth only when CF_ORIGIN_SECRET is configured in environment.

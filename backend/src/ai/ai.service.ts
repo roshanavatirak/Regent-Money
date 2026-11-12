@@ -1,5 +1,41 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { RedisService } from '../redis/redis.service';
+
+/** Give up on an AI provider after this long and try the next one. */
+export const PROVIDER_TIMEOUT_MS = 8000;
+/** After a provider says "too many requests" or fails on its side, skip it for this long. */
+export const PROVIDER_COOLDOWN_MS = 60_000;
+/** Default questions per user per day (override with AI_DAILY_LIMIT). */
+export const DEFAULT_AI_DAILY_LIMIT = 40;
+/** Default statement / screenshot scans per user per day (override with AI_DAILY_SCAN_LIMIT). */
+export const DEFAULT_AI_DAILY_SCAN_LIMIT = 20;
+/** What one chat request may carry, whatever the phone sends. */
+export const MAX_QUESTION_CHARS = 2000;
+export const MAX_HISTORY_MESSAGES = 8;
+export const MAX_HISTORY_MESSAGE_CHARS = 4000;
+export const MAX_CONTEXT_CHARS = 60_000;
+
+/**
+ * How a provider call ended:
+ *  - 'ok'    answer received
+ *  - 'next'  provider-side problem (rate limit, outage, timeout, bad key): try the next provider
+ *  - 'stop'  the request itself was rejected (400/413/422): every provider would refuse it too
+ */
+export type ProviderOutcome =
+  | { kind: 'ok'; answer: string }
+  | { kind: 'next'; cooldown: boolean }
+  | { kind: 'stop'; status: number };
+
+/** Sorts an HTTP status from a provider into what to do next. */
+export const classifyProviderStatus = (status: number): 'next-cooldown' | 'next' | 'stop' => {
+  if (status === 429 || status >= 500) return 'next-cooldown';
+  if (status === 400 || status === 413 || status === 422) return 'stop';
+  return 'next'; // 401/403/404 etc.: a problem with this provider's key or model; others may work
+};
+
+/** Today's date in India, so the daily limit resets at midnight IST. */
+export const istDay = (now = Date.now()) => new Date(now + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10);
 import { IsNotEmpty, IsString, IsOptional, IsArray, IsObject } from 'class-validator';
 
 export interface ChatMessageDto {
@@ -84,7 +120,88 @@ export interface StatementValidationResult {
 export class AiService {
   private readonly logger = new Logger(AiService.name);
 
-  constructor(private readonly configService: ConfigService) {}
+  /** Provider name -> time until which it's skipped (in memory, per server). */
+  private readonly cooldownUntil = new Map<string, number>();
+  /** Fallback counter used only if Redis can't be reached. */
+  private readonly localQuota = new Map<string, number>();
+
+  constructor(
+    private readonly configService: ConfigService,
+    @Optional() private readonly redis?: RedisService,
+  ) {}
+
+  /**
+   * Counts one question against the user's daily limit (resets at midnight IST).
+   * Uses Redis so the count survives restarts; if Redis is down, counts in memory instead.
+   */
+  async consumeDailyQuota(
+    userId: string,
+    kind: 'chat' | 'scan' = 'chat',
+  ): Promise<{ allowed: boolean; used: number; limit: number }> {
+    const limit =
+      kind === 'scan'
+        ? Math.max(1, Number(this.configService.get<string>('AI_DAILY_SCAN_LIMIT')) || DEFAULT_AI_DAILY_SCAN_LIMIT)
+        : Math.max(1, Number(this.configService.get<string>('AI_DAILY_LIMIT')) || DEFAULT_AI_DAILY_LIMIT);
+    const key = `ai:${kind === 'scan' ? 's' : 'q'}:${userId}:${istDay()}`;
+    let used: number | null = null;
+    try {
+      const n = await this.redis?.executeCommand(['INCR', key]);
+      if (typeof n === 'number') {
+        used = n;
+        if (n === 1) await this.redis?.executeCommand(['EXPIRE', key, 2 * 24 * 60 * 60]);
+      }
+    } catch {
+      used = null;
+    }
+    if (used === null) {
+      used = (this.localQuota.get(key) || 0) + 1;
+      this.localQuota.set(key, used);
+      if (this.localQuota.size > 5000) this.localQuota.clear();
+    }
+    return { allowed: used <= limit, used, limit };
+  }
+
+  private inCooldown(provider: string) {
+    return (this.cooldownUntil.get(provider) || 0) > Date.now();
+  }
+
+  /**
+   * Calls one provider with a timeout and decides what to do with the result.
+   * `send` gets an AbortSignal; `extract` pulls the answer text out of the JSON.
+   */
+  async callProvider(
+    provider: string,
+    send: (signal: AbortSignal) => Promise<Response>,
+    extract: (json: any) => string | undefined,
+  ): Promise<ProviderOutcome> {
+    if (this.inCooldown(provider)) {
+      return { kind: 'next', cooldown: false };
+    }
+    try {
+      const response = await send(AbortSignal.timeout(PROVIDER_TIMEOUT_MS));
+      if (response.ok) {
+        const json = await response.json();
+        const answer = extract(json)?.trim();
+        if (answer) return { kind: 'ok', answer };
+        this.logger.warn(`[AI] ${provider} returned an empty answer. Trying the next provider.`);
+        return { kind: 'next', cooldown: false };
+      }
+      const errText = await response.text().catch(() => '');
+      const verdict = classifyProviderStatus(response.status);
+      this.logger.warn(`[AI] ${provider} status ${response.status}: ${errText.slice(0, 300)}`);
+      if (verdict === 'stop') return { kind: 'stop', status: response.status };
+      if (verdict === 'next-cooldown') this.cooldownUntil.set(provider, Date.now() + PROVIDER_COOLDOWN_MS);
+      return { kind: 'next', cooldown: verdict === 'next-cooldown' };
+    } catch (err: any) {
+      const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+      this.logger.warn(
+        `[AI] ${provider} ${timedOut ? `timed out after ${PROVIDER_TIMEOUT_MS} ms` : `error: ${err?.message || err}`}`,
+      );
+      // A timeout or network error looks like an outage: rest the provider briefly.
+      this.cooldownUntil.set(provider, Date.now() + PROVIDER_COOLDOWN_MS);
+      return { kind: 'next', cooldown: true };
+    }
+  }
 
   private buildSystemPrompt(context?: ChatContextDto): string {
     const user = context?.user;
@@ -182,14 +299,17 @@ ${txsSummary}
       return String(c || '');
     };
 
-    const validHistory = history
+    // Only the last few messages, each cut to a sane length, and never a "system" message from
+    // the phone (those could override the assistant's rules).
+    const validHistory = (Array.isArray(history) ? history : [])
+      .slice(-MAX_HISTORY_MESSAGES)
       .map((m) => ({
-        role: m.role === 'assistant' ? 'assistant' : m.role === 'system' ? 'system' : 'user',
-        content: cleanContent(m.content).trim(),
+        role: m?.role === 'assistant' ? 'assistant' : 'user',
+        content: cleanContent(m?.content).trim().slice(0, MAX_HISTORY_MESSAGE_CHARS),
       }))
       .filter((m) => m.content.length > 0);
 
-    const questionText = cleanContent(dto.question).trim();
+    const questionText = cleanContent(dto.question).trim().slice(0, MAX_QUESTION_CHARS);
 
     const standardMessages = [
       { role: 'system', content: systemPrompt },
@@ -197,133 +317,78 @@ ${txsSummary}
       { role: 'user', content: questionText },
     ];
 
-    // ==========================================
-    // 1. ENGINE 1: Groq (Ultra-Fast)
-    // ==========================================
+    const openAiStyle = (url: string, key: string, model: string) => (signal: AbortSignal) =>
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+        body: JSON.stringify({ model, messages: standardMessages, temperature: 0.7, max_tokens: 600 }),
+        signal,
+      });
+    const openAiAnswer = (json: any) => json?.choices?.[0]?.message?.content;
+
+    // Each provider is tried once, in order. One that is rate-limited, down or slow (8 s) is
+    // skipped and rested for a minute. If the request itself is rejected (400/413/422) we stop:
+    // the other providers would refuse the same request and only use up their quota.
+    const attempts: { label: string; run: () => Promise<ProviderOutcome> }[] = [];
+
     if (groqKey) {
-      try {
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${groqKey}`,
-          },
-          body: JSON.stringify({
-            model: 'openai/gpt-oss-120b',
-            messages: standardMessages,
-            temperature: 0.7,
-            max_tokens: 600,
-          }),
-        });
-
-        if (response.ok) {
-          const json = await response.json();
-          const reply = json.choices?.[0]?.message?.content;
-          if (reply && reply.trim()) {
-            return { answer: reply.trim(), model: 'groq/gpt-oss-120b' };
-          }
-        } else {
-          const errText = await response.text();
-          this.logger.warn(`[Groq Failover] Status ${response.status}: ${errText}. Attempting Mistral...`);
-        }
-      } catch (err: any) {
-        this.logger.warn(`[Groq Failover] Exception: ${err?.message || err}. Attempting Mistral...`);
-      }
+      attempts.push({
+        label: 'groq/gpt-oss-120b',
+        run: () =>
+          this.callProvider(
+            'groq',
+            openAiStyle('https://api.groq.com/openai/v1/chat/completions', groqKey, 'openai/gpt-oss-120b'),
+            openAiAnswer,
+          ),
+      });
     }
-
-    // ==========================================
-    // 2. ENGINE 2: Mistral AI (High Accuracy Fallback)
-    // ==========================================
     if (mistralKey) {
-      try {
-        const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${mistralKey}`,
-          },
-          body: JSON.stringify({
-            model: 'ministral-8b-latest',
-            messages: standardMessages,
-            temperature: 0.7,
-            max_tokens: 600,
-          }),
-        });
-
-        if (response.ok) {
-          const json = await response.json();
-          const reply = json.choices?.[0]?.message?.content;
-          if (reply && reply.trim()) {
-            return { answer: reply.trim(), model: 'mistral/ministral-8b' };
-          }
-        } else {
-          // Try ministral-3b fallback if 8b was busy
-          const fallbackRes = await fetch('https://api.mistral.ai/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${mistralKey}`,
-            },
-            body: JSON.stringify({
-              model: 'ministral-3b-latest',
-              messages: standardMessages,
-              temperature: 0.7,
-              max_tokens: 600,
-            }),
-          });
-
-          if (fallbackRes.ok) {
-            const fbJson = await fallbackRes.json();
-            const fbReply = fbJson.choices?.[0]?.message?.content;
-            if (fbReply && fbReply.trim()) {
-              return { answer: fbReply.trim(), model: 'mistral/ministral-3b' };
-            }
-          }
-
-          const errText = await response.text();
-          this.logger.warn(`[Mistral Failover] Status ${response.status}: ${errText}. Attempting Gemini...`);
-        }
-      } catch (err: any) {
-        this.logger.warn(`[Mistral Failover] Exception: ${err?.message || err}. Attempting Gemini...`);
-      }
+      attempts.push({
+        label: 'mistral/ministral-8b',
+        run: () =>
+          this.callProvider(
+            'mistral',
+            openAiStyle('https://api.mistral.ai/v1/chat/completions', mistralKey, 'ministral-8b-latest'),
+            openAiAnswer,
+          ),
+      });
+    }
+    if (geminiKey) {
+      const contents = [
+        ...validHistory.map((m) => ({
+          role: m.role === 'assistant' ? 'model' : 'user',
+          parts: [{ text: m.content }],
+        })),
+        { role: 'user', parts: [{ text: questionText }] },
+      ];
+      attempts.push({
+        label: 'gemini-2.5-flash',
+        run: () =>
+          this.callProvider(
+            'gemini',
+            (signal) =>
+              fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
+                {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ contents, systemInstruction: { parts: [{ text: systemPrompt }] } }),
+                  signal,
+                },
+              ),
+            (json) => json?.candidates?.[0]?.content?.parts?.[0]?.text,
+          ),
+      });
     }
 
-    // ==========================================
-    // 3. ENGINE 3: Google Gemini (Reliable Fallback)
-    // ==========================================
-    if (geminiKey) {
-      try {
-        const contents = [
-          ...validHistory.map((m) => ({
-            role: m.role === 'assistant' ? 'model' : 'user',
-            parts: [{ text: m.content }],
-          })),
-          { role: 'user', parts: [{ text: questionText }] },
-        ];
-
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents,
-              systemInstruction: { parts: [{ text: systemPrompt }] },
-            }),
-          }
-        );
-
-        if (response.ok) {
-          const json = await response.json();
-          const reply = json.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (reply && reply.trim()) {
-            return { answer: reply.trim(), model: 'gemini-2.5-flash' };
-          }
-        } else {
-          this.logger.warn(`[Gemini Failover] Status ${response.status}`);
-        }
-      } catch (err: any) {
-        this.logger.warn(`[Gemini Failover] Exception: ${err?.message || err}`);
+    for (const attempt of attempts) {
+      const outcome = await attempt.run();
+      if (outcome.kind === 'ok') return { answer: outcome.answer, model: attempt.label };
+      if (outcome.kind === 'stop') {
+        return {
+          answer: "I couldn't process that question. Try asking it in a shorter or simpler way.",
+          model: 'system/request-rejected',
+        };
       }
     }
 
@@ -422,6 +487,8 @@ Return ONLY a valid JSON object matching:
               systemInstruction: { parts: [{ text: systemInstruction }] },
               generationConfig: { responseMimeType: 'application/json' },
             }),
+            // Reading a statement takes longer than a chat answer, but never wait forever
+            signal: AbortSignal.timeout(30_000),
           }
         );
 
@@ -576,6 +643,8 @@ Return ONLY a valid JSON object matching this schema:
             systemInstruction: { parts: [{ text: systemInstruction }] },
             generationConfig: { responseMimeType: 'application/json' },
           }),
+          // Reading a screenshot takes longer than a chat answer, but never wait forever
+          signal: AbortSignal.timeout(30_000),
         }
       );
 

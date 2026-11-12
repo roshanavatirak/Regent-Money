@@ -963,6 +963,18 @@ export const rehydrateAllStores = async () => {
       useNotificationStore.getState().setNotifications(notifs);
     }
 
+    // Rehydrate Peer / Borrow & Lend store and reconcile any peer transactions
+    try {
+      const { usePeerStore } = require('./peerStore');
+      usePeerStore.getState().rehydrate();
+      const allTxs = txs || useTransactionStore.getState().transactions || [];
+      if (allTxs.length > 0) {
+        usePeerStore.getState().reconcileWithTransactions(allTxs);
+      }
+    } catch (peerErr) {
+      console.warn('[Store] Peer rehydration notice:', peerErr);
+    }
+
     await useSecurityStore.getState().rehydrateSecurity();
   } catch (e) {
     console.error('[Store] Rehydration error:', e);
@@ -1165,13 +1177,18 @@ export interface SyncStatusState {
   status: 'idle' | 'loading' | 'success' | 'error';
   lastError: string | null;
   lastSyncedAt: number | null;
+  /** True while a request is taking long because the server is starting up (shows "Connecting…"). */
+  connecting: boolean;
   setSyncStatus: (status: 'idle' | 'loading' | 'success' | 'error', error?: string | null) => void;
+  setConnecting: (connecting: boolean) => void;
 }
 
 export const useSyncStatusStore = create<SyncStatusState>((set) => ({
   status: 'idle',
   lastError: null,
   lastSyncedAt: null,
+  connecting: false,
+  setConnecting: (connecting) => set({ connecting }),
   setSyncStatus: (status, error = null) =>
     set({
       status,
@@ -1179,3 +1196,4 @@ export const useSyncStatusStore = create<SyncStatusState>((set) => ({
       ...(status === 'success' ? { lastSyncedAt: Date.now() } : {}),
     }),
 }));
+

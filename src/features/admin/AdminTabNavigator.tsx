@@ -3,6 +3,7 @@ import { createMaterialTopTabNavigator } from '@react-navigation/material-top-ta
 import { AdminBottomTabBar } from './AdminBottomTabBar';
 import { AdminDashboardTab } from './AdminDashboardTab';
 import { AdminUsersTab } from './AdminUsersTab';
+import { AdminBroadcastTab } from './AdminBroadcastTab';
 import { AdminLogsTab } from './AdminLogsTab';
 import { AdminSettingsTab } from './AdminSettingsTab';
 
@@ -23,6 +24,7 @@ export function AdminTabNavigator() {
     >
       <Tab.Screen name="AdminDashboard" component={AdminDashboardTab} />
       <Tab.Screen name="AdminUsers" component={AdminUsersTab} />
+      <Tab.Screen name="AdminBroadcast" component={AdminBroadcastTab} />
       <Tab.Screen name="AdminLogs" component={AdminLogsTab} />
       <Tab.Screen name="AdminSettings" component={AdminSettingsTab} />
     </Tab.Navigator>

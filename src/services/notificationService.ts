@@ -1,6 +1,6 @@
 import * as Notifications from 'expo-notifications';
 import { isRunningInExpoGo } from 'expo';
-import { Platform } from 'react-native';
+import { Linking, Platform } from 'react-native';
 import { useNotificationStore, useAuthStore } from '../store';
 import { BACKEND_URL, getBackendUrl } from '../config/api';
 import { mmkvStorage } from '../db/mmkv';
@@ -464,6 +464,10 @@ export const notificationService = {
           (navigationRef.navigate as any)('Main', { screen: 'Banks' });
         } else if (route.startsWith('chat') || route.startsWith('regent')) {
           (navigationRef.navigate as any)('Main', { screen: 'Regent' });
+        } else if (route.startsWith('transactions')) {
+          (navigationRef.navigate as any)('AllTransactions');
+        } else if (route.startsWith('borrow')) {
+          (navigationRef.navigate as any)('BorrowLend');
         } else if (route.startsWith('transaction') || route.startsWith('home')) {
           (navigationRef.navigate as any)('Main', { screen: 'Home' });
         } else if (route.startsWith('calendar')) {
@@ -477,6 +481,24 @@ export const notificationService = {
     };
 
     navigateTo();
+  },
+
+  /**
+   * Opens an external link sent with a notification. Only Play Store listings are allowed,
+   * so a broadcast can never send users to an arbitrary website.
+   */
+  async handleNotificationUrl(url?: string | null): Promise<void> {
+    if (typeof url !== 'string') return;
+    const match = url.trim().match(/^https:\/\/play\.google\.com\/store\/apps\/details\?id=([\w.]+)/);
+    if (!match) return;
+    const id = match[1];
+    const candidates = Platform.OS === 'android' ? [`market://details?id=${id}`, url.trim()] : [url.trim()];
+    for (const target of candidates) {
+      try {
+        await Linking.openURL(target);
+        return;
+      } catch {}
+    }
   },
 
   /**
@@ -499,7 +521,9 @@ export const notificationService = {
         if (notificationId) {
           this.markAsOpened(notificationId).catch(() => {});
         }
-        if (deepLink) {
+        if (data?.action === 'open_url' && data?.url) {
+          this.handleNotificationUrl(data.url).catch(() => {});
+        } else if (deepLink) {
           this.handleNotificationDeepLink(deepLink);
         }
       } catch (err: any) {

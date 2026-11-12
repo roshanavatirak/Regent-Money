@@ -3,13 +3,14 @@
 // Borrow and lend: who owes you, who you owe, one nudge for what's overdue,
 // and a clean list of people. Tap a person to see everything, long-press to settle up.
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, Linking, Platform, StatusBar } from 'react-native';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { Feather } from '@expo/vector-icons';
 import * as Font from 'expo-font';
-import { useTheme } from '../store';
+import { useTheme, useTransactionStore } from '../store';
 import { usePeerStore } from '../store/peerStore';
 import { computeGlobalMetrics, computeAllContactSummaries } from '../services/peerLedgerSelectors';
 import { formatPaise, ContactLedgerSummary } from '../types/peer';
@@ -54,6 +55,23 @@ export const BorrowLendScreen: React.FC<BorrowLendScreenProps> = ({ navigation }
   const contacts = usePeerStore((s) => s.contacts);
   const entries = usePeerStore((s) => s.entries);
   const storedAllocations = usePeerStore((s) => s.storedAllocations);
+  const transactions = useTransactionStore((s) => s.transactions);
+
+  // Self-heal & reconcile peer entries on mount/focus and when transaction store updates
+  useFocusEffect(
+    useCallback(() => {
+      const txs = useTransactionStore.getState().transactions;
+      if (txs && txs.length > 0) {
+        usePeerStore.getState().reconcileWithTransactions(txs);
+      }
+    }, [])
+  );
+
+  useEffect(() => {
+    if (transactions && transactions.length > 0) {
+      usePeerStore.getState().reconcileWithTransactions(transactions);
+    }
+  }, [transactions]);
 
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');

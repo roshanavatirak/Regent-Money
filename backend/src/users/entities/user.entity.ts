@@ -127,4 +127,10 @@ export class User {
     from: (value: string) => value ? Number(value) : null
   }})
   deletionCooldownUntil?: number | null;
+
+  @Column({ name: 'last_read_broadcast_at', type: 'bigint', nullable: true, default: 0, transformer: {
+    to: (value: number) => value ? String(value) : null,
+    from: (value: string) => value ? Number(value) : null
+  }})
+  lastReadBroadcastAt?: number | null;
 }

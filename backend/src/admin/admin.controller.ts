@@ -17,6 +17,9 @@ import { AdminGuard } from './admin.guard';
 import { AdminService } from './admin.service';
 import { BanUserDto } from './dto/ban-user.dto';
 import { DeleteUserDto } from './dto/delete-user.dto';
+import { CreateBroadcastDto } from './dto/create-broadcast.dto';
+import { CreateEmailBroadcastDto } from './dto/create-email-broadcast.dto';
+import { EmailDraftDto } from './dto/email-draft.dto';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard, AdminGuard)
@@ -27,6 +30,77 @@ export class AdminController {
   @Get('stats')
   getStats() {
     return this.adminService.getStats();
+  }
+
+  @Get('broadcasts/audience-estimate')
+  getAudienceEstimate() {
+    return this.adminService.getAudienceEstimate();
+  }
+
+  @Get('broadcasts')
+  listBroadcasts(
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+  ) {
+    return this.adminService.listBroadcasts(page, limit);
+  }
+
+  @Post('broadcasts')
+  sendBroadcast(@Req() req: any, @Body() dto: CreateBroadcastDto) {
+    return this.adminService.sendBroadcast(req.user.id, req.user.role, dto);
+  }
+
+  @Get('emails/quota')
+  getEmailQuota() {
+    return this.adminService.getEmailBroadcastQuota();
+  }
+
+  @Get('emails/overview')
+  getEmailOverview() {
+    return this.adminService.getEmailSystemOverview();
+  }
+
+  @Post('emails/preview')
+  previewEmail(@Req() req: any, @Body() dto: EmailDraftDto) {
+    return this.adminService.previewEmailDraft(req.user.role, dto);
+  }
+
+  @Post('emails/test-draft')
+  sendDraftTest(@Req() req: any, @Body() dto: EmailDraftDto) {
+    return this.adminService.sendEmailDraftTest(req.user.id, req.user.role, dto);
+  }
+
+  @Post('emails/fallback')
+  setEmailFallback(@Req() req: any, @Body() dto: { enabled: boolean }) {
+    return this.adminService.setEmailFallback(req.user.id, req.user.role, dto?.enabled);
+  }
+
+  @Post('emails/test')
+  sendTestEmail(@Req() req: any, @Body() dto: { type: 'primary' | 'broadcast'; email?: string }) {
+    return this.adminService.sendTestEmail(req.user.id, req.user.role, dto.type, dto.email);
+  }
+
+  @Get('emails/audience-estimate')
+  getEmailAudienceEstimate() {
+    return this.adminService.getEmailAudienceEstimate();
+  }
+
+  @Get('emails/broadcasts')
+  listEmailBroadcasts(
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+  ) {
+    return this.adminService.listEmailBroadcasts(page, limit);
+  }
+
+  @Post('emails/broadcast')
+  createEmailBroadcast(@Req() req: any, @Body() dto: CreateEmailBroadcastDto) {
+    return this.adminService.createEmailBroadcast(req.user.id, req.user.role, dto);
+  }
+
+  @Post('emails/broadcasts/:id/cancel')
+  cancelEmailBroadcast(@Req() req: any, @Param('id') id: string) {
+    return this.adminService.cancelEmailBroadcast(req.user.id, req.user.role, id);
   }
 
   @Get('users')

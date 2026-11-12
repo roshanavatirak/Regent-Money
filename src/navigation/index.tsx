@@ -43,7 +43,7 @@ import { navigationRef } from './navigationRef';
 export { navigationRef };
 import { createNativeStackNavigator, NativeStackNavigationOptions } from '@react-navigation/native-stack';
 import * as Font from 'expo-font';
-import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import Animated, {
   useSharedValue,
@@ -121,6 +121,8 @@ import {
 import { biometricService } from '../services/biometricService';
 import { BiometricLockOverlay } from '../components/BiometricLockOverlay';
 import { AppSidebarDrawer } from '../components/AppSidebarDrawer';
+import { AdminEmailConfigScreen } from '../features/admin/AdminEmailConfigScreen';
+import { DashboardSkeleton } from '../components/DashboardSkeleton';
 import { BrandWordmark } from '../components/BrandWordmark';
 import { StatusBar } from 'expo-status-bar';
 import { authService } from '../services/authService';
@@ -1986,19 +1988,19 @@ const DashboardScreen = () => {
   const [isSmsPermissionActive, setIsSmsPermissionActive] = useState(true);
   const [initialWaitTimedOut, setInitialWaitTimedOut] = useState(false);
 
-  // If this device has NEVER completed a sync from the server (e.g. fresh reinstall/login),
-  // and local arrays are empty, hold a clean loading state for up to 2.5s while initial sync finishes.
+  // While the account's data is still on its way (just logged in, fresh install), show a
+  // skeleton of Home instead of ₹0. It stays until the first sync has finished, or 60 s at most
+  // (a server that is starting after a deploy can take that long).
+  const syncState = useSyncStatusStore((state) => state.status);
+  const hasAnyData = transactions.length > 0 || bankProfiles.length > 0 || incomeRecords.length > 0;
   const isAwaitingFirstSync =
-    lastSyncedAt === null &&
-    transactions.length === 0 &&
-    bankProfiles.length === 0 &&
-    !initialWaitTimedOut;
+    !hasAnyData && (lastSyncedAt === null || syncState === 'loading') && !initialWaitTimedOut;
 
   useEffect(() => {
     if (isAwaitingFirstSync) {
       const timer = setTimeout(() => {
         setInitialWaitTimedOut(true);
-      }, 2500);
+      }, 60000);
       return () => clearTimeout(timer);
     }
   }, [isAwaitingFirstSync]);
@@ -2076,11 +2078,7 @@ const DashboardScreen = () => {
   };
 
   if (isAwaitingFirstSync) {
-    return (
-      <View style={{ flex: 1, backgroundColor: isDark ? colors.background : '#F3F6F4', justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator size="small" color={isDark ? '#B8F36B' : '#0B3D2C'} />
-      </View>
-    );
+    return <DashboardSkeleton userName={user?.name} topInset={insets.top} bottomInset={insets.bottom} />;
   }
 
   return (
@@ -2145,596 +2143,6 @@ const DashboardScreen = () => {
         liveNetWorth={liveNetWorth}
         loading={false}
       />
-    </View>
-  );
-};
-
-// ----------------------------------------------------
-// 2. Regent AIbot Screen Component
-// ----------------------------------------------------
-const ChatScreen = () => {
-  const { colors, isDark } = useTheme();
-  const styles = getStyles(colors);
-  const insets = useSafeAreaInsets();
-  const { sync } = useSyncDb();
-  const { width: windowWidth } = useWindowDimensions();
-
-  const isSmall = windowWidth < 380;
-  const navBarHeight = isSmall ? 58 : 64;
-  const bottomOffset = Platform.OS === 'web'
-    ? 18
-    : Math.max(insets.bottom + (Platform.OS === 'ios' ? 4 : 8), 16);
-  const navBarClearance = bottomOffset + navBarHeight;
-
-  const chatHistory = useAIStore((state) => state.chatHistory);
-  const addChatMessage = useAIStore((state) => state.addChatMessage);
-  const clearChatHistory = useAIStore((state) => state.clearChatHistory);
-  const isThinking = useAIStore((state) => state.isThinking);
-  const setThinking = useAIStore((state) => state.setThinking);
-
-  const user = useAuthStore((state) => state.user);
-  const bankProfiles = useBankStore((state) => state.bankProfiles);
-  const goals = useGoalsStore((state) => state.goals);
-  const transactions = useTransactionStore((state) => state.transactions);
-  const budgets = useBudgetStore((state) => state.budgets);
-
-  const [chatInput, setChatInput] = useState('');
-  const [executiveGreeting, setExecutiveGreeting] = useState(() => getSessionGreeting(user?.name));
-
-  useEffect(() => {
-    if (user?.name) {
-      setExecutiveGreeting(getSessionGreeting(user.name));
-    }
-  }, [user?.name]);
-
-  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
-  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
-  const flatListRef = React.useRef<FlatList>(null);
-  const inputRef = React.useRef<TextInput>(null);
-
-  const handleCopyMessage = async (text: string, index: number) => {
-    try {
-      if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.clipboard) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        await Clipboard.setStringAsync(text);
-      }
-      setCopiedIndex(index);
-      setTimeout(() => {
-        setCopiedIndex((prev) => (prev === index ? null : prev));
-      }, 2000);
-    } catch (err) {
-      console.warn('Failed to copy message:', err);
-    }
-  };
-
-  useKeyboardHandler(
-    {
-      onStart: (e) => {
-        'worklet';
-        runOnJS(setIsKeyboardVisible)(e.height > 0);
-      },
-      onEnd: (e) => {
-        'worklet';
-        runOnJS(setIsKeyboardVisible)(e.height > 0);
-      },
-    },
-    []
-  );
-
-  useEffect(() => {
-    if (Platform.OS === 'web') {
-      const showSub = Keyboard.addListener('keyboardDidShow', () => setIsKeyboardVisible(true));
-      const hideSub = Keyboard.addListener('keyboardDidHide', () => setIsKeyboardVisible(false));
-      return () => {
-        showSub.remove();
-        hideSub.remove();
-      };
-    }
-  }, []);
-
-  useEffect(() => {
-    if (isKeyboardVisible) {
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      }, 80);
-    }
-  }, [isKeyboardVisible]);
-
-  // Responsive bottom clearance:
-  // - When keyboard is open: StandaloneBottomTabBar is hidden, and KeyboardAvoidingView handles the lift.
-  //   Input bar only needs clean resting clearance (8px).
-  // - When keyboard is closed: Input bar rests cleanly above the floating bottom tab bar (navBarClearance + 8).
-  const dynamicBottomPadding = useMemo(() => {
-    if (Platform.OS === 'web') {
-      return navBarClearance + 8;
-    }
-    return isKeyboardVisible ? 8 : (navBarClearance + 8);
-  }, [isKeyboardVisible, navBarClearance]);
-
-  // Sync DB on screen focus
-  useFocusEffect(
-    useCallback(() => {
-      sync();
-    }, [sync])
-  );
-
-  const handleSendQuery = async (queryText?: string) => {
-    const textToSend = (queryText || chatInput).trim();
-    if (!textToSend || isThinking) return;
-
-    setChatInput('');
-    Keyboard.dismiss();
-
-    addChatMessage({ role: 'user', content: textToSend });
-    setThinking(true);
-
-    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
-
-    try {
-      // 1. User Profile Context
-      const userProfileContext = {
-        name: user?.name,
-        email: user?.email,
-        gender: user?.gender,
-        dob: user?.dob,
-        occupation: user?.occupation,
-        currentIncome: user?.currentIncome ? Number(user.currentIncome) : undefined,
-        incomeSourcesCount: user?.incomeSourcesCount,
-      };
-
-      // 2. Total Balance & Connected Accounts
-      const totalBalance = bankProfiles.reduce((sum, b) => sum + (Number(b.currentBalance) || 0), 0);
-      const accountsContext = bankProfiles.map((b) => ({
-        bankName: b.bankName,
-        accountType: 'Bank Account',
-        balance: Number(b.currentBalance) || 0,
-        accountNumberEnding: b.accountNumberSuffix || undefined,
-      }));
-
-      // 3. Savings Goals Context
-      const goalsContext = goals.map((g) => ({
-        name: g.name,
-        target: Number(g.targetAmount) || 0,
-        current: Number(g.currentAmount) || 0,
-        targetDate: g.targetDate ? new Date(g.targetDate).toLocaleDateString('en-IN') : undefined,
-      }));
-
-      // 4. Budgets
-      const budgetContext = budgets.map((b) => ({
-        category: b.category,
-        limit: Number(b.limitAmount) || 0,
-        spent: Number(b.spentAmount) || 0,
-      }));
-
-      // 5. Recent Transactions
-      const rawRecentTxs = transactions.slice(0, 15).map((t) => ({
-        amount: Number(t.amount) || 0,
-        category: t.category,
-        merchant: t.merchant,
-        timestamp: t.timestamp,
-        type: (t.type === 'credit' ? 'credit' : 'debit') as 'credit' | 'debit',
-      }));
-      const recentTxs = sanitizeTransactions(rawRecentTxs);
-
-      const context = {
-        user: userProfileContext,
-        totalBalance,
-        accounts: accountsContext,
-        savingsGoals: goalsContext,
-        budgets: budgetContext,
-        recentTransactions: recentTxs,
-      };
-
-      const response = await askChatbot(textToSend, chatHistory, context);
-      addChatMessage({ role: 'assistant', content: response });
-    } catch (e: any) {
-      console.error(e);
-      addChatMessage({
-        role: 'assistant',
-        content: 'Connection issue. Could not contact financial assistant.',
-      });
-    } finally {
-      setThinking(false);
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
-    }
-  };
-
-  const handleClearChat = () => {
-    showGlobalConfirm({
-      title: 'Clear Chat History',
-      message: 'Are you sure you want to clear your conversation with Regent AI?',
-      confirmText: 'Clear Chat',
-      cancelText: 'Cancel',
-      isDestructive: true,
-      icon: 'trash-2',
-      onConfirm: () => {
-        clearChatHistory();
-      },
-    });
-  };
-
-  const [activeSetIndex, setActiveSetIndex] = useState<number>(() => {
-    const saved = mmkvStorage.getNumber('regent_active_prompt_set_idx');
-    if (saved !== undefined && !isNaN(saved)) {
-      return ((saved % EXECUTIVE_PROMPT_SETS.length) + EXECUTIVE_PROMPT_SETS.length) % EXECUTIVE_PROMPT_SETS.length;
-    }
-    return getWeeklySetIndex();
-  });
-
-  const activeSet = EXECUTIVE_PROMPT_SETS[activeSetIndex] || EXECUTIVE_PROMPT_SETS[0];
-  const activeDeck = activeSet.cards;
-
-  // Dynamic opening card on fresh open so every open or different user sees a new card
-  const [cardIndex, setCardIndex] = useState<number>(() => getRandomCardIndex(11));
-  const pan = React.useRef(new RNAnimated.ValueXY()).current;
-
-  const cardRotate = pan.x.interpolate({
-    inputRange: [-200, 0, 200],
-    outputRange: ['-8deg', '0deg', '8deg'],
-    extrapolate: 'clamp',
-  });
-
-  const cardOpacity = pan.x.interpolate({
-    inputRange: [-200, -100, 0, 100, 200],
-    outputRange: [0.6, 0.9, 1, 0.9, 0.6],
-    extrapolate: 'clamp',
-  });
-
-  const advanceToNextSet = useCallback(() => {
-    pan.setValue({ x: 0, y: 0 });
-    setActiveSetIndex((prev) => {
-      const next = (prev + 1) % EXECUTIVE_PROMPT_SETS.length;
-      mmkvStorage.setNumber('regent_active_prompt_set_idx', next);
-      return next;
-    });
-    setCardIndex(0);
-  }, [pan]);
-
-  const restartCurrentSet = useCallback(() => {
-    pan.setValue({ x: 0, y: 0 });
-    setCardIndex(0);
-  }, [pan]);
-
-  const nextCard = useCallback(() => {
-    pan.setValue({ x: 0, y: 0 });
-    setCardIndex((prev) => (prev + 1) % (activeDeck.length + 1));
-  }, [pan, activeDeck.length]);
-
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onMoveShouldSetPanResponder: (_, gesture) => {
-          return Math.abs(gesture.dx) > 10 && Math.abs(gesture.dy) < 30;
-        },
-        onPanResponderMove: (_, gesture) => {
-          pan.setValue({ x: gesture.dx, y: 0 });
-        },
-        onPanResponderRelease: (_, gesture) => {
-          if (gesture.dx < -40) {
-            RNAnimated.timing(pan, {
-              toValue: { x: -350, y: 0 },
-              duration: 180,
-              useNativeDriver: false,
-            }).start(() => nextCard());
-          } else if (gesture.dx > 40) {
-            RNAnimated.timing(pan, {
-              toValue: { x: 350, y: 0 },
-              duration: 180,
-              useNativeDriver: false,
-            }).start(() => nextCard());
-          } else {
-            RNAnimated.spring(pan, {
-              toValue: { x: 0, y: 0 },
-              friction: 6,
-              useNativeDriver: false,
-            }).start();
-          }
-        },
-      }),
-    [pan, nextCard]
-  );
-
-  const currentCard = activeDeck[cardIndex];
-  const nextCard1 = cardIndex < activeDeck.length ? activeDeck[(cardIndex + 1) % activeDeck.length] : null;
-  const nextCard2 = cardIndex < activeDeck.length ? activeDeck[(cardIndex + 2) % activeDeck.length] : null;
-
-  return (
-    <View style={[styles.container, { paddingTop: 0 }]}>
-      <AppTopBar />
-
-      <KeyboardAvoidingView
-        behavior="padding"
-        style={{ flex: 1 }}
-      >
-        {/* Minimalist Executive Header */}
-        <View style={styles.chatHeaderRow}>
-          <Text style={styles.headerTitle}>Regent AI</Text>
-
-          {chatHistory.length > 0 && (
-            <TouchableOpacity
-              style={styles.chatResetBtn}
-              onPress={handleClearChat}
-              activeOpacity={0.7}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Feather name="rotate-ccw" size={15} color={colors.textSecondary} />
-            </TouchableOpacity>
-          )}
-        </View>
-
-        {/* Content Body: Empty State or Active Messages */}
-        {chatHistory.length === 0 ? (
-          <ScrollView
-            style={{ flex: 1 }}
-            contentContainerStyle={styles.welcomeScroll}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-          >
-            {/* Executive Greeting */}
-            <View style={styles.welcomeHero}>
-              <View style={styles.welcomeAvatar}>
-                <Image
-                  source={require('../../assets/tree.png')}
-                  style={styles.welcomeAvatarImage}
-                  resizeMode="contain"
-                />
-              </View>
-              <Text style={styles.execGreetingTitle}>{executiveGreeting}</Text>
-              {/* <Text style={styles.execGreetingSub}>
-                Executive intelligence across your accounts, cash flow, and budgets.
-              </Text> */}
-            </View>
-
-            {/* Stacked Card Deck (11 cards) or End-Of-Deck Card */}
-            {cardIndex < activeDeck.length ? (
-              <View style={{ width: '100%', alignItems: 'center' }}>
-                <View style={styles.deckContainer}>
-                  {/* 3rd Card Behind */}
-                  {nextCard2 && (
-                    <View
-                      style={[
-                        styles.deckCardBehind,
-                        {
-                          top: 18,
-                          transform: [{ scale: 0.90 }],
-                          opacity: 0.35,
-                          zIndex: 1,
-                        },
-                      ]}
-                    >
-                      <View style={styles.suggestIconBox}>
-                        <Feather name={nextCard2.icon as any} size={16} color={colors.accent} />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.suggestCategory} numberOfLines={1}>{nextCard2.title}</Text>
-                        <Text style={styles.suggestPrompt} numberOfLines={1}>{nextCard2.query}</Text>
-                      </View>
-                    </View>
-                  )}
-
-                  {/* 2nd Card Behind */}
-                  {nextCard1 && (
-                    <View
-                      style={[
-                        styles.deckCardBehind,
-                        {
-                          top: 9,
-                          transform: [{ scale: 0.95 }],
-                          opacity: 0.65,
-                          zIndex: 2,
-                        },
-                      ]}
-                    >
-                      <View style={styles.suggestIconBox}>
-                        <Feather name={nextCard1.icon as any} size={16} color={colors.accent} />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.suggestCategory} numberOfLines={1}>{nextCard1.title}</Text>
-                        <Text style={styles.suggestPrompt} numberOfLines={1}>{nextCard1.query}</Text>
-                      </View>
-                    </View>
-                  )}
-
-                  {/* Active Front Card (Swipeable) */}
-                  <RNAnimated.View
-                    style={[
-                      styles.deckCardFront,
-                      {
-                        transform: [{ translateX: pan.x }, { rotate: cardRotate }],
-                        opacity: cardOpacity,
-                        zIndex: 5,
-                      },
-                    ]}
-                    {...panResponder.panHandlers}
-                  >
-                    <TouchableOpacity
-                      style={styles.cardInnerTouchable}
-                      onPress={() => handleSendQuery(currentCard.query)}
-                      activeOpacity={0.8}
-                    >
-                      <View style={styles.suggestIconBox}>
-                        <Feather name={currentCard.icon as any} size={16} color={colors.accent} />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.suggestCategory}>{currentCard.title}</Text>
-                        <Text style={styles.suggestPrompt}>{currentCard.query}</Text>
-                      </View>
-                      <Feather name="arrow-up-right" size={16} color={colors.accent} style={{ marginLeft: 8 }} />
-                    </TouchableOpacity>
-                  </RNAnimated.View>
-                </View>
-
-                <Text style={styles.deckSwipeHint}>
-                  Swipe for next card • Set {activeSetIndex + 1} of 11 ({activeSet.badge})
-                </Text>
-              </View>
-            ) : (
-              /* End of Suggestions State */
-              <View style={styles.endDeckCard}>
-                <View style={styles.endIconCircle}>
-                  <Feather name="check" size={20} color={colors.accent} />
-                </View>
-                <Text style={styles.endTitle}>Set {activeSetIndex + 1} Explored ({activeSet.badge})</Text>
-                <Text style={styles.endSub}>
-                  You've viewed all 11 prompts in "{activeSet.category}". Tap Next Set to explore more, or replay this set.
-                </Text>
-                <View style={styles.endActionRow}>
-                  <TouchableOpacity
-                    style={styles.endBtnPrimary}
-                    onPress={advanceToNextSet}
-                    activeOpacity={0.8}
-                  >
-                    <Feather name="arrow-right" size={14} color="#ffffff" style={{ marginRight: 6 }} />
-                    <Text style={styles.endBtnPrimaryText}>Next Set (Set {((activeSetIndex + 1) % 11) + 1}/11)</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.endBtnSecondary}
-                    onPress={restartCurrentSet}
-                    activeOpacity={0.8}
-                  >
-                    <Feather name="rotate-ccw" size={14} color={colors.text} style={{ marginRight: 6 }} />
-                    <Text style={styles.endBtnSecondaryText}>Start Over</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            )}
-          </ScrollView>
-        ) : (
-          <FlatList
-            ref={flatListRef}
-            data={chatHistory}
-            keyExtractor={(_, index) => index.toString()}
-            contentContainerStyle={styles.chatList}
-            keyboardShouldPersistTaps="handled"
-            onScrollBeginDrag={Keyboard.dismiss}
-            onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
-            renderItem={({ item, index }) => {
-              const isUser = item.role === 'user';
-              return (
-                <View style={{ flexDirection: 'row', justifyContent: isUser ? 'flex-end' : 'flex-start', marginBottom: 14 }}>
-                  {!isUser && (
-                    <View style={styles.chatAvatarBadge}>
-                      <Image
-                        source={require('../../assets/tree.png')}
-                        style={styles.chatAvatarImg}
-                        resizeMode="contain"
-                      />
-                    </View>
-                  )}
-                  <View
-                    style={[
-                      styles.chatBubble,
-                      isUser ? styles.userBubble : styles.botBubble,
-                    ]}
-                  >
-                    <FormattedChatMessage
-                      content={item.content}
-                      isUser={isUser}
-                      colors={colors}
-                      isDark={isDark}
-                    />
-
-                    {/* Copy message button with feedback icon */}
-                    <View style={[styles.copyRow, isUser ? styles.copyRowUser : styles.copyRowBot]}>
-                      <TouchableOpacity
-                        onPress={() => handleCopyMessage(item.content, index)}
-                        style={[
-                          styles.copyBtn,
-                          isUser ? styles.copyBtnUser : styles.copyBtnBot,
-                          copiedIndex === index && styles.copyBtnSuccess,
-                        ]}
-                        activeOpacity={0.7}
-                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                      >
-                        <Ionicons
-                          name={copiedIndex === index ? 'checkmark-circle' : 'copy-outline'}
-                          size={12}
-                          color={
-                            copiedIndex === index
-                              ? '#10B981'
-                              : isUser
-                                ? (colors.isDark ? '#6ee7b7' : '#047857')
-                                : colors.textSecondary
-                          }
-                        />
-                        <Text
-                          style={[
-                            styles.copyBtnText,
-                            {
-                              color:
-                                copiedIndex === index
-                                  ? '#10B981'
-                                  : isUser
-                                    ? (colors.isDark ? '#6ee7b7' : '#047857')
-                                    : colors.textSecondary,
-                            },
-                          ]}
-                        >
-                          {copiedIndex === index ? 'Copied' : 'Copy'}
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                </View>
-              );
-            }}
-          />
-        )}
-
-        {/* Typing Indicator */}
-        {isThinking && <TypingIndicator />}
-
-        {/* Clean Input Bar */}
-        <View
-          style={[
-            styles.inputArea,
-            { paddingBottom: dynamicBottomPadding },
-          ]}
-        >
-          <View style={styles.inputAreaRow}>
-            <TextInput
-              ref={inputRef}
-              style={styles.chatTextInput}
-              placeholder="Ask Regent AI..."
-              placeholderTextColor="#8E8E9F"
-              value={chatInput}
-              onChangeText={setChatInput}
-              editable={!isThinking}
-              returnKeyType="send"
-              onSubmitEditing={() => handleSendQuery()}
-              onFocus={() => {
-                setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 150);
-              }}
-            />
-
-            <TouchableOpacity
-              style={[
-                styles.sendBtn,
-                (!chatInput.trim() || isThinking) && styles.sendBtnDisabled,
-              ]}
-              onPress={() => handleSendQuery()}
-              disabled={!chatInput.trim() || isThinking}
-              activeOpacity={0.8}
-            >
-              {isThinking ? (
-                <ActivityIndicator size="small" color="#24292e" />
-              ) : (
-                <Feather
-                  name="send"
-                  size={18}
-                  color={!chatInput.trim() ? colors.textSecondary : '#24292e'}
-                />
-              )}
-            </TouchableOpacity>
-          </View>
-
-          {/* AI Disclaimer below search bar */}
-          <Text style={styles.aiDisclaimerText}>
-            Regent can make mistakes. Please check info.
-          </Text>
-        </View>
-      </KeyboardAvoidingView>
     </View>
   );
 };
@@ -3558,11 +2966,15 @@ export default function AppNavigator() {
   // sync answers (max 3.5s) so an existing user isn't sent to setup. Worked out during render,
   // so the setup screen never mounts for a frame before the spinner.
   const [initialSyncDoneFor, setInitialSyncDoneFor] = useState<string | null>(null);
+  // Login already loaded the account's data (authService.loadAccountData); don't show a second spinner
+  const lastSyncedAt = useSyncStatusStore((s) => s.lastSyncedAt);
+  const justSynced = !!lastSyncedAt && Date.now() - lastSyncedAt < 60_000;
   const initialSyncPending =
     Platform.OS === 'android' &&
     !!user?.id &&
     !hasSetupTracking &&
     !hasBankProfiles &&
+    !justSynced &&
     initialSyncDoneFor !== user.id;
 
   useEffect(() => {
@@ -3609,8 +3021,17 @@ export default function AppNavigator() {
   useEffect(() => {
     if (Platform.OS === 'web') return;
     const cleanup = notificationService.initNotificationResponseHandler();
+    // A push arriving while the app is open refreshes the in-app list straight away
+    // (regular syncs only refresh notifications once a minute).
+    const removeListeners = notificationService.setupListeners(
+      () => {
+        notificationService.fetchNotifications().catch(() => {});
+      },
+      () => {},
+    );
     return () => {
       cleanup?.();
+      removeListeners?.();
     };
   }, []);
 
@@ -3728,6 +3149,21 @@ export default function AppNavigator() {
     };
   }, []);
 
+  // Signed in and still loading the first data: show Home's skeleton rather than a blank spinner
+  if (initialSyncPending && !isLoading && splashFinished) {
+    return (
+      <>
+        <StatusBar style={colors.statusBar} />
+        {/* This screen sits outside the SafeAreaProvider, so use the device's initial insets */}
+        <DashboardSkeleton
+          userName={user?.name}
+          topInset={initialWindowMetrics?.insets.top ?? 0}
+          bottomInset={initialWindowMetrics?.insets.bottom ?? 0}
+        />
+      </>
+    );
+  }
+
   if ((isLoading || initialSyncPending) && splashFinished) {
     return (
       <View style={{ flex: 1, backgroundColor: colors.background, justifyContent: 'center', alignItems: 'center' }}>
@@ -3809,6 +3245,11 @@ export default function AppNavigator() {
                     options={sidebarAwareOptions('slide_from_right')}
                   />
                   <Stack.Screen
+                    name="AdminEmailConfig"
+                    component={AdminEmailConfigScreen}
+                    options={sidebarAwareOptions('slide_from_right')}
+                  />
+                  <Stack.Screen
                     name="EditProfile"
                     component={EditProfileScreen}
                     options={{
@@ -3833,11 +3274,11 @@ export default function AppNavigator() {
                   {!hasSetupTracking && !hasBankProfiles && Platform.OS === 'android' ? (
                     <>
                       <Stack.Screen name="AutoTrackingSetup" component={AutoTrackingSetupScreen} />
-                      <Stack.Screen name="Main" component={TabNavigator} />
+                      <Stack.Screen name="Main" component={TabNavigator} options={{ animation: 'fade' }} />
                     </>
                   ) : (
                     <>
-                      <Stack.Screen name="Main" component={TabNavigator} />
+                      <Stack.Screen name="Main" component={TabNavigator} options={{ animation: 'fade' }} />
                       <Stack.Screen name="AutoTrackingSetup" component={AutoTrackingSetupScreen} />
                     </>
                   )}

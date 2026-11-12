@@ -581,22 +581,53 @@ export class SignalsService {
    */
   async runSignalsDispatchJob(): Promise<{ totalUsers: number; sentCount: number }> {
     this.logger.log('[SignalsJob] Running autonomous signals detection and dispatch...');
-    const users = await this.userRepository.find({
-      where: { isDeleted: false },
-    });
-
+    // Only people who can actually receive a notification (a push token, not banned), loaded
+    // 100 at a time instead of the whole users table. A short pause after each person lets
+    // requests from the app through: this job runs at 9:30 AM and 8:30 PM, when people are
+    // using the app, on a small shared CPU.
+    const PAGE = 100;
+    const PAUSE_MS = 150;
     let sentCount = 0;
-    for (const u of users) {
-      try {
-        const res = await this.processAndDispatchForUser(u);
-        if (res.sent) sentCount++;
-      } catch (userErr: any) {
-        this.logger.warn(`Failed signal processing for user ${u.id}: ${userErr.message}`);
+    let totalUsers = 0;
+    let afterId = '';
+
+    for (;;) {
+      const users = await this.userRepository
+        .createQueryBuilder('u')
+        .where('u.isDeleted = false')
+        .andWhere('COALESCE(u.isBanned, false) = false')
+        .andWhere("u.pushToken IS NOT NULL AND u.pushToken <> ''")
+        .andWhere('u.id > :afterId', { afterId })
+        .orderBy('u.id', 'ASC')
+        .take(PAGE)
+        .getMany();
+      if (users.length === 0) break;
+
+      for (const u of users) {
+        try {
+          const res = await this.processAndDispatchForUser(u);
+          if (res.sent) sentCount++;
+        } catch (userErr: any) {
+          this.logger.warn(`Failed signal processing for user ${u.id}: ${userErr.message}`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, PAUSE_MS));
       }
+
+      totalUsers += users.length;
+      afterId = users[users.length - 1].id;
+      if (users.length < PAGE) break;
     }
 
-    this.logger.log(`[SignalsJob] Finished. Processed ${users.length} users, dispatched ${sentCount} notifications.`);
-    return { totalUsers: users.length, sentCount };
+    // Computed-signal snapshots are only read for the newest run: keep 30 days
+    await this.signalsRepository
+      .createQueryBuilder()
+      .delete()
+      .where('computed_at < :cutoff', { cutoff: Date.now() - 30 * 24 * 60 * 60 * 1000 })
+      .execute()
+      .catch((err: any) => this.logger.warn(`Could not purge old signal snapshots: ${err?.message || err}`));
+
+    this.logger.log(`[SignalsJob] Finished. Processed ${totalUsers} users, dispatched ${sentCount} notifications.`);
+    return { totalUsers, sentCount };
   }
 
   /**

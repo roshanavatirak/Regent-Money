@@ -1,52 +1,8 @@
 import { BACKEND_URL } from '../config/api';
 import { tokenStore } from './tokenStore';
-import { sanitizeTransactions, SanitizedTransaction } from './sanitizer';
+import type { SanitizedTransaction } from './sanitizer';
 
-// 1. Weekly Briefings & Deep Analysis
-export const generateWeeklyBriefing = async (
-  rawTransactions: Array<{
-    amount: number;
-    category: string;
-    merchant: string;
-    timestamp: number;
-    type: 'debit' | 'credit';
-  }>,
-  savingsGoals: Array<{ name: string; target: number; current: number }>
-): Promise<string> => {
-  const token = tokenStore.getAccessToken();
-  const sanitized = sanitizeTransactions(rawTransactions);
-
-  try {
-    const response = await fetch(`${BACKEND_URL}/ai/chat`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify({
-        question: 'Generate my weekly financial briefing and breakdown.',
-        history: [],
-        context: {
-          recentTransactions: sanitized,
-          savingsGoals,
-        },
-      }),
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      if (data && data.answer) {
-        return data.answer;
-      }
-    }
-    return 'Unable to generate weekly briefing at this time. Please check your connection.';
-  } catch (err: any) {
-    console.error('[AI Service] generateWeeklyBriefing error:', err);
-    return 'Failed to generate AI weekly briefing. Please try again later.';
-  }
-};
-
-// 2. Chatbot Interface
+// Chatbot interface
 export interface ChatMessage {
   id?: string;
   role: 'user' | 'assistant' | 'system';
@@ -130,6 +86,9 @@ export const askChatbot = async (
     }
 
     if (res.status === 429) {
+      if (errJson?.code === 'AI_DAILY_LIMIT' && typeof errJson.message === 'string') {
+        return errJson.message;
+      }
       return "Regent AI is currently receiving a high volume of requests. Please wait a moment and try again.";
     }
 

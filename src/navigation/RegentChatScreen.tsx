@@ -530,7 +530,7 @@ export const RegentChatScreen: React.FC = () => {
   const isFocused = useIsFocused();
   const { width: windowWidth } = useWindowDimensions();
   const { colors, isDark } = useTheme();
-  const { sync } = useSyncDb();
+  const { sync, syncIfStale } = useSyncDb();
 
   const P = useMemo(() => makePalette(isDark), [isDark]);
   const styles = useMemo(() => makeStyles(P), [P]);
@@ -593,8 +593,8 @@ export const RegentChatScreen: React.FC = () => {
 
   useFocusEffect(
     useCallback(() => {
-      sync();
-    }, [sync])
+      syncIfStale();
+    }, [syncIfStale])
   );
 
   useKeyboardHandler(

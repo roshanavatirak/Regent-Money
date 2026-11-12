@@ -33,6 +33,12 @@ import { UserKey } from './crypto/entities/user-key.entity';
 import { CryptoModule } from './crypto/crypto.module';
 import { ChatHistoryModule } from './chat-history/chat-history.module';
 import { ChatThread } from './chat-history/entities/chat-thread.entity';
+import { RefreshToken } from './auth/entities/refresh-token.entity';
+import { Broadcast } from './notifications/entities/broadcast.entity';
+import { EmailBroadcast } from './mail/entities/email-broadcast.entity';
+import { EmailRecipient } from './mail/entities/email-recipient.entity';
+import { EmailUnsubscribe } from './mail/entities/email-unsubscribe.entity';
+import { MailModule } from './mail/mail.module';
 import * as dns from 'dns';
 
 // Helper to resolve host to IPv4 address programmatically
@@ -105,9 +111,24 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
             UserKey,
             Feedback,
             ChatThread,
+            RefreshToken,
+            Broadcast,
+            EmailBroadcast,
+            EmailRecipient,
+            EmailUnsubscribe,
           ],
           synchronize: false, // Set to false to avoid altering tables automatically, schemas exist
           ssl: getSslConfig(),
+          // Connection pool and safety timeouts (passed to the Postgres driver):
+          //  - a small fixed pool: the free database allows 60 connections, this server needs few
+          //  - a request waits at most 10 s for a free connection instead of forever
+          // (Query timeouts are set per connection in SyncService.installDbTimeouts, not here:
+          // sent as connection options they can be refused by Supabase's connection pooler.)
+          extra: {
+            max: Math.max(2, Number(configService.get<string>('DB_POOL_MAX')) || 10),
+            connectionTimeoutMillis: 10_000,
+            idleTimeoutMillis: 30_000,
+          },
         };
 
         if (dbUrl) {
@@ -128,6 +149,7 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
 
     AuthModule,
     AdminModule,
+    MailModule,
     SyncModule,
     NotificationsModule,
     AiModule,

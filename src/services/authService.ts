@@ -1,4 +1,5 @@
 import { Platform, NativeModules } from 'react-native';
+import { saveSession, syncNativeAuthCredentials, setSessionEndedHandler } from './sessionRefresh';
 import { isRunningInExpoGo } from 'expo';
 import { mmkvStorage } from '../db/mmkv';
 import {
@@ -29,6 +30,31 @@ const triggerSync = () => {
   }
 };
 
+/** Longest the login button waits for the account's data (a starting server can take ~60 s). */
+const FIRST_LOAD_MAX_MS = 60000;
+
+/**
+ * Downloads the account's data while the login button still shows its spinner, so the
+ * dashboard opens already filled in. Gives up after 12 s; the sync then finishes in the
+ * background and the dashboard fills in when it arrives.
+ */
+const loadAccountData = async (profile: { id: string; role?: string | null }) => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const { syncService } = require('./syncService');
+    await Promise.race([
+      syncService.loadForLogin(profile),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, FIRST_LOAD_MAX_MS);
+      }),
+    ]);
+  } catch (err) {
+    console.warn('[Auth] Initial data load failed:', err);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
+
 const SESSION_KEY = 'auth_user_id';
 const USER_PROFILE_KEY = 'auth_user_profile';
 const LAST_GOOGLE_USER_KEY = 'last_google_user';
@@ -52,19 +78,11 @@ function formatPhoneNumber(phone: string): string {
   return '+' + clean;
 }
 
-function syncNativeAuthCredentials(token: string | null, userId?: string | null) {
-  if (Platform.OS === 'android') {
-    try {
-      if (token) {
-        NativeModules.NativeStorage?.setAuthCredentials?.(token, getBackendUrl(), userId || null);
-      } else {
-        NativeModules.NativeStorage?.clearAuthCredentials?.();
-      }
-    } catch (e) {
-      console.warn('[AuthService] Failed to sync credentials to native storage:', e);
-    }
-  }
-}
+/** Headers that ask the server for a 15-minute access token + refresh token. */
+const SESSION_HEADERS = {
+  'X-Supports-Refresh': '1',
+  'X-Device-Name': `${Platform.OS} app`,
+};
 
 /**
  * Marks a 429 from the auth API so screens can show a countdown.
@@ -137,7 +155,11 @@ export const authService = {
 
     // Sync in background if token exists
     if (token) {
-      syncNativeAuthCredentials(token, cachedProfile?.id);
+      syncNativeAuthCredentials(tokenStore.getIngestToken() || token, cachedProfile?.id);
+      if (!tokenStore.getRefreshToken()) {
+        // Signed in before refresh tokens existed: swap the old 30-day token once, silently
+        this.upgradeSession(cachedProfile?.id).catch(() => { });
+      }
       this.fetchProfile().catch(() => { });
       triggerSync();
     }
@@ -155,13 +177,35 @@ export const authService = {
     return cachedProfile;
   },
 
+  /**
+   * Exchanges an old 30-day token for a 15-minute access token + refresh token, without asking
+   * the user to log in again. If it can't (offline), the old token keeps working until it expires.
+   */
+  async upgradeSession(userId?: string | null): Promise<boolean> {
+    const legacy = tokenStore.getAccessToken();
+    if (!legacy || tokenStore.getRefreshToken()) return false;
+    const rememberMe = mmkvStorage.getBoolean?.('auth_remember_me') ?? true;
+    const res = await fetch(`${BACKEND_URL}/auth/upgrade`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${legacy}`, ...SESSION_HEADERS },
+      body: JSON.stringify({ rememberMe }),
+    });
+    if (!res.ok) return false;
+    const data = await res.json().catch(() => null);
+    if (!data?.accessToken || !data?.refreshToken) return false;
+    // Logged out while this was in flight: don't bring the session back
+    if (tokenStore.getAccessToken() !== legacy) return false;
+    saveSession(data, userId);
+    return true;
+  },
+
   async signUp(name: string, email: string, phone: string, password?: string, turnstileToken?: string): Promise<{ profile: UserProfile; sessionConfirmed: boolean }> {
     const sanitizedEmail = email.trim().toLowerCase();
     const sanitizedPhone = formatPhoneNumber(phone.trim());
 
     const response = await fetch(`${BACKEND_URL}/auth/signup`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...SESSION_HEADERS },
       body: JSON.stringify({
         name,
         email: sanitizedEmail,
@@ -184,19 +228,17 @@ export const authService = {
     const sessionConfirmed = data.sessionConfirmed;
 
     if (sessionConfirmed && data.accessToken) {
-      // Save profile cache and token locally
+      // Save profile cache and tokens locally
       mmkvStorage.setString(SESSION_KEY, profile.id);
       mmkvStorage.setObject(USER_PROFILE_KEY, profile);
-      tokenStore.setAccessToken(data.accessToken);
+      saveSession(data, profile?.id);
       mmkvStorage.setBoolean('auth_remember_me', true); // Sign up auto-remembers
+      await loadAccountData(profile);
       useAuthStore.getState().setUser(profile);
-      syncNativeAuthCredentials(data.accessToken);
 
       // Auto-accept terms locally and on backend since user agreed inline during signup
       this.acceptTerms().catch(() => {});
 
-      // Initial database push
-      triggerSync();
     }
 
     return { profile, sessionConfirmed };
@@ -212,11 +254,12 @@ export const authService = {
 
     const response = await fetch(`${BACKEND_URL}/auth/login`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...SESSION_HEADERS },
       body: JSON.stringify({
         emailOrMobile: emailOrMobileFormatted,
         password,
         turnstileToken,
+        rememberMe,
       }),
     });
 
@@ -240,10 +283,11 @@ export const authService = {
     // Save profile cache and token locally
     mmkvStorage.setString(SESSION_KEY, profile.id);
     mmkvStorage.setObject(USER_PROFILE_KEY, profile);
-    tokenStore.setAccessToken(data.accessToken);
+    saveSession(data, profile?.id);
     mmkvStorage.setBoolean('auth_remember_me', rememberMe);
+    // Load the account's data while the login button still spins, then open the dashboard
+    await loadAccountData(profile);
     useAuthStore.getState().setUser(profile);
-    syncNativeAuthCredentials(data.accessToken, profile?.id);
 
     if (data.accountRestored) {
       showGlobalAlert(
@@ -252,16 +296,15 @@ export const authService = {
       );
     }
 
-    // Initial database pull (downloads user transactions, budgets, goals)
-    triggerSync();
 
     return profile;
   },
 
   /**
-   * Resends verification email with a fresh secure token
+   * Resends verification email with a fresh secure token.
+   * `retryAfterSeconds`: how long the server will refuse another resend (60 s between emails, 5 a day).
    */
-  async resendVerificationEmail(email: string): Promise<{ message: string }> {
+  async resendVerificationEmail(email: string): Promise<{ message: string; retryAfterSeconds?: number }> {
     const response = await fetch(`${BACKEND_URL}/auth/resend-verification`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -348,7 +391,7 @@ export const authService = {
       // Send idToken to backend for cryptographic verification and account linking
       const response = await fetch(`${BACKEND_URL}/auth/google`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...SESSION_HEADERS },
         body: JSON.stringify({ idToken }),
       });
 
@@ -377,9 +420,9 @@ export const authService = {
       // Save profile cache and token locally
       mmkvStorage.setString(SESSION_KEY, profile.id);
       mmkvStorage.setObject(USER_PROFILE_KEY, profile);
-      tokenStore.setAccessToken(data.accessToken);
+      saveSession(data, profile?.id);
+      await loadAccountData(profile);
       useAuthStore.getState().setUser(profile);
-      syncNativeAuthCredentials(data.accessToken, profile?.id);
 
       // Auto-accept terms if not yet accepted (user agreed via Google button notice)
       if (!profile.termsAccepted) {
@@ -394,7 +437,6 @@ export const authService = {
       }
 
       // Initial database sync
-      triggerSync();
 
       return profile;
     } catch (e: any) {
@@ -597,16 +639,31 @@ export const authService = {
    * Log out session.
    */
   async logOut(): Promise<void> {
+    // Forget the "data version" for this account, so the next login downloads everything
+    // (the local stores are wiped below, so a "nothing changed" reply would leave them empty).
+    const uid = useAuthStore.getState().user?.id;
+    if (uid) {
+      // Forget the saved sync version and cursor, so the next login downloads everything
+      for (const key of ['sync_etag_v1_', 'sync_cursor_v1_', 'sync_full_at_v1_', 'sync_delta_miss_v1_', 'sync_delta_paused_until_v1_']) {
+        mmkvStorage.delete(`${key}${uid}`);
+      }
+    }
+
     // Revoke the session on the server first, so the token stops working even if a copy exists.
     // Best effort with a short timeout: sign-out must still finish offline.
     const currentToken = tokenStore.getAccessToken();
+    const refreshToken = tokenStore.getRefreshToken();
+    // Forget the tokens first, so nothing tries to refresh this session while logging out
+    tokenStore.clearAccessToken();
     if (currentToken) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 5000);
       try {
         await fetch(`${BACKEND_URL}/auth/logout`, {
           method: 'POST',
-          headers: { Authorization: `Bearer ${currentToken}` },
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${currentToken}` },
+          // The refresh token lets the server cancel this device's session even if the access token expired
+          body: JSON.stringify({ refreshToken }),
           signal: controller.signal,
         });
       } catch {
@@ -741,3 +798,17 @@ export const authService = {
     return data;
   },
 };
+
+// When a refresh is refused (logged out elsewhere, banned, session expired), sign out here too.
+let endingSession = false;
+setSessionEndedHandler(() => {
+  if (endingSession) return;
+  endingSession = true;
+  authService
+    .logOut()
+    .catch(() => {})
+    .finally(() => {
+      endingSession = false;
+      showGlobalAlert('Session ended', 'Log in again to continue.');
+    });
+});

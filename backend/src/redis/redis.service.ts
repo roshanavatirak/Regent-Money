@@ -14,7 +14,7 @@ export class RedisService implements OnModuleInit {
 
   // L1 In-Memory Cache (Protects the 500k monthly Upstash command quota)
   private readonly l1Cache = new Map<string, CacheEntry>();
-  private readonly L1_TTL_MS = 10 * 1000; // 10 seconds
+  private readonly L1_TTL_MS = 60 * 1000; // 60 seconds (keeps hot keys in Node memory to shield Upstash free quota)
 
   constructor(private readonly configService: ConfigService) {}
 
@@ -63,6 +63,8 @@ export class RedisService implements OnModuleInit {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(commandArray),
+        // A stalled Upstash must not hang the request that is waiting on it
+        signal: AbortSignal.timeout(4500),
       });
 
       if (!response.ok) {
@@ -95,8 +97,10 @@ export class RedisService implements OnModuleInit {
   /**
    * Get cached string value.
    * Checks L1 in-memory cache first (0 Upstash commands), then falls back to Upstash L2.
+   * `l1TtlMs` lets a caller keep its value in memory longer than the default 10 s
+   * (the login guard keeps account status for as long as Redis does, 60 s).
    */
-  async get(key: string): Promise<string | null> {
+  async get(key: string, opts: { l1TtlMs?: number } = {}): Promise<string | null> {
     const now = Date.now();
 
     // 1. Check L1 In-Memory
@@ -114,7 +118,7 @@ export class RedisService implements OnModuleInit {
       // Warm L1 in-memory cache
       this.l1Cache.set(key, {
         value: remoteResult,
-        expiresAt: now + this.L1_TTL_MS,
+        expiresAt: now + (opts.l1TtlMs ?? this.L1_TTL_MS),
       });
       return remoteResult;
     }
@@ -125,11 +129,11 @@ export class RedisService implements OnModuleInit {
   /**
    * Store cached value with TTL in seconds (defaults to 30s).
    */
-  async set(key: string, value: string, ttlSeconds: number = 30): Promise<boolean> {
+  async set(key: string, value: string, ttlSeconds: number = 30, opts: { l1TtlMs?: number } = {}): Promise<boolean> {
     const now = Date.now();
 
     // 1. Set L1 cache (bounded by min of L1 TTL and requested TTL)
-    const l1TtlMs = Math.min(ttlSeconds * 1000, this.L1_TTL_MS);
+    const l1TtlMs = Math.min(ttlSeconds * 1000, opts.l1TtlMs ?? this.L1_TTL_MS);
     this.l1Cache.set(key, {
       value,
       expiresAt: now + l1TtlMs,

@@ -6,11 +6,15 @@ import { AdminGuard } from './admin.guard';
 import { User } from '../users/entities/user.entity';
 import { AdminAuditLog } from './entities/admin-audit-log.entity';
 import { AuthModule } from '../auth/auth.module';
+import { NotificationsModule } from '../notifications/notifications.module';
+import { MailModule } from '../mail/mail.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([User, AdminAuditLog]),
     AuthModule,
+    NotificationsModule,
+    MailModule,
   ],
   controllers: [AdminController],
   providers: [AdminService, AdminGuard],

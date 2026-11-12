@@ -100,7 +100,7 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const { colors, isDark } = useTheme();
-  const { sync } = useSyncDb();
+  const { sync, syncIfStale } = useSyncDb();
   const display = Font.isLoaded('BricolageGrotesque_800ExtraBold') ? 'BricolageGrotesque_800ExtraBold' : undefined;
   const heading = { fontFamily: display, fontWeight: display ? undefined : ('800' as const) };
 
@@ -152,6 +152,8 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
       });
   }, [allOverallAndEventBudgets, historyFilter]);
 
+  const excludedIdSet = useMemo(() => new Set(excludedTransactionIds), [excludedTransactionIds]);
+
   const getHistoryBudgetStats = useCallback(
     (budget: BudgetCategory) => {
       const limit = Number(budget.limitAmount || 0);
@@ -160,7 +162,7 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
         const start = ts(budget.startDate);
         const end = ts(budget.endDate);
         spent = transactions.reduce((acc, t) => {
-          if (isExcludedFromBudget(t, excludedTransactionIds)) return acc;
+          if (isExcludedFromBudget(t, excludedIdSet)) return acc;
           const t0 = ts(t.timestamp);
           if (start && end && (t0 < start || t0 > end)) return acc;
           return acc + Math.abs(parseFloat(t.amount || 0));
@@ -176,7 +178,7 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
         pct: limit > 0 ? Math.min(100, Math.round((spent / limit) * 100)) : 0,
       };
     },
-    [transactions, excludedTransactionIds]
+    [transactions, excludedIdSet]
   );
 
   useEffect(() => {
@@ -194,11 +196,11 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
 
   useFocusEffect(
     useCallback(() => {
-      sync();
+      syncIfStale();
       budgetService.cleanupDuplicateBudgets().catch(() => { });
       if (route.params?.openTab) setActiveTab(route.params.openTab);
       if (route.params?.selectedBudgetId) setSelectedMonthlyBudgetId(route.params.selectedBudgetId);
-    }, [sync, route.params?.openTab, route.params?.selectedBudgetId])
+    }, [syncIfStale, route.params?.openTab, route.params?.selectedBudgetId])
   );
 
   const onRefresh = useCallback(async () => {

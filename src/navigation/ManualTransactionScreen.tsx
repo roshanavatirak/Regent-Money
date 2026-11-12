@@ -244,7 +244,9 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
 
         const idemKey = `op_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
         const entityId = `${type === 'credit' ? 'inc_manual_' : 'tx_manual_'}${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-        const label = note.trim() || getCategory(category).label;
+        const isPeer = category.startsWith('peer_');
+        const defaultLabel = isPeer ? 'Friend' : getCategory(category).label;
+        const label = note.trim() || defaultLabel;
 
         // 1. Enqueue to persistent outbox first (guarantees offline survival)
         outbox.enqueue({
@@ -281,7 +283,6 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
           updatedAt: Date.now(),
         };
 
-        const isPeer = category.startsWith('peer_');
         if (type === 'credit') {
           if (!isPeer) {
             useIncomeStore.getState().addIncomeRecordState(record);
@@ -296,7 +297,7 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
           category,
           parsedAmount,
           dateStr,
-          note.trim() || undefined,
+          label,
         );
 
         // 3. Background flush attempt (fire-and-forget; retries automatically if offline)
@@ -365,12 +366,13 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
 
       if (result.record) {
         const dateStr = format(new Date(recordTs), 'yyyy-MM-dd');
+        const defaultLabel = category.startsWith('peer_') ? 'Friend' : undefined;
         usePeerStore.getState().syncWithTransactionTag(
           result.record.id,
           category,
           parsedAmount,
           dateStr,
-          note.trim() || undefined
+          note.trim() || defaultLabel
         );
       }
 

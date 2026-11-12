@@ -58,6 +58,7 @@ export const AppSidebarDrawer: React.FC = () => {
 
   const currentVersion = getAppCurrentVersion();
   const isAdmin = !!user?.role && ['admin', 'superadmin'].includes(user.role);
+  const canAccessAdmin = isAdmin || __DEV__;
   const display = Font.isLoaded('BricolageGrotesque_800ExtraBold') ? 'BricolageGrotesque_800ExtraBold' : undefined;
 
   const [mounted, setMounted] = useState(isOpen);
@@ -190,12 +191,13 @@ export const AppSidebarDrawer: React.FC = () => {
     });
   };
 
-  const groups: { title: string; items: MenuItem[] }[] = isAdmin
+  const groups: { title: string; items: MenuItem[] }[] = canAccessAdmin
     ? [
         {
           title: 'Admin',
           items: [
             { key: 'dash', label: 'Console', icon: 'grid', onPress: () => nav('AdminDashboard') },
+            { key: 'email_config', label: 'Email', icon: 'mail', onPress: () => nav('AdminEmailConfig') },
             { key: 'users', label: 'Users', icon: 'users', onPress: () => nav('AdminUsers') },
             { key: 'logs', label: 'Audit logs', icon: 'activity', onPress: () => nav('AdminLogs') },
             { key: 'asettings', label: 'Admin settings', icon: 'sliders', onPress: () => nav('AdminSettings') },

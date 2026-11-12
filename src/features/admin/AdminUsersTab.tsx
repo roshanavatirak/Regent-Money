@@ -11,69 +11,133 @@ import {
   Pressable,
   RefreshControl,
   Image,
+  LayoutAnimation,
+  Platform,
+  UIManager,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
-import { useTheme, useAuthStore, showGlobalAlert } from '../../store';
+import { useAuthStore, showGlobalAlert } from '../../store';
 import { adminService, AdminUserItem } from '../../services/adminService';
+import {
+  useAdminTheme,
+  ff,
+  AdminHeader,
+  IconTile,
+  Pill,
+  Segmented,
+  SectionLabel,
+  AdminPalette,
+  AdminFont,
+  FOREST,
+  LIME,
+  CORAL,
+} from './adminTheme';
 
-// Global Theme Brand Tokens (Strictly Green, White, and Neutral Ink/Gray)
-const BRAND_GREEN = '#2dba4e';
-const BRAND_GREEN_DARK = '#1f8f3a';
-const BRAND_GREEN_TINT = 'rgba(45, 186, 78, 0.12)';
-const BRAND_GREEN_BORDER = 'rgba(45, 186, 78, 0.28)';
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
+type QuickFilter = 'all' | 'active' | 'suspended' | 'admins';
+type SortKey = 'newest' | 'oldest' | 'name' | 'email';
 
 const getInitials = (name?: string | null, email?: string | null) => {
   if (name?.trim()) {
     const parts = name.trim().split(/\s+/);
-    if (parts.length >= 2) {
-      return (parts[0][0] + parts[1][0]).toUpperCase();
-    }
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
     return parts[0].slice(0, 2).toUpperCase();
   }
-  if (email?.trim()) {
-    return email.trim().slice(0, 2).toUpperCase();
-  }
+  if (email?.trim()) return email.trim().slice(0, 2).toUpperCase();
   return 'U';
 };
 
-const UserAvatarItem: React.FC<{
-  avatarUrl?: string | null;
-  initials: string;
-  isBanned: boolean;
-  isDark: boolean;
-}> = ({ avatarUrl, initials, isBanned, isDark }) => {
-  const [loadError, setLoadError] = useState(false);
-  const hasAvatar = !!avatarUrl && !loadError;
+// Avatar palette borrowed from the home dashboard banners (lilac, blue, amber, coral, mint, lime).
+const AVATAR_TINTS = [
+  { bg: '#C9B8FF', fg: '#1C0F4A' },
+  { bg: '#DCEBFF', fg: '#1450A3' },
+  { bg: '#FFD27A', fg: '#2B1700' },
+  { bg: '#FFB29E', fg: '#3A0D00' },
+  { bg: '#CFE9D9', fg: '#0B3D2C' },
+  { bg: '#B8F36B', fg: '#0B3D2C' },
+];
 
+const avatarTint = (seed: string) => {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0;
+  return AVATAR_TINTS[Math.abs(h) % AVATAR_TINTS.length];
+};
+
+const formatDate = (ts: number | null) => {
+  if (!ts) return 'Unknown';
+  return new Date(Number(ts)).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+};
+
+const providerLabel = (p?: string | null) => {
+  const v = (p || 'email').toLowerCase();
+  return v.charAt(0).toUpperCase() + v.slice(1);
+};
+
+const UserAvatar: React.FC<{ user: AdminUserItem; ring: string; font: AdminFont }> = ({ user, ring, font }) => {
+  const [loadError, setLoadError] = useState(false);
+  const tint = user.role === 'admin' || user.role === 'superadmin' ? { bg: LIME, fg: FOREST } : avatarTint(user.id);
+  const hasAvatar = !!user.avatarUrl && !loadError;
   return (
-    <View style={styles.avatarWrap}>
+    <View style={[styles.avatar, { backgroundColor: tint.bg }]}>
       {hasAvatar ? (
-        <Image
-          source={{ uri: avatarUrl! }}
-          style={styles.avatarImg}
-          onError={() => setLoadError(true)}
-          resizeMode="cover"
-        />
+        <Image source={{ uri: user.avatarUrl! }} style={styles.avatarImg} onError={() => setLoadError(true)} />
       ) : (
-        <Text style={styles.avatarText}>{initials}</Text>
+        <Text style={[{ fontSize: 17, color: tint.fg }, ff(font.displayBold, '700')]}>
+          {getInitials(user.name, user.email)}
+        </Text>
       )}
       <View
         style={[
           styles.statusDot,
-          {
-            backgroundColor: isBanned ? '#94a3b8' : BRAND_GREEN,
-            borderColor: isDark ? '#161B22' : '#FFFFFF',
-          },
+          { backgroundColor: user.isBanned ? '#94A3B8' : '#16A34A', borderColor: ring },
         ]}
       />
     </View>
   );
 };
 
+const OptionChips = <T extends string>({
+  options,
+  value,
+  onChange,
+  p,
+  font,
+}: {
+  options: { id: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+  p: AdminPalette;
+  font: AdminFont;
+}) => (
+  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+    {options.map((o) => {
+      const on = o.id === value;
+      return (
+        <TouchableOpacity
+          key={o.id}
+          onPress={() => onChange(o.id)}
+          activeOpacity={0.8}
+          accessibilityRole="radio"
+          accessibilityState={{ selected: on }}
+          style={[
+            styles.chip,
+            { backgroundColor: on ? p.segActive : p.card, borderColor: on ? p.segActive : p.line },
+          ]}
+        >
+          <Text style={[{ fontSize: 13, color: on ? p.segActiveText : p.sub }, ff(font.bodySemi, '600')]}>{o.label}</Text>
+        </TouchableOpacity>
+      );
+    })}
+  </View>
+);
+
 export const AdminUsersTab: React.FC = () => {
   const insets = useSafeAreaInsets();
-  const { colors, isDark } = useTheme();
+  const { p, font } = useAdminTheme();
   const currentUser = useAuthStore((s) => s.user);
 
   const [users, setUsers] = useState<AdminUserItem[]>([]);
@@ -84,21 +148,22 @@ export const AdminUsersTab: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  // Filter States
-  const [activeTabFilter, setActiveTabFilter] = useState<'all' | 'active' | 'suspended' | 'admins'>('all');
+  // Filters
+  const [activeTabFilter, setActiveTabFilter] = useState<QuickFilter>('all');
   const [filterModalVisible, setFilterModalVisible] = useState(false);
   const [filterRole, setFilterRole] = useState<'all' | 'user' | 'admin'>('all');
   const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'suspended'>('all');
-  const [sortBy, setSortBy] = useState<'newest' | 'oldest' | 'name' | 'email'>('newest');
+  const [sortBy, setSortBy] = useState<SortKey>('newest');
 
-  // Ban Modal
+  // Suspend
   const [banModalVisible, setBanModalVisible] = useState(false);
   const [selectedUserForBan, setSelectedUserForBan] = useState<AdminUserItem | null>(null);
   const [banReason, setBanReason] = useState('');
   const [banSubmitting, setBanSubmitting] = useState(false);
 
-  // Delete Modal
+  // Purge
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
   const [selectedUserForDelete, setSelectedUserForDelete] = useState<AdminUserItem | null>(null);
   const [confirmEmailInput, setConfirmEmailInput] = useState('');
@@ -117,7 +182,6 @@ export const AdminUsersTab: React.FC = () => {
         setPage(res.page || 1);
         setTotalPages(res.totalPages || 1);
         setTotalUsersCount(res.total || 0);
-        setFetchError(null);
       } catch (err: any) {
         setFetchError(err.message || 'Failed to connect to backend server');
       } finally {
@@ -130,23 +194,23 @@ export const AdminUsersTab: React.FC = () => {
 
   useEffect(() => {
     fetchUsers(1, '');
+    return () => {
+      if (searchTimer.current) clearTimeout(searchTimer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSearchChange = (text: string) => {
     setSearchQuery(text);
     if (searchTimer.current) clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => {
-      fetchUsers(1, text);
-    }, 350);
+    searchTimer.current = setTimeout(() => fetchUsers(1, text), 350);
   };
 
   const handleRefresh = async () => {
     setRefreshing(true);
     await fetchUsers(page, searchQuery);
-    setRefreshing(false);
   };
 
-  // Quick Counts
   const counts = useMemo(() => {
     const total = totalUsersCount || users.length;
     const active = users.filter((u) => !u.isBanned).length;
@@ -155,9 +219,7 @@ export const AdminUsersTab: React.FC = () => {
     return { total, active, suspended, admins };
   }, [users, totalUsersCount]);
 
-  const hasAdvancedFilters = useMemo(() => {
-    return filterRole !== 'all' || filterStatus !== 'all' || sortBy !== 'newest';
-  }, [filterRole, filterStatus, sortBy]);
+  const hasAdvancedFilters = filterRole !== 'all' || filterStatus !== 'all' || sortBy !== 'newest';
 
   const resetFilters = () => {
     setFilterRole('all');
@@ -166,54 +228,33 @@ export const AdminUsersTab: React.FC = () => {
     setActiveTabFilter('all');
   };
 
-  // Filtered & Sorted List
   const displayedUsers = useMemo(() => {
     let result = [...users];
+    if (activeTabFilter === 'active') result = result.filter((u) => !u.isBanned);
+    else if (activeTabFilter === 'suspended') result = result.filter((u) => u.isBanned);
+    else if (activeTabFilter === 'admins') result = result.filter((u) => u.role === 'admin' || u.role === 'superadmin');
 
-    // Quick Tab filter
-    if (activeTabFilter === 'active') {
-      result = result.filter((u) => !u.isBanned);
-    } else if (activeTabFilter === 'suspended') {
-      result = result.filter((u) => u.isBanned);
-    } else if (activeTabFilter === 'admins') {
-      result = result.filter((u) => u.role === 'admin' || u.role === 'superadmin');
-    }
+    if (filterRole === 'admin') result = result.filter((u) => u.role === 'admin' || u.role === 'superadmin');
+    else if (filterRole === 'user') result = result.filter((u) => u.role === 'user');
 
-    // Modal role filter
-    if (filterRole === 'admin') {
-      result = result.filter((u) => u.role === 'admin' || u.role === 'superadmin');
-    } else if (filterRole === 'user') {
-      result = result.filter((u) => u.role === 'user');
-    }
+    if (filterStatus === 'active') result = result.filter((u) => !u.isBanned);
+    else if (filterStatus === 'suspended') result = result.filter((u) => u.isBanned);
 
-    // Modal status filter
-    if (filterStatus === 'active') {
-      result = result.filter((u) => !u.isBanned);
-    } else if (filterStatus === 'suspended') {
-      result = result.filter((u) => u.isBanned);
-    }
-
-    // Sort
     result.sort((a, b) => {
-      if (sortBy === 'newest') {
-        return (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0);
-      }
-      if (sortBy === 'oldest') {
-        return (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0);
-      }
-      if (sortBy === 'name') {
-        return (a.name || '').localeCompare(b.name || '');
-      }
-      if (sortBy === 'email') {
-        return (a.email || '').localeCompare(b.email || '');
-      }
-      return 0;
+      if (sortBy === 'newest') return (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0);
+      if (sortBy === 'oldest') return (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0);
+      if (sortBy === 'name') return (a.name || '').localeCompare(b.name || '');
+      return (a.email || '').localeCompare(b.email || '');
     });
-
     return result;
   }, [users, activeTabFilter, filterRole, filterStatus, sortBy]);
 
-  // Ban / Unban Actions
+  const toggleExpanded = (id: string) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setExpandedId((cur) => (cur === id ? null : id));
+  };
+
+  // Suspend / reinstate
   const openBanModal = (user: AdminUserItem) => {
     setSelectedUserForBan(user);
     setBanReason('');
@@ -245,13 +286,17 @@ export const AdminUsersTab: React.FC = () => {
     }
   };
 
-  // Delete Actions
+  // Purge
   const openDeleteModal = (user: AdminUserItem) => {
     setSelectedUserForDelete(user);
     setConfirmEmailInput('');
     setDeleteReason('');
     setDeleteModalVisible(true);
   };
+
+  const emailMatches =
+    !!selectedUserForDelete?.email &&
+    confirmEmailInput.trim().toLowerCase() === selectedUserForDelete.email.trim().toLowerCase();
 
   const submitDelete = async () => {
     if (!selectedUserForDelete) return;
@@ -263,11 +308,9 @@ export const AdminUsersTab: React.FC = () => {
         deleteReason || 'Permanent account purge',
       );
       setDeleteModalVisible(false);
+      setExpandedId(null);
       await fetchUsers(page, searchQuery);
-      showGlobalAlert(
-        'User Deleted',
-        `${selectedUserForDelete.email} and all related records have been permanently erased.`,
-      );
+      showGlobalAlert('User Deleted', `${selectedUserForDelete.email} and all related records have been permanently erased.`);
     } catch (err: any) {
       showGlobalAlert('Delete Failed', err.message);
     } finally {
@@ -275,634 +318,359 @@ export const AdminUsersTab: React.FC = () => {
     }
   };
 
-  const formatDate = (ts: number | null) => {
-    if (!ts) return 'Unknown';
-    const date = new Date(Number(ts));
-    return date.toLocaleDateString('en-IN', {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric',
-    });
-  };
+  const inputStyle = [styles.input, { color: p.text, backgroundColor: p.bg, borderColor: p.line }, ff(font.body, '500')];
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Top Header */}
-      <View
-        style={[
-          styles.header,
-          {
-            paddingTop: Math.max(insets.top, 16) + 8,
-            backgroundColor: isDark ? 'rgba(22, 27, 34, 0.95)' : colors.card,
-            borderBottomColor: colors.border,
-          },
-        ]}
-      >
-        <View style={{ flex: 1 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <Text style={[styles.headerTitle, { color: colors.text }]}>Users Directory</Text>
-            <View style={styles.countBadge}>
-              <Text style={styles.countBadgeText}>{totalUsersCount} Total</Text>
-            </View>
-          </View>
-          <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]}>
-            Directory inspection, suspensions & account purges
-          </Text>
-        </View>
+    <View style={[styles.container, { backgroundColor: p.bg }]}>
+      <AdminHeader
+        title="Users"
+        subtitle="Search, suspend or purge accounts"
+        badge={<Pill tint={p.tint.green} label={`${totalUsersCount} total`} font={font} />}
+        onRefresh={handleRefresh}
+        refreshing={refreshing}
+      />
 
-        <TouchableOpacity
-          onPress={handleRefresh}
-          style={[styles.reloadBtn, { borderColor: colors.border, backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#ffffff' }]}
-          disabled={loading || refreshing}
-        >
-          {refreshing ? (
-            <ActivityIndicator size="small" color={BRAND_GREEN} />
-          ) : (
-            <Feather name="refresh-cw" size={13} color={colors.textSecondary} />
-          )}
-        </TouchableOpacity>
-      </View>
-
-      {/* Search Bar + Filter Trigger */}
-      <View style={{ paddingHorizontal: 16, paddingTop: 10, paddingBottom: 6 }}>
-        <View style={styles.searchRow}>
-          <View
-            style={[
-              styles.searchContainer,
-              {
-                backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : '#ffffff',
-                borderColor: colors.border,
-              },
-            ]}
-          >
-            <Feather name="search" size={15} color={colors.textTertiary} style={{ marginRight: 8 }} />
+      {/* Search + filters */}
+      <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+        <View style={{ flexDirection: 'row', gap: 10 }}>
+          <View style={[styles.search, { backgroundColor: p.card, borderColor: p.line }]}>
+            <Feather name="search" size={18} color={p.muted} />
             <TextInput
-              style={[styles.searchInput, { color: colors.text }]}
-              placeholder="Search by name, email, or phone..."
-              placeholderTextColor={colors.textTertiary}
+              style={[styles.searchInput, { color: p.text }, ff(font.body, '500')]}
+              placeholder="Name, email or phone"
+              placeholderTextColor={p.muted}
               value={searchQuery}
               onChangeText={handleSearchChange}
               autoCapitalize="none"
+              autoCorrect={false}
+              accessibilityLabel="Search users"
             />
             {searchQuery.length > 0 && (
-              <TouchableOpacity onPress={() => handleSearchChange('')} style={{ padding: 4 }}>
-                <Feather name="x" size={14} color={colors.textTertiary} />
+              <TouchableOpacity onPress={() => handleSearchChange('')} hitSlop={10} accessibilityLabel="Clear search">
+                <Feather name="x-circle" size={16} color={p.muted} />
               </TouchableOpacity>
             )}
           </View>
-
-          {/* Filter Icon Button */}
           <TouchableOpacity
-            style={[
-              styles.filterBtn,
-              {
-                backgroundColor: hasAdvancedFilters ? BRAND_GREEN_TINT : isDark ? 'rgba(255,255,255,0.05)' : '#ffffff',
-                borderColor: hasAdvancedFilters ? BRAND_GREEN : colors.border,
-              },
-            ]}
             onPress={() => setFilterModalVisible(true)}
-            activeOpacity={0.7}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel="Filter and sort"
+            style={[styles.filterBtn, { backgroundColor: FOREST }]}
           >
-            <Feather
-              name="filter"
-              size={15}
-              color={hasAdvancedFilters ? BRAND_GREEN : colors.textSecondary}
-            />
-            {hasAdvancedFilters && <View style={styles.filterActiveDot} />}
+            <Feather name="sliders" size={18} color={LIME} />
+            {hasAdvancedFilters && <View style={[styles.filterDot, { borderColor: FOREST }]} />}
           </TouchableOpacity>
         </View>
 
-        {/* Filter Pills Row (Green & White Theme) */}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.filterPillsContainer}
-        >
-          <TouchableOpacity
-            style={[
-              styles.filterPill,
-              activeTabFilter === 'all'
-                ? styles.filterPillActive
-                : { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#ffffff', borderColor: colors.border },
-            ]}
-            onPress={() => setActiveTabFilter('all')}
-          >
-            <Text
-              style={[
-                styles.filterPillText,
-                activeTabFilter === 'all'
-                  ? styles.filterPillTextActive
-                  : { color: colors.textSecondary },
-              ]}
-            >
-              All ({counts.total})
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[
-              styles.filterPill,
-              activeTabFilter === 'active'
-                ? styles.filterPillActive
-                : { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#ffffff', borderColor: colors.border },
-            ]}
-            onPress={() => setActiveTabFilter('active')}
-          >
-            <View
-              style={[
-                styles.pillDot,
-                { backgroundColor: activeTabFilter === 'active' ? '#ffffff' : BRAND_GREEN },
-              ]}
-            />
-            <Text
-              style={[
-                styles.filterPillText,
-                activeTabFilter === 'active'
-                  ? styles.filterPillTextActive
-                  : { color: colors.textSecondary },
-              ]}
-            >
-              Active ({counts.active})
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[
-              styles.filterPill,
-              activeTabFilter === 'suspended'
-                ? styles.filterPillActive
-                : { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#ffffff', borderColor: colors.border },
-            ]}
-            onPress={() => setActiveTabFilter('suspended')}
-          >
-            <Text
-              style={[
-                styles.filterPillText,
-                activeTabFilter === 'suspended'
-                  ? styles.filterPillTextActive
-                  : { color: colors.textSecondary },
-              ]}
-            >
-              Suspended ({counts.suspended})
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[
-              styles.filterPill,
-              activeTabFilter === 'admins'
-                ? styles.filterPillActive
-                : { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#ffffff', borderColor: colors.border },
-            ]}
-            onPress={() => setActiveTabFilter('admins')}
-          >
-            <Text
-              style={[
-                styles.filterPillText,
-                activeTabFilter === 'admins'
-                  ? styles.filterPillTextActive
-                  : { color: colors.textSecondary },
-              ]}
-            >
-              Admins ({counts.admins})
-            </Text>
-          </TouchableOpacity>
-        </ScrollView>
+        <Segmented<QuickFilter>
+          style={{ marginTop: 14 }}
+          value={activeTabFilter}
+          onChange={(v) => {
+            setActiveTabFilter(v);
+            setExpandedId(null);
+          }}
+          options={[
+            { id: 'all', label: 'All', count: counts.total },
+            { id: 'active', label: 'Active', count: counts.active },
+            { id: 'suspended', label: 'Suspended', count: counts.suspended },
+            { id: 'admins', label: 'Admins', count: counts.admins },
+          ]}
+        />
       </View>
 
       <ScrollView
-        contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 4, paddingBottom: insets.bottom + 90 }}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={BRAND_GREEN} />
-        }
+        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 110 }}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={p.segActive} />}
       >
-        {/* Loading State */}
         {loading && !refreshing && (
-          <View style={{ paddingVertical: 40, alignItems: 'center' }}>
-            <ActivityIndicator size="small" color={BRAND_GREEN} />
-            <Text style={{ marginTop: 10, fontSize: 13, color: colors.textSecondary }}>
-              Loading user accounts...
-            </Text>
+          <View style={{ paddingVertical: 48, alignItems: 'center' }}>
+            <ActivityIndicator size="small" color={p.segActive} />
+            <Text style={[{ marginTop: 10, fontSize: 13, color: p.sub }, ff(font.body, '500')]}>Loading accounts…</Text>
           </View>
         )}
 
-        {/* Error State */}
         {fetchError && !loading && (
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#ffffff',
-              borderWidth: 1,
-              borderColor: colors.border,
-              borderRadius: 12,
-              padding: 14,
-              marginBottom: 12,
-            }}
-          >
-            <Feather name="alert-circle" size={18} color={BRAND_GREEN} />
-            <View style={{ flex: 1, marginLeft: 12 }}>
-              <Text style={{ fontSize: 13, fontWeight: '700', color: colors.text }}>Server Connection Offline</Text>
-              <Text style={{ fontSize: 12, color: colors.textSecondary, marginTop: 2 }}>
-                {fetchError.includes('Failed to fetch')
-                  ? 'Backend server was temporarily unreachable. Tap Retry to reconnect.'
-                  : fetchError}
+          <View style={[styles.errorCard, { backgroundColor: p.card, borderColor: p.line }]}>
+            <IconTile tint={p.tint.coral} size={40}>
+              <Feather name="wifi-off" size={18} color={p.tint.coral.fg} />
+            </IconTile>
+            <View style={{ flex: 1 }}>
+              <Text style={[{ fontSize: 14, color: p.text }, ff(font.bodyBold, '700')]}>Can't reach the server</Text>
+              <Text style={[{ fontSize: 12, color: p.sub, marginTop: 2 }, ff(font.body, '500')]} numberOfLines={2}>
+                {fetchError.includes('Failed to fetch') ? 'The backend is temporarily unreachable.' : fetchError}
               </Text>
             </View>
             <TouchableOpacity
               onPress={() => fetchUsers(page, searchQuery)}
-              style={{ backgroundColor: BRAND_GREEN, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8 }}
+              style={[styles.smallBtn, { backgroundColor: p.segActive }]}
             >
-              <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700' }}>Retry</Text>
+              <Text style={[{ fontSize: 13, color: p.segActiveText }, ff(font.bodyBold, '700')]}>Retry</Text>
             </TouchableOpacity>
           </View>
         )}
 
-        {/* Empty State */}
         {!loading && !fetchError && displayedUsers.length === 0 && (
-          <View style={styles.emptyCard}>
-            <Feather name="users" size={32} color={colors.textTertiary} />
-            <Text style={[styles.emptyTitle, { color: colors.text }]}>No Users Found</Text>
-            <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
-              {searchQuery
-                ? `No accounts matching "${searchQuery}"`
-                : 'No registered accounts match the selected filter.'}
+          <View style={{ alignItems: 'center', paddingVertical: 48, gap: 8 }}>
+            <IconTile tint={p.tint.green} size={56} radius={20}>
+              <Feather name="users" size={24} color={p.tint.green.fg} />
+            </IconTile>
+            <Text style={[{ fontSize: 17, color: p.text, marginTop: 6 }, ff(font.displayBold, '700')]}>No users found</Text>
+            <Text style={[{ fontSize: 13, color: p.sub, textAlign: 'center' }, ff(font.body, '500')]}>
+              {searchQuery ? `Nothing matches "${searchQuery}"` : 'No accounts match this filter.'}
             </Text>
             {(activeTabFilter !== 'all' || hasAdvancedFilters) && (
-              <TouchableOpacity
-                onPress={resetFilters}
-                style={[styles.resetFilterBtn, { borderColor: BRAND_GREEN, backgroundColor: BRAND_GREEN_TINT }]}
-              >
-                <Text style={[styles.resetFilterText, { color: BRAND_GREEN }]}>Clear All Filters</Text>
+              <TouchableOpacity onPress={resetFilters} style={[styles.ghostBtn, { borderColor: p.line, backgroundColor: p.card }]}>
+                <Text style={[{ fontSize: 13, color: p.text }, ff(font.bodySemi, '600')]}>Clear filters</Text>
               </TouchableOpacity>
             )}
           </View>
         )}
 
-        {/* Standardized & Space-Efficient Users List (Green & White Theme) */}
-        {!loading &&
-          displayedUsers.map((u) => {
-            const isSelf = currentUser?.id === u.id;
-            const isSuperOrAdmin = u.role === 'admin' || u.role === 'superadmin';
-            const initials = getInitials(u.name, u.email);
+        {!loading && displayedUsers.length > 0 && (
+          <>
+            <SectionLabel
+              right={<Text style={[{ fontSize: 12, color: p.muted }, ff(font.body, '500')]}>Tap a user for actions</Text>}
+            >
+              {sortBy === 'newest' ? 'Newest first' : sortBy === 'oldest' ? 'Oldest first' : sortBy === 'name' ? 'By name' : 'By email'}
+            </SectionLabel>
 
-            return (
-              <View
-                key={u.id}
-                style={[
-                  styles.userCard,
-                  {
-                    backgroundColor: isDark ? 'rgba(255,255,255,0.03)' : colors.card,
-                    borderColor: colors.border,
-                    borderLeftColor: isSuperOrAdmin || isSelf ? BRAND_GREEN : colors.border,
-                    borderLeftWidth: isSuperOrAdmin || isSelf ? 3 : 1,
-                  },
-                ]}
-              >
-                {/* Header Row: Avatar + Details */}
-                <View style={styles.cardMainRow}>
-                  {/* User Logo or Green Initials Avatar */}
-                  <UserAvatarItem
-                    avatarUrl={u.avatarUrl}
-                    initials={initials}
-                    isBanned={u.isBanned}
-                    isDark={isDark}
-                  />
-
-                  {/* Middle Content */}
-                  <View style={styles.userInfoWrap}>
-                    {/* Line 1: Name + Badges */}
-                    <View style={styles.userNameRow}>
-                      <Text style={[styles.userName, { color: colors.text }]} numberOfLines={1}>
-                        {u.name || 'Unnamed Account'}
-                      </Text>
-
-                      {isSelf && (
-                        <View style={styles.selfBadge}>
-                          <Text style={styles.selfBadgeText}>YOU</Text>
-                        </View>
-                      )}
-
-                      {isSuperOrAdmin && (
-                        <View style={styles.adminBadge}>
-                          <Text style={styles.adminBadgeText}>
-                            {u.role.toUpperCase()}
+            <View style={[styles.listCard, { backgroundColor: p.card, borderColor: p.line }]}>
+              {displayedUsers.map((u, i) => {
+                const isSelf = currentUser?.id === u.id;
+                const isAdmin = u.role === 'admin' || u.role === 'superadmin';
+                const canPurge = !isSelf && (!isAdmin || currentUser?.role === 'superadmin');
+                const canAct = !isSelf;
+                const open = expandedId === u.id;
+                return (
+                  <View
+                    key={u.id}
+                    style={{ borderBottomWidth: i < displayedUsers.length - 1 ? 1 : 0, borderBottomColor: p.divider }}
+                  >
+                    <TouchableOpacity
+                      activeOpacity={0.7}
+                      disabled={!canAct}
+                      onPress={() => toggleExpanded(u.id)}
+                      accessibilityRole="button"
+                      accessibilityState={{ expanded: open }}
+                      style={styles.userRow}
+                    >
+                      <UserAvatar user={u} ring={p.card} font={font} />
+                      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          <Text style={[{ fontSize: 15, color: p.text, flexShrink: 1 }, ff(font.bodySemi, '600')]} numberOfLines={1}>
+                            {u.name || 'Unnamed account'}
                           </Text>
+                          {isSelf && <Pill tint={p.tint.green} label="YOU" font={font} small />}
+                          {isAdmin && <Pill tint={p.tint.lilac} label={u.role.toUpperCase()} font={font} small />}
+                          {u.isBanned && <Pill tint={p.tint.coral} label="SUSPENDED" font={font} small />}
                         </View>
-                      )}
-
-                      {!isSuperOrAdmin && (
-                        <View style={[styles.userBadge, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#f1f5f9' }]}>
-                          <Text style={[styles.userBadgeText, { color: colors.textSecondary }]}>
-                            USER
-                          </Text>
-                        </View>
-                      )}
-
-                      {u.isBanned && (
-                        <View style={styles.bannedBadge}>
-                          <Text style={styles.bannedBadgeText}>SUSPENDED</Text>
-                        </View>
-                      )}
-                    </View>
-
-                    {/* Line 2: Email */}
-                    <Text style={[styles.userEmail, { color: colors.textSecondary }]} numberOfLines={1}>
-                      {u.email || 'No email provided'}
-                    </Text>
-
-                    {/* Line 3: Compact Metadata Row */}
-                    <View style={styles.compactMetaRow}>
-                      {u.phone ? (
-                        <>
-                          <View style={styles.metaInlineItem}>
-                            <Feather name="phone" size={10} color={colors.textTertiary} />
-                            <Text style={[styles.metaInlineText, { color: colors.textTertiary }]}>{u.phone}</Text>
-                          </View>
-                          <Text style={[styles.metaDot, { color: colors.textTertiary }]}>•</Text>
-                        </>
-                      ) : null}
-
-                      <View style={styles.metaInlineItem}>
-                        <Feather name="calendar" size={10} color={colors.textTertiary} />
-                        <Text style={[styles.metaInlineText, { color: colors.textTertiary }]}>
-                          {formatDate(u.createdAt)}
+                        <Text style={[{ fontSize: 13, color: p.sub }, ff(font.body, '500')]} numberOfLines={1}>
+                          {u.email || 'No email provided'}
+                        </Text>
+                        <Text style={[{ fontSize: 12, color: p.muted }, ff(font.body, '500')]} numberOfLines={1}>
+                          {providerLabel(u.authProvider)} · Joined {formatDate(u.createdAt)}
+                          {u.phone ? ` · ${u.phone}` : ''}
                         </Text>
                       </View>
+                      {canAct && (
+                        <View style={[styles.chevron, { backgroundColor: p.soft, transform: [{ rotate: open ? '180deg' : '0deg' }] }]}>
+                          <Feather name="chevron-down" size={16} color={p.sub} />
+                        </View>
+                      )}
+                    </TouchableOpacity>
 
-                      <Text style={[styles.metaDot, { color: colors.textTertiary }]}>•</Text>
-
-                      <View style={styles.metaInlineItem}>
-                        <Feather name="shield" size={10} color={colors.textTertiary} />
-                        <Text style={[styles.metaInlineText, { color: colors.textTertiary }]}>
-                          {u.authProvider || 'email'}
+                    {u.isBanned && (
+                      <View style={[styles.banNote, { backgroundColor: p.tint.coral.bg }]}>
+                        <Feather name="info" size={12} color={p.tint.coral.fg} />
+                        <Text style={[{ flex: 1, fontSize: 12, color: p.tint.coral.fg }, ff(font.body, '500')]} numberOfLines={2}>
+                          {u.banReason || 'Administrative suspension'}
+                          {u.bannedAt ? ` · ${formatDate(u.bannedAt)}` : ''}
                         </Text>
                       </View>
-                    </View>
-                  </View>
-                </View>
-
-                {/* Suspension notice strip if banned */}
-                {u.isBanned && (
-                  <View style={[styles.banNoticeBox, { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#f8fafc', borderColor: colors.border }]}>
-                    <Feather name="info" size={11} color={colors.textSecondary} style={{ marginTop: 1 }} />
-                    <Text style={[styles.banNoticeReason, { color: colors.textSecondary }]} numberOfLines={1}>
-                      Suspended: {u.banReason || 'Administrative suspension'}
-                      {u.bannedAt ? ` (${formatDate(u.bannedAt)})` : ''}
-                    </Text>
-                  </View>
-                )}
-
-                {/* Standardized Action Buttons (Only if not self) */}
-                {!isSelf && (
-                  <View style={styles.cardActionsRow}>
-                    {u.isBanned ? (
-                      <TouchableOpacity
-                        style={[styles.compactBtn, styles.compactBtnReinstate]}
-                        onPress={() => handleUnban(u)}
-                        activeOpacity={0.7}
-                      >
-                        <Feather name="check" size={11} color={BRAND_GREEN} />
-                        <Text style={styles.compactBtnReinstateText}>Reinstate</Text>
-                      </TouchableOpacity>
-                    ) : (
-                      <TouchableOpacity
-                        style={[styles.compactBtn, { borderColor: colors.border, backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#ffffff' }]}
-                        onPress={() => openBanModal(u)}
-                        activeOpacity={0.7}
-                      >
-                        <Feather name="slash" size={10} color={colors.textSecondary} />
-                        <Text style={[styles.compactBtnNeutralText, { color: colors.textSecondary }]}>Suspend</Text>
-                      </TouchableOpacity>
                     )}
 
-                    {(!isSuperOrAdmin || currentUser?.role === 'superadmin') && (
-                      <TouchableOpacity
-                        style={[styles.compactBtn, { borderColor: colors.border, backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#ffffff' }]}
-                        onPress={() => openDeleteModal(u)}
-                        activeOpacity={0.7}
-                      >
-                        <Feather name="trash-2" size={10} color={colors.textSecondary} />
-                        <Text style={[styles.compactBtnNeutralText, { color: colors.textSecondary }]}>Purge Account</Text>
-                      </TouchableOpacity>
+                    {open && canAct && (
+                      <View style={styles.actionRow}>
+                        {u.isBanned ? (
+                          <TouchableOpacity
+                            style={[styles.actionBtn, { backgroundColor: p.tint.green.bg }]}
+                            onPress={() => handleUnban(u)}
+                            activeOpacity={0.8}
+                          >
+                            <Feather name="check-circle" size={15} color={p.tint.green.fg} />
+                            <Text style={[{ fontSize: 13, color: p.tint.green.fg }, ff(font.bodyBold, '700')]}>Reinstate</Text>
+                          </TouchableOpacity>
+                        ) : (
+                          <TouchableOpacity
+                            style={[styles.actionBtn, { backgroundColor: p.tint.amber.bg }]}
+                            onPress={() => openBanModal(u)}
+                            activeOpacity={0.8}
+                          >
+                            <Feather name="slash" size={15} color={p.tint.amber.fg} />
+                            <Text style={[{ fontSize: 13, color: p.tint.amber.fg }, ff(font.bodyBold, '700')]}>Suspend</Text>
+                          </TouchableOpacity>
+                        )}
+                        {canPurge && (
+                          <TouchableOpacity
+                            style={[styles.actionBtn, { backgroundColor: p.tint.coral.bg }]}
+                            onPress={() => openDeleteModal(u)}
+                            activeOpacity={0.8}
+                          >
+                            <Feather name="trash-2" size={15} color={p.tint.coral.fg} />
+                            <Text style={[{ fontSize: 13, color: p.tint.coral.fg }, ff(font.bodyBold, '700')]}>Purge account</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
                     )}
                   </View>
-                )}
-              </View>
-            );
-          })}
+                );
+              })}
+            </View>
+          </>
+        )}
 
-        {/* Pagination Bar */}
         {totalPages > 1 && (
-          <View style={styles.paginationRow}>
+          <View style={styles.pagination}>
             <TouchableOpacity
               disabled={page <= 1}
               onPress={() => fetchUsers(page - 1)}
-              style={[
-                styles.pageBtn,
-                { opacity: page <= 1 ? 0.4 : 1, borderColor: colors.border, backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#ffffff' },
-              ]}
+              style={[styles.pageBtn, { opacity: page <= 1 ? 0.4 : 1, borderColor: p.line, backgroundColor: p.card }]}
+              accessibilityLabel="Previous page"
             >
-              <Feather name="chevron-left" size={14} color={colors.text} />
-              <Text style={[styles.pageBtnText, { color: colors.text }]}>Prev</Text>
+              <Feather name="chevron-left" size={18} color={p.text} />
             </TouchableOpacity>
-            <Text style={[styles.pageIndicator, { color: colors.textSecondary }]}>
+            <Text style={[{ fontSize: 13, color: p.sub }, ff(font.bodySemi, '600')]}>
               Page {page} of {totalPages}
             </Text>
             <TouchableOpacity
               disabled={page >= totalPages}
               onPress={() => fetchUsers(page + 1)}
-              style={[
-                styles.pageBtn,
-                { opacity: page >= totalPages ? 0.4 : 1, borderColor: colors.border, backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#ffffff' },
-              ]}
+              style={[styles.pageBtn, { opacity: page >= totalPages ? 0.4 : 1, borderColor: p.line, backgroundColor: p.card }]}
+              accessibilityLabel="Next page"
             >
-              <Text style={[styles.pageBtnText, { color: colors.text }]}>Next</Text>
-              <Feather name="chevron-right" size={14} color={colors.text} />
+              <Feather name="chevron-right" size={18} color={p.text} />
             </TouchableOpacity>
           </View>
         )}
       </ScrollView>
 
-      {/* Filter & Sort Modal (Green & White Theme) */}
-      <Modal visible={filterModalVisible} transparent animationType="fade">
-        <Pressable style={styles.modalBackdrop} onPress={() => setFilterModalVisible(false)}>
+      {/* Filter & sort sheet */}
+      <Modal visible={filterModalVisible} transparent animationType="slide" onRequestClose={() => setFilterModalVisible(false)}>
+        <Pressable style={styles.sheetBackdrop} onPress={() => setFilterModalVisible(false)}>
           <Pressable
-            style={[styles.modalCard, { backgroundColor: isDark ? '#161B22' : '#FFFFFF', borderColor: colors.border }]}
+            style={[styles.sheet, { backgroundColor: p.card, paddingBottom: insets.bottom + 20 }]}
             onPress={(e) => e.stopPropagation()}
           >
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Feather name="filter" size={16} color={BRAND_GREEN} />
-                <Text style={[styles.modalTitle, { color: colors.text }]}>Filter & Sort Users</Text>
-              </View>
-              <TouchableOpacity onPress={() => setFilterModalVisible(false)} style={{ padding: 4 }}>
-                <Feather name="x" size={16} color={colors.textTertiary} />
+            <View style={[styles.grabber, { backgroundColor: p.line }]} />
+            <View style={styles.rowBetween}>
+              <Text style={[{ fontSize: 20, color: p.text }, ff(font.displayBold, '700')]}>Filter & sort</Text>
+              <TouchableOpacity onPress={() => setFilterModalVisible(false)} hitSlop={10} accessibilityLabel="Close">
+                <Feather name="x" size={20} color={p.sub} />
               </TouchableOpacity>
             </View>
 
-            {/* Role Filter */}
-            <Text style={[styles.filterSectionTitle, { color: colors.textSecondary }]}>ROLE</Text>
-            <View style={styles.modalOptionsRow}>
-              {(['all', 'user', 'admin'] as const).map((r) => (
-                <TouchableOpacity
-                  key={r}
-                  style={[
-                    styles.modalOptionPill,
-                    filterRole === r
-                      ? styles.modalOptionPillActive
-                      : { borderColor: colors.border, backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#ffffff' },
-                  ]}
-                  onPress={() => setFilterRole(r)}
-                >
-                  <Text
-                    style={[
-                      styles.modalOptionText,
-                      filterRole === r ? styles.modalOptionTextActive : { color: colors.textSecondary },
-                    ]}
-                  >
-                    {r === 'all' ? 'All Roles' : r === 'user' ? 'Users Only' : 'Admins Only'}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+            <SectionLabel style={{ marginHorizontal: 0, marginTop: 18 }}>Role</SectionLabel>
+            <OptionChips
+              p={p}
+              font={font}
+              value={filterRole}
+              onChange={setFilterRole}
+              options={[
+                { id: 'all', label: 'All roles' },
+                { id: 'user', label: 'Users' },
+                { id: 'admin', label: 'Admins' },
+              ]}
+            />
 
-            {/* Status Filter */}
-            <Text style={[styles.filterSectionTitle, { color: colors.textSecondary, marginTop: 14 }]}>STATUS</Text>
-            <View style={styles.modalOptionsRow}>
-              {(['all', 'active', 'suspended'] as const).map((s) => (
-                <TouchableOpacity
-                  key={s}
-                  style={[
-                    styles.modalOptionPill,
-                    filterStatus === s
-                      ? styles.modalOptionPillActive
-                      : { borderColor: colors.border, backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#ffffff' },
-                  ]}
-                  onPress={() => setFilterStatus(s)}
-                >
-                  <Text
-                    style={[
-                      styles.modalOptionText,
-                      filterStatus === s ? styles.modalOptionTextActive : { color: colors.textSecondary },
-                    ]}
-                  >
-                    {s === 'all' ? 'All Status' : s === 'active' ? 'Active' : 'Suspended'}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+            <SectionLabel style={{ marginHorizontal: 0, marginTop: 18 }}>Status</SectionLabel>
+            <OptionChips
+              p={p}
+              font={font}
+              value={filterStatus}
+              onChange={setFilterStatus}
+              options={[
+                { id: 'all', label: 'Any status' },
+                { id: 'active', label: 'Active' },
+                { id: 'suspended', label: 'Suspended' },
+              ]}
+            />
 
-            {/* Sort Filter */}
-            <Text style={[styles.filterSectionTitle, { color: colors.textSecondary, marginTop: 14 }]}>SORT ORDER</Text>
-            <View style={styles.modalOptionsGrid}>
-              {[
-                { id: 'newest', label: 'Newest First' },
-                { id: 'oldest', label: 'Oldest First' },
-                { id: 'name', label: 'Name (A-Z)' },
-                { id: 'email', label: 'Email (A-Z)' },
-              ].map((s) => (
-                <TouchableOpacity
-                  key={s.id}
-                  style={[
-                    styles.modalOptionPill,
-                    sortBy === s.id
-                      ? styles.modalOptionPillActive
-                      : { borderColor: colors.border, backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#ffffff' },
-                  ]}
-                  onPress={() => setSortBy(s.id as any)}
-                >
-                  <Text
-                    style={[
-                      styles.modalOptionText,
-                      sortBy === s.id ? styles.modalOptionTextActive : { color: colors.textSecondary },
-                    ]}
-                  >
-                    {s.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+            <SectionLabel style={{ marginHorizontal: 0, marginTop: 18 }}>Sort by</SectionLabel>
+            <OptionChips
+              p={p}
+              font={font}
+              value={sortBy}
+              onChange={setSortBy}
+              options={[
+                { id: 'newest', label: 'Newest' },
+                { id: 'oldest', label: 'Oldest' },
+                { id: 'name', label: 'Name A–Z' },
+                { id: 'email', label: 'Email A–Z' },
+              ]}
+            />
 
-            {/* Bottom Actions */}
-            <View style={[styles.modalBtnRow, { marginTop: 18 }]}>
-              <TouchableOpacity
-                style={[styles.modalBtnCancel, { borderColor: colors.border }]}
-                onPress={resetFilters}
-              >
-                <Text style={[styles.modalBtnCancelText, { color: colors.textSecondary }]}>Reset</Text>
+            <View style={[styles.btnRow, { marginTop: 24 }]}>
+              <TouchableOpacity style={[styles.btn, styles.btnOutline, { borderColor: p.line }]} onPress={resetFilters}>
+                <Text style={[{ fontSize: 15, color: p.text }, ff(font.bodySemi, '600')]}>Reset</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.modalBtnConfirm, { backgroundColor: BRAND_GREEN }]}
+                style={[styles.btn, { backgroundColor: p.segActive }]}
                 onPress={() => setFilterModalVisible(false)}
               >
-                <Text style={[styles.modalBtnConfirmText, { color: '#FFFFFF', fontWeight: '800' }]}>
-                  Apply Filters
-                </Text>
+                <Text style={[{ fontSize: 15, color: p.segActiveText }, ff(font.bodyBold, '700')]}>Show results</Text>
               </TouchableOpacity>
             </View>
           </Pressable>
         </Pressable>
       </Modal>
 
-      {/* Ban / Suspend Modal */}
-      <Modal visible={banModalVisible} transparent animationType="fade">
-        <Pressable style={styles.modalBackdrop} onPress={() => setBanModalVisible(false)}>
+      {/* Suspend sheet */}
+      <Modal visible={banModalVisible} transparent animationType="slide" onRequestClose={() => setBanModalVisible(false)}>
+        <Pressable style={styles.sheetBackdrop} onPress={() => !banSubmitting && setBanModalVisible(false)}>
           <Pressable
-            style={[styles.modalCard, { backgroundColor: isDark ? '#161B22' : '#FFFFFF', borderColor: colors.border }]}
+            style={[styles.sheet, { backgroundColor: p.card, paddingBottom: insets.bottom + 20 }]}
             onPress={(e) => e.stopPropagation()}
           >
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-              <View style={[styles.modalIconWrap, { backgroundColor: BRAND_GREEN_TINT }]}>
-                <Feather name="slash" size={18} color={BRAND_GREEN} />
-              </View>
+            <View style={[styles.grabber, { backgroundColor: p.line }]} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <IconTile tint={p.tint.amber} size={48} radius={16}>
+                <Feather name="slash" size={20} color={p.tint.amber.fg} />
+              </IconTile>
               <View style={{ flex: 1 }}>
-                <Text style={[styles.modalTitle, { color: colors.text }]}>Suspend Account</Text>
-                <Text style={[styles.modalSubtitle, { color: colors.textSecondary }]} numberOfLines={1}>
+                <Text style={[{ fontSize: 20, color: p.text }, ff(font.displayBold, '700')]}>Suspend account</Text>
+                <Text style={[{ fontSize: 13, color: p.sub, marginTop: 2 }, ff(font.body, '500')]} numberOfLines={1}>
                   {selectedUserForBan?.email}
                 </Text>
               </View>
             </View>
-
-            <Text style={[styles.modalBodyText, { color: colors.textSecondary }]}>
-              Suspended users will immediately lose access and have their active refresh tokens revoked.
+            <Text style={[{ fontSize: 14, lineHeight: 20, color: p.sub, marginTop: 16 }, ff(font.body, '500')]}>
+              They'll lose access right away and their active sessions will be signed out. You can reinstate them later.
             </Text>
-
-            <Text style={[styles.inputLabel, { color: colors.text }]}>Suspension Reason</Text>
+            <Text style={[styles.label, { color: p.text }, ff(font.bodySemi, '600')]}>Reason</Text>
             <TextInput
-              style={[
-                styles.modalInput,
-                {
-                  color: colors.text,
-                  backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#F8FAFC',
-                  borderColor: colors.border,
-                },
-              ]}
-              placeholder="e.g. Terms violation or suspicious activity..."
-              placeholderTextColor={colors.textTertiary}
+              style={[...inputStyle, { minHeight: 84, textAlignVertical: 'top' }]}
+              placeholder="e.g. Terms violation or suspicious activity"
+              placeholderTextColor={p.muted}
               value={banReason}
               onChangeText={setBanReason}
               multiline
-              numberOfLines={3}
             />
-
-            <View style={styles.modalBtnRow}>
+            <View style={[styles.btnRow, { marginTop: 20 }]}>
               <TouchableOpacity
-                style={[styles.modalBtnCancel, { borderColor: colors.border }]}
+                style={[styles.btn, styles.btnOutline, { borderColor: p.line }]}
                 onPress={() => setBanModalVisible(false)}
                 disabled={banSubmitting}
               >
-                <Text style={[styles.modalBtnCancelText, { color: colors.text }]}>Cancel</Text>
+                <Text style={[{ fontSize: 15, color: p.text }, ff(font.bodySemi, '600')]}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalBtnConfirm, { backgroundColor: BRAND_GREEN }]}
-                onPress={submitBan}
-                disabled={banSubmitting}
-              >
+              <TouchableOpacity style={[styles.btn, { backgroundColor: p.segActive }]} onPress={submitBan} disabled={banSubmitting}>
                 {banSubmitting ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
+                  <ActivityIndicator size="small" color={p.segActiveText} />
                 ) : (
-                  <Text style={styles.modalBtnConfirmText}>Suspend User</Text>
+                  <Text style={[{ fontSize: 15, color: p.segActiveText }, ff(font.bodyBold, '700')]}>Suspend user</Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -910,100 +678,71 @@ export const AdminUsersTab: React.FC = () => {
         </Pressable>
       </Modal>
 
-      {/* Delete / Purge Modal */}
-      <Modal visible={deleteModalVisible} transparent animationType="fade">
-        <Pressable style={styles.modalBackdrop} onPress={() => setDeleteModalVisible(false)}>
+      {/* Purge sheet */}
+      <Modal visible={deleteModalVisible} transparent animationType="slide" onRequestClose={() => setDeleteModalVisible(false)}>
+        <Pressable style={styles.sheetBackdrop} onPress={() => !deleteSubmitting && setDeleteModalVisible(false)}>
           <Pressable
-            style={[styles.modalCard, { backgroundColor: isDark ? '#161B22' : '#FFFFFF', borderColor: colors.border }]}
+            style={[styles.sheet, { backgroundColor: p.card, paddingBottom: insets.bottom + 20 }]}
             onPress={(e) => e.stopPropagation()}
           >
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-              <View style={[styles.modalIconWrap, { backgroundColor: BRAND_GREEN_TINT }]}>
-                <Feather name="alert-circle" size={18} color={BRAND_GREEN} />
-              </View>
+            <View style={[styles.grabber, { backgroundColor: p.line }]} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <IconTile tint={p.tint.coral} size={48} radius={16}>
+                <Feather name="trash-2" size={20} color={p.tint.coral.fg} />
+              </IconTile>
               <View style={{ flex: 1 }}>
-                <Text style={[styles.modalTitle, { color: colors.text }]}>Permanent Account Purge</Text>
-                <Text style={[styles.modalSubtitle, { color: colors.textSecondary }]} numberOfLines={1}>
-                  Target: {selectedUserForDelete?.email}
+                <Text style={[{ fontSize: 20, color: p.text }, ff(font.displayBold, '700')]}>Purge account</Text>
+                <Text style={[{ fontSize: 13, color: p.sub, marginTop: 2 }, ff(font.body, '500')]} numberOfLines={1}>
+                  {selectedUserForDelete?.email}
                 </Text>
               </View>
             </View>
 
-            <View style={[styles.warningBox, { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#f8fafc', borderColor: colors.border }]}>
-              <Text style={[styles.warningText, { color: colors.textSecondary }]}>
-                Notice: This permanently removes this user and cascades across ALL database tables. This action
-                cannot be undone.
+            <View style={[styles.warn, { backgroundColor: p.tint.coral.bg }]}>
+              <Feather name="alert-triangle" size={15} color={p.tint.coral.fg} style={{ marginTop: 1 }} />
+              <Text style={[{ flex: 1, fontSize: 13, lineHeight: 19, color: p.tint.coral.fg }, ff(font.bodySemi, '600')]}>
+                This permanently deletes the user and every record linked to them. It can't be undone.
               </Text>
             </View>
 
-            <Text style={[styles.inputLabel, { color: colors.text }]}>
-              Type <Text style={{ fontWeight: '800', color: colors.text }}>{selectedUserForDelete?.email}</Text> to confirm:
+            <Text style={[styles.label, { color: p.text }, ff(font.bodySemi, '600')]}>
+              Type <Text style={ff(font.bodyBold, '800')}>{selectedUserForDelete?.email}</Text> to confirm
             </Text>
             <TextInput
-              style={[
-                styles.modalInput,
-                {
-                  color: colors.text,
-                  backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#F8FAFC',
-                  borderColor:
-                    confirmEmailInput.trim().toLowerCase() === selectedUserForDelete?.email?.trim().toLowerCase()
-                      ? BRAND_GREEN
-                      : colors.border,
-                },
-              ]}
-              placeholder="Confirm exact email address"
-              placeholderTextColor={colors.textTertiary}
+              style={[...inputStyle, { borderColor: emailMatches ? p.success : p.line }]}
+              placeholder="Exact email address"
+              placeholderTextColor={p.muted}
               value={confirmEmailInput}
               onChangeText={setConfirmEmailInput}
               autoCapitalize="none"
               autoCorrect={false}
             />
-
-            <Text style={[styles.inputLabel, { color: colors.text, marginTop: 8 }]}>Audit Reason</Text>
+            <Text style={[styles.label, { color: p.text }, ff(font.bodySemi, '600')]}>Reason for audit log</Text>
             <TextInput
-              style={[
-                styles.modalInput,
-                {
-                  color: colors.text,
-                  backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#F8FAFC',
-                  borderColor: colors.border,
-                },
-              ]}
-              placeholder="Reason for account deletion..."
-              placeholderTextColor={colors.textTertiary}
+              style={inputStyle}
+              placeholder="Why is this account being removed?"
+              placeholderTextColor={p.muted}
               value={deleteReason}
               onChangeText={setDeleteReason}
             />
 
-            <View style={styles.modalBtnRow}>
+            <View style={[styles.btnRow, { marginTop: 20 }]}>
               <TouchableOpacity
-                style={[styles.modalBtnCancel, { borderColor: colors.border }]}
+                style={[styles.btn, styles.btnOutline, { borderColor: p.line }]}
                 onPress={() => setDeleteModalVisible(false)}
                 disabled={deleteSubmitting}
               >
-                <Text style={[styles.modalBtnCancelText, { color: colors.text }]}>Cancel</Text>
+                <Text style={[{ fontSize: 15, color: p.text }, ff(font.bodySemi, '600')]}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[
-                  styles.modalBtnConfirm,
-                  {
-                    backgroundColor: BRAND_GREEN,
-                    opacity:
-                      confirmEmailInput.trim().toLowerCase() === selectedUserForDelete?.email?.trim().toLowerCase()
-                        ? 1
-                        : 0.4,
-                  },
-                ]}
+                style={[styles.btn, { backgroundColor: CORAL, opacity: emailMatches ? 1 : 0.4 }]}
                 onPress={submitDelete}
-                disabled={
-                  deleteSubmitting ||
-                  confirmEmailInput.trim().toLowerCase() !== selectedUserForDelete?.email?.trim().toLowerCase()
-                }
+                disabled={deleteSubmitting || !emailMatches}
               >
                 {deleteSubmitting ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
+                  <ActivityIndicator size="small" color="#3A0D00" />
                 ) : (
-                  <Text style={styles.modalBtnConfirmText}>Purge Account</Text>
+                  <Text style={[{ fontSize: 15, color: '#3A0D00' }, ff(font.bodyBold, '700')]}>Purge forever</Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -1015,459 +754,93 @@ export const AdminUsersTab: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
-  container: {
+  container: { flex: 1 },
+  rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  search: {
     flex: 1,
-  },
-  header: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 10,
+    height: 50,
     paddingHorizontal: 16,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-  },
-  headerTitle: {
-    fontSize: 19,
-    fontWeight: '800',
-    letterSpacing: -0.3,
-  },
-  headerSubtitle: {
-    fontSize: 11.5,
-    fontWeight: '500',
-    marginTop: 2,
-  },
-  countBadge: {
-    backgroundColor: BRAND_GREEN_TINT,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  countBadgeText: {
-    color: BRAND_GREEN,
-    fontSize: 10.5,
-    fontWeight: '700',
-  },
-  reloadBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  searchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  searchContainer: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: 10,
-    borderWidth: 1,
-    paddingHorizontal: 10,
-    height: 38,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 12.5,
-    paddingVertical: 0,
-  },
-  filterBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-  },
-  filterActiveDot: {
-    position: 'absolute',
-    top: 6,
-    right: 6,
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: BRAND_GREEN,
-  },
-  filterPillsContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingTop: 8,
-    paddingBottom: 2,
-  },
-  filterPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 11,
-    paddingVertical: 5.5,
-    borderRadius: 20,
-    borderWidth: 1,
-  },
-  filterPillActive: {
-    backgroundColor: BRAND_GREEN,
-    borderColor: BRAND_GREEN,
-  },
-  filterPillText: {
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  filterPillTextActive: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-  },
-  pillDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  emptyCard: {
-    paddingVertical: 45,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-  },
-  emptyTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    marginTop: 6,
-  },
-  emptySubtitle: {
-    fontSize: 12,
-    fontWeight: '500',
-    textAlign: 'center',
-  },
-  resetFilterBtn: {
-    marginTop: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
-  },
-  resetFilterText: {
-    fontSize: 11.5,
-    fontWeight: '700',
-  },
-  userCard: {
-    borderRadius: 12,
-    borderWidth: 1,
-    paddingVertical: 9,
-    paddingHorizontal: 11,
-    marginBottom: 8,
-  },
-  cardMainRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  avatarWrap: {
-    width: 36,
-    height: 36,
     borderRadius: 18,
-    backgroundColor: BRAND_GREEN_TINT,
     borderWidth: 1,
-    borderColor: BRAND_GREEN_BORDER,
+  },
+  searchInput: { flex: 1, fontSize: 15, paddingVertical: 0 },
+  filterBtn: { width: 50, height: 50, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  filterDot: {
+    position: 'absolute',
+    top: 11,
+    right: 12,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: CORAL,
+    borderWidth: 2,
+  },
+  errorCard: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
+    gap: 12,
+    borderWidth: 1,
+    borderRadius: 24,
+    padding: 16,
+    marginTop: 18,
   },
-  avatarImg: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-  },
-  avatarText: {
-    fontSize: 12.5,
-    fontWeight: '800',
-    color: BRAND_GREEN,
-  },
+  smallBtn: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999 },
+  ghostBtn: { marginTop: 10, paddingHorizontal: 18, paddingVertical: 10, borderRadius: 999, borderWidth: 1 },
+  listCard: { borderRadius: 24, borderWidth: 1, paddingHorizontal: 16, paddingVertical: 4 },
+  userRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14 },
+  avatar: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center' },
+  avatarImg: { width: 46, height: 46, borderRadius: 23 },
   statusDot: {
     position: 'absolute',
-    bottom: -1,
-    right: -1,
-    width: 9,
-    height: 9,
-    borderRadius: 4.5,
-    borderWidth: 1.5,
-  },
-  userInfoWrap: {
-    flex: 1,
-    marginLeft: 10,
-  },
-  userNameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    flexWrap: 'wrap',
-  },
-  userName: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  selfBadge: {
-    backgroundColor: BRAND_GREEN_TINT,
-    borderWidth: 1,
-    borderColor: BRAND_GREEN_BORDER,
-    paddingHorizontal: 5,
-    paddingVertical: 1.5,
-    borderRadius: 4,
-  },
-  selfBadgeText: {
-    color: BRAND_GREEN,
-    fontSize: 8.5,
-    fontWeight: '800',
-  },
-  adminBadge: {
-    backgroundColor: BRAND_GREEN_TINT,
-    borderWidth: 1,
-    borderColor: BRAND_GREEN_BORDER,
-    paddingHorizontal: 5,
-    paddingVertical: 1.5,
-    borderRadius: 4,
-  },
-  adminBadgeText: {
-    color: BRAND_GREEN,
-    fontSize: 8.5,
-    fontWeight: '800',
-  },
-  userBadge: {
-    paddingHorizontal: 5,
-    paddingVertical: 1.5,
-    borderRadius: 4,
-  },
-  userBadgeText: {
-    fontSize: 8.5,
-    fontWeight: '700',
-  },
-  bannedBadge: {
-    backgroundColor: 'rgba(0, 0, 0, 0.06)',
-    paddingHorizontal: 5,
-    paddingVertical: 1.5,
-    borderRadius: 4,
-  },
-  bannedBadgeText: {
-    color: '#64748b',
-    fontSize: 8.5,
-    fontWeight: '800',
-  },
-  userEmail: {
-    fontSize: 11.5,
-    fontWeight: '500',
-    marginTop: 1.5,
-  },
-  compactMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 4,
-    marginTop: 3,
-  },
-  metaInlineItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-  },
-  metaInlineText: {
-    fontSize: 10.5,
-    fontWeight: '500',
-  },
-  metaDot: {
-    fontSize: 9,
-    opacity: 0.5,
-  },
-  banNoticeBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderRadius: 6,
-    paddingVertical: 3.5,
-    paddingHorizontal: 7,
-    marginTop: 6,
-    gap: 5,
-  },
-  banNoticeReason: {
-    fontSize: 10.5,
-    fontWeight: '500',
-    flex: 1,
-  },
-  cardActionsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: 6,
-    marginTop: 7,
-    paddingTop: 6,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(0,0,0,0.05)',
-  },
-  compactBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    borderWidth: 1,
-  },
-  compactBtnNeutralText: {
-    fontSize: 10.5,
-    fontWeight: '600',
-  },
-  compactBtnReinstate: {
-    backgroundColor: BRAND_GREEN_TINT,
-    borderWidth: 1,
-    borderColor: BRAND_GREEN_BORDER,
-  },
-  compactBtnReinstateText: {
-    color: BRAND_GREEN,
-    fontSize: 10.5,
-    fontWeight: '700',
-  },
-  paginationRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 14,
-    paddingVertical: 12,
-  },
-  pageBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    right: 0,
+    bottom: 0,
+    width: 13,
+    height: 13,
     borderRadius: 7,
-    borderWidth: 1,
+    borderWidth: 2,
   },
-  pageBtnText: {
-    fontSize: 11.5,
-    fontWeight: '600',
-  },
-  pageIndicator: {
-    fontSize: 11.5,
-    fontWeight: '600',
-  },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.65)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  modalCard: {
-    width: '100%',
-    maxWidth: 420,
-    borderRadius: 16,
-    borderWidth: 1,
-    padding: 18,
-  },
-  modalTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  modalSubtitle: {
-    fontSize: 11.5,
-    fontWeight: '500',
-    marginTop: 2,
-  },
-  modalBodyText: {
-    fontSize: 12.5,
-    fontWeight: '500',
-    lineHeight: 17,
-    marginBottom: 10,
-  },
-  inputLabel: {
-    fontSize: 11.5,
-    fontWeight: '700',
-    marginBottom: 5,
-  },
-  modalInput: {
-    borderRadius: 8,
-    borderWidth: 1,
-    padding: 9,
-    fontSize: 12.5,
-    marginBottom: 10,
-  },
-  warningBox: {
-    borderRadius: 8,
-    borderWidth: 1,
-    padding: 9,
-    marginBottom: 10,
-  },
-  warningText: {
-    fontSize: 10.5,
-    fontWeight: '500',
-    lineHeight: 15,
-  },
-  modalBtnRow: {
+  chevron: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  banNote: {
     flexDirection: 'row',
+    alignItems: 'flex-start',
     gap: 8,
-    marginTop: 4,
+    marginLeft: 58,
+    marginBottom: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
   },
-  modalBtnCancel: {
+  actionRow: { flexDirection: 'row', gap: 10, paddingLeft: 58, paddingBottom: 16 },
+  actionBtn: {
     flex: 1,
-    paddingVertical: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalBtnCancelText: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  modalBtnConfirm: {
-    flex: 1.2,
-    paddingVertical: 10,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalBtnConfirmText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  modalIconWrap: {
-    width: 34,
-    height: 34,
-    borderRadius: 9,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  filterSectionTitle: {
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-    marginBottom: 7,
-  },
-  modalOptionsRow: {
+    height: 44,
+    borderRadius: 14,
     flexDirection: 'row',
-    gap: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
   },
-  modalOptionsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 7,
+  pagination: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 16, paddingTop: 18 },
+  pageBtn: { width: 44, height: 44, borderRadius: 22, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  chip: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 999, borderWidth: 1 },
+  sheetBackdrop: { flex: 1, backgroundColor: 'rgba(11, 31, 23, 0.45)', justifyContent: 'flex-end' },
+  sheet: {
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    width: '100%',
+    maxWidth: 560,
+    alignSelf: 'center',
   },
-  modalOptionPill: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
-  },
-  modalOptionPillActive: {
-    backgroundColor: BRAND_GREEN,
-    borderColor: BRAND_GREEN,
-  },
-  modalOptionText: {
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  modalOptionTextActive: {
-    color: '#FFFFFF',
-    fontWeight: '800',
-  },
+  grabber: { width: 40, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: 16 },
+  warn: { flexDirection: 'row', gap: 10, padding: 14, borderRadius: 16, marginTop: 16 },
+  label: { fontSize: 13, marginTop: 16, marginBottom: 8 },
+  input: { borderWidth: 1, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15 },
+  btnRow: { flexDirection: 'row', gap: 10 },
+  btn: { flex: 1, height: 52, borderRadius: 999, alignItems: 'center', justifyContent: 'center' },
+  btnOutline: { borderWidth: 1, backgroundColor: 'transparent' },
 });

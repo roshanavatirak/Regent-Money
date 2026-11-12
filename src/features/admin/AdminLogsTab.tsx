@@ -1,22 +1,31 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  ActivityIndicator,
-  RefreshControl,
-  Platform,
-} from 'react-native';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Feather, Ionicons } from '@expo/vector-icons';
-import { useTheme } from '../../store';
+import { Feather } from '@expo/vector-icons';
+import * as Clipboard from 'expo-clipboard';
 import { adminService, AdminAuditLogItem } from '../../services/adminService';
+import {
+  useAdminTheme,
+  ff,
+  AdminHeader,
+  IconTile,
+  Pill,
+  Segmented,
+  SectionLabel,
+  HeroRings,
+  shortId,
+  FOREST,
+  LIME,
+  MIST,
+  MONO,
+} from './adminTheme';
+import { actionKind, actionMeta, fmtTime, fmtLongDay } from './adminActions';
+
+type LogFilter = 'all' | 'purge' | 'suspend';
 
 export const AdminLogsTab: React.FC = () => {
   const insets = useSafeAreaInsets();
-  const { colors, isDark } = useTheme();
+  const { p, font } = useAdminTheme();
 
   const [logs, setLogs] = useState<AdminAuditLogItem[]>([]);
   const [page, setPage] = useState(1);
@@ -25,6 +34,8 @@ export const AdminLogsTab: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<LogFilter>('all');
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const fetchLogs = useCallback(async (targetPage = 1) => {
     setLoading(true);
@@ -35,7 +46,6 @@ export const AdminLogsTab: React.FC = () => {
       setPage(res.page || 1);
       setTotalPages(res.totalPages || 1);
       setTotalCount(res.total || 0);
-      setFetchError(null);
     } catch (err: any) {
       setFetchError(err.message || 'Failed to fetch audit logs');
     } finally {
@@ -53,230 +63,189 @@ export const AdminLogsTab: React.FC = () => {
     await fetchLogs(page);
   };
 
-  const formatDate = (ts: number | null) => {
-    if (!ts) return 'Unknown';
-    const d = new Date(Number(ts));
-    return d.toLocaleDateString('en-IN', {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
+  const copyHash = async (log: AdminAuditLogItem) => {
+    if (!log.targetEmailHmac) return;
+    await Clipboard.setStringAsync(log.targetEmailHmac);
+    setCopiedId(log.id);
+    setTimeout(() => setCopiedId((cur) => (cur === log.id ? null : cur)), 1500);
   };
 
-  const getActionColor = (action: string) => {
-    if (action.includes('BAN')) return '#EF4444';
-    if (action.includes('UNBAN')) return '#10B981';
-    if (action.includes('DELETE')) return '#DC2626';
-    return '#EAB308';
-  };
+  // Filter, then group by calendar day (logs arrive newest first).
+  const groups = useMemo(() => {
+    const filtered = logs.filter((l) => {
+      if (filter === 'all') return true;
+      const k = actionKind(l.action);
+      return filter === 'purge' ? k === 'purge' : k === 'suspend' || k === 'reinstate';
+    });
+    const out: { day: string; items: AdminAuditLogItem[] }[] = [];
+    for (const l of filtered) {
+      const day = fmtLongDay(l.createdAt);
+      const last = out[out.length - 1];
+      if (last && last.day === day) last.items.push(l);
+      else out.push({ day, items: [l] });
+    }
+    return out;
+  }, [logs, filter]);
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Top Header */}
-      <View
-        style={[
-          styles.header,
-          {
-            paddingTop: Math.max(insets.top, 16) + 8,
-            backgroundColor: isDark ? 'rgba(22, 27, 34, 0.95)' : colors.card,
-            borderBottomColor: colors.border,
-          },
-        ]}
-      >
-        <View style={{ flex: 1 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <Text style={[styles.headerTitle, { color: colors.text }]}>Audit Trail</Text>
-            <View style={styles.countBadge}>
-              <Text style={styles.countBadgeText}>{totalCount} Events</Text>
-            </View>
-          </View>
-          <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]}>
-            Immutable cryptographic records of administrative actions
-          </Text>
-        </View>
-
-        <TouchableOpacity
-          onPress={handleRefresh}
-          style={[
-            styles.refreshBtn,
-            { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)' },
-          ]}
-          activeOpacity={0.7}
-        >
-          <Feather name="refresh-cw" size={16} color={colors.text} />
-        </TouchableOpacity>
-      </View>
+    <View style={[styles.container, { backgroundColor: p.bg }]}>
+      <AdminHeader
+        title="Audit trail"
+        subtitle="Every admin action, signed and kept"
+        badge={<Pill tint={p.tint.amber} label={`${totalCount} events`} font={font} />}
+        onRefresh={handleRefresh}
+        refreshing={refreshing}
+      />
 
       <ScrollView
-        contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 90 }}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.accent} />
-        }
+        contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: insets.bottom + 110 }}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={p.segActive} />}
       >
-        {/* Security / Compliance Badge Banner */}
-        <View
-          style={[
-            styles.securityBanner,
-            {
-              backgroundColor: isDark ? 'rgba(234, 179, 8, 0.08)' : '#FEFCE8',
-              borderColor: 'rgba(234, 179, 8, 0.25)',
-            },
-          ]}
-        >
-          <Feather name="shield" size={16} color="#EAB308" style={{ marginTop: 1 }} />
-          <View style={{ flex: 1, marginLeft: 8 }}>
-            <Text style={[styles.securityTitle, { color: isDark ? '#FEF08A' : '#713F12' }]}>
-              HMAC-SHA256 Anonymized Audit Log
-            </Text>
-            <Text style={[styles.securityText, { color: isDark ? '#FDE047' : '#854D0E' }]}>
-              All administrative purges and suspensions are logged with cryptographic HMACs to maintain zero raw
-              PII compliance while ensuring forensic traceability.
+        {/* Trust card */}
+        <View style={styles.trust}>
+          <HeroRings big={160} small={100} />
+          <IconTile tint={{ bg: LIME, fg: FOREST }} size={42}>
+            <Feather name="lock" size={19} color={FOREST} />
+          </IconTile>
+          <View style={{ flex: 1 }}>
+            <Text style={[{ fontSize: 17, color: '#FFFFFF' }, ff(font.displayBold, '700')]}>Tamper-evident by design</Text>
+            <Text style={[{ fontSize: 13, lineHeight: 19, color: MIST, marginTop: 4 }, ff(font.body, '500')]}>
+              Each purge and suspension is signed with HMAC-SHA256. IDs are anonymised, so no raw personal data is stored.
             </Text>
           </View>
         </View>
 
-        {/* Loading State */}
+        <Segmented<LogFilter>
+          style={{ marginTop: 16 }}
+          value={filter}
+          onChange={setFilter}
+          options={[
+            { id: 'all', label: 'All events' },
+            { id: 'purge', label: 'Purges' },
+            { id: 'suspend', label: 'Suspensions' },
+          ]}
+        />
+
         {loading && !refreshing && (
-          <View style={{ paddingVertical: 40, alignItems: 'center' }}>
-            <ActivityIndicator size="small" color="#EAB308" />
-            <Text style={{ marginTop: 10, fontSize: 13, color: colors.textSecondary }}>
-              Loading audit logs...
-            </Text>
+          <View style={{ paddingVertical: 48, alignItems: 'center' }}>
+            <ActivityIndicator size="small" color={p.segActive} />
+            <Text style={[{ marginTop: 10, fontSize: 13, color: p.sub }, ff(font.body, '500')]}>Loading audit trail…</Text>
           </View>
         )}
 
-        {/* Error State */}
         {fetchError && !loading && (
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              backgroundColor: isDark ? 'rgba(239, 68, 68, 0.12)' : '#FEF2F2',
-              borderWidth: 1,
-              borderColor: 'rgba(239, 68, 68, 0.3)',
-              borderRadius: 12,
-              padding: 14,
-              marginBottom: 16,
-            }}
-          >
-            <Feather name="alert-triangle" size={20} color="#EF4444" />
-            <View style={{ flex: 1, marginLeft: 12 }}>
-              <Text style={{ fontSize: 13, fontWeight: '700', color: '#EF4444' }}>Unable to Load Logs</Text>
-              <Text style={{ fontSize: 12, color: colors.textSecondary, marginTop: 2 }}>
-                {fetchError.includes('Failed to fetch')
-                  ? 'Backend server was temporarily unreachable. Tap Retry to reconnect.'
-                  : fetchError}
+          <View style={[styles.card, styles.errorCard, { backgroundColor: p.card, borderColor: p.line }]}>
+            <IconTile tint={p.tint.coral} size={40}>
+              <Feather name="wifi-off" size={18} color={p.tint.coral.fg} />
+            </IconTile>
+            <View style={{ flex: 1 }}>
+              <Text style={[{ fontSize: 14, color: p.text }, ff(font.bodyBold, '700')]}>Can't load the audit trail</Text>
+              <Text style={[{ fontSize: 12, color: p.sub, marginTop: 2 }, ff(font.body, '500')]} numberOfLines={2}>
+                {fetchError.includes('Failed to fetch') ? 'The backend is temporarily unreachable.' : fetchError}
               </Text>
             </View>
-            <TouchableOpacity
-              onPress={() => fetchLogs(page)}
-              style={{ backgroundColor: '#EF4444', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8 }}
-            >
-              <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700' }}>Retry</Text>
+            <TouchableOpacity onPress={() => fetchLogs(page)} style={[styles.smallBtn, { backgroundColor: p.segActive }]}>
+              <Text style={[{ fontSize: 13, color: p.segActiveText }, ff(font.bodyBold, '700')]}>Retry</Text>
             </TouchableOpacity>
           </View>
         )}
 
-        {/* Empty State */}
-        {!loading && !fetchError && logs.length === 0 && (
-          <View style={styles.emptyCard}>
-            <Ionicons name="document-text-outline" size={38} color={colors.textTertiary} />
-            <Text style={[styles.emptyTitle, { color: colors.text }]}>No Audit Logs Recorded</Text>
-            <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
-              Administrative actions such as user suspensions, unbans, and account deletions will appear here.
+        {!loading && !fetchError && groups.length === 0 && (
+          <View style={{ alignItems: 'center', paddingVertical: 48, gap: 8 }}>
+            <IconTile tint={p.tint.amber} size={56} radius={20}>
+              <Feather name="file-text" size={24} color={p.tint.amber.fg} />
+            </IconTile>
+            <Text style={[{ fontSize: 17, color: p.text, marginTop: 6 }, ff(font.displayBold, '700')]}>No events yet</Text>
+            <Text style={[{ fontSize: 13, color: p.sub, textAlign: 'center', maxWidth: 300 }, ff(font.body, '500')]}>
+              Suspensions, reinstatements and account purges will show up here.
             </Text>
           </View>
         )}
 
-        {/* Logs List */}
         {!loading &&
-          logs.map((log) => {
-            const actionColor = getActionColor(log.action);
+          groups.map((g) => (
+            <View key={g.day}>
+              <SectionLabel>{g.day}</SectionLabel>
+              <View style={[styles.listCard, { backgroundColor: p.card, borderColor: p.line }]}>
+                {g.items.map((log, i) => {
+                  const meta = actionMeta(log.action, p);
+                  const copied = copiedId === log.id;
+                  return (
+                    <View
+                      key={log.id}
+                      style={{ paddingVertical: 16, borderBottomWidth: i < g.items.length - 1 ? 1 : 0, borderBottomColor: p.divider }}
+                    >
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                        <IconTile tint={meta.tint} size={40}>
+                          <Feather name={meta.icon} size={18} color={meta.tint.fg} />
+                        </IconTile>
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <Text style={[{ fontSize: 15, color: p.text }, ff(font.bodySemi, '600')]} numberOfLines={1}>
+                            {meta.label}
+                          </Text>
+                          <Text style={[{ fontSize: 12, color: p.muted, marginTop: 2 }, ff(font.body, '500')]} numberOfLines={1}>
+                            {log.reason || log.action}
+                          </Text>
+                        </View>
+                        <Text style={[{ fontSize: 13, color: p.sub }, ff(font.bodySemi, '600')]}>{fmtTime(log.createdAt)}</Text>
+                      </View>
 
-            return (
-              <View
-                key={log.id}
-                style={[
-                  styles.logCard,
-                  {
-                    backgroundColor: isDark ? 'rgba(255,255,255,0.03)' : colors.card,
-                    borderColor: colors.border,
-                  },
-                ]}
-              >
-                <View style={styles.logCardHeader}>
-                  <View
-                    style={[
-                      styles.actionBadge,
-                      { backgroundColor: `${actionColor}18`, borderColor: `${actionColor}35` },
-                    ]}
-                  >
-                    <Text style={[styles.actionBadgeText, { color: actionColor }]}>{log.action}</Text>
-                  </View>
-                  <Text style={[styles.logTimestamp, { color: colors.textTertiary }]}>
-                    {formatDate(log.createdAt)}
-                  </Text>
-                </View>
+                      <View style={styles.idRow}>
+                        <View style={[styles.idTile, { backgroundColor: p.bg }]}>
+                          <Text style={[{ fontSize: 11, color: p.muted }, ff(font.bodySemi, '600')]}>Admin</Text>
+                          <Text style={{ fontFamily: MONO, fontSize: 13, color: p.text, marginTop: 3 }}>{shortId(log.adminId)}</Text>
+                        </View>
+                        <View style={[styles.idTile, { backgroundColor: p.bg }]}>
+                          <Text style={[{ fontSize: 11, color: p.muted }, ff(font.bodySemi, '600')]}>Target user</Text>
+                          <Text style={{ fontFamily: MONO, fontSize: 13, color: p.text, marginTop: 3 }}>
+                            {shortId(log.targetUserId, 'System')}
+                          </Text>
+                        </View>
+                      </View>
 
-                <Text style={[styles.logReason, { color: colors.text }]}>{log.reason}</Text>
-
-                <View style={styles.logDetailGrid}>
-                  <View style={styles.logDetailItem}>
-                    <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>Admin ID</Text>
-                    <Text style={[styles.detailValue, { color: colors.text }]}>
-                      {log.adminId ? log.adminId.slice(0, 8) + '...' : 'System'}
-                    </Text>
-                  </View>
-
-                  <View style={styles.logDetailItem}>
-                    <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>Target User</Text>
-                    <Text style={[styles.detailValue, { color: colors.text }]}>
-                      {log.targetUserId ? log.targetUserId.slice(0, 8) + '...' : 'System Target'}
-                    </Text>
-                  </View>
-
-                  {log.targetEmailHmac ? (
-                    <View style={[styles.logDetailItem, { width: '100%', marginTop: 4 }]}>
-                      <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>HMAC Checksum</Text>
-                      <Text style={[styles.detailValueMono, { color: colors.textTertiary }]} numberOfLines={1}>
-                        {log.targetEmailHmac}
-                      </Text>
+                      {log.targetEmailHmac ? (
+                        <View style={[styles.hashRow, { borderColor: p.line }]}>
+                          <Feather name="shield" size={14} color={p.link} />
+                          <Text style={{ flex: 1, fontFamily: MONO, fontSize: 11, color: p.sub }} numberOfLines={1}>
+                            {log.targetEmailHmac}
+                          </Text>
+                          <TouchableOpacity
+                            onPress={() => copyHash(log)}
+                            accessibilityLabel="Copy checksum"
+                            style={[styles.copyBtn, { backgroundColor: copied ? p.tint.green.bg : p.soft }]}
+                          >
+                            <Feather name={copied ? 'check' : 'copy'} size={14} color={copied ? p.tint.green.fg : p.text} />
+                          </TouchableOpacity>
+                        </View>
+                      ) : null}
                     </View>
-                  ) : null}
-                </View>
+                  );
+                })}
               </View>
-            );
-          })}
+            </View>
+          ))}
 
-        {/* Pagination Bar */}
         {totalPages > 1 && (
-          <View style={styles.paginationRow}>
+          <View style={styles.pagination}>
             <TouchableOpacity
               disabled={page <= 1}
               onPress={() => fetchLogs(page - 1)}
-              style={[
-                styles.pageBtn,
-                { opacity: page <= 1 ? 0.4 : 1, borderColor: colors.border },
-              ]}
+              style={[styles.pageBtn, { opacity: page <= 1 ? 0.4 : 1, borderColor: p.line, backgroundColor: p.card }]}
+              accessibilityLabel="Newer events"
             >
-              <Feather name="chevron-left" size={16} color={colors.text} />
-              <Text style={[styles.pageBtnText, { color: colors.text }]}>Prev</Text>
+              <Feather name="chevron-left" size={18} color={p.text} />
             </TouchableOpacity>
-            <Text style={[styles.pageIndicator, { color: colors.textSecondary }]}>
+            <Text style={[{ fontSize: 13, color: p.sub }, ff(font.bodySemi, '600')]}>
               Page {page} of {totalPages}
             </Text>
             <TouchableOpacity
               disabled={page >= totalPages}
               onPress={() => fetchLogs(page + 1)}
-              style={[
-                styles.pageBtn,
-                { opacity: page >= totalPages ? 0.4 : 1, borderColor: colors.border },
-              ]}
+              style={[styles.pageBtn, { opacity: page >= totalPages ? 0.4 : 1, borderColor: p.line, backgroundColor: p.card }]}
+              accessibilityLabel="Older events"
             >
-              <Text style={[styles.pageBtnText, { color: colors.text }]}>Next</Text>
-              <Feather name="chevron-right" size={16} color={colors.text} />
+              <Feather name="chevron-right" size={18} color={p.text} />
             </TouchableOpacity>
           </View>
         )}
@@ -286,157 +255,35 @@ export const AdminLogsTab: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
+  container: { flex: 1 },
+  trust: {
+    backgroundColor: FOREST,
+    borderRadius: 24,
+    padding: 18,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 14,
+    overflow: 'hidden',
   },
-  header: {
+  card: { borderWidth: 1, borderRadius: 24, padding: 16, marginTop: 18 },
+  errorCard: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  smallBtn: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999 },
+  listCard: { borderRadius: 24, borderWidth: 1, paddingHorizontal: 16 },
+  idRow: { flexDirection: 'row', gap: 10, marginTop: 14 },
+  idTile: { flex: 1, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 10 },
+  hashRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingBottom: 14,
-    borderBottomWidth: 1,
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: '800',
-    letterSpacing: -0.3,
-  },
-  headerSubtitle: {
-    fontSize: 12,
-    fontWeight: '500',
-    marginTop: 2,
-  },
-  countBadge: {
-    backgroundColor: 'rgba(234, 179, 8, 0.15)',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  countBadgeText: {
-    color: '#EAB308',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  refreshBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  securityBanner: {
-    flexDirection: 'row',
-    borderRadius: 12,
-    borderWidth: 1,
-    padding: 12,
-    marginBottom: 16,
-  },
-  securityTitle: {
-    fontSize: 12,
-    fontWeight: '700',
-    marginBottom: 2,
-  },
-  securityText: {
-    fontSize: 11,
-    lineHeight: 16,
-  },
-  emptyCard: {
-    paddingVertical: 50,
-    alignItems: 'center',
-    justifyContent: 'center',
     gap: 8,
-  },
-  emptyTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    marginTop: 8,
-  },
-  emptySubtitle: {
-    fontSize: 13,
-    fontWeight: '500',
-    textAlign: 'center',
-    maxWidth: 320,
-  },
-  logCard: {
-    borderRadius: 14,
-    borderWidth: 1,
-    padding: 14,
-    marginBottom: 10,
-  },
-  logCardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  actionBadge: {
-    borderWidth: 1,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 5,
-  },
-  actionBadgeText: {
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  logTimestamp: {
-    fontSize: 11,
-    fontWeight: '500',
-  },
-  logReason: {
-    fontSize: 13,
-    fontWeight: '700',
-    marginTop: 8,
-  },
-  logDetailGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
     marginTop: 10,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.06)',
-    rowGap: 6,
-  },
-  logDetailItem: {
-    width: '50%',
-  },
-  detailLabel: {
-    fontSize: 10,
-    fontWeight: '500',
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
-  },
-  detailValue: {
-    fontSize: 12,
-    fontWeight: '600',
-    marginTop: 1,
-  },
-  detailValueMono: {
-    fontSize: 10,
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-    marginTop: 1,
-  },
-  paginationRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 16,
-    paddingVertical: 14,
-  },
-  pageBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 12,
+    paddingLeft: 12,
+    paddingRight: 6,
     paddingVertical: 6,
-    borderRadius: 8,
     borderWidth: 1,
+    borderStyle: 'dashed',
+    borderRadius: 14,
   },
-  pageBtnText: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  pageIndicator: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
+  copyBtn: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  pagination: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 16, paddingTop: 18 },
+  pageBtn: { width: 44, height: 44, borderRadius: 22, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
 });

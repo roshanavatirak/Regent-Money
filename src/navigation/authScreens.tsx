@@ -146,8 +146,20 @@ type ButtonProps = {
   style?: StyleProp<ViewStyle>;
 };
 
+/** After this long on one tap, the server is probably starting up: say so instead of a bare spinner. */
+const SLOW_BUTTON_MS = 4000;
+
 function Button({ label, onPress, variant = 'primary', loading, disabled, leading, style }: ButtonProps) {
   const primary = variant === 'primary';
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    if (!loading) {
+      setSlow(false);
+      return;
+    }
+    const t = setTimeout(() => setSlow(true), SLOW_BUTTON_MS);
+    return () => clearTimeout(t);
+  }, [loading]);
   return (
     <PressScale
       onPress={onPress}
@@ -156,7 +168,14 @@ function Button({ label, onPress, variant = 'primary', loading, disabled, leadin
       style={[styles.btn, primary ? styles.btnPrimary : styles.btnSecondary, disabled && styles.btnDisabled, style]}
     >
       {loading ? (
-        <ActivityIndicator color={primary ? C.lime : C.forest} />
+        slow ? (
+          <View style={styles.btnConnecting}>
+            <ActivityIndicator size="small" color={primary ? C.lime : C.forest} />
+            <Text style={[styles.btnText, !primary && styles.btnTextSecondary]}>Connecting…</Text>
+          </View>
+        ) : (
+          <ActivityIndicator color={primary ? C.lime : C.forest} />
+        )
       ) : (
         <>
           {leading}
@@ -346,6 +365,14 @@ function EmailVerificationModal({ visible, email, onClose, onProceedToLogin }: E
   const [resending, setResending] = useState(false);
   const [resendStatus, setResendStatus] = useState<string | null>(null);
 
+  // The signup email was just sent; the server won't send another for 60 seconds.
+  useEffect(() => {
+    if (visible) {
+      setCooldown(60);
+      setResendStatus(null);
+    }
+  }, [visible]);
+
   useEffect(() => {
     if (cooldown <= 0) return;
     const timer = setInterval(() => {
@@ -361,7 +388,7 @@ function EmailVerificationModal({ visible, email, onClose, onProceedToLogin }: E
     try {
       const res = await authService.resendVerificationEmail(email);
       setResendStatus(res.message || 'Link resent!');
-      setCooldown(30);
+      setCooldown(typeof res.retryAfterSeconds === 'number' ? res.retryAfterSeconds : 60);
     } catch (err: any) {
       setResendStatus(err.message || 'Failed to resend');
     } finally {
@@ -447,7 +474,13 @@ function EmailVerificationModal({ visible, email, onClose, onProceedToLogin }: E
               <Text style={styles.verifyResendText}>
                 Didn't receive it?{' '}
                 <Text style={[styles.verifyResendHighlight, cooldown > 0 && { color: C.muted }]}>
-                  {cooldown > 0 ? `Resend (${cooldown}s)` : 'Resend link'}
+                  {cooldown > 0
+                    ? cooldown > 3600
+                      ? 'Resend tomorrow'
+                      : cooldown > 90
+                        ? `Resend in ${Math.ceil(cooldown / 60)} min`
+                        : `Resend (${cooldown}s)`
+                    : 'Resend link'}
                 </Text>
               </Text>
             )}
@@ -2019,6 +2052,7 @@ const styles = StyleSheet.create({
   btnSecondary: { backgroundColor: C.white, borderWidth: 1, borderColor: C.line, ...shadow(C.ink, 0.05, 10, 4, 2) },
   btnDisabled: { backgroundColor: C.disabled, shadowOpacity: 0, elevation: 0 },
   btnText: { fontSize: 16, fontWeight: '700', color: C.lime },
+  btnConnecting: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   btnTextSecondary: { color: C.ink },
   btnIcon: { marginRight: 10 },
   back: {

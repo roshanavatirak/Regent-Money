@@ -1,4 +1,6 @@
 import { Injectable, UnauthorizedException, BadRequestException, ConflictException, ForbiddenException, NotFoundException, HttpException, HttpStatus, OnModuleInit } from '@nestjs/common';
+import { CLAIM_SEND_SQL, refusal, utcDay, RESEND_GAP_MS } from './verification-limit';
+import { TokenService } from './token.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
@@ -20,6 +22,7 @@ export class AuthService implements OnModuleInit {
     private readonly mailService: MailService,
     private readonly configService: ConfigService,
     private readonly redisService: RedisService,
+    private readonly tokenService: TokenService,
   ) { }
 
   async onModuleInit() {
@@ -89,6 +92,9 @@ export class AuthService implements OnModuleInit {
         ALTER TABLE core.users ADD COLUMN IF NOT EXISTS restored_at BIGINT;
         ALTER TABLE core.users ADD COLUMN IF NOT EXISTS deletion_cooldown_until BIGINT;
         ALTER TABLE core.users ADD COLUMN IF NOT EXISTS tokens_valid_after BIGINT;
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS verification_last_sent_at BIGINT;
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS verification_send_day TEXT;
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS verification_send_count INT;
         CREATE INDEX IF NOT EXISTS idx_users_deletion_deadline ON core.users(deletion_deadline) WHERE is_scheduled_for_deletion = TRUE;
       `);
 
@@ -145,6 +151,18 @@ export class AuthService implements OnModuleInit {
       console.warn('[AuthService] Could not auto-migrate core.users columns/audit tables:', err?.message || err);
     }
 
+    // One active account per email, enforced by the database (two signups at the same moment
+    // can no longer both succeed). If old duplicates exist the index is not created: fix them,
+    // then restart.
+    try {
+      await this.userRepository.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email_active ON core.users (lower(email))
+        WHERE is_deleted = false AND email IS NOT NULL AND email <> '';
+      `);
+    } catch (err: any) {
+      console.warn('[AuthService] Could not create the unique email rule (duplicate emails exist?):', err?.message || err);
+    }
+
     const cloudName = this.configService.get<string>('CLOUDINARY_CLOUD_NAME')?.trim();
     const apiKey = this.configService.get<string>('CLOUDINARY_API_KEY')?.trim();
     const apiSecret = this.configService.get<string>('CLOUDINARY_API_SECRET')?.trim();
@@ -159,9 +177,32 @@ export class AuthService implements OnModuleInit {
     }
   }
 
+  /** A short, single-line text field, or throws a 400. */
+  private requireText(value: unknown, label: string, max: number): string {
+    if (typeof value !== 'string' || !value.trim()) throw new BadRequestException(`${label} is required.`);
+    const text = value.trim();
+    if (text.length > max) throw new BadRequestException(`${label} is too long.`);
+    return text;
+  }
+
+  /** Passwords: 6 to 128 characters (very long ones only slow the server down). */
+  private checkPassword(value: unknown, required: boolean): string | undefined {
+    if (value == null || value === '') {
+      if (required) throw new BadRequestException('Password is required.');
+      return undefined;
+    }
+    if (typeof value !== 'string' || value.length < 6 || value.length > 128) {
+      throw new BadRequestException('Password must be 6 to 128 characters.');
+    }
+    return value;
+  }
+
   async signUp(dto: { name: string; email: string; phone: string; password?: string }) {
-    const email = dto.email.trim().toLowerCase();
-    const phone = dto.phone.trim();
+    const name = this.requireText(dto?.name, 'Name', 80);
+    const email = this.requireText(dto?.email, 'Email', 254).toLowerCase();
+    const phone = this.requireText(dto?.phone, 'Phone number', 20);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new BadRequestException('Enter a valid email address.');
+    const password = this.checkPassword(dto?.password, false);
 
     // 1. Check if user already exists (by email or phone)
     const existingUser = await this.userRepository.findOne({
@@ -180,8 +221,8 @@ export class AuthService implements OnModuleInit {
 
     // 2. Hash password
     let passwordHash: string | null = null;
-    if (dto.password) {
-      passwordHash = await bcrypt.hash(dto.password, 10);
+    if (password) {
+      passwordHash = await bcrypt.hash(password, 10);
     }
 
     // 3. Generate verification token
@@ -196,7 +237,7 @@ export class AuthService implements OnModuleInit {
       email,
       phone,
       passwordHash,
-      name: dto.name,
+      name,
       authProvider: 'email',
       avatarUrl: '',
       createdAt: now,
@@ -208,10 +249,27 @@ export class AuthService implements OnModuleInit {
       termsAcceptedAt: now,
     });
 
-    const savedUser = await this.userRepository.save(user) as User;
+    let savedUser: User;
+    try {
+      savedUser = (await this.userRepository.save(user)) as User;
+    } catch (err: any) {
+      // Another signup with this email finished a moment earlier (unique email rule)
+      if (err?.code === '23505' || err?.driverError?.code === '23505') {
+        throw new ConflictException('This email is already registered. Please log in.');
+      }
+      throw err;
+    }
+
+    // The signup email counts toward the resend limits (60 s gap, 5 a day).
+    await this.userRepository
+      .query(
+        `UPDATE core.users SET verification_last_sent_at = $2, verification_send_day = $3, verification_send_count = 1 WHERE id = $1;`,
+        [savedUser.id, now, utcDay(now)],
+      )
+      .catch(() => {});
 
     // 5. Send verification email asynchronously in the background (DO NOT await it!)
-    this.mailService.sendVerificationEmail(email, dto.name, verificationToken).catch((err) => {
+    this.mailService.sendVerificationEmail(email, name, verificationToken).catch((err) => {
       console.error(`[AuthService] Background verification email dispatch failed: ${err.message}`);
     });
 
@@ -254,44 +312,104 @@ export class AuthService implements OnModuleInit {
     return { message: 'Your email has been successfully verified! You can now log in.' };
   }
 
-  async resendVerificationEmail(email: string) {
+  /**
+   * Sends a fresh verification link. Per account: at least 60 seconds between emails and at most
+   * 5 a day (signup included), so the button can't flood an inbox or use up the daily email limit.
+   * `retryAfterSeconds` tells the app how long to keep the button disabled.
+   */
+  async resendVerificationEmail(email: string): Promise<{ message: string; retryAfterSeconds: number }> {
     const sanitizedEmail = email.trim().toLowerCase();
+    const gap = Math.round(RESEND_GAP_MS / 1000);
     const user = await this.userRepository.findOne({
       where: { email: sanitizedEmail, isDeleted: false },
     });
 
     if (!user) {
-      return { message: 'If this email is registered, a new verification link has been sent.' };
+      return { message: 'If this email is registered, a new verification link has been sent.', retryAfterSeconds: gap };
     }
 
     if (user.isVerified) {
-      return { message: 'Your account is already verified. You can log in directly.' };
+      return { message: 'Your account is already verified. You can log in directly.', retryAfterSeconds: 0 };
     }
 
+    const now = Date.now();
     const verificationToken = crypto.randomBytes(32).toString('hex');
-    user.verificationToken = verificationToken;
-    user.updatedAt = Date.now();
-    await this.userRepository.save(user);
+    const claimed = await this.userRepository.query(CLAIM_SEND_SQL, [user.id, now, utcDay(now), verificationToken]);
+    const rows = Array.isArray(claimed) ? (Array.isArray(claimed[0]) ? claimed[0] : claimed) : [];
+
+    if (!rows.length) {
+      const [state] = await this.userRepository.query(
+        `SELECT verification_last_sent_at AS last, verification_send_day AS day, verification_send_count AS count FROM core.users WHERE id = $1;`,
+        [user.id],
+      );
+      const why = refusal(
+        { lastSentAt: state?.last ? Number(state.last) : null, day: state?.day ?? null, count: state?.count ?? null },
+        now,
+      ) || { reason: 'too_soon' as const, retryAfterSeconds: gap };
+      return why.reason === 'daily_cap'
+        ? {
+            message: "You've asked for 5 links today. Use the newest email we sent, or try again tomorrow.",
+            retryAfterSeconds: why.retryAfterSeconds,
+          }
+        : {
+            message: `Please wait ${why.retryAfterSeconds} seconds before asking for another link.`,
+            retryAfterSeconds: why.retryAfterSeconds,
+          };
+    }
 
     await this.mailService.sendVerificationEmail(user.email || sanitizedEmail, user.name || '', verificationToken);
-    return { message: 'A new verification link has been sent to your email.' };
+    return { message: 'A new verification link has been sent to your email.', retryAfterSeconds: gap };
   }
 
-  private getLockKeyForUser(userId: string): string {
-    return `auth:lock:u:${userId}`;
+  /**
+   * Wrong-password lock. It is counted per account AND per network address, so a stranger who
+   * types wrong passwords for someone's email locks only their own connection out, not the
+   * real owner. A separate account-wide counter still stops guessing from many addresses.
+   */
+  private getLockKeyForUser(userId: string, ip = ''): string {
+    return ip ? `auth:lock:u:${userId}:ip:${ip}` : `auth:lock:u:${userId}`;
+  }
+
+  /** Failed logins for an account from every address in the last hour. */
+  private getFailCountKey(userId: string): string {
+    return `auth:fail:u:${userId}`;
+  }
+
+  /** Set by a password reset: locks created before this moment no longer apply. */
+  private getUnlockKey(userId: string): string {
+    return `auth:unlock:u:${userId}`;
+  }
+
+  /** Above this many failed logins in an hour (from all addresses), the account pauses. */
+  private static readonly ACCOUNT_FAIL_CAP = 30;
+
+  private async accountFailCount(userId: string): Promise<number> {
+    const n = Number(await this.redisService.executeCommand(['GET', this.getFailCountKey(userId)]).catch(() => 0));
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  private async recordAccountFail(userId: string): Promise<void> {
+    const key = this.getFailCountKey(userId);
+    const n = await this.redisService.executeCommand(['INCR', key]).catch(() => null);
+    if (n === 1) await this.redisService.executeCommand(['EXPIRE', key, 3600]).catch(() => null);
   }
 
   private getLockKeyForAnon(identifier: string): string {
     return `auth:lock:anon:${identifier.trim().toLowerCase()}`;
   }
 
-  private async getLockoutStateFromRedis(lockKey: string): Promise<{ attempts: number; violations: number; lockedUntil: number; tier: number } | null> {
+  private async getLockoutStateFromRedis(lockKey: string, unlockKey?: string): Promise<{ attempts: number; violations: number; lockedUntil: number; tier: number } | null> {
     const raw = await this.redisService.get(lockKey);
     if (!raw) return null;
 
     try {
       const parsed = JSON.parse(raw);
       const now = Date.now();
+      // A password reset after this lock was written cancels it
+      if (unlockKey) {
+        const unlockedAt = Number(await this.redisService.get(unlockKey)) || 0;
+        if (unlockedAt && (!parsed.t || parsed.t <= unlockedAt)) return null;
+      }
       if (parsed.l && now < parsed.l) {
         return { attempts: parsed.a || 0, violations: parsed.v || 1, lockedUntil: parsed.l, tier: parsed.v || 1 };
       }
@@ -301,8 +419,12 @@ export class AuthService implements OnModuleInit {
     }
   }
 
-  async login(dto: { emailOrMobile: string; password?: string }) {
-    const input = dto.emailOrMobile.trim();
+  async login(dto: { emailOrMobile: string; password?: string }, clientIp = '') {
+    const input = this.requireText(dto?.emailOrMobile, 'Email or mobile number', 254);
+    if (dto?.password != null && (typeof dto.password !== 'string' || dto.password.length > 128)) {
+      throw new UnauthorizedException('Invalid email/mobile number or password.');
+    }
+    const ip = String(clientIp || '').slice(0, 64);
     const isEmail = input.includes('@');
     const normalizedIdentifier = isEmail ? input.toLowerCase() : input;
 
@@ -323,10 +445,27 @@ export class AuthService implements OnModuleInit {
     }
 
     // Determine the universal Redis lock key (keyed by user.id if user exists, else anonymous identifier)
-    const lockKey = user ? this.getLockKeyForUser(user.id) : this.getLockKeyForAnon(normalizedIdentifier);
+    const lockKey = user ? this.getLockKeyForUser(user.id, ip) : this.getLockKeyForAnon(normalizedIdentifier);
 
-    // 2. Check if account is currently locked out in Redis (universal across all devices & methods)
-    const lockState = await this.getLockoutStateFromRedis(lockKey);
+    // Too many wrong passwords for this account from many addresses: pause for everyone briefly
+    if (user && (await this.accountFailCount(user.id)) >= AuthService.ACCOUNT_FAIL_CAP) {
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.LOCKED || 423,
+          error: 'AccountLocked',
+          message: 'Too many failed attempts on this account. Try again in up to 60 minutes, or reset your password to unlock immediately.',
+          lockedUntil: Date.now() + 3600 * 1000,
+          remainingSeconds: 3600,
+          remainingMinutes: 60,
+          tier: 1,
+          locked: true,
+        },
+        HttpStatus.LOCKED || 423,
+      );
+    }
+
+    // 2. Check if this connection is currently locked out for this account
+    const lockState = await this.getLockoutStateFromRedis(lockKey, user ? this.getUnlockKey(user.id) : undefined);
     if (lockState && lockState.lockedUntil > Date.now()) {
       const remainingSec = Math.max(1, Math.ceil((lockState.lockedUntil - Date.now()) / 1000));
       const remainingMin = Math.ceil(remainingSec / 60);
@@ -357,7 +496,8 @@ export class AuthService implements OnModuleInit {
     }
 
     if (!passwordValid) {
-      // Handle failed password attempt (3 attempt rule, tracked universally in Redis)
+      await this.recordAccountFail(user.id);
+      // Handle failed password attempt (3 attempt rule, tracked in Redis)
       const currentAttempts = (lockState?.attempts || 0) + 1;
       const currentViolations = lockState?.violations || 0;
 
@@ -366,7 +506,7 @@ export class AuthService implements OnModuleInit {
         const attemptsLeft = 3 - currentAttempts;
         await this.redisService.set(
           lockKey,
-          JSON.stringify({ a: currentAttempts, v: currentViolations, l: 0 }),
+          JSON.stringify({ a: currentAttempts, v: currentViolations, l: 0, t: Date.now() }),
           7200,
         );
         throw new UnauthorizedException({
@@ -384,7 +524,7 @@ export class AuthService implements OnModuleInit {
           const lockedUntil = Date.now() + lockDurationSec * 1000;
           await this.redisService.set(
             lockKey,
-            JSON.stringify({ a: 0, v: 1, l: lockedUntil }),
+            JSON.stringify({ a: 0, v: 1, l: lockedUntil, t: Date.now() }),
             lockDurationSec + 3600,
           );
           throw new HttpException(
@@ -406,7 +546,7 @@ export class AuthService implements OnModuleInit {
           const lockedUntil = Date.now() + lockDurationSec * 1000;
           await this.redisService.set(
             lockKey,
-            JSON.stringify({ a: 0, v: 2, l: lockedUntil }),
+            JSON.stringify({ a: 0, v: 2, l: lockedUntil, t: Date.now() }),
             lockDurationSec + 7200,
           );
           throw new HttpException(
@@ -557,7 +697,13 @@ export class AuthService implements OnModuleInit {
     // 4. Immediately clear token from Redis
     await this.redisService.del(`pwd_reset:${token}`);
 
-    // 5. Instantly clear universal user lockout & attempt key in Redis across all devices
+    // A reset must end every existing session: whoever had the old password (or a stolen
+    // session) is signed out on all devices.
+    await this.revokeSessions(user.id).catch(() => undefined);
+
+    // 5. Clear every lock on this account (all addresses) and the failed-attempt counter
+    await this.redisService.set(this.getUnlockKey(user.id), String(Date.now()), 25 * 3600);
+    await this.redisService.del(this.getFailCountKey(user.id));
     await this.redisService.del(this.getLockKeyForUser(user.id));
     if (user.email) {
       await this.redisService.del(this.getLockKeyForAnon(user.email));
@@ -625,6 +771,7 @@ export class AuthService implements OnModuleInit {
     // 2. Check if a user with this email already exists (e.g. active or scheduled for deletion)
     let user = await this.userRepository.findOne({
       where: { email },
+      order: { isDeleted: 'ASC' }, // the active account first, if an old deleted one shares the email
     });
 
     let accountRestored = false;
@@ -653,6 +800,13 @@ export class AuthService implements OnModuleInit {
         throw new UnauthorizedException('Your account has been suspended by an administrator.');
       }
 
+      // An account that was never verified may have been created by someone else typing this
+      // email with their own password. Google has now proved who owns the email, so that
+      // password is removed: only the Google owner (or a password reset by email) gets in.
+      if (!user.isVerified) {
+        user.passwordHash = null;
+        user.verificationToken = null;
+      }
       user.isVerified = true; // Auto-verify email via Google
       if (!user.name && name) user.name = name;
       if (!user.avatarUrl && avatarUrl) user.avatarUrl = avatarUrl;
@@ -850,20 +1004,40 @@ export class AuthService implements OnModuleInit {
       throw new UnauthorizedException('User not found.');
     }
 
-    if (dto.name !== undefined) user.name = dto.name;
-    if (dto.avatarUrl !== undefined) user.avatarUrl = dto.avatarUrl;
-    if (dto.dob !== undefined) user.dob = dto.dob;
-    if (dto.gender !== undefined) user.gender = dto.gender;
-    if (dto.occupation !== undefined) user.occupation = dto.occupation;
-    if (dto.currentIncome !== undefined) user.currentIncome = dto.currentIncome;
-    if (dto.incomeSourcesCount !== undefined) user.incomeSourcesCount = dto.incomeSourcesCount;
+    // Every field is bounded: nothing a phone sends can store megabytes in the users table
+    const text = (v: unknown, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : undefined);
+    const name = text(dto.name, 80);
+    if (name) user.name = name;
+    if (dto.avatarUrl === '' || AuthService.isHostedImageUrl(dto.avatarUrl)) user.avatarUrl = dto.avatarUrl as string;
+    const dob = text(dto.dob, 20);
+    if (dob !== undefined) user.dob = dob;
+    const gender = text(dto.gender, 20);
+    if (gender !== undefined) user.gender = gender;
+    const occupation = text(dto.occupation, 80);
+    if (occupation !== undefined) user.occupation = occupation;
+    if (dto.currentIncome !== undefined) {
+      const income = Number(dto.currentIncome);
+      if (Number.isFinite(income) && income >= 0 && income <= 1e12) user.currentIncome = income;
+    }
+    if (dto.incomeSourcesCount !== undefined) {
+      const count = Math.floor(Number(dto.incomeSourcesCount));
+      if (Number.isFinite(count) && count >= 0 && count <= 50) user.incomeSourcesCount = count;
+    }
     user.updatedAt = Date.now();
 
     await this.userRepository.save(user);
     return this.getProfile(userId);
   }
 
+  /** A normal https image link (not a data: blob, not megabytes of text). */
+  static isHostedImageUrl(value: unknown): boolean {
+    return typeof value === 'string' && value.length <= 500 && /^https:\/\/[^\s]+$/.test(value);
+  }
+
   async uploadAvatar(userId: string, fileData: string) {
+    if (typeof fileData !== 'string' || !fileData) {
+      throw new BadRequestException('Choose a photo to upload.');
+    }
     const user = await this.userRepository.findOne({
       where: { id: userId, isDeleted: false },
     });
@@ -895,7 +1069,11 @@ export class AuthService implements OnModuleInit {
       }
     }
 
-    // Direct URL fallback if Cloudinary is not yet configured or for remote links
+    // Without the image host, only a normal https link may be saved. The photo itself is never
+    // written into the database (the app keeps it on the phone instead).
+    if (!AuthService.isHostedImageUrl(fileData)) {
+      throw new BadRequestException('The photo could not be uploaded. Please try again.');
+    }
     user.avatarUrl = fileData;
     user.updatedAt = Date.now();
     await this.userRepository.save(user);
@@ -954,6 +1132,8 @@ export class AuthService implements OnModuleInit {
       [nowSeconds, userId],
     );
     await this.redisService.del(`user:status:${userId}`).catch(() => false);
+    // Also cancel every refresh token and blacklist the user's current access tokens
+    await this.tokenService.revokeAllForUser(userId).catch(() => undefined);
     return { success: true };
   }
 
@@ -1037,13 +1217,14 @@ export class AuthService implements OnModuleInit {
       console.warn('[AuthService] Could not log deletion survey reason:', surveyErr);
     }
 
-    // 5. Invalidate active Redis tokens and sessions
+    // 5. Invalidate active Redis tokens and sessions, and cancel all device families & access tokens
     try {
       await Promise.allSettled([
         this.redisService.del(this.getLockKeyForUser(user.id)),
         this.redisService.del(`auth:session:${user.id}`),
         this.redisService.del(`auth:refresh:${user.id}`),
         this.redisService.del(`user:role:${user.id}`),
+        this.tokenService.revokeAllForUser(user.id),
       ]);
     } catch {}
 

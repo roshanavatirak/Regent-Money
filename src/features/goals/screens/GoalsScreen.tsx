@@ -77,7 +77,7 @@ const Bar: React.FC<{ pct: number; color: string; track: string; height?: number
 export const GoalsScreen: React.FC<GoalsScreenProps> = ({ AppTopBarComponent }) => {
   const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
-  const { sync } = useSyncDb();
+  const { sync, syncIfStale } = useSyncDb();
   const display = Font.isLoaded('BricolageGrotesque_800ExtraBold') ? 'BricolageGrotesque_800ExtraBold' : undefined;
   const heading = { fontFamily: display, fontWeight: display ? undefined : ('800' as const) };
 
@@ -95,8 +95,8 @@ export const GoalsScreen: React.FC<GoalsScreenProps> = ({ AppTopBarComponent }) 
 
   useFocusEffect(
     useCallback(() => {
-      sync();
-    }, [sync])
+      syncIfStale();
+    }, [syncIfStale])
   );
 
   /* ---------------- Numbers ---------------- */

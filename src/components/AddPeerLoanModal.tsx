@@ -17,9 +17,11 @@ import {
   ScrollView,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import { format } from 'date-fns';
 import { useTheme } from '../store';
 import { usePeerStore } from '../store/peerStore';
 import { toPaise, DateString } from '../types/peer';
+import { DateTimePickerSheet } from './DateTimePickerSheet';
 
 interface AddPeerLoanModalProps {
   visible: boolean;
@@ -47,15 +49,27 @@ export const AddPeerLoanModal: React.FC<AddPeerLoanModalProps> = ({
   const [dueDate, setDueDate] = useState('');
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [errorText, setErrorText] = useState('');
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [entryCalendarOpen, setEntryCalendarOpen] = useState(false);
 
   const todayStr: DateString = new Date().toISOString().split('T')[0];
+  const [entryDate, setEntryDate] = useState<DateString>(todayStr);
+
+  const isDateOrderInvalid = Boolean(dueDate && entryDate && dueDate < entryDate);
 
   const handleSubmit = () => {
     const num = parseFloat(amountStr);
     const cleanName = contactName.trim();
     if (isNaN(num) || num <= 0 || !cleanName) return;
 
+    if (dueDate && entryDate && dueDate < entryDate) {
+      setErrorText(`Return date must be on or after the ${kind === 'LEND' ? 'date lent' : 'date borrowed'}.`);
+      return;
+    }
+
     setSubmitting(true);
+    setErrorText('');
     try {
       const contact = findOrCreateContact(cleanName);
       const paise = toPaise(num);
@@ -64,7 +78,7 @@ export const AddPeerLoanModal: React.FC<AddPeerLoanModalProps> = ({
         contactId: contact.id,
         kind,
         amount: paise,
-        date: todayStr,
+        date: entryDate || todayStr,
         dueDate: dueDate.trim() || undefined,
         source: { type: 'manual', method: 'cash' },
         note: note.trim() || undefined,
@@ -198,22 +212,83 @@ export const AddPeerLoanModal: React.FC<AddPeerLoanModalProps> = ({
               />
             </View>
 
-            {/* Due Date (Optional) */}
-            <Text style={[styles.inputLabel, { color: muted }]}>Expected Return Date (YYYY-MM-DD, Optional)</Text>
-            <View style={[styles.inputBox, { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#F8FAF9', borderColor: line }]}>
-              <Feather name="calendar" size={16} color={muted} style={{ marginRight: 10 }} />
-              <TextInput
-                style={[styles.textInput, { color: ink }]}
-                placeholder="e.g. 2026-11-15"
-                placeholderTextColor={muted}
-                value={dueDate}
-                onChangeText={setDueDate}
-              />
+            {/* Entry / Loan Date */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, marginBottom: 4 }}>
+              <Text style={[styles.inputLabel, { color: muted, marginTop: 0, marginBottom: 0 }]}>
+                {kind === 'LEND' ? 'Date Lent' : 'Date Borrowed'}
+              </Text>
+              <Pressable
+                onPress={() => setEntryCalendarOpen(true)}
+                style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 2, paddingHorizontal: 4 }}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Change date"
+              >
+                <Feather name="calendar" size={13} color={isDark ? '#B8F36B' : '#0B3D2C'} style={{ marginRight: 5 }} />
+                <Text style={{ fontSize: 13, fontWeight: '700', color: isDark ? '#B8F36B' : '#0B3D2C' }}>
+                  {entryDate === todayStr ? 'Today' : format(new Date(entryDate + 'T00:00:00'), 'dd MMM yyyy')}
+                </Text>
+              </Pressable>
             </View>
+
+            {/* Expected Return Date (Global Calendar) */}
+            <Text style={[styles.inputLabel, { color: muted }]}>Expected Return Date (Optional)</Text>
+            <Pressable
+              onPress={() => setCalendarOpen(true)}
+              style={[
+                styles.inputBox,
+                {
+                  backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#F8FAF9',
+                  borderColor: isDateOrderInvalid ? '#EF4444' : line,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                },
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Select expected return date"
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                <Feather
+                  name="calendar"
+                  size={16}
+                  color={isDateOrderInvalid ? '#EF4444' : dueDate ? (isDark ? '#B8F36B' : '#0B3D2C') : muted}
+                  style={{ marginRight: 10 }}
+                />
+                <Text
+                  style={{
+                    color: isDateOrderInvalid ? '#EF4444' : dueDate ? ink : muted,
+                    fontSize: 14,
+                    fontWeight: dueDate ? '600' : '400',
+                  }}
+                >
+                  {dueDate ? format(new Date(dueDate + 'T00:00:00'), 'dd MMM yyyy') : 'e.g. 2026-11-15'}
+                </Text>
+              </View>
+              {dueDate ? (
+                <Pressable
+                  hitSlop={12}
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    setDueDate('');
+                    setErrorText('');
+                  }}
+                  style={{ padding: 4 }}
+                  accessibilityLabel="Clear date"
+                >
+                  <Feather name="x-circle" size={16} color={muted} />
+                </Pressable>
+              ) : null}
+            </Pressable>
+            {isDateOrderInvalid ? (
+              <Text style={{ color: '#EF4444', fontSize: 12, marginTop: 4, fontWeight: '600' }}>
+                Return date must be on or after {kind === 'LEND' ? 'date lent' : 'date borrowed'}.
+              </Text>
+            ) : null}
 
             {/* Note */}
             <Text style={[styles.inputLabel, { color: muted }]}>Note / Purpose (Optional)</Text>
-            <View style={[styles.inputBox, { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#F8FAF9', borderColor: line, marginBottom: 20 }]}>
+            <View style={[styles.inputBox, { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#F8FAF9', borderColor: line, marginBottom: 16 }]}>
               <Feather name="file-text" size={16} color={muted} style={{ marginRight: 10 }} />
               <TextInput
                 style={[styles.textInput, { color: ink }]}
@@ -224,14 +299,20 @@ export const AddPeerLoanModal: React.FC<AddPeerLoanModalProps> = ({
               />
             </View>
 
+            {errorText ? (
+              <Text style={{ color: '#EF4444', fontSize: 12, marginBottom: 12, textAlign: 'center', fontWeight: '600' }}>
+                {errorText}
+              </Text>
+            ) : null}
+
             {/* Submit Button */}
             <Pressable
               onPress={handleSubmit}
-              disabled={submitting || !amountStr || parseFloat(amountStr) <= 0 || !contactName.trim()}
+              disabled={submitting || !amountStr || parseFloat(amountStr) <= 0 || !contactName.trim() || isDateOrderInvalid}
               style={({ pressed }) => [
                 styles.submitBtn,
                 { backgroundColor: accent },
-                (!amountStr || parseFloat(amountStr) <= 0 || !contactName.trim()) && { opacity: 0.5 },
+                (!amountStr || parseFloat(amountStr) <= 0 || !contactName.trim() || isDateOrderInvalid) && { opacity: 0.5 },
                 pressed && { transform: [{ scale: 0.98 }] },
               ]}
             >
@@ -241,6 +322,39 @@ export const AddPeerLoanModal: React.FC<AddPeerLoanModalProps> = ({
             </Pressable>
           </ScrollView>
         </View>
+
+        {/* Global Calendar Pickers */}
+        <DateTimePickerSheet
+          visible={calendarOpen}
+          mode="date"
+          title="Expected Return Date"
+          value={dueDate ? new Date(dueDate + 'T00:00:00') : new Date(entryDate + 'T00:00:00')}
+          minimumDate={new Date(entryDate + 'T00:00:00')}
+          onClose={() => setCalendarOpen(false)}
+          onConfirm={(selectedDate) => {
+            setDueDate(format(selectedDate, 'yyyy-MM-dd'));
+            setErrorText('');
+            setCalendarOpen(false);
+          }}
+        />
+
+        <DateTimePickerSheet
+          visible={entryCalendarOpen}
+          mode="date"
+          title={kind === 'LEND' ? 'When did you lend this?' : 'When did you borrow this?'}
+          value={entryDate ? new Date(entryDate + 'T00:00:00') : new Date()}
+          maximumDate={new Date()}
+          onClose={() => setEntryCalendarOpen(false)}
+          onConfirm={(selectedDate) => {
+            const formatted = format(selectedDate, 'yyyy-MM-dd');
+            setEntryDate(formatted);
+            if (dueDate && dueDate < formatted) {
+              setDueDate(formatted);
+            }
+            setErrorText('');
+            setEntryCalendarOpen(false);
+          }}
+        />
       </KeyboardAvoidingView>
     </Modal>
   );

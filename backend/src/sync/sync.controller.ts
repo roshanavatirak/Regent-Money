@@ -1,4 +1,7 @@
-import { Controller, Get, Post, Patch, Body, Req, UseGuards, HttpCode, HttpStatus, Delete, Param, Query, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Req, Res, UseGuards, HttpCode, HttpStatus, Delete, Param, Query, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
+import type { Response } from 'express';
+import { SyncVersionInterceptor } from './sync-version.interceptor';
+import { AllowIngestToken } from '../auth/allow-ingest-token.decorator';
 import { SyncService } from './sync.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { OcrSyncDto } from './dto/ocr-sync.dto';
@@ -8,15 +11,45 @@ import { OutboxBatchDto } from './dto/outbox-batch.dto';
 import { DirectSmsDto } from './dto/direct-sms.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 
+/**
+ * Even when nothing changed, a phone gets the full data at least once in this window,
+ * so a missed version bump can never leave it stale for long.
+ */
+export const SYNC_ETAG_WINDOW_MS = 15 * 60 * 1000;
+
+/** Uploaded files are held in memory, so they are capped (same limits the app enforces). */
+export const MAX_SCREENSHOT_BYTES = 15 * 1024 * 1024;
+export const MAX_STATEMENT_BYTES = 25 * 1024 * 1024;
+
 @Controller('sync')
 @UseGuards(JwtAuthGuard)
+@UseInterceptors(SyncVersionInterceptor)
 export class SyncController {
   constructor(private readonly syncService: SyncService) {}
 
+  /**
+   * Full sync, with "nothing changed" replies. The ETag is the user's sync version (bumped on
+   * every write) plus a 15-minute window. If the phone already has that version, reply 304 with
+   * no body and skip the database entirely. When something did change, a phone that sends
+   * ?since=<cursor> receives only the changed rows (see SyncService.syncForClient).
+   */
   @Get()
-  async getSyncData(@Req() req: any) {
+  async getSyncData(@Req() req: any, @Res({ passthrough: true }) res: Response, @Query('since') since?: string) {
     const userId = req.user.id;
-    return this.syncService.sync(userId);
+    const version = await this.syncService.getSyncVersion(userId);
+    const etag = version ? `"${version}-${Math.floor(Date.now() / SYNC_ETAG_WINDOW_MS)}"` : null;
+
+    res.setHeader('Cache-Control', 'private, no-cache');
+    if (etag && req.headers['if-none-match'] === etag) {
+      res.setHeader('ETag', etag);
+      res.status(HttpStatus.NOT_MODIFIED);
+      return;
+    }
+
+    // With ?since=<cursor> the phone gets only what changed; without it, everything
+    const data = await this.syncService.syncForClient(userId, since);
+    if (etag) res.setHeader('ETag', etag);
+    return data;
   }
 
   @Post('bank-profile')
@@ -69,16 +102,6 @@ export class SyncController {
   async getIncomeRecords(@Req() req: any) {
     const userId = req.user.id;
     return this.syncService.getIncomeRecords(userId);
-  }
-
-  @Post('verify-bank')
-  @HttpCode(HttpStatus.OK)
-  async verifyBankAccount(
-    @Req() req: any,
-    @Body() body: { bankCode: string; phoneNumber: string; simulateFailure?: boolean },
-  ) {
-    const userId = req.user.id;
-    return this.syncService.verifyBankAccount(userId, body);
   }
 
   @Patch('transaction/:id/category')
@@ -145,7 +168,9 @@ export class SyncController {
     return this.syncService.syncSmsCatchup(userId, body);
   }
 
+  // The Android background worker posts here with its SMS-only token while the app is closed
   @Post('direct-sms')
+  @AllowIngestToken()
   @HttpCode(HttpStatus.OK)
   async ingestDirectSms(
     @Req() req: any,
@@ -212,7 +237,7 @@ export class SyncController {
   }
 
   @Post('upload-screenshot')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_SCREENSHOT_BYTES, files: 1 } }))
   @HttpCode(HttpStatus.OK)
   async uploadScreenshot(
     @Req() req: any,
@@ -223,11 +248,12 @@ export class SyncController {
     if (!file) {
       throw new BadRequestException('Screenshot image file is required.');
     }
+    await this.syncService.assertScanQuota(userId);
     return this.syncService.processScreenshotUpload(userId, bankProfileId, file.buffer, file.mimetype);
   }
 
   @Post('upload-statement')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_STATEMENT_BYTES, files: 1 } }))
   @HttpCode(HttpStatus.OK)
   async uploadStatement(
     @Req() req: any,
@@ -239,6 +265,7 @@ export class SyncController {
     if (!file) {
       throw new BadRequestException('Statement file is required.');
     }
+    await this.syncService.assertScanQuota(userId);
     return this.syncService.syncStatementFile(userId, bankProfileId, file.buffer, file.mimetype, password);
   }
 

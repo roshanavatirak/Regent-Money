@@ -311,7 +311,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
         if (!user) throw new Error('Sign in again to edit transactions.');
 
         const idemKey = `op_edit_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-        const label = note.trim() || category;
+        const payeeName = note.trim() || transaction.merchant || (transaction as any).source || (category.startsWith('peer_') ? 'Friend' : category);
 
         outbox.enqueue({
           idemKey,
@@ -322,7 +322,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
           payload: {
             amount: parsedAmount,
             category,
-            [isCredit ? 'source' : 'merchant']: label,
+            [isCredit ? 'source' : 'merchant']: payeeName,
             timestamp,
             bankProfileId: selectedBankProfileId || null,
             updatedAt: Date.now(),
@@ -338,8 +338,8 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
             useIncomeStore.getState().updateIncomeRecordState(transaction.id, {
               amount: parsedAmount,
               category,
-              merchant: label,
-              source: label,
+              merchant: payeeName,
+              source: payeeName,
               timestamp,
               bankProfileId: selectedBankProfileId || null,
             });
@@ -348,7 +348,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
           useTransactionStore.getState().updateTransactionState(transaction.id, {
             amount: parsedAmount,
             category,
-            merchant: label,
+            merchant: payeeName,
             timestamp,
             bankProfileId: selectedBankProfileId || null,
           });
@@ -360,13 +360,13 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
           category,
           parsedAmount,
           dateStr,
-          label,
+          payeeName,
         );
 
-        if (label && rememberRule) {
-          tagLearningService.saveLearnedTag(label, category).catch(() => {});
-        } else if (label && initialHasActiveRule && !rememberRule) {
-          tagLearningService.removeLearnedTag(label).catch(() => {});
+        if (payeeName && rememberRule) {
+          tagLearningService.saveLearnedTag(payeeName, category).catch(() => {});
+        } else if (payeeName && initialHasActiveRule && !rememberRule) {
+          tagLearningService.removeLearnedTag(payeeName).catch(() => {});
         }
 
         syncService.flushOutbox().catch(() => {});
@@ -376,7 +376,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
           type: transaction.type,
           newAmount: parsedAmount,
           category,
-          merchant: label,
+          merchant: payeeName,
           timestamp,
           bankProfileId: selectedBankProfileId || null,
         };
@@ -416,7 +416,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
         useBankStore.getState().updateBankBalance(activeBankId, res.updatedBalance);
       }
 
-      const label = note.trim() || category;
+      const payeeName = note.trim() || transaction.merchant || (transaction as any).source || (category.startsWith('peer_') ? 'Friend' : category);
       const isPeer = category.startsWith('peer_');
       if (isCredit) {
         if (isPeer) {
@@ -425,8 +425,8 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
           useIncomeStore.getState().updateIncomeRecordState(transaction.id, {
             amount: parsedAmount,
             category,
-            merchant: label,
-            source: label,
+            merchant: payeeName,
+            source: payeeName,
             timestamp,
           });
         }
@@ -434,26 +434,25 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
         useTransactionStore.getState().updateTransactionState(transaction.id, {
           amount: parsedAmount,
           category,
-          merchant: label,
+          merchant: payeeName,
           timestamp,
         });
       }
 
       // Sync with Peer Ledger
       const dateStr = format(new Date(timestamp), 'yyyy-MM-dd');
-      const merchant = note.trim() || transaction.merchant;
       usePeerStore.getState().syncWithTransactionTag(
         transaction.id,
         category,
         parsedAmount,
         dateStr,
-        merchant
+        payeeName
       );
 
-      if (merchant && rememberRule) {
-        await tagLearningService.saveLearnedTag(merchant, category).catch(() => {});
-      } else if (merchant && initialHasActiveRule && !rememberRule) {
-        await tagLearningService.removeLearnedTag(merchant).catch(() => {});
+      if (payeeName && rememberRule) {
+        await tagLearningService.saveLearnedTag(payeeName, category).catch(() => {});
+      } else if (payeeName && initialHasActiveRule && !rememberRule) {
+        await tagLearningService.removeLearnedTag(payeeName).catch(() => {});
       }
 
       const payload = {
@@ -462,7 +461,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
         type: transaction.type,
         newAmount: parsedAmount,
         category,
-        merchant: label,
+        merchant: payeeName,
         timestamp,
       };
       if (typeof props.onSuccess === 'function') props.onSuccess('updated', payload);

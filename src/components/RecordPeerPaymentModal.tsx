@@ -17,9 +17,11 @@ import {
   ScrollView,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import { format } from 'date-fns';
 import { useTheme } from '../store';
 import { usePeerStore } from '../store/peerStore';
 import { Contact, Paise, toPaise, formatPaise, DateString } from '../types/peer';
+import { DateTimePickerSheet } from './DateTimePickerSheet';
 
 interface RecordPeerPaymentModalProps {
   visible: boolean;
@@ -46,8 +48,10 @@ export const RecordPeerPaymentModal: React.FC<RecordPeerPaymentModalProps> = ({
   const [method, setMethod] = useState<'cash' | 'upi_manual' | 'other'>('cash');
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [calendarOpen, setCalendarOpen] = useState(false);
 
   const todayStr: DateString = new Date().toISOString().split('T')[0];
+  const [paymentDate, setPaymentDate] = useState<DateString>(todayStr);
 
   const handleFullAmount = () => {
     if (pendingAmountPaise > 0) {
@@ -68,7 +72,7 @@ export const RecordPeerPaymentModal: React.FC<RecordPeerPaymentModalProps> = ({
         contactId: contact.id,
         kind,
         amount: paise,
-        date: todayStr,
+        date: paymentDate || todayStr,
         source: { type: 'manual', method },
         note: note.trim() || undefined,
       });
@@ -187,6 +191,23 @@ export const RecordPeerPaymentModal: React.FC<RecordPeerPaymentModalProps> = ({
               />
             </View>
 
+            {/* Payment Date */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, marginBottom: 4 }}>
+              <Text style={[styles.inputLabel, { color: muted, marginTop: 0, marginBottom: 0 }]}>Date of Payment</Text>
+              <Pressable
+                onPress={() => setCalendarOpen(true)}
+                style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 2, paddingHorizontal: 4 }}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Change payment date"
+              >
+                <Feather name="calendar" size={13} color={isDark ? '#B8F36B' : '#0B3D2C'} style={{ marginRight: 5 }} />
+                <Text style={{ fontSize: 13, fontWeight: '700', color: isDark ? '#B8F36B' : '#0B3D2C' }}>
+                  {paymentDate === todayStr ? 'Today' : format(new Date(paymentDate + 'T00:00:00'), 'dd MMM yyyy')}
+                </Text>
+              </Pressable>
+            </View>
+
             {/* Payment Method */}
             <Text style={[styles.inputLabel, { color: muted }]}>Payment Method</Text>
             <View style={styles.methodRow}>
@@ -253,6 +274,20 @@ export const RecordPeerPaymentModal: React.FC<RecordPeerPaymentModalProps> = ({
             </Pressable>
           </ScrollView>
         </View>
+
+        {/* Global Calendar Picker */}
+        <DateTimePickerSheet
+          visible={calendarOpen}
+          mode="date"
+          title="Date of Payment"
+          value={paymentDate ? new Date(paymentDate + 'T00:00:00') : new Date()}
+          maximumDate={new Date()}
+          onClose={() => setCalendarOpen(false)}
+          onConfirm={(selectedDate) => {
+            setPaymentDate(format(selectedDate, 'yyyy-MM-dd'));
+            setCalendarOpen(false);
+          }}
+        />
       </KeyboardAvoidingView>
     </Modal>
   );

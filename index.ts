@@ -1,6 +1,11 @@
 import { registerRootComponent } from 'expo';
 import { Platform } from 'react-native';
 import App from './App';
+import { installAuthFetch } from './src/services/sessionRefresh';
+
+// Every request to the Regent backend refreshes the 15-minute access token silently when needed.
+// Installed here so it also covers headless background tasks.
+installAuthFetch();
 
 // Suppress unhandled promise rejections from web font observers
 if (Platform.OS === 'web' && typeof window !== 'undefined') {

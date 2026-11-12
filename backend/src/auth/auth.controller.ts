@@ -1,16 +1,25 @@
 import { Controller, Post, Get, Patch, Body, Query, Res, Req, HttpCode, HttpStatus, UseGuards, BadRequestException } from '@nestjs/common';
-import { Throttle } from '@nestjs/throttler';
+import { Throttle, SkipThrottle } from '@nestjs/throttler';
+import * as fs from 'fs';
+import * as path from 'path';
 import type { Response } from 'express';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
 
 import { TurnstileService } from './turnstile.service';
+import { TokenService } from './token.service';
+import { JwtService } from '@nestjs/jwt';
+import { clientIpOf } from './throttler-behind-proxy.guard';
+import { EmailBroadcastService } from '../mail/email-broadcast.service';
 
 @Controller('auth')
 export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly turnstileService: TurnstileService,
+    private readonly tokenService: TokenService,
+    private readonly jwtService: JwtService,
+    private readonly emailBroadcastService: EmailBroadcastService,
   ) { }
 
   @Throttle({ default: { limit: 10, ttl: 60000 } })
@@ -21,7 +30,7 @@ export class AuthController {
     @Body() body: { name: string; email: string; phone: string; password?: string; turnstileToken?: string },
   ) {
     await this.requireHumanCheck(req, body.turnstileToken);
-    return this.authService.signUp(body);
+    return this.withTokenPair(req, await this.authService.signUp(body), true);
   }
 
   @Throttle({ default: { limit: 10, ttl: 60000 } })
@@ -29,10 +38,51 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async login(
     @Req() req: any,
-    @Body() body: { emailOrMobile: string; password?: string; turnstileToken?: string },
+    @Body() body: { emailOrMobile: string; password?: string; turnstileToken?: string; rememberMe?: boolean },
   ) {
     await this.requireHumanCheck(req, body.turnstileToken);
-    return this.authService.login(body);
+    return this.withTokenPair(req, await this.authService.login(body, clientIpOf(req)), body?.rememberMe !== false);
+  }
+
+  /**
+   * Apps that send `X-Supports-Refresh: 1` get a 15-minute access token, a refresh token and a
+   * background SMS token. Older app versions keep receiving one 30-day token, so they aren't
+   * logged out every 15 minutes.
+   */
+  private async withTokenPair<T extends { accessToken?: string; profile?: any }>(req: any, result: T, remember: boolean) {
+    const supportsRefresh = String(req?.headers?.['x-supports-refresh'] || '') === '1';
+    if (!supportsRefresh || !result?.accessToken || !result?.profile?.id) return result;
+    const pair = await this.tokenService.issuePair(
+      { id: result.profile.id, email: result.profile.email, role: result.profile.role },
+      { remember, deviceName: (req?.headers?.['x-device-name'] as string) || null },
+    );
+    return { ...result, ...pair };
+  }
+
+  /** Swap a refresh token for a new pair. No access token needed (it has usually expired). */
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  async refresh(@Body('refreshToken') refreshToken: string) {
+    return this.tokenService.refresh(refreshToken);
+  }
+
+  /**
+   * One-time switch for a signed-in older app: its 30-day token (still checked against the
+   * account) is exchanged for a token pair, without asking the user to log in again.
+   */
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @UseGuards(JwtAuthGuard)
+  @Post('upgrade')
+  @HttpCode(HttpStatus.OK)
+  async upgrade(@Req() req: any, @Body() body: { rememberMe?: boolean }) {
+    if (req.user?.tokenType !== 'legacy') {
+      throw new BadRequestException('This session already uses refresh tokens.');
+    }
+    return this.tokenService.issuePair(
+      { id: req.user.id, email: req.user.email, role: req.user.role },
+      { remember: body?.rememberMe !== false, deviceName: (req.headers?.['x-device-name'] as string) || null },
+    );
   }
 
   /**
@@ -89,7 +139,9 @@ export class AuthController {
 
   @Get('reset-password-page')
   async resetPasswordPage(@Query('token') token: string, @Res() res: Response) {
-    if (!token) {
+    // Reset tokens are plain letters and digits. Anything else is not one of ours and is never
+    // written into the page.
+    if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(token)) {
       return res.status(400).send(`
         <!DOCTYPE html>
         <html>
@@ -192,7 +244,7 @@ export class AuthController {
         </div>
 
         <script>
-          const token = ${JSON.stringify(token)};
+          const token = ${JSON.stringify(token).replace(/</g, '\\u003c')};
           async function submitReset() {
             const pwd = document.getElementById('newPassword').value;
             const confirm = document.getElementById('confirmPassword').value;
@@ -250,6 +302,7 @@ export class AuthController {
   @Post('google')
   @HttpCode(HttpStatus.OK)
   async googleAuth(
+    @Req() req: any,
     @Body('idToken') idToken?: string,
     @Body() body?: { idToken?: string },
   ) {
@@ -257,7 +310,7 @@ export class AuthController {
     if (!token) {
       throw new BadRequestException('Google ID token is required');
     }
-    return this.authService.googleAuthWithToken(token);
+    return this.withTokenPair(req, await this.authService.googleAuthWithToken(token), true);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -315,10 +368,47 @@ export class AuthController {
     return this.authService.uploadAvatar(req.user.id, body.fileData);
   }
 
-  @UseGuards(JwtAuthGuard)
+  /**
+   * Log out. Works even when the access token has already expired (the app may have been idle):
+   * the refresh token in the body identifies the device session to cancel.
+   */
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  async logout(@Req() req: any) {
+  async logout(@Req() req: any, @Body() body: { refreshToken?: string }) {
+    const [type, token] = (req.headers?.authorization || '').split(' ');
+    let payload: any = null;
+    if (type === 'Bearer' && token) {
+      try {
+        payload = await this.jwtService.verifyAsync(token, { ignoreExpiration: true });
+      } catch {
+        payload = null;
+      }
+    }
+
+    if (body?.refreshToken || payload?.typ === 'access') {
+      // Log out this device only: cancel its refresh tokens and its current access token
+      await this.tokenService.logoutDevice({
+        refreshToken: body?.refreshToken,
+        familyId: payload?.typ === 'access' ? payload.fid : undefined,
+        jti: payload?.typ === 'access' ? payload.jti : undefined,
+        accessExp: payload?.typ === 'access' ? payload.exp : undefined,
+      });
+      return { success: true };
+    }
+
+    // Older 30-day tokens can't be cancelled one by one: sign out everywhere, as before
+    if (payload?.sub && (!payload.exp || payload.exp * 1000 > Date.now())) {
+      return this.authService.revokeSessions(payload.sub);
+    }
+    return { success: true };
+  }
+
+  /** Log out on every device: all refresh tokens cancelled, current access tokens refused at once. */
+  @UseGuards(JwtAuthGuard)
+  @Post('logout-all')
+  @HttpCode(HttpStatus.OK)
+  async logoutAll(@Req() req: any) {
     return this.authService.revokeSessions(req.user.id);
   }
 
@@ -692,5 +782,124 @@ export class AuthController {
         </html>
       `);
     }
+  }
+
+  /** Regent Money logo shown at the top of every email. Public, cached for a day. */
+  @SkipThrottle()
+  @Get('email-logo.png')
+  emailLogo(@Res() res: Response) {
+    const file = [
+      path.join(process.cwd(), 'assets', 'email-logo.png'),
+      path.join(__dirname, '..', '..', 'assets', 'email-logo.png'),
+      path.join(__dirname, '..', '..', '..', 'assets', 'email-logo.png'),
+    ].find((f) => fs.existsSync(f));
+    if (!file) return res.status(404).end();
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+    return res.sendFile(file);
+  }
+
+  @Get('unsubscribe')
+  async renderUnsubscribeConfirmPage(@Query('token') token: string, @Res() res: Response) {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+
+    if (!token) {
+      return res.status(400).send(`
+        <!DOCTYPE html><html><body style="font-family:sans-serif;padding:40px;text-align:center;background:#F3F6F4;">
+          <div style="max-width:440px;margin:0 auto;background:#fff;padding:32px;border-radius:16px;border:1px solid #E1E9E4;">
+            <h2 style="color:#0F172A;">Invalid Request</h2>
+            <p style="color:#64748B;">Missing unsubscribe token.</p>
+          </div>
+        </body></html>
+      `);
+    }
+
+    const verified = this.emailBroadcastService.verifyUnsubscribeToken(token);
+    if (!verified) {
+      return res.status(400).send(`
+        <!DOCTYPE html><html><body style="font-family:sans-serif;padding:40px;text-align:center;background:#F3F6F4;">
+          <div style="max-width:440px;margin:0 auto;background:#fff;padding:32px;border-radius:16px;border:1px solid #E1E9E4;">
+            <h2 style="color:#0F172A;">Link Expired or Invalid</h2>
+            <p style="color:#64748B;">This unsubscribe link is not valid or has expired.</p>
+          </div>
+        </body></html>
+      `);
+    }
+
+    return res.status(200).send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Unsubscribe - Regent Money</title>
+        <style>
+          body { margin:0; padding:40px 16px; background-color:#F3F6F4; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; text-align:center; }
+          .card { max-width:460px; margin:0 auto; background:#FFFFFF; padding:36px 28px; border-radius:18px; border:1px solid #E1E9E4; box-shadow:0 4px 16px rgba(11,61,44,0.06); }
+          .logo { width:40px; height:40px; border-radius:12px; background:#0B3D2C; color:#B8F36B; font-weight:bold; font-size:20px; line-height:40px; margin:0 auto 20px; }
+          h2 { color:#0F172A; font-size:22px; margin:0 0 12px; }
+          p { color:#475569; font-size:14px; line-height:22px; margin:0 0 24px; }
+          .btn { background:#0B3D2C; color:#B8F36B; border:none; padding:14px 28px; border-radius:12px; font-weight:700; font-size:15px; cursor:pointer; width:100%; transition: opacity 0.2s; }
+          .btn:hover { opacity:0.9; }
+          .notice { font-size:12px; color:#94A3B8; margin-top:20px; line-height:18px; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <div class="logo">RM</div>
+          <h2>Unsubscribe from Updates</h2>
+          <p>Are you sure you want to stop receiving product announcements, weekly wealth tips, and update emails from Regent Money?</p>
+          <form method="POST" action="/auth/unsubscribe">
+            <input type="hidden" name="token" value="${token}" />
+            <button type="submit" class="btn">Confirm Unsubscribe</button>
+          </form>
+          <p class="notice">
+            Important transactional emails (security alerts, password resets, and policy changes) will still be delivered.
+          </p>
+        </div>
+      </body>
+      </html>
+    `);
+  }
+
+  @Post('unsubscribe')
+  async handleUnsubscribeExecution(@Body('token') token: string, @Res() res: Response) {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+
+    if (!token) {
+      return res.status(400).send('<p>Missing unsubscribe token.</p>');
+    }
+
+    const verified = this.emailBroadcastService.verifyUnsubscribeToken(token);
+    if (!verified) {
+      return res.status(400).send('<p>Invalid or expired unsubscribe token.</p>');
+    }
+
+    await this.emailBroadcastService.recordUnsubscribe(verified.emailHmac, 'all');
+
+    return res.status(200).send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Unsubscribed - Regent Money</title>
+        <style>
+          body { margin:0; padding:40px 16px; background-color:#F3F6F4; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; text-align:center; }
+          .card { max-width:460px; margin:0 auto; background:#FFFFFF; padding:36px 28px; border-radius:18px; border:1px solid #E1E9E4; box-shadow:0 4px 16px rgba(11,61,44,0.06); }
+          .badge { width:48px; height:48px; border-radius:50%; background:#E3F2E8; color:#0B6B3A; font-size:24px; line-height:48px; margin:0 auto 16px; }
+          h2 { color:#0F172A; font-size:22px; margin:0 0 12px; }
+          p { color:#475569; font-size:14px; line-height:22px; margin:0; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <div class="badge">&#10003;</div>
+          <h2>You Have Been Unsubscribed</h2>
+          <p>Your email has been removed from marketing and announcement lists. You will not receive any further optional emails from us.</p>
+        </div>
+      </body>
+      </html>
+    `);
   }
 }

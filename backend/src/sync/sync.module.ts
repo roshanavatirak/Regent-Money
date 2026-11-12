@@ -1,3 +1,4 @@
+import { SyncVersionInterceptor } from './sync-version.interceptor';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { SyncService } from './sync.service';
@@ -39,7 +40,7 @@ import { CryptoModule } from '../crypto/crypto.module';
     NotificationsModule,
     CryptoModule,
   ],
-  providers: [SyncService, TombstonePurgeService],
+  providers: [SyncService, TombstonePurgeService, SyncVersionInterceptor],
   controllers: [SyncController],
 })
 export class SyncModule {}

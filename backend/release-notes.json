@@ -1,16 +1,24 @@
 {
   "notes": [
     {
-      "title": "Email Verification Deep Links",
-      "detail": "Open Regent Money directly from verification emails to log in instantly."
+      "title": "Better Borrow & Lend",
+      "detail": "Keeping track of money you've lent to friends and paid back is now smoother and clearer."
     },
     {
-      "title": "Smoother Sign Up",
-      "detail": "One-tap action to open your email app and complete registration quickly."
+      "title": "Suggestions and bug reports",
+      "detail": "Improved screens for suggesting a feature or reporting a problem, so it's quicker to tell us what you need."
     },
     {
-      "title": "Security & Usability Updates",
-      "detail": "Instant server-side session revocation, hardware keystore fixes, and enabled screenshots."
+      "title": "Notifications open the right screen",
+      "detail": "Tapping a notification now takes you straight to the screen it's about, or to Google Play when an update is ready."
+    },
+    {
+      "title": "Cleaner emails",
+      "detail": "Sign-up and password reset emails have a fresh, simpler design that's easier to read."
+    },
+    {
+      "title": "More reliable sign-in emails",
+      "detail": "Verification and password reset emails keep arriving even on busy days, with a clear timer before you can ask for a new link."
     }
   ]
 }

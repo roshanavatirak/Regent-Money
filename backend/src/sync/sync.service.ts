@@ -1,4 +1,7 @@
-import { Injectable, Logger, BadRequestException, UnauthorizedException, OnModuleInit, GoneException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, UnauthorizedException, OnModuleInit, GoneException, ConflictException, HttpException, HttpStatus } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
+import { createHash } from 'node:crypto';
+import { istDay } from '../ai/ai.service';
 import { isErasedRow } from './erased-rows.util';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, In, EntityManager, Brackets } from 'typeorm';
@@ -55,6 +58,53 @@ if (typeof BigInt !== 'undefined' && !(BigInt.prototype as any).toJSON) {
 }
 
 export class RejectOp extends Error {}
+
+/**
+ * Changed-only sync ("delta sync").
+ *  - Each pull re-sends the last 2 minutes before the phone's cursor, so a write that was still
+ *    being committed during the previous pull is never missed (receiving a row twice is harmless).
+ *  - A cursor older than 25 days gets the full data instead: deleted rows are erased for good
+ *    after 30 days, so an older phone could miss a deletion.
+ *  - Above 2,000 changed rows the full data is simpler and no slower.
+ */
+export const DELTA_OVERLAP_MS = 2 * 60 * 1000;
+export const DELTA_MAX_AGE_MS = 25 * 24 * 60 * 60 * 1000;
+export const DELTA_MAX_ROWS = 2000;
+
+/**
+ * How many months in a row (ending this month, or last month if nothing is saved yet this
+ * month) the goal has at least one saving. Counts months, not the number of savings.
+ */
+export function savingStreakMonths(entries: any[] | null | undefined, today: string): number {
+  const months = new Set<string>();
+  for (const e of entries || []) {
+    if (e && e.type === 'save' && typeof e.at === 'string' && Number(e.amount) > 0) months.add(e.at.slice(0, 7));
+  }
+  let [year, month] = today.slice(0, 7).split('-').map(Number);
+  const key = () => `${year}-${String(month).padStart(2, '0')}`;
+  const back = () => {
+    month -= 1;
+    if (month === 0) {
+      month = 12;
+      year -= 1;
+    }
+  };
+  if (!months.has(key())) back();
+  let streak = 0;
+  while (months.has(key())) {
+    streak += 1;
+    back();
+  }
+  return streak;
+}
+
+/** What the older (pre-outbox) endpoints tell the app when a write is refused. */
+const LEGACY_REJECT_MESSAGES: Record<string, string> = {
+  bad_bank_profile: 'Bank account not found.',
+  bad_amount: 'Enter a valid amount (up to 2 decimal places).',
+  bad_timestamp: 'Choose a valid date.',
+  forbidden: 'Entry not found.',
+};
 
 export type OpResult = {
   idemKey: string;
@@ -122,11 +172,84 @@ export class SyncService implements OnModuleInit {
     private readonly fieldCipherService: FieldCipherService,
   ) {}
 
+  /**
+   * Every new database connection gets two safety limits:
+   *  - a single query is cancelled after 20 s (DB_STATEMENT_TIMEOUT_MS) instead of holding a
+   *    connection and the CPU for minutes
+   *  - a transaction left open and idle for 30 s is closed by the database
+   * Set with a plain SET on each connection, which works through Supabase's pooler too.
+   */
+  private installDbTimeouts() {
+    try {
+      const pool = (this.dataSource.driver as any)?.master;
+      if (!pool || typeof pool.on !== 'function') return;
+      const statementMs = Math.max(1000, Number(process.env.DB_STATEMENT_TIMEOUT_MS) || 20_000);
+      pool.on('connect', (client: any) => {
+        client
+          .query(`SET statement_timeout = ${statementMs}; SET idle_in_transaction_session_timeout = 30000;`)
+          .catch((err: any) => this.logger.warn(`Could not set database timeouts: ${err?.message || err}`));
+      });
+    } catch (err: any) {
+      this.logger.warn(`Could not install database timeouts: ${err?.message || err}`);
+    }
+  }
+
+  /** True once the database stamps every changed row (see installChangeTracking). */
+  private deltaSyncReady = false;
+
+  /**
+   * Makes the database itself record when a transaction or income row last changed
+   * (server_changed_at, set by a trigger on every insert and update). Changed-only sync reads
+   * this instead of updated_at, which is the time on the PHONE when the edit was made and can
+   * be days old for an edit made offline. If any step fails, changed-only sync stays off and
+   * every pull sends the full data, as before.
+   */
+  private async installChangeTracking() {
+    try {
+      await this.dataSource.query(`
+        CREATE OR REPLACE FUNCTION finance.stamp_server_changed_at() RETURNS trigger AS $$
+        BEGIN
+          NEW.server_changed_at := (extract(epoch from clock_timestamp()) * 1000)::bigint;
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+      `);
+      for (const table of ['transactions', 'income_records']) {
+        await this.dataSource.query(`ALTER TABLE finance.${table} ADD COLUMN IF NOT EXISTS server_changed_at BIGINT;`);
+        await this.dataSource.query(
+          `CREATE INDEX IF NOT EXISTS idx_${table}_user_changed ON finance.${table} (user_id, server_changed_at);`,
+        );
+        await this.dataSource.query(`
+          DO $$ BEGIN
+            IF NOT EXISTS (
+              SELECT 1 FROM pg_trigger WHERE tgname = 'trg_${table}_server_changed'
+                 AND tgrelid = 'finance.${table}'::regclass
+            ) THEN
+              CREATE TRIGGER trg_${table}_server_changed BEFORE INSERT OR UPDATE ON finance.${table}
+              FOR EACH ROW EXECUTE FUNCTION finance.stamp_server_changed_at();
+            END IF;
+          END $$;
+        `);
+      }
+      this.deltaSyncReady = true;
+      this.logger.log('Changed-only sync is on (server change tracking installed).');
+    } catch (err: any) {
+      this.deltaSyncReady = false;
+      this.logger.warn(`Changed-only sync is OFF, full sync is used instead: ${err?.message || err}`);
+    }
+  }
+
   async onModuleInit() {
+    this.installDbTimeouts();
+    await this.installChangeTracking();
     this.logger.log('Initializing BankProfile schema checks...');
     try {
       await this.dataSource.query(`
         ALTER TABLE core.bank_profiles ADD COLUMN IF NOT EXISTS sms_sender_id TEXT;
+      `);
+      // Time of the bank SMS whose "available balance" the stored balance came from
+      await this.dataSource.query(`
+        ALTER TABLE core.bank_profiles ADD COLUMN IF NOT EXISTS balance_as_of BIGINT;
       `);
       await this.dataSource.query(`
         ALTER TABLE core.bank_profiles ADD COLUMN IF NOT EXISTS upi_id TEXT;
@@ -227,9 +350,6 @@ export class SyncService implements OnModuleInit {
       `);
       // Performance indexes for scale (millions of records per user)
       await this.dataSource.query(`
-        CREATE INDEX IF NOT EXISTS idx_transactions_user_active ON finance.transactions(user_id, is_deleted);
-      `);
-      await this.dataSource.query(`
         CREATE INDEX IF NOT EXISTS idx_transactions_user_timestamp_desc ON finance.transactions(user_id, is_deleted, timestamp DESC);
       `);
       await this.dataSource.query(`
@@ -237,9 +357,6 @@ export class SyncService implements OnModuleInit {
       `);
       await this.dataSource.query(`
         CREATE INDEX IF NOT EXISTS idx_transactions_user_sms_id ON finance.transactions(user_id, sms_id);
-      `);
-      await this.dataSource.query(`
-        CREATE INDEX IF NOT EXISTS idx_income_records_user_active ON finance.income_records(user_id, is_deleted);
       `);
       await this.dataSource.query(`
         CREATE INDEX IF NOT EXISTS idx_income_records_user_timestamp_desc ON finance.income_records(user_id, is_deleted, timestamp DESC);
@@ -259,15 +376,18 @@ export class SyncService implements OnModuleInit {
       await this.dataSource.query(`
         CREATE INDEX IF NOT EXISTS idx_notifications_user_created_desc ON core.notifications(user_id, is_deleted, created_at DESC);
       `);
-      try {
-        await this.dataSource.query(`CREATE EXTENSION IF NOT EXISTS pg_trgm;`);
-        await this.dataSource.query(`
-          CREATE INDEX IF NOT EXISTS idx_transactions_merchant_trgm ON finance.transactions USING gin (merchant gin_trgm_ops);
-        `);
-      } catch {
-        await this.dataSource.query(`
-          CREATE INDEX IF NOT EXISTS idx_transactions_merchant ON finance.transactions(merchant);
-        `);
+      // Indexes nothing reads any more, removed to save disk and make every write cheaper:
+      //  - the two on the plain "merchant" column (merchants are stored encrypted now)
+      //  - the two (user_id, is_deleted) ones, fully covered by the (user_id, is_deleted, timestamp) indexes
+      for (const index of [
+        'finance.idx_transactions_merchant_trgm',
+        'finance.idx_transactions_merchant',
+        'finance.idx_transactions_user_active',
+        'finance.idx_income_records_user_active',
+      ]) {
+        await this.dataSource.query(`DROP INDEX IF EXISTS ${index};`).catch((err: any) =>
+          this.logger.warn(`Could not drop unused index ${index}: ${err?.message || err}`),
+        );
       }
       // User merchant learning table
       await this.dataSource.query(`
@@ -401,28 +521,203 @@ export class SyncService implements OnModuleInit {
     }
   }
 
-  async invalidateUserSyncCache(userId: string) {
-    if (!userId) return;
-    try {
-      await this.redisService.del(`user:${userId}:sync`);
-    } catch (err: any) {
-      this.logger.warn(`Failed to invalidate sync cache for user ${userId}: ${err.message}`);
+  /**
+   * Runs `fn` over rows 50 at a time instead of one by one. The first row runs alone so the
+   * user's key is loaded (and cached) once, rather than 50 parallel key unwraps.
+   */
+  private async decryptInBatches<T>(rows: T[], fn: (row: T) => Promise<void>, batchSize = 50): Promise<void> {
+    if (rows.length === 0) return;
+    await fn(rows[0]);
+    for (let i = 1; i < rows.length; i += batchSize) {
+      await Promise.all(rows.slice(i, i + batchSize).map(fn));
     }
   }
 
-  async sync(userId: string) {
-    const cacheKey = `user:${userId}:sync`;
+  /**
+   * Marks the user's data as changed, so the next GET /sync sends everything again instead of
+   * "304 nothing changed". Called by the write paths below and, for every write request to
+   * /sync, by SyncVersionInterceptor.
+   */
+  async invalidateUserSyncCache(userId: string) {
+    await this.bumpSyncVersion(userId);
+  }
+
+  /**
+   * Each user's sync version, kept in this server's memory (no Redis commands at all).
+   * After a restart the map is empty, so every user gets a brand-new version and their phone
+   * does one full sync, which is always correct. This relies on there being ONE server: with
+   * several servers the version must move to a shared store again.
+   */
+  private static readonly syncVersions = new Map<string, number>();
+  private static readonly MAX_TRACKED_VERSIONS = 50_000;
+
+  /** A new version is the current time in microseconds: always above any earlier version. */
+  private static freshSyncVersion(previous = 0): number {
+    return Math.max(Date.now() * 1000, previous + 1);
+  }
+
+  /** Marks the user's data as changed. Never fails and never waits on the network. */
+  async bumpSyncVersion(userId: string): Promise<void> {
+    if (!userId) return;
+    const versions = SyncService.syncVersions;
+    if (versions.size >= SyncService.MAX_TRACKED_VERSIONS && !versions.has(userId)) versions.clear();
+    versions.set(userId, SyncService.freshSyncVersion(versions.get(userId)));
+  }
+
+  /** The user's current sync version (created on first use). */
+  async getSyncVersion(userId: string): Promise<string | null> {
+    if (!userId) return null;
+    const versions = SyncService.syncVersions;
+    let version = versions.get(userId);
+    if (version == null) {
+      if (versions.size >= SyncService.MAX_TRACKED_VERSIONS) versions.clear();
+      version = SyncService.freshSyncVersion();
+      versions.set(userId, version);
+    }
+    return String(version);
+  }
+
+  /** Tests only. */
+  static resetSyncVersionsForTest() {
+    SyncService.syncVersions.clear();
+  }
+
+  /** The database's clock in milliseconds: the same clock that stamps server_changed_at. */
+  private async dbNowMs(): Promise<number> {
+    const rows = await this.dataSource.query(`SELECT (extract(epoch from clock_timestamp()) * 1000)::bigint AS now`);
+    const now = Number(rows?.[0]?.now);
+    if (!Number.isFinite(now) || now <= 0) throw new Error('database clock unavailable');
+    return now;
+  }
+
+  /**
+   * What GET /sync returns. With a valid `since` cursor the phone gets only what changed since
+   * then; otherwise (old app, forced refresh, cursor too old, tracking not installed, or any
+   * problem building the delta) it gets everything. Both replies carry the next cursor.
+   */
+  async syncForClient(userId: string, sinceRaw?: string | null) {
+    if (!this.deltaSyncReady) return this.sync(userId);
+
+    let cursor: number;
     try {
-      const cached = await this.redisService.get(cacheKey);
-      if (cached) {
-        this.logger.log(`[SyncService] Cache HIT for user: ${userId}`);
-        return JSON.parse(cached);
-      }
-    } catch (err: any) {
-      this.logger.warn(`[SyncService] Cache lookup error: ${err.message}`);
+      cursor = await this.dbNowMs();
+    } catch {
+      return this.sync(userId);
     }
 
-    this.logger.log(`Performing data synchronization for user: ${userId}`);
+    const since = sinceRaw == null || sinceRaw === '' ? NaN : Number(sinceRaw);
+    if (Number.isInteger(since) && since > cursor - DELTA_MAX_AGE_MS && since <= cursor + 60_000) {
+      try {
+        const delta = await this.syncDelta(userId, since, cursor);
+        if (delta) return delta;
+      } catch (err: any) {
+        this.logger.warn(`Changed-only sync failed for user ${userId}, sending full data: ${err?.message || err}`);
+      }
+    }
+
+    const full = await this.sync(userId);
+    return { ...full, delta: false, cursor };
+  }
+
+  /**
+   * Only the transactions and income that changed after `since` (deleted ones as ids), plus the
+   * small lists in full (accounts, budgets, goals, exclusions). `totals` lets the phone check
+   * that it ends up with exactly as many rows as the server holds, and ask for everything if not.
+   * Returns null when the full data is the better answer.
+   */
+  async syncDelta(userId: string, since: number, cursor: number) {
+    const from = since - DELTA_OVERLAP_MS;
+
+    const [txRows, incRows, budgets, goals, bankProfiles, exclusions, counts] = await Promise.all([
+      this.transactionRepository
+        .createQueryBuilder('t')
+        .where('t.userId = :userId', { userId })
+        .andWhere('t.server_changed_at > :from', { from })
+        .take(DELTA_MAX_ROWS + 1)
+        .getMany(),
+      this.incomeRecordRepository
+        .createQueryBuilder('i')
+        .where('i.userId = :userId', { userId })
+        .andWhere('i.server_changed_at > :from', { from })
+        .take(DELTA_MAX_ROWS + 1)
+        .getMany(),
+      this.budgetDeclarationRepository.find({ where: { userId, isDeleted: false } }),
+      this.savingsGoalRepository.find({ where: { userId, isDeleted: false } }),
+      this.bankProfileRepository.find({ where: { userId, isDeleted: false } }),
+      this.budgetExclusionRepository.find({ where: { userId, isDeleted: false } }),
+      this.dataSource.query(
+        `SELECT
+           (SELECT count(*) FROM finance.transactions WHERE user_id = $1 AND is_deleted = false) AS transactions,
+           (SELECT count(*) FROM finance.income_records WHERE user_id = $1 AND is_deleted = false
+              AND NOT (COALESCE(amount, 0) = 95000 AND id ~ '^income_[0-9]+_')) AS income`,
+        [userId],
+      ),
+    ]);
+
+    if (txRows.length > DELTA_MAX_ROWS || incRows.length > DELTA_MAX_ROWS) return null;
+
+    const excludedTransactionIds = new Set((exclusions || []).map((e) => e.transactionId));
+
+    const deletedTransactionIds = txRows.filter((t) => t.isDeleted).map((t) => t.id);
+    const transactions: any[] = txRows.filter((t) => !t.isDeleted);
+    for (const tx of transactions) tx.excludedFromBudget = excludedTransactionIds.has(tx.id);
+    await this.decryptInBatches(
+      transactions.filter((tx) => tx.encAmount != null),
+      async (tx) => {
+        try {
+          const dec = await this.fieldCipherService.readTransactionDualRun(userId, tx);
+          tx.amount = dec.amount;
+          if (dec.merchant) tx.merchant = dec.merchant;
+        } catch (e: any) {
+          this.logger.error(`Tampering alert: Failed to decrypt transaction row ${tx.id}`, e.stack);
+        }
+      },
+    );
+
+    // Same legacy mock-income filter as the full sync
+    const isMockIncome = (inc: IncomeRecord) => inc.amount === 95000 && /^income_\d+_/.test(inc.id);
+    const deletedIncomeIds = incRows.filter((i) => i.isDeleted || isMockIncome(i)).map((i) => i.id);
+    const incomeRecords = incRows.filter((i) => !i.isDeleted && !isMockIncome(i));
+    await this.decryptInBatches(
+      incomeRecords.filter((inc) => inc.encAmount != null),
+      async (inc) => {
+        try {
+          const dec = await this.fieldCipherService.readIncomeDualRun(userId, inc);
+          inc.amount = dec.amount;
+          if (dec.source) inc.source = dec.source;
+        } catch (e: any) {
+          this.logger.error(`Tampering alert: Failed to decrypt income row ${inc.id}`, e.stack);
+        }
+      },
+    );
+
+    const now = Date.now();
+    for (const bank of bankProfiles) {
+      bank.lastSyncTimestamp = now;
+      if (bank.accountType === 'Savings' && Number(bank.currentBalance) < 0) bank.currentBalance = 0;
+    }
+
+    return {
+      delta: true,
+      cursor,
+      transactions,
+      deletedTransactionIds,
+      incomeRecords,
+      deletedIncomeIds,
+      totals: {
+        transactions: Number(counts?.[0]?.transactions ?? -1),
+        incomeRecords: Number(counts?.[0]?.income ?? -1),
+      },
+      body: bankProfiles,
+      budgets,
+      goals,
+      bankProfiles,
+      excludedTransactionIds: [...excludedTransactionIds],
+    };
+  }
+
+  async sync(userId: string) {
+    this.logger.debug(`Performing data synchronization for user: ${userId}`);
 
     const [rawTransactions, budgets, goals, bankProfiles, rawIncomeRecords, exclusions] = await Promise.all([
       this.transactionRepository.find({ where: { userId, isDeleted: false }, order: { timestamp: 'DESC' } }),
@@ -438,9 +733,10 @@ export class SyncService implements OnModuleInit {
       (inc) => !(inc.amount === 95000 && /^income_\d+_/.test(inc.id)),
     );
 
-    // Read and verify encrypted income records
-    for (const inc of incomeRecords) {
-      if (inc.encAmount != null) {
+    // Read and verify encrypted income records (in parallel batches, see decryptInBatches)
+    await this.decryptInBatches(
+      incomeRecords.filter((inc) => inc.encAmount != null),
+      async (inc) => {
         try {
           const dec = await this.fieldCipherService.readIncomeDualRun(userId, inc);
           inc.amount = dec.amount;
@@ -448,10 +744,10 @@ export class SyncService implements OnModuleInit {
         } catch (e: any) {
           this.logger.error(`Tampering alert: Failed to decrypt income row ${inc.id}`, e.stack);
         }
-      }
-    }
+      },
+    );
 
-    const excludedTransactionIds = (exclusions || []).map((e) => e.transactionId);
+    const excludedTransactionIds = new Set((exclusions || []).map((e) => e.transactionId));
 
     // Deduplicate only true duplicate records (identical reference ID, identical SMS hash, or exact-second collision)
     const seenTx = new Set<string>();
@@ -495,7 +791,14 @@ export class SyncService implements OnModuleInit {
         duplicateIdsToDelete.push(tx.id);
         continue;
       }
-      if (tx.encAmount != null) {
+      (tx as any).excludedFromBudget = excludedTransactionIds.has(tx.id);
+      transactions.push(tx);
+    }
+
+    // Decrypt the kept rows (duplicates were skipped above, as before) in parallel batches
+    await this.decryptInBatches(
+      transactions.filter((tx) => tx.encAmount != null),
+      async (tx) => {
         try {
           const dec = await this.fieldCipherService.readTransactionDualRun(userId, tx);
           tx.amount = dec.amount;
@@ -503,10 +806,8 @@ export class SyncService implements OnModuleInit {
         } catch (e: any) {
           this.logger.error(`Tampering alert: Failed to decrypt transaction row ${tx.id}`, e.stack);
         }
-      }
-      (tx as any).excludedFromBudget = excludedTransactionIds.includes(tx.id);
-      transactions.push(tx);
-    }
+      },
+    );
 
     if (duplicateIdsToDelete.length > 0) {
       this.logger.log(`Cleaning up ${duplicateIdsToDelete.length} duplicate transactions for user: ${userId}`);
@@ -520,8 +821,10 @@ export class SyncService implements OnModuleInit {
     for (const bank of bankProfiles) {
       bank.lastSyncTimestamp = now;
       if (bank.accountType === 'Savings' && Number(bank.currentBalance) < 0) {
+        // Shown as 0, but the stored value is left alone and logged: a negative savings
+        // balance means the tracked balance has drifted and should be looked at, not hidden.
+        this.logger.warn(`Savings balance below zero for bank ${bank.id} (user ${userId}): ${bank.currentBalance}`);
         bank.currentBalance = 0;
-        this.bankProfileRepository.save(bank).catch(() => {});
       }
     }
 
@@ -532,16 +835,40 @@ export class SyncService implements OnModuleInit {
       goals,
       bankProfiles,
       incomeRecords,
-      excludedTransactionIds,
+      excludedTransactionIds: [...excludedTransactionIds],
     };
 
-    try {
-      await this.redisService.set(cacheKey, JSON.stringify(result), 30);
-    } catch (err: any) {
-      this.logger.warn(`[SyncService] Cache store error: ${err.message}`);
-    }
-
     return result;
+  }
+
+  /**
+   * Ids are chosen by the phone and are unique across all users. Before saving a new row under
+   * such an id, make sure the id is not already someone else's row: saving would otherwise
+   * overwrite that row and hand it to the caller.
+   */
+  private async assertIdNotOwnedByAnother(repo: Repository<any>, id: unknown, userId: string) {
+    if (id == null || id === '') return;
+    if (typeof id !== 'string' || id.length > 120) throw new BadRequestException('Invalid id.');
+    const row = await repo.findOne({ where: { id }, select: { id: true, userId: true } });
+    if (row && row.userId !== userId) {
+      throw new ConflictException('This item could not be saved. Please try again.');
+    }
+  }
+
+  /** Statement and screenshot scans use the AI: each person gets a daily number of them. */
+  async assertScanQuota(userId: string) {
+    const quota = await this.aiService.consumeDailyQuota(userId, 'scan');
+    if (!quota.allowed) {
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          code: 'AI_SCAN_LIMIT',
+          message: `You've scanned ${quota.limit} statements or screenshots today, which is the daily limit. It resets at midnight.`,
+          limit: quota.limit,
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
   }
 
   /**
@@ -594,6 +921,7 @@ export class SyncService implements OnModuleInit {
       return this.bankProfileRepository.save(existing);
     }
 
+    await this.assertIdNotOwnedByAnother(this.bankProfileRepository, data.id, userId);
     const bankProfile = this.bankProfileRepository.create({
       id: data.id,
       userId,
@@ -615,14 +943,10 @@ export class SyncService implements OnModuleInit {
 
   async deleteBankProfile(userId: string, id: string) {
     this.logger.log(`Deleting bank profile: ${id} for user: ${userId}`);
-    let bankProfile = await this.bankProfileRepository.findOne({
+    // Only the owner's own account: never look the id up without the user
+    const bankProfile = await this.bankProfileRepository.findOne({
       where: { id, userId, isDeleted: false },
     });
-    if (!bankProfile) {
-      bankProfile = await this.bankProfileRepository.findOne({
-        where: { id, isDeleted: false },
-      });
-    }
     if (!bankProfile) {
       throw new BadRequestException('Bank profile not found or already deleted.');
     }
@@ -662,48 +986,6 @@ export class SyncService implements OnModuleInit {
       }
     }
     return filtered;
-  }
-
-  async verifyBankAccount(
-    userId: string,
-    data: { bankCode: string; phoneNumber: string; simulateFailure?: boolean }
-  ) {
-    this.logger.log(`Verifying bank connection for user: ${userId}, bank: ${data.bankCode}`);
-
-    if (data.simulateFailure) {
-      throw new BadRequestException(`Phone number not registered with ${data.bankCode || 'bank'}`);
-    }
-
-    const user = await this.userRepository.findOne({ where: { id: userId } });
-    if (!user) {
-      throw new UnauthorizedException('User session not found.');
-    }
-
-    const cleanNumber = (num: string) => num.replace(/[\s\-\+]/g, '').slice(-10);
-    
-    const inputPhone = cleanNumber(data.phoneNumber);
-    const userPhone = user.phone ? cleanNumber(user.phone) : '';
-
-    if (!userPhone) {
-      throw new BadRequestException('Verification failed: No mobile number registered in your profile.');
-    }
-
-    if (inputPhone !== userPhone) {
-      throw new BadRequestException(`Phone number not registered with ${data.bankCode || 'bank'}`);
-    }
-
-    // Generate simulated account data dynamically
-    const suffix = Math.floor(1000 + Math.random() * 9000).toString();
-    const mockBalance = Math.floor(15000 + Math.random() * 85000);
-
-    return {
-      success: true,
-      bankName: data.bankCode,
-      accountNumberSuffix: suffix,
-      accountType: 'Savings Account',
-      holderName: user.name || 'Account Holder',
-      currentBalance: mockBalance,
-    };
   }
 
   async updateTransactionCategory(
@@ -1525,130 +1807,126 @@ export class SyncService implements OnModuleInit {
     };
   }
 
-  async addManualTransaction(userId: string, data: ManualTransactionDto) {
-    this.logger.log(`Adding manual ${data.type} transaction for user ${userId}, bank: ${data.bankProfileId}`);
-
-    const bank = await this.bankProfileRepository.findOne({
-      where: { id: data.bankProfileId, userId, isDeleted: false },
-    });
-    if (!bank) {
-      throw new BadRequestException('Bank profile not found or does not belong to you.');
-    }
-
-    const amount = parseFloat(String(data.amount));
-    if (isNaN(amount) || amount <= 0) {
-      throw new BadRequestException('Transaction amount must be a positive number.');
-    }
-
-    if (data.type !== 'debit' && data.type !== 'credit') {
-      throw new BadRequestException("Transaction type must be 'debit' or 'credit'.");
-    }
-
-    const cleanCategory = (data.category || '').trim();
-    if (!cleanCategory) {
-      throw new BadRequestException('Category is required.');
-    }
-
-    const note = (data.note || '').trim() || cleanCategory;
-    const timestamp = data.timestamp ? Number(data.timestamp) : Date.now();
-
-    let createdRecord: any = null;
-
-    if (data.type === 'debit') {
-      const txId = 'tx_manual_' + Math.random().toString(36).substr(2, 9);
-      const enc = await this.fieldCipherService.encryptTransactionFields(
-        userId,
-        txId,
-        { amount, merchant: note },
-      );
-      const newTx = this.transactionRepository.create({
-        id: txId,
-        userId,
-        amount: null as any,
-        category: cleanCategory.toLowerCase(),
-        merchant: null as any,
-        encAmount: enc.encAmount,
-        encMerchant: enc.encMerchant,
-        merchantIdx: enc.merchantIdx,
-        rowVersion: enc.rowVersion,
-        timestamp,
-        bankProfileId: bank.id,
-        smsId: 'manual_entry',
-        isAnomaly: false,
-        status: 'cleared',
-        updatedAt: Date.now(),
-        isDeleted: false,
-      });
-      createdRecord = await this.transactionRepository.save(newTx);
-      createdRecord.amount = amount;
-      createdRecord.merchant = note;
-
-      // Decrement bank balance
-      bank.currentBalance = Math.round((parseFloat(String(bank.currentBalance)) - amount) * 100) / 100;
-
-      // Update budget spent amount if matching category exists
-      try {
-        const budget = await this.budgetDeclarationRepository.findOne({
-          where: { userId, category: cleanCategory.toLowerCase(), isDeleted: false },
-        });
-        if (budget) {
-          budget.spentAmount = parseFloat(String(budget.spentAmount || 0)) + amount;
-          budget.updatedAt = Date.now();
-          await this.budgetDeclarationRepository.save(budget);
-        }
-      } catch (err: any) {
-        this.logger.warn(`Could not update budget spent amount: ${err.message}`);
+  /**
+   * Runs one outbox-style write for the older endpoints below: one database transaction that
+   * saves the entry (encrypted) and moves the account balance together. The caller holds the
+   * user lock.
+   */
+  private async applyLegacyOp(userId: string, op: any): Promise<OpResult> {
+    try {
+      return await this.dataSource.transaction((m) => this.applyOne(m, userId, op));
+    } catch (e: any) {
+      if (e instanceof RejectOp) {
+        throw new BadRequestException(LEGACY_REJECT_MESSAGES[e.message] || 'This entry could not be saved.');
       }
-    } else {
-      // Credit
-      const incId = 'income_manual_' + Math.random().toString(36).substr(2, 9);
-      const enc = await this.fieldCipherService.encryptIncomeFields(
-        userId,
-        incId,
-        { amount, source: note },
-      );
-      const newInc = this.incomeRecordRepository.create({
-        id: incId,
-        userId,
-        amount: null as any,
-        category: cleanCategory.toLowerCase(),
-        source: null as any,
-        encAmount: enc.encAmount,
-        encSource: enc.encSource,
-        sourceIdx: enc.sourceIdx,
-        rowVersion: enc.rowVersion,
-        timestamp,
-        bankProfileId: bank.id,
-        updatedAt: Date.now(),
-        isDeleted: false,
-      });
-      createdRecord = await this.incomeRecordRepository.save(newInc);
-      createdRecord.amount = amount;
-      createdRecord.source = note;
-
-      // Increment bank balance
-      bank.currentBalance = Math.round((parseFloat(String(bank.currentBalance)) + amount) * 100) / 100;
+      throw e;
     }
-
-    if (note) {
-      await this.saveMerchantTagRule(userId, note, cleanCategory.toLowerCase()).catch(() => {});
-    }
-
-    bank.lastSyncTimestamp = Date.now();
-    bank.updatedAt = Date.now();
-    await this.bankProfileRepository.save(bank);
-
-    await this.invalidateUserSyncCache(userId);
-
-    return {
-      success: true,
-      type: data.type,
-      record: createdRecord,
-      updatedBalance: bank.currentBalance,
-      bankProfile: bank,
-    };
   }
 
+  private legacyAmount(value: unknown): number {
+    const amount = Math.round(parseFloat(String(value)) * 100) / 100;
+    if (!Number.isFinite(amount) || amount <= 0 || amount > 1e9) {
+      throw new BadRequestException('Amount must be a positive number.');
+    }
+    return amount;
+  }
+
+  private async balanceOfBank(userId: string, bankProfileId: string | null | undefined) {
+    if (!bankProfileId) return null;
+    return this.bankProfileRepository.findOne({ where: { id: bankProfileId, userId, isDeleted: false } });
+  }
+
+  /**
+   * Older app versions add a manual entry here (current versions use /sync/outbox). The entry
+   * and the balance change are saved together, and the same request arriving twice (a retry
+   * after a slow reply) is saved only once.
+   */
+  async addManualTransaction(userId: string, data: ManualTransactionDto) {
+    return this.withUserLock(userId, async () => {
+      this.logger.log(`Adding manual ${data.type} transaction for user ${userId}, bank: ${data.bankProfileId}`);
+
+      const bank = await this.bankProfileRepository.findOne({
+        where: { id: data.bankProfileId, userId, isDeleted: false },
+      });
+      if (!bank) {
+        throw new BadRequestException('Bank profile not found or does not belong to you.');
+      }
+
+      const amount = this.legacyAmount(data.amount);
+      if (data.type !== 'debit' && data.type !== 'credit') {
+        throw new BadRequestException("Transaction type must be 'debit' or 'credit'.");
+      }
+      const cleanCategory = (data.category || '').trim();
+      if (!cleanCategory) {
+        throw new BadRequestException('Category is required.');
+      }
+
+      const isDebit = data.type === 'debit';
+      const category = cleanCategory.toLowerCase().slice(0, 40);
+      const note = ((data.note || '').trim() || cleanCategory).slice(0, 120);
+      const now = Date.now();
+      const claimedTime = Math.floor(Number(data.timestamp));
+      const timestamp = Number.isFinite(claimedTime) && claimedTime > 0 ? claimedTime : now;
+
+      // The same details within the same 2 minutes are one entry: a retry gets the same id
+      const fingerprint = createHash('sha256')
+        .update([userId, bank.id, data.type, amount, category, note, timestamp, Math.floor(now / 120_000)].join('|'))
+        .digest('hex');
+      const entityId = (isDebit ? 'tx_manual_' : 'inc_manual_') + fingerprint.slice(0, 24);
+
+      const result = await this.applyLegacyOp(userId, {
+        idemKey: 'op_manual_' + fingerprint.slice(0, 40),
+        entity: isDebit ? 'transaction' : 'income',
+        op: 'upsert',
+        entityId,
+        payload: {
+          amount,
+          category,
+          [isDebit ? 'merchant' : 'source']: note,
+          timestamp,
+          bankProfileId: bank.id,
+          updatedAt: now,
+        },
+      });
+
+      if (result.status === 'applied' && note) {
+        await this.saveMerchantTagRule(userId, note, category).catch(() => {});
+      }
+      await this.invalidateUserSyncCache(userId);
+
+      const freshBank = (await this.balanceOfBank(userId, bank.id)) ?? bank;
+      const record: any = {
+        id: entityId,
+        userId,
+        amount,
+        category,
+        timestamp,
+        bankProfileId: bank.id,
+        updatedAt: now,
+        isDeleted: false,
+      };
+      if (isDebit) {
+        record.merchant = note;
+        record.smsId = 'manual_entry';
+        record.status = 'cleared';
+      } else {
+        record.source = note;
+      }
+
+      return {
+        success: true,
+        type: data.type,
+        record,
+        updatedBalance: freshBank.currentBalance,
+        bankProfile: freshBank,
+      };
+    });
+  }
+
+  /**
+   * Older app versions edit an entry here. Uses the same write as the outbox, so the stored
+   * (encrypted) amount is what changes and the balance moves by the difference.
+   */
   async updateTransactionEntry(
     userId: string,
     data: {
@@ -1662,243 +1940,91 @@ export class SyncService implements OnModuleInit {
       updateMerchantRule?: boolean;
     },
   ) {
-    this.logger.log(`Updating ${data.type} transaction entry ${data.id} for user ${userId}`);
+    return this.withUserLock(userId, async () => {
+      this.logger.log(`Updating ${data.type} transaction entry ${data.id} for user ${userId}`);
 
-    const newAmount = parseFloat(String(data.amount));
-    if (isNaN(newAmount) || newAmount <= 0) {
-      throw new BadRequestException('Amount must be a positive number.');
-    }
+      const amount = this.legacyAmount(data.amount);
+      const cleanCategory = (data.category || '').trim();
+      if (!cleanCategory) {
+        throw new BadRequestException('Category is required.');
+      }
+      const category = cleanCategory.toLowerCase().slice(0, 40);
+      const cleanNote = (data.note || '').trim().slice(0, 120);
+      const isDebit = data.type === 'debit';
 
-    const cleanCategory = (data.category || '').trim();
-    if (!cleanCategory) {
-      throw new BadRequestException('Category is required.');
-    }
+      const repo: Repository<any> = isDebit ? this.transactionRepository : this.incomeRecordRepository;
+      const existing = await repo.findOne({ where: { id: data.id, userId, isDeleted: false } });
+      if (!existing) {
+        throw new BadRequestException(isDebit ? 'Debit transaction not found.' : 'Income/credit record not found.');
+      }
 
-    const note = (data.note || '').trim() || cleanCategory;
+      const payload: Record<string, any> = {
+        amount,
+        category,
+        updatedAt: Math.max(Date.now(), Number(existing.updatedAt || 0) + 1),
+      };
+      if (cleanNote) payload[isDebit ? 'merchant' : 'source'] = cleanNote;
+      const claimedTime = Math.floor(Number(data.timestamp));
+      if (data.timestamp && Number.isFinite(claimedTime)) payload.timestamp = claimedTime;
+      if (data.bankProfileId !== undefined) payload.bankProfileId = data.bankProfileId || null;
 
-    if (data.type === 'debit') {
-      const tx = await this.transactionRepository.findOne({
-        where: { id: data.id, userId, isDeleted: false },
+      await this.applyLegacyOp(userId, {
+        idemKey: `op_edit_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+        entity: isDebit ? 'transaction' : 'income',
+        op: 'upsert',
+        entityId: data.id,
+        payload,
       });
-      if (!tx) {
-        throw new BadRequestException('Debit transaction not found.');
-      }
 
-      const oldAmount = parseFloat(String(tx.amount || 0));
-      const amountDiff = newAmount - oldAmount;
-      const oldBankProfileId = tx.bankProfileId || null;
-      const targetBankProfileId =
-        data.bankProfileId !== undefined ? (data.bankProfileId || null) : oldBankProfileId;
-
-      tx.amount = newAmount;
-      tx.category = cleanCategory.toLowerCase();
-      tx.merchant = note;
-      tx.bankProfileId = targetBankProfileId;
-      if (data.timestamp && !isNaN(Number(data.timestamp))) {
-        tx.timestamp = Number(data.timestamp);
+      if (isDebit && cleanNote && data.updateMerchantRule === true) {
+        await this.saveMerchantTagRule(userId, cleanNote, category).catch(() => {});
       }
-      tx.updatedAt = Date.now();
-      await this.transactionRepository.save(tx);
+      await this.invalidateUserSyncCache(userId);
 
-      if (note && data.updateMerchantRule === true) {
-        await this.saveMerchantTagRule(userId, note, cleanCategory.toLowerCase()).catch(() => {});
-      }
-
-      let updatedBalance: number | null = null;
-      if (oldBankProfileId !== targetBankProfileId) {
-        if (oldBankProfileId) {
-          const oldBank = await this.bankProfileRepository.findOne({
-            where: { id: oldBankProfileId, userId, isDeleted: false },
-          });
-          if (oldBank) {
-            oldBank.currentBalance =
-              Math.round((parseFloat(String(oldBank.currentBalance)) + oldAmount) * 100) / 100;
-            oldBank.lastSyncTimestamp = Date.now();
-            oldBank.updatedAt = Date.now();
-            await this.bankProfileRepository.save(oldBank);
-          }
-        }
-        if (targetBankProfileId) {
-          const newBank = await this.bankProfileRepository.findOne({
-            where: { id: targetBankProfileId, userId, isDeleted: false },
-          });
-          if (newBank) {
-            newBank.currentBalance =
-              Math.round((parseFloat(String(newBank.currentBalance)) - newAmount) * 100) / 100;
-            newBank.lastSyncTimestamp = Date.now();
-            newBank.updatedAt = Date.now();
-            await this.bankProfileRepository.save(newBank);
-            updatedBalance = newBank.currentBalance;
-          }
-        }
-      } else if (targetBankProfileId && amountDiff !== 0) {
-        const bank = await this.bankProfileRepository.findOne({
-          where: { id: targetBankProfileId, userId, isDeleted: false },
-        });
-        if (bank) {
-          bank.currentBalance =
-            Math.round((parseFloat(String(bank.currentBalance)) - amountDiff) * 100) / 100;
-          bank.lastSyncTimestamp = Date.now();
-          bank.updatedAt = Date.now();
-          await this.bankProfileRepository.save(bank);
-          updatedBalance = bank.currentBalance;
-        }
-      }
+      const targetBankId = data.bankProfileId !== undefined ? data.bankProfileId || null : existing.bankProfileId || null;
+      const bank = await this.balanceOfBank(userId, targetBankId);
+      const record: any = { ...existing, amount, category, bankProfileId: targetBankId };
+      if (cleanNote) record[isDebit ? 'merchant' : 'source'] = cleanNote;
+      if (payload.timestamp) record.timestamp = payload.timestamp;
 
       return {
         success: true,
-        type: 'debit',
-        record: tx,
-        updatedBalance,
+        type: data.type === 'debit' ? 'debit' : 'credit',
+        record,
+        updatedBalance: bank ? bank.currentBalance : null,
       };
-    } else {
-      const inc = await this.incomeRecordRepository.findOne({
-        where: { id: data.id, userId, isDeleted: false },
-      });
-      if (!inc) {
-        throw new BadRequestException('Income/credit record not found.');
-      }
-
-      const oldAmount = parseFloat(String(inc.amount || 0));
-      const amountDiff = newAmount - oldAmount;
-      const oldBankProfileId = inc.bankProfileId || null;
-      const targetBankProfileId =
-        data.bankProfileId !== undefined ? (data.bankProfileId || null) : oldBankProfileId;
-
-      inc.amount = newAmount;
-      inc.category = cleanCategory.toLowerCase();
-      inc.source = note;
-      inc.bankProfileId = targetBankProfileId;
-      if (data.timestamp && !isNaN(Number(data.timestamp))) {
-        inc.timestamp = Number(data.timestamp);
-      }
-      inc.updatedAt = Date.now();
-      await this.incomeRecordRepository.save(inc);
-
-      let updatedBalance: number | null = null;
-      if (oldBankProfileId !== targetBankProfileId) {
-        if (oldBankProfileId) {
-          const oldBank = await this.bankProfileRepository.findOne({
-            where: { id: oldBankProfileId, userId, isDeleted: false },
-          });
-          if (oldBank) {
-            oldBank.currentBalance =
-              Math.round((parseFloat(String(oldBank.currentBalance)) - oldAmount) * 100) / 100;
-            oldBank.lastSyncTimestamp = Date.now();
-            oldBank.updatedAt = Date.now();
-            await this.bankProfileRepository.save(oldBank);
-          }
-        }
-        if (targetBankProfileId) {
-          const newBank = await this.bankProfileRepository.findOne({
-            where: { id: targetBankProfileId, userId, isDeleted: false },
-          });
-          if (newBank) {
-            newBank.currentBalance =
-              Math.round((parseFloat(String(newBank.currentBalance)) + newAmount) * 100) / 100;
-            newBank.lastSyncTimestamp = Date.now();
-            newBank.updatedAt = Date.now();
-            await this.bankProfileRepository.save(newBank);
-            updatedBalance = newBank.currentBalance;
-          }
-        }
-      } else if (targetBankProfileId && amountDiff !== 0) {
-        const bank = await this.bankProfileRepository.findOne({
-          where: { id: targetBankProfileId, userId, isDeleted: false },
-        });
-        if (bank) {
-          bank.currentBalance =
-            Math.round((parseFloat(String(bank.currentBalance)) + amountDiff) * 100) / 100;
-          bank.lastSyncTimestamp = Date.now();
-          bank.updatedAt = Date.now();
-          await this.bankProfileRepository.save(bank);
-          updatedBalance = bank.currentBalance;
-        }
-      }
-
-      return {
-        success: true,
-        type: 'credit',
-        record: inc,
-        updatedBalance,
-      };
-    }
+    });
   }
 
+  /** Older app versions delete an entry here; the money goes back to (or comes off) the account. */
   async deleteTransactionEntry(userId: string, id: string, type: 'credit' | 'debit') {
-    this.logger.log(`Deleting ${type} transaction entry ${id} for user ${userId}`);
+    return this.withUserLock(userId, async () => {
+      this.logger.log(`Deleting ${type} transaction entry ${id} for user ${userId}`);
+      const isDebit = type === 'debit';
 
-    if (type === 'debit') {
-      const tx = await this.transactionRepository.findOne({
-        where: { id, userId, isDeleted: false },
+      const repo: Repository<any> = isDebit ? this.transactionRepository : this.incomeRecordRepository;
+      const existing = await repo.findOne({ where: { id, userId, isDeleted: false } });
+      if (!existing) {
+        throw new BadRequestException(isDebit ? 'Debit transaction not found.' : 'Income record not found.');
+      }
+
+      await this.applyLegacyOp(userId, {
+        idemKey: `op_del_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+        entity: isDebit ? 'transaction' : 'income',
+        op: 'delete',
+        entityId: id,
+        payload: { updatedAt: Math.max(Date.now(), Number(existing.updatedAt || 0) + 1) },
       });
-      if (!tx) {
-        throw new BadRequestException('Debit transaction not found.');
-      }
-
-      const oldAmount = parseFloat(String(tx.amount || 0));
-      tx.isDeleted = true;
-      tx.updatedAt = Date.now();
-      await this.transactionRepository.save(tx);
-
-      let updatedBalance: number | null = null;
-      if (tx.bankProfileId) {
-        const bank = await this.bankProfileRepository.findOne({
-          where: { id: tx.bankProfileId, userId, isDeleted: false },
-        });
-        if (bank) {
-          bank.currentBalance = Math.round((parseFloat(String(bank.currentBalance)) + oldAmount) * 100) / 100;
-          bank.lastSyncTimestamp = Date.now();
-          bank.updatedAt = Date.now();
-          await this.bankProfileRepository.save(bank);
-          updatedBalance = bank.currentBalance;
-        }
-      }
-
       await this.invalidateUserSyncCache(userId);
 
+      const bank = await this.balanceOfBank(userId, existing.bankProfileId);
       return {
         success: true,
-        type: 'debit',
+        type: isDebit ? 'debit' : 'credit',
         deletedId: id,
-        updatedBalance,
+        updatedBalance: bank ? bank.currentBalance : null,
       };
-    } else {
-      const inc = await this.incomeRecordRepository.findOne({
-        where: { id, userId, isDeleted: false },
-      });
-      if (!inc) {
-        throw new BadRequestException('Income record not found.');
-      }
-
-      const oldAmount = parseFloat(String(inc.amount || 0));
-      inc.isDeleted = true;
-      inc.updatedAt = Date.now();
-      await this.incomeRecordRepository.save(inc);
-
-      let updatedBalance: number | null = null;
-      if (inc.bankProfileId) {
-        const bank = await this.bankProfileRepository.findOne({
-          where: { id: inc.bankProfileId, userId, isDeleted: false },
-        });
-        if (bank) {
-          bank.currentBalance = Math.round((parseFloat(String(bank.currentBalance)) - oldAmount) * 100) / 100;
-          bank.lastSyncTimestamp = Date.now();
-          bank.updatedAt = Date.now();
-          await this.bankProfileRepository.save(bank);
-          updatedBalance = bank.currentBalance;
-        }
-      }
-
-      await this.invalidateUserSyncCache(userId);
-
-      return {
-        success: true,
-        type: 'credit',
-        deletedId: id,
-        updatedBalance,
-      };
-    }
+    });
   }
 
   /**
@@ -1924,9 +2050,14 @@ export class SyncService implements OnModuleInit {
     },
   ) {
     await this.rejectIfErased('wealth.savings_goals', dto.id);
+    await this.assertIdNotOwnedByAnother(this.savingsGoalRepository, dto.id, userId);
     const goalId = dto.id || 'goal_' + Math.random().toString(36).substr(2, 9);
     const initialAmount = parseFloat(String(dto.currentAmount || 0));
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const goalTarget = parseFloat(String(dto.targetAmount || 0));
+    if (!Number.isFinite(initialAmount) || initialAmount < 0 || !Number.isFinite(goalTarget) || goalTarget < 0) {
+      throw new BadRequestException('Enter valid amounts for this goal.');
+    }
+    const todayStr = istDay(); // the date in India, not UTC
     const now = Date.now();
 
     const initialEntries = dto.entries || (initialAmount > 0 ? [{
@@ -2048,7 +2179,12 @@ export class SyncService implements OnModuleInit {
   /**
    * Add contribution / funds to a goal
    */
+  /** One at a time per user, so two savings logged at the same moment are both kept. */
   async contributeToGoal(userId: string, id: string, amount: number, note?: string) {
+    return this.withUserLock(userId, () => this.contributeToGoalLocked(userId, id, amount, note));
+  }
+
+  private async contributeToGoalLocked(userId: string, id: string, amount: number, note?: string) {
     const goal = await this.savingsGoalRepository.findOne({
       where: { id, userId, isDeleted: false },
     });
@@ -2057,12 +2193,12 @@ export class SyncService implements OnModuleInit {
     }
 
     const add = parseFloat(String(amount || 0));
-    if (add <= 0) {
+    if (!Number.isFinite(add) || add <= 0) {
       throw new BadRequestException('Contribution amount must be greater than 0.');
     }
 
     const now = Date.now();
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = istDay(); // the date in India, not UTC
     const entryId = `entry_${now}_${Math.random().toString(36).substr(2, 6)}`;
 
     const newEntry = {
@@ -2082,7 +2218,7 @@ export class SyncService implements OnModuleInit {
       return acc + (e.type === 'withdraw' ? -val : val);
     }, 0));
 
-    goal.streakMonths = (goal.streakMonths || 0) + 1;
+    goal.streakMonths = savingStreakMonths(goal.entries, todayStr);
     if (goal.currentAmount >= parseFloat(String(goal.targetAmount))) {
       goal.status = 'achieved';
     }
@@ -2115,6 +2251,10 @@ export class SyncService implements OnModuleInit {
    * Withdraw funds from a goal
    */
   async withdrawFromGoal(userId: string, id: string, amount: number, note?: string) {
+    return this.withUserLock(userId, () => this.withdrawFromGoalLocked(userId, id, amount, note));
+  }
+
+  private async withdrawFromGoalLocked(userId: string, id: string, amount: number, note?: string) {
     try {
       this.logger.log(`[withdrawFromGoal] User: ${userId}, Goal: ${id}, Amount: ${amount}`);
       const goal = await this.savingsGoalRepository.findOne({
@@ -2127,7 +2267,7 @@ export class SyncService implements OnModuleInit {
 
       const cur = parseFloat(String(goal.currentAmount || 0));
       const withdrawAmt = parseFloat(String(amount || 0));
-      if (withdrawAmt <= 0) {
+      if (!Number.isFinite(withdrawAmt) || withdrawAmt <= 0) {
         throw new BadRequestException('Withdrawal amount must be greater than 0.');
       }
       if (withdrawAmt > cur) {
@@ -2136,7 +2276,7 @@ export class SyncService implements OnModuleInit {
       }
 
     const now = Date.now();
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = istDay(); // the date in India, not UTC
     const entryId = `entry_${now}_${Math.random().toString(36).substr(2, 6)}`;
 
     const newEntry = {
@@ -2194,6 +2334,10 @@ export class SyncService implements OnModuleInit {
    * - Deleting a withdrawal ('withdraw') restores that withdrawn amount back into current balance
    */
   async deleteGoalEntry(userId: string, goalId: string, entryId: string) {
+    return this.withUserLock(userId, () => this.deleteGoalEntryLocked(userId, goalId, entryId));
+  }
+
+  private async deleteGoalEntryLocked(userId: string, goalId: string, entryId: string) {
     const goal = await this.savingsGoalRepository.findOne({
       where: { id: goalId, userId, isDeleted: false },
     });
@@ -2217,6 +2361,7 @@ export class SyncService implements OnModuleInit {
     } else if (goal.currentAmount >= target && goal.status === 'active') {
       goal.status = 'achieved';
     }
+    goal.streakMonths = savingStreakMonths(goal.entries, istDay());
     goal.updatedAt = Date.now();
 
     // Mark as deleted in GoalHistory table
@@ -2290,6 +2435,7 @@ export class SyncService implements OnModuleInit {
     },
   ) {
     await this.rejectIfErased('finance.budget_declarations', dto.id);
+    await this.assertIdNotOwnedByAnother(this.budgetDeclarationRepository, dto.id, userId);
     const budget = this.budgetDeclarationRepository.create({
       id: dto.id || 'budget_' + Math.random().toString(36).substr(2, 9),
       userId,
@@ -2857,22 +3003,16 @@ export class SyncService implements OnModuleInit {
     }
 
     const ingested = true;
-    let newBalance = parseFloat(String(matchedBank.currentBalance || 0));
-    if (parsed.availableBalance !== undefined && !isNaN(parsed.availableBalance) && parsed.availableBalance >= 0) {
-      newBalance = parsed.availableBalance;
-    } else if (parsed.type === 'debit') {
-      newBalance = newBalance - parsed.amount;
-    } else {
-      newBalance += parsed.amount;
-    }
-
-    if (ingested && matchedBank) {
-      const roundedNewBal = Math.round(newBalance * 100) / 100;
-      matchedBank.currentBalance = roundedNewBal;
-      matchedBank.lastSyncTimestamp = Date.now();
-      matchedBank.updatedAt = Date.now();
-      await this.bankProfileRepository.save(matchedBank);
-    }
+    const statedBalance =
+      parsed.availableBalance !== undefined && !isNaN(parsed.availableBalance) && parsed.availableBalance >= 0
+        ? parsed.availableBalance
+        : undefined;
+    const newBalance = await this.applySmsBalance(
+      userId,
+      matchedBank,
+      Math.min(txTime, Date.now() + 5 * 60 * 1000), // a phone clock set ahead can't block later SMS
+      statedBalance !== undefined ? { absolute: statedBalance } : { delta: parsed.type === 'debit' ? -parsed.amount : parsed.amount },
+    );
 
     await this.invalidateUserSyncCache(userId);
 
@@ -2887,6 +3027,64 @@ export class SyncService implements OnModuleInit {
       merchant: parsed.merchant,
     };
     });
+  }
+
+  /**
+   * Moves an account balance for a bank SMS, in one database statement.
+   *  - The SMS states the balance: use it, unless a newer SMS has already stated one (bank SMS
+   *    can arrive out of order; an older message must not overwrite a newer balance).
+   *  - It doesn't: add or subtract the amount, unless a newer stated balance already includes it.
+   * Returns the account's balance afterwards.
+   */
+  private async applySmsBalance(
+    userId: string,
+    bank: BankProfile,
+    smsTime: number,
+    change: { absolute?: number; delta?: number },
+  ): Promise<number> {
+    const now = Date.now();
+    // An UPDATE ... RETURNING comes back as [rows, count] from the Postgres driver
+    const rowsOf = (res: any): any[] => (Array.isArray(res?.[0]) ? res[0] : Array.isArray(res) ? res : []);
+    try {
+      const res =
+        change.absolute !== undefined
+          ? await this.dataSource.query(
+              `UPDATE core.bank_profiles
+                  SET current_balance = ROUND($3::numeric, 2), balance_as_of = $4, last_sync_timestamp = $5, updated_at = $5
+                WHERE id = $1 AND user_id = $2 AND is_deleted = false
+                  AND (balance_as_of IS NULL OR balance_as_of <= $4)
+              RETURNING current_balance`,
+              [bank.id, userId, change.absolute, smsTime, now],
+            )
+          : await this.dataSource.query(
+              `UPDATE core.bank_profiles
+                  SET current_balance = ROUND((COALESCE(current_balance, 0) + $3)::numeric, 2), last_sync_timestamp = $5, updated_at = $5
+                WHERE id = $1 AND user_id = $2 AND is_deleted = false
+                  AND (balance_as_of IS NULL OR balance_as_of < $4)
+              RETURNING current_balance`,
+              [bank.id, userId, change.delta ?? 0, smsTime, now],
+            );
+      const rows = rowsOf(res);
+      if (rows.length > 0 && rows[0]?.current_balance != null) return Number(rows[0].current_balance);
+
+      // Nothing changed: a newer SMS already set the balance. Report what is stored.
+      const current = await this.dataSource.query(
+        `SELECT current_balance FROM core.bank_profiles WHERE id = $1 AND user_id = $2`,
+        [bank.id, userId],
+      );
+      const stored = current?.[0]?.current_balance;
+      return stored != null ? Number(stored) : Number(bank.currentBalance || 0);
+    } catch (err: any) {
+      // e.g. the balance_as_of column could not be added: keep the previous behaviour
+      this.logger.warn(`Atomic SMS balance update failed, using fallback: ${err?.message || err}`);
+      const base = parseFloat(String(bank.currentBalance || 0));
+      const next = Math.round((change.absolute !== undefined ? change.absolute : base + (change.delta ?? 0)) * 100) / 100;
+      bank.currentBalance = next;
+      bank.lastSyncTimestamp = now;
+      bank.updatedAt = now;
+      await this.bankProfileRepository.save(bank);
+      return next;
+    }
   }
 
   /** Debit card last-4s linked to a bank account. */
@@ -3220,8 +3418,38 @@ export class SyncService implements OnModuleInit {
     };
   }
 
+  /**
+   * Nightly: forget "already applied" markers older than 45 days. They only exist so a retried
+   * save isn't applied twice; a phone replaying an edit that old is harmless (the row already
+   * exists and the edit is older than what is stored). Deleted in small batches.
+   */
+  @Cron('10 3 * * *')
+  async purgeOldAppliedOps() {
+    try {
+      for (let i = 0; i < 50; i++) {
+        const res = await this.dataSource.query(
+          `DELETE FROM finance.applied_ops WHERE idem_key IN (
+             SELECT idem_key FROM finance.applied_ops WHERE applied_at < now() - interval '45 days' LIMIT 5000
+           )`,
+        );
+        const removed = Array.isArray(res) && typeof res[1] === 'number' ? res[1] : 0;
+        if (removed < 5000) break;
+      }
+    } catch (err: any) {
+      this.logger.warn(`[AppliedOpsPurge] failed: ${err?.message || err}`);
+    }
+  }
+
+  /**
+   * One at a time per user, together with SMS ingest and the other balance writers, so two
+   * writes arriving at the same moment can't overwrite each other's balance change.
+   */
   async applyOutbox(userId: string, ops: any[]) {
     if (!Array.isArray(ops) || ops.length > 100) throw new BadRequestException();
+    return this.withUserLock(userId, () => this.applyOutboxLocked(userId, ops));
+  }
+
+  private async applyOutboxLocked(userId: string, ops: any[]) {
     const results: OpResult[] = [];
     let stopped = false;
     let touched = false;
@@ -3458,6 +3686,11 @@ export class SyncService implements OnModuleInit {
       }
     } else {
       const expectedRowVersion = BigInt(row.row_version ?? 1);
+      // What this row currently takes off (or adds to) its account, read before it changes
+      const oldAmount = row.is_deleted
+        ? 0
+        : await this.outboxRowAmount(userId, op.entity, op.entityId, row, expectedRowVersion);
+      const oldBankId: string | null = row.bank_profile_id ?? null;
       let targetAmount = f.amount;
       let targetText = f[spec.textField];
 
@@ -3528,6 +3761,20 @@ export class SyncService implements OnModuleInit {
         [op.entityId, userId, updatedAt, nextRowVersion.toString(), encAmount, encText, textIdx, ...vals, expectedRowVersion.toString()],
       );
       if (Array.isArray(upd) && upd.length === 0) throw new Error('update_concurrency_race');
+
+      // An edit that changes the amount or the account moves the balance by the difference
+      // (a spend takes money off the account, an income adds it). A row that was deleted had
+      // its effect removed already, so only the new amount applies.
+      const sign = op.entity === 'transaction' ? -1 : 1;
+      const cents = (n: number) => Math.round(n * 100) / 100;
+      const newBankId: string | null = 'bankProfileId' in f ? f.bankProfileId ?? null : oldBankId;
+      const newAmount = Math.abs(Number(targetAmount) || 0);
+      if (oldBankId === newBankId) {
+        if (newBankId) await this.adjustBankBalance(m, userId, newBankId, cents(sign * (newAmount - oldAmount)));
+      } else {
+        if (oldBankId) await this.adjustBankBalance(m, userId, oldBankId, cents(-sign * oldAmount));
+        if (newBankId) await this.adjustBankBalance(m, userId, newBankId, cents(sign * newAmount));
+      }
     }
     return { idemKey: op.idemKey, status: 'applied' };
   }

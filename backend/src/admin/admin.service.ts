@@ -1,3 +1,4 @@
+import { TokenService } from '../auth/token.service';
 import {
   Injectable,
   BadRequestException,
@@ -14,6 +15,13 @@ import { v2 as cloudinary } from 'cloudinary';
 import { User } from '../users/entities/user.entity';
 import { AdminAuditLog } from './entities/admin-audit-log.entity';
 import { RedisService } from '../redis/redis.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { CreateBroadcastDto } from './dto/create-broadcast.dto';
+import { EmailBroadcastService } from '../mail/email-broadcast.service';
+import { MailService } from '../mail/mail.service';
+import { EmailAccountsService, PRIMARY_RESERVE } from '../mail/email-accounts.service';
+import { EmailDraftDto } from './dto/email-draft.dto';
+import { CreateEmailBroadcastDto } from './dto/create-email-broadcast.dto';
 
 export const CASCADE_DELETE_TABLES = [
   { schema: 'core', table: 'notifications', column: 'user_id' },
@@ -37,6 +45,9 @@ export const CASCADE_DELETE_TABLES = [
   { schema: 'wealth', table: 'net_worth_snapshots', column: 'user_id' },
   { schema: 'wealth', table: 'savings_goals', column: 'user_id' },
   { schema: 'wealth', table: 'scenario_simulations', column: 'user_id' },
+  { schema: 'core', table: 'chat_threads', column: 'user_id' },
+  { schema: 'core', table: 'refresh_tokens', column: 'user_id' },
+  { schema: 'core', table: 'feedback', column: 'user_id' },
   { schema: 'core', table: 'users', column: 'id' },
 ] as const;
 
@@ -52,6 +63,11 @@ export class AdminService {
     private readonly userRepo: Repository<User>,
     @InjectRepository(AdminAuditLog)
     private readonly auditRepo: Repository<AdminAuditLog>,
+    private readonly tokenService: TokenService,
+    private readonly notificationsService: NotificationsService,
+    private readonly emailBroadcastService: EmailBroadcastService,
+    private readonly mailService: MailService,
+    private readonly emailAccounts: EmailAccountsService,
   ) {}
 
   private getHmac(email: string): string {
@@ -110,9 +126,9 @@ export class AdminService {
         .replace(/\\/g, '\\\\')
         .replace(/[%_]/g, '\\$&');
 
-      // Uses exact expression from trigram GIN index
+      // Uses exact expression from trigram GIN index or matches user ID directly
       qb.andWhere(
-        "(COALESCE(u.name, '') || ' ' || COALESCE(u.email, '') || ' ' || COALESCE(u.phone, '')) ILIKE :s",
+        "((COALESCE(u.name, '') || ' ' || COALESCE(u.email, '') || ' ' || COALESCE(u.phone, '')) ILIKE :s OR u.id ILIKE :s)",
         { s: `%${sanitized}%` },
       );
     }
@@ -198,6 +214,7 @@ export class AdminService {
       this.redisService.del(`auth:lock:u:${targetUserId}`),
       this.redisService.del(`auth:refresh:${targetUserId}`),
       this.redisService.del(`auth:session:${targetUserId}`),
+      this.tokenService.revokeAllForUser(targetUserId),
     ]);
 
     redisResults.forEach((res, i) => {
@@ -322,6 +339,7 @@ export class AdminService {
       this.redisService.del(`auth:lock:u:${targetUserId}`),
       this.redisService.del(`auth:refresh:${targetUserId}`),
       this.redisService.del(`auth:session:${targetUserId}`),
+      this.tokenService.revokeAllForUser(targetUserId),
     ]);
 
     redisResults.forEach((res, i) => {
@@ -401,6 +419,7 @@ export class AdminService {
             this.redisService.del(`auth:lock:u:${targetUserId}`),
             this.redisService.del(`auth:refresh:${targetUserId}`),
             this.redisService.del(`auth:session:${targetUserId}`),
+      this.tokenService.revokeAllForUser(targetUserId),
           ]);
 
           if (avatarUrl && avatarUrl.includes('res.cloudinary.com')) {
@@ -414,6 +433,241 @@ export class AdminService {
       }
     } catch (e: any) {
       this.logger.error('[AccountPurgeCron] Failed to run purge cron:', e?.message || e);
+    }
+  }
+
+  /**
+   * A broadcast tap can either open an in-app screen (`deepLink: regent://...`)
+   * or open the app's Play Store listing (`action: open_url`). Anything else is dropped,
+   * so a broadcast can never carry an arbitrary external link.
+   */
+  private sanitizeBroadcastPayload(payload: any): Record<string, string> {
+    if (!payload || typeof payload !== 'object') return {};
+    if (payload.action === 'open_url') {
+      const url = typeof payload.url === 'string' ? payload.url.trim() : '';
+      if (!/^https:\/\/play\.google\.com\/store\/apps\/details\?id=[\w.]+(&[\w=.%-]*)*$/.test(url) || url.length > 300) {
+        throw new BadRequestException('Tap link must be a Play Store app listing (play.google.com/store/apps/details?id=...).');
+      }
+      return { action: 'open_url', url };
+    }
+    if (typeof payload.deepLink === 'string' && /^regent:\/\/[a-z_/-]{1,40}$/.test(payload.deepLink)) {
+      return { deepLink: payload.deepLink };
+    }
+    return {};
+  }
+
+  async getAudienceEstimate() {
+    return this.notificationsService.getAudienceEstimate();
+  }
+
+  async sendBroadcast(adminId: string, adminRole: string, dto: CreateBroadcastDto) {
+    if (adminRole !== 'admin' && adminRole !== 'superadmin') {
+      throw new ForbiddenException('Only administrators can send live broadcasts.');
+    }
+
+    const broadcast = await this.notificationsService.createBroadcast({
+      title: dto.title,
+      body: dto.body,
+      type: dto.type || 'announcement',
+      payload: this.sanitizeBroadcastPayload(dto.payload),
+      idempotencyKey: dto.idempotencyKey,
+      createdBy: adminId,
+    });
+
+    // Record audit log entry
+    try {
+      await this.dataSource.query(
+        `INSERT INTO core.admin_audit_logs (admin_id, target_user_id, target_email_hmac, action, reason, metadata, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          adminId,
+          'broadcast:all',
+          null,
+          'ADMIN_BROADCAST_SENT',
+          dto.title,
+          JSON.stringify({
+            broadcastId: broadcast.id,
+            totalTargeted: broadcast.totalTargeted,
+            type: broadcast.type,
+          }),
+          Date.now(),
+        ],
+      );
+    } catch (auditErr: any) {
+      this.logger.warn(`Could not log broadcast audit trail: ${auditErr.message}`);
+    }
+
+    return {
+      success: true,
+      broadcast,
+    };
+  }
+
+  async listBroadcasts(page = 1, limit = 20) {
+    return this.notificationsService.listBroadcasts(page, limit);
+  }
+
+  async getEmailBroadcastQuota() {
+    return this.emailBroadcastService.getDailyQuotaStats();
+  }
+
+  async getEmailAudienceEstimate() {
+    return this.emailBroadcastService.getAudienceEstimate();
+  }
+
+  async createEmailBroadcast(adminId: string, adminRole: string, dto: CreateEmailBroadcastDto) {
+    if (adminRole !== 'admin' && adminRole !== 'superadmin') {
+      throw new ForbiddenException('Only administrators can send live email broadcasts.');
+    }
+
+    const broadcast = await this.emailBroadcastService.createBroadcast(adminId, dto);
+
+    // Audit log
+    try {
+      await this.dataSource.query(
+        `INSERT INTO core.admin_audit_logs (admin_id, target_user_id, target_email_hmac, action, reason, metadata, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          adminId,
+          dto.targetUserId || 'broadcast:email_all',
+          null,
+          'ADMIN_EMAIL_BROADCAST_SENT',
+          dto.subject,
+          JSON.stringify({
+            broadcastId: broadcast.id,
+            totalRecipients: broadcast.totalRecipients,
+            category: broadcast.category,
+          }),
+          Date.now(),
+        ],
+      );
+    } catch (auditErr: any) {
+      this.logger.warn(`Could not log email broadcast audit: ${auditErr.message}`);
+    }
+
+    return {
+      success: true,
+      broadcast,
+    };
+  }
+
+  async listEmailBroadcasts(page = 1, limit = 20) {
+    return this.emailBroadcastService.listBroadcasts(page, limit);
+  }
+
+  async cancelEmailBroadcast(adminId: string, adminRole: string, broadcastId: string) {
+    if (adminRole !== 'admin' && adminRole !== 'superadmin') {
+      throw new ForbiddenException('Only administrators can cancel email broadcasts.');
+    }
+
+    const broadcast = await this.emailBroadcastService.cancelBroadcast(broadcastId, adminId);
+
+    try {
+      await this.dataSource.query(
+        `INSERT INTO core.admin_audit_logs (admin_id, target_user_id, target_email_hmac, action, reason, metadata, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          adminId,
+          'broadcast:email:' + broadcastId,
+          null,
+          'ADMIN_EMAIL_BROADCAST_CANCELLED',
+          'Admin cancelled active broadcast',
+          JSON.stringify({ broadcastId }),
+          Date.now(),
+        ],
+      );
+    } catch {}
+
+    return {
+      success: true,
+      broadcast,
+    };
+  }
+
+  async getEmailSystemOverview() {
+    const [primary, broadcast, fallbackEnabled] = await Promise.all([
+      this.mailService.getPrimaryEmailStats(),
+      this.emailBroadcastService.getDailyQuotaStats(),
+      this.emailAccounts.isFallbackEnabled(),
+    ]);
+
+    return {
+      primary,
+      broadcast,
+      fallback: {
+        enabled: fallbackEnabled,
+        // Both accounts must exist (and differ) for one to cover the other.
+        available: this.emailAccounts.canFallBack(),
+        signInReserve: PRIMARY_RESERVE,
+      },
+    };
+  }
+
+  async previewEmailDraft(adminRole: string, dto: EmailDraftDto) {
+    if (adminRole !== 'admin' && adminRole !== 'superadmin') {
+      throw new ForbiddenException('Only administrators can preview emails.');
+    }
+    return { html: await this.emailBroadcastService.renderDraftPreview(dto) };
+  }
+
+  async sendEmailDraftTest(adminId: string, adminRole: string, dto: EmailDraftDto) {
+    if (adminRole !== 'admin' && adminRole !== 'superadmin') {
+      throw new ForbiddenException('Only administrators can send test emails.');
+    }
+    const admin = await this.userRepo.findOne({ where: { id: adminId }, select: { email: true, name: true } });
+    if (!admin?.email) {
+      throw new BadRequestException('Your admin account has no email address.');
+    }
+    return this.emailBroadcastService.sendDraftTest(admin.email, admin.name || 'there', dto);
+  }
+
+  async setEmailFallback(adminId: string, adminRole: string, enabled: boolean) {
+    if (adminRole !== 'admin' && adminRole !== 'superadmin') {
+      throw new ForbiddenException('Only administrators can change email settings.');
+    }
+    if (typeof enabled !== 'boolean') {
+      throw new BadRequestException('enabled must be true or false.');
+    }
+    const value = await this.emailAccounts.setFallbackEnabled(enabled, adminId);
+    try {
+      await this.dataSource.query(
+        `INSERT INTO core.admin_audit_logs (admin_id, target_user_id, target_email_hmac, action, reason, metadata, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          adminId,
+          'system:email',
+          null,
+          value ? 'ADMIN_EMAIL_FALLBACK_ON' : 'ADMIN_EMAIL_FALLBACK_OFF',
+          value ? 'Email fallback turned on' : 'Email fallback turned off',
+          JSON.stringify({ enabled: value }),
+          Date.now(),
+        ],
+      );
+    } catch (auditErr: any) {
+      this.logger.warn(`Could not log email fallback change: ${auditErr.message}`);
+    }
+    return { enabled: value };
+  }
+
+  async sendTestEmail(adminId: string, adminRole: string, type: 'primary' | 'broadcast', targetEmail?: string) {
+    if (adminRole !== 'admin' && adminRole !== 'superadmin') {
+      throw new ForbiddenException('Only administrators can send test emails.');
+    }
+
+    let toEmail = targetEmail?.trim();
+    if (!toEmail) {
+      const adminUser = await this.userRepo.findOne({ where: { id: adminId }, select: { email: true } });
+      toEmail = adminUser?.email || '';
+    }
+
+    if (!toEmail) {
+      throw new BadRequestException('Recipient email address is required.');
+    }
+
+    if (type === 'primary') {
+      return this.mailService.sendTestPrimaryEmail(toEmail);
+    } else {
+      return this.emailBroadcastService.sendTestBroadcastEmail(toEmail);
     }
   }
 }

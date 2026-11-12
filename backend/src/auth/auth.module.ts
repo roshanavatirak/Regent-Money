@@ -9,10 +9,12 @@ import { MailModule } from '../mail/mail.module';
 
 import { TurnstileService } from './turnstile.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
+import { TokenService } from './token.service';
+import { RefreshToken } from './entities/refresh-token.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User]),
+    TypeOrmModule.forFeature([User, RefreshToken]),
     MailModule,
     JwtModule.registerAsync({
       inject: [ConfigService],
@@ -26,13 +28,15 @@ import { JwtAuthGuard } from './jwt-auth.guard';
         }
         return {
           secret: secret || 'default-jwt-secret-key-1234',
-          signOptions: { expiresIn: '30d' }, // Session active for 30 days
+          // Default for older app versions: one 30-day token. Apps that support refresh get
+          // 15-minute access tokens from TokenService instead.
+          signOptions: { expiresIn: '30d' },
         };
       },
     }),
   ],
-  providers: [AuthService, TurnstileService, JwtAuthGuard],
+  providers: [AuthService, TurnstileService, JwtAuthGuard, TokenService],
   controllers: [AuthController],
-  exports: [AuthService, TurnstileService, JwtModule, JwtAuthGuard],
+  exports: [AuthService, TurnstileService, JwtModule, JwtAuthGuard, TokenService],
 })
 export class AuthModule {}

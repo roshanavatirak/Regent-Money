@@ -7,6 +7,7 @@ import { SignalsService } from './signals.service';
 import { Notification } from './entities/notification.entity';
 import { NotificationLog } from './entities/notification-log.entity';
 import { UserSignals } from './entities/user-signals.entity';
+import { Broadcast } from './entities/broadcast.entity';
 import { User } from '../users/entities/user.entity';
 import { Transaction } from '../sync/entities/transaction.entity';
 import { BudgetDeclaration } from '../sync/entities/budget-declaration.entity';
@@ -21,6 +22,7 @@ import { AuthModule } from '../auth/auth.module';
       Notification,
       NotificationLog,
       UserSignals,
+      Broadcast,
       User,
       Transaction,
       BudgetDeclaration,
