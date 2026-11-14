@@ -48,6 +48,10 @@ export const BUDGET_DEBIT_CATEGORIES = [
   { id: 'cafe', label: 'Café & Quick Snacks', icon: 'cafe-outline', color: '#2dba4e' },
   { id: 'nightlife', label: 'Nightlife & Drinks', icon: 'wine-outline', color: '#2dba4e' },
   { id: 'gifts', label: 'Gifts & Celebrations', icon: 'gift-outline', color: '#2dba4e' },
+  { id: 'household_help', label: 'Household Help (Maid/Cook)', icon: 'people-outline', color: '#2dba4e' },
+  { id: 'family_support', label: 'Family Support', icon: 'heart-circle-outline', color: '#2dba4e' },
+  { id: 'festivals', label: 'Festivals', icon: 'sparkles-outline', color: '#2dba4e' },
+  { id: 'business_expense', label: 'Business Expense', icon: 'briefcase-outline', color: '#2dba4e' },
   { id: 'pets', label: 'Pet Care & Supplies', icon: 'paw-outline', color: '#2dba4e' },
   { id: 'charity', label: 'Charity & Donations', icon: 'heart-outline', color: '#2dba4e' },
   { id: 'other_expense', label: 'Other Expense', icon: 'pricetag-outline', color: '#2dba4e' },
@@ -390,6 +394,13 @@ export const CATEGORY_ALIASES: Record<string, string[]> = {
   doctor: ['doctor', 'consultation', 'clinic', 'hospital'],
   entertainment: ['entertainment', 'movies', 'cinema', 'theatre', 'bookmyshow'],
   subscriptions: ['subscriptions', 'subscription', 'ott', 'netflix', 'spotify', 'hotstar', 'prime'],
+  credit_card: ['credit_card', 'card_bill', 'credit_card_bill', 'cc_bill', 'credit_card_payment'],
+  emi: ['emi', 'emi_loans', 'loan', 'loans'],
+  gifts: ['gifts', 'gift', 'shagun'],
+  household_help: ['household_help', 'maid', 'domestic_help', 'house_help', 'cook', 'driver'],
+  family_support: ['family_support', 'family', 'parents'],
+  festivals: ['festivals', 'festival', 'festive'],
+  business_expense: ['business_expense', 'business', 'work_expense', 'office'],
   investments: ['investments', 'investment', 'sip', 'mutual_funds', 'stocks', 'zerodha', 'groww'],
   rent: ['rent', 'house_rent', 'home_rent'],
   fitness: ['fitness', 'gym', 'yoga', 'cult', 'sports'],
@@ -484,7 +495,9 @@ export function calculateBudgetNetSpend(
   if (!isUpcoming) {
     for (const tx of transactions) {
       if (tx.isDeleted) continue;
-      if (isExcludedFromBudget(tx)) continue;
+      // Cash withdrawal and Card bill stay out of the overall budget, but a budget made for
+      // that category (for example "Credit Card Bill") still counts them.
+      if (isExcludedFromBudget(tx, undefined, { keepNonSpending: !isOverall })) continue;
 
       // Pure DEBIT spend tracking only (strictly exclude credits, income, salary)
       const isCredit = tx.type === 'credit' || !!tx.isSalary;

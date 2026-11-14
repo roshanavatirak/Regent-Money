@@ -11,6 +11,7 @@ import { v2 as cloudinary } from 'cloudinary';
 import { OAuth2Client } from 'google-auth-library';
 import { User } from '../users/entities/user.entity';
 import { MailService } from '../mail/mail.service';
+import { WelcomeEmailService } from '../mail/welcome-email.service';
 import { RedisService } from '../redis/redis.service';
 
 @Injectable()
@@ -23,6 +24,7 @@ export class AuthService implements OnModuleInit {
     private readonly configService: ConfigService,
     private readonly redisService: RedisService,
     private readonly tokenService: TokenService,
+    private readonly welcomeEmails: WelcomeEmailService,
   ) { }
 
   async onModuleInit() {
@@ -304,10 +306,14 @@ export class AuthService implements OnModuleInit {
       throw new BadRequestException('Invalid or expired verification token.');
     }
 
+    const wasVerified = user.isVerified;
     user.isVerified = true;
     user.verificationToken = null;
     user.updatedAt = Date.now();
     await this.userRepository.save(user);
+
+    // New email signup just confirmed: send the thank-you email right away (Redis queue worker).
+    if (!wasVerified) await this.welcomeEmails.schedule(user, 'email_verified');
 
     return { message: 'Your email has been successfully verified! You can now log in.' };
   }
@@ -768,6 +774,8 @@ export class AuthService implements OnModuleInit {
     const avatarUrl = payload.picture || '';
     const now = Date.now();
 
+    let joinedNow = false;
+
     // 2. Check if a user with this email already exists (e.g. active or scheduled for deletion)
     let user = await this.userRepository.findOne({
       where: { email },
@@ -806,6 +814,7 @@ export class AuthService implements OnModuleInit {
       if (!user.isVerified) {
         user.passwordHash = null;
         user.verificationToken = null;
+        joinedNow = true; // first time this email is confirmed
       }
       user.isVerified = true; // Auto-verify email via Google
       if (!user.name && name) user.name = name;
@@ -832,7 +841,11 @@ export class AuthService implements OnModuleInit {
         termsAcceptedAt: now,
       });
       user = (await this.userRepository.save(user)) as User;
+      joinedNow = true;
     }
+
+    // New Google signup: send the thank-you email right away (Redis queue worker).
+    if (joinedNow) await this.welcomeEmails.schedule(user, 'google');
 
     // 3. Issue the standard Regent Money JWT token
     const tokenPayload = { sub: user.id, email: user.email, role: user.role || 'user' };

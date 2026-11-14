@@ -517,6 +517,7 @@ export const syncService = {
         customKeywords: b.customKeywords ?? b.custom_keywords,
         smsConsent: b.smsConsent ?? b.sms_consent ?? false,
         debitCardSuffixes: parseDebitCardSuffixes(b.debitCardSuffixes ?? b.debit_card_suffixes),
+        cashTrackingSince: Number(b.cashTrackingSince ?? b.cash_tracking_since ?? 0) || undefined,
       }));
       useBankStore.getState().setBankProfiles(mappedBanks);
       if (mappedBanks.length > 0) {

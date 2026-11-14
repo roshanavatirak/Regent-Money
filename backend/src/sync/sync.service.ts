@@ -22,6 +22,8 @@ interface SmsLedgerItem extends SmsCandidate {
   merchant: string;
   category?: string;
   isSalary?: boolean;
+  /** The SMS text, used only to pick a tag (never stored). */
+  body?: string;
 }
 
 /**
@@ -44,6 +46,12 @@ import { ManualTransactionDto } from './dto/manual-transaction.dto';
 import { ConfirmDuplicateDto } from './dto/confirm-duplicate.dto';
 import type { PDFExtractOptions } from 'pdf.js-extract';
 import { loadPdfExtract } from './pdf-extract.loader';
+import { reconcileCashTopups, ReadAmount } from './cash-wallet-topups';
+import { predictTag } from './merchant-tag-rules';
+import { normalizeScanCategory } from '../ai/ai.service';
+
+/** Tags that only make sense for money coming in. */
+const SCAN_CREDIT_TAGS = new Set(['salary', 'interest', 'cashback', 'money_received', 'self_transfer']);
 import { AiService } from '../ai/ai.service';
 import { parseSMS, detectBankFromSender, isBankSmsSender, ParsedTransaction } from './sms-parser.util';
 import { DirectSmsDto } from './dto/direct-sms.dto';
@@ -271,6 +279,9 @@ export class SyncService implements OnModuleInit {
         ALTER TABLE core.bank_profiles ADD COLUMN IF NOT EXISTS debit_card_suffixes TEXT;
       `);
       await this.dataSource.query(`
+        ALTER TABLE core.bank_profiles ADD COLUMN IF NOT EXISTS cash_tracking_since BIGINT;
+      `);
+      await this.dataSource.query(`
         ALTER TABLE finance.income_records ADD COLUMN IF NOT EXISTS category TEXT;
       `);
       // SMS identity on both ledgers, so a re-scanned SMS is recognised instead of flagged as a duplicate
@@ -415,6 +426,19 @@ export class SyncService implements OnModuleInit {
           PRIMARY KEY (user_id, name_normalized)
         );
       `);
+      // ATM withdrawals already added to the Cash wallet, one row each (cash-wallet-topups.ts)
+      await this.dataSource.query(`
+        CREATE TABLE IF NOT EXISTS finance.cash_wallet_topups (
+          transaction_id TEXT PRIMARY KEY,
+          user_id UUID NOT NULL,
+          amount NUMERIC(14,2) NOT NULL,
+          row_version BIGINT NOT NULL,
+          updated_at BIGINT NOT NULL
+        );
+      `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_cash_wallet_topups_user ON finance.cash_wallet_topups(user_id);
+      `);
       // Budget declarations column migrations
       await this.dataSource.query(`
         ALTER TABLE finance.budget_declarations ADD COLUMN IF NOT EXISTS name TEXT;
@@ -551,6 +575,38 @@ export class SyncService implements OnModuleInit {
    */
   async invalidateUserSyncCache(userId: string) {
     await this.bumpSyncVersion(userId);
+  }
+
+  /**
+   * Adds tagged ATM withdrawals to the user's Cash wallet (and takes back ones untagged,
+   * edited or deleted). Run by SyncVersionInterceptor after every write to /sync, so every
+   * path that changes a transaction is covered. Never throws: a failure is logged and the
+   * next write tries again, since the step only ever applies what is still missing.
+   */
+  async reconcileCashWithdrawals(userId: string): Promise<void> {
+    if (!userId) return;
+    const readAmount: ReadAmount = async (row) => {
+      if (row.amount != null && !isNaN(Number(row.amount))) return Math.abs(Number(row.amount));
+      if (!row.enc_amount) return null;
+      try {
+        const dec = await this.fieldCipherService.decryptTransactionFields(userId, {
+          id: row.id,
+          encAmount: row.enc_amount,
+          encMerchant: row.enc_text,
+          rowVersion: BigInt(String(row.row_version ?? 1)),
+        } as any);
+        const n = Number(dec.amount);
+        return Number.isFinite(n) ? Math.abs(n) : null;
+      } catch {
+        return null; // left as it is until it can be read
+      }
+    };
+    try {
+      const delta = await this.dataSource.transaction((m) => reconcileCashTopups(m, userId, readAmount));
+      if (delta !== 0) this.logger.log(`Cash wallet moved by ${delta} from ATM withdrawals (user ${userId})`);
+    } catch (e: any) {
+      this.logger.warn(`Cash wallet ATM update failed for user ${userId}: ${e?.message || e}`);
+    }
   }
 
   /**
@@ -1575,7 +1631,9 @@ export class SyncService implements OnModuleInit {
   private async classifyCategory(
     merchantName: string,
     userId?: string,
-    preloadedUserRules?: Array<{ merchantNormalized: string; tag: string }>
+    preloadedUserRules?: Array<{ merchantNormalized: string; tag: string }>,
+    /** The SMS text, when there is one: lets phrases like "income tax" or "towards credit card" count */
+    body?: string,
   ): Promise<string> {
     const name = (merchantName || '')
       .toLowerCase()
@@ -1583,10 +1641,11 @@ export class SyncService implements OnModuleInit {
       .replace(/\s+/g, ' ')
       .trim();
 
-    if (!name) return 'miscellaneous';
+    if (!name && !body) return 'miscellaneous';
 
     // 1. Check preloaded user rules (in-memory to eliminate N+1 database queries)
-    if (preloadedUserRules && preloadedUserRules.length > 0) {
+    // Rules passed in (even an empty list: the user has none) mean no database lookup per row
+    if (preloadedUserRules) {
       const direct = preloadedUserRules.find((r) => r.merchantNormalized === name);
       if (direct && direct.tag) {
         return direct.tag;
@@ -1620,75 +1679,27 @@ export class SyncService implements OnModuleInit {
       }
     }
 
-    // 2. 30+ Indian merchant & category keyword rules
-    if (/blinkit|zepto|instamart|bigbasket|dmart|supermarket|kirana|provision|nature basket|spencer|more retail|dairy|milk|fruits|vegetable|bakery/.test(name)) {
-      return 'groceries';
-    }
-    if (/zomato|swiggy|starbucks|mcdonald|burger king|kfc|pizza hut|domino|haldiram|subway|barbeque|cafe|restaurant|dhaba|tea|chai|coffee|bhojanalaya|biryani|sweets|tiffin|canteen|dining/.test(name)) {
-      return 'food';
-    }
-    if (/uber|ola|rapido|metro|chalo|fastag|toll|parking|auto|taxi|ride|cab|transit/.test(name)) {
-      return 'commute';
-    }
-    if (/indian oil|iocl|bharat petroleum|bpcl|hindustan petroleum|hpcl|shell|petrol|diesel|cng|fuel|gas station/.test(name)) {
-      return 'fuel';
-    }
-    if (/makemytrip|goibibo|easemytrip|irctc|yatra|indigo|air india|vistara|spicejet|akasa|hotel|flight|resort|train ticket|railways|bus|redbus/.test(name)) {
-      return 'travel';
-    }
-    if (/amazon|flipkart|myntra|ajio|nykaa|tata cliq|meesho|zara|h&m|uniqlo|shoppers stop|lifestyle|max fashion|westside|decathlon|croma|reliance digital|mall|store|clothing|apparel/.test(name)) {
-      return 'shopping';
-    }
-    if (/netflix|prime video|hotstar|disney|spotify|pvr|inox|cinepolis|bookmyshow|sonyliv|zee5|youtube|gaming|steam|playstation|movies/.test(name)) {
-      return 'entertainment';
-    }
-    if (/apollo|pharmeasy|1mg|netmeds|medplus|hospital|clinic|diagnostic|doctor|pharmacy|chemist|pathology|lab|health|dental|opticals/.test(name)) {
-      return 'medical';
-    }
-    if (/jio|airtel|vodafone|vi bill|bsnl|tatasky|tata play|dth|dish tv|broadband|act fibernet|hathway|recharge|mobile bill/.test(name)) {
-      return 'bill_payments';
-    }
-    if (/bescom|tata power|adani electricity|bses|mahavitaran|wbsetcl|uppcl|water board|igl|indraprastha gas|mahanagar gas|piped gas|electricity|cylinder|hp gas|indane|bharat gas/.test(name)) {
-      return 'utilities';
-    }
-    if (/nobroker|magicbricks|housing|house rent|flat rent|society maintenance|landlord|rent payment/.test(name)) {
-      return 'rent';
-    }
-    if (/bajaj finserv|home credit|kreditbee|lazypay|simpl|loan|emi|finance emi|car loan|personal loan/.test(name)) {
-      return 'emi_loans';
-    }
-    if (/zerodha|groww|upstox|angelone|indmoney|motilal oswal|demat|brokerage|sharekhan/.test(name)) {
-      return 'financial_services';
-    }
-    if (/lic|hdfc ergo|icici lombard|star health|policybazaar|care health|max life|sbi life|insurance premium/.test(name)) {
-      return 'insurance';
-    }
-    if (/mutual fund|sip|fixed deposit|recurring deposit|sgb|gold bond|nps|ppf|crypto|coin|securities/.test(name)) {
-      return 'investment';
-    }
-    if (/school|college|university|tuition|coaching|fees|unacademy|byju|coursera|udemy/.test(name)) {
-      return 'education';
-    }
-    if (/cult\.fit|cure\.fit|gold gym|anytime fitness|gym|fitness|yoga|crossfit|sports club|protein/.test(name)) {
-      return 'fitness';
-    }
-    if (/salon|spa|urban company|geetanjali|enrich|barber|parlour|grooming|haircut|cosmetics/.test(name)) {
-      return 'personal_care';
-    }
-    if (/atm|cash wdl|cash withdrawal|nfs cash/.test(name)) {
-      return 'cash_withdrawals';
-    }
-    if (/salary|payroll|stipend|employer|batchid|wages/.test(name)) {
-      return 'salary';
-    }
-    if (/cashback|refund|reversal|reward|promo credit/.test(name)) {
-      return 'cashback';
-    }
-    if (/interest|savings bank interest|fd interest|int\.pd/.test(name)) {
-      return 'interest';
-    }
+    // 2. Shared auto-tag rules (same as the app: merchant-tag-rules.ts)
+    return predictTag(merchantName, body, 'debit');
+  }
 
-    return 'miscellaneous';
+  /**
+   * Tag for a transaction read from a statement or screenshot. The user's own rules and the
+   * shared keyword rules know brands exactly, so they come first; the AI's pick fills in the
+   * rest, and only when it is one of the app's tags (never a made-up "General" tag).
+   */
+  private async scanCategory(
+    tx: { merchant: string; category?: string; type?: string },
+    userId: string,
+    userRules?: Array<{ merchantNormalized: string; tag: string }>,
+  ): Promise<string> {
+    const ai = normalizeScanCategory(tx.category);
+    if (tx.type === 'credit') {
+      return ai && SCAN_CREDIT_TAGS.has(ai) ? ai : predictTag(tx.merchant, undefined, 'credit');
+    }
+    const ruled = await this.classifyCategory(tx.merchant, userId, userRules);
+    if (ruled !== 'miscellaneous') return ruled;
+    return ai && !SCAN_CREDIT_TAGS.has(ai) ? ai : 'miscellaneous';
   }
 
   async processScreenshotUpload(userId: string, bankProfileId: string, imageBuffer: Buffer, mimeType: string) {
@@ -1720,7 +1731,7 @@ export class SyncService implements OnModuleInit {
         amount: tx.amount,
         type: tx.type,
         merchant: tx.merchant,
-        category: tx.category || (await this.classifyCategory(tx.merchant, userId, userRules)),
+        category: await this.scanCategory(tx, userId, userRules),
         balanceAfter: tx.balanceAfter ?? null,
         referenceId: tx.referenceId ?? null,
       }))
@@ -1794,7 +1805,7 @@ export class SyncService implements OnModuleInit {
         amount: tx.amount,
         type: tx.type,
         merchant: tx.merchant,
-        category: tx.category || (await this.classifyCategory(tx.merchant, userId, userRules)),
+        category: await this.scanCategory(tx, userId, userRules),
         balanceAfter: tx.balanceAfter ?? null,
         referenceId: tx.referenceId ?? null,
       }))
@@ -2754,7 +2765,9 @@ export class SyncService implements OnModuleInit {
       const txId = (options.idPrefix || 'tx_sms_') + Math.random().toString(36).substr(2, 9);
       const category =
         item.category ||
-        (item.merchant ? await this.classifyCategory(item.merchant, userId, options.preloadedRules) : 'miscellaneous');
+        (item.merchant || item.body
+          ? await this.classifyCategory(item.merchant, userId, options.preloadedRules, item.body)
+          : 'miscellaneous');
       const enc = await this.fieldCipherService.encryptTransactionFields(userId, txId, {
         amount: item.amount,
         merchant: item.merchant || 'Merchant',
@@ -2795,7 +2808,10 @@ export class SyncService implements OnModuleInit {
       encSource: enc.encSource,
       sourceIdx: enc.sourceIdx,
       rowVersion: enc.rowVersion,
-      category: item.category ? item.category.toLowerCase() : item.isSalary ? 'Salary' : 'Other Income',
+      // Same rules as the app: salary, refund/cashback, interest, money from yourself, else Money in
+      category: item.category
+        ? item.category.toLowerCase()
+        : predictTag(item.merchant, item.body, 'credit', !!item.isSalary),
       timestamp: item.timestamp,
       bankProfileId: item.bankProfileId ?? null,
       smsId: item.smsId || item.contentId || null,
@@ -3003,6 +3019,7 @@ export class SyncService implements OnModuleInit {
       amount: parsed.amount,
       merchant: parsed.merchant || '',
       isSalary: parsed.isSalary,
+      body: data.body || '',
       timestamp: txTime,
       referenceId: incomingRef,
       smsId: directSmsId,

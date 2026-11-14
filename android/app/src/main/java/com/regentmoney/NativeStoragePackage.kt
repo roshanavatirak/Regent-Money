@@ -11,7 +11,9 @@ class NativeStoragePackage : ReactPackage {
     override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {
         return listOf(
             NativeStorageModule(reactContext),
-            SmsModule(reactContext)
+            SmsModule(reactContext),
+            AttributionModule(reactContext),
+            VoiceRecognizerModule(reactContext)
         )
     }
 

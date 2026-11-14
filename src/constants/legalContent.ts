@@ -96,7 +96,7 @@ export const TERMS: LegalDocument = {
 
 export const PRIVACY: LegalDocument = {
   title: 'Privacy policy',
-  version: '2.4',
+  version: '2.5',
   effective: 'November 2026',
   summary: [
     'We read only bank messages, on your phone. The message text never leaves it.',
@@ -116,6 +116,10 @@ export const PRIVACY: LegalDocument = {
         { title: 'Profile photo', text: 'A photo, if you choose to add one.' },
         { title: 'Profile details', text: 'Things you add yourself, like date of birth, gender, occupation and income.' },
         { title: 'Device and security', text: 'A push notification token so we can send you alerts, device details in bug reports you choose to send, and a bot-protection check when you sign in.' },
+        {
+          title: 'How you found Regent',
+          text: 'Once, after you sign in, the app records how it was installed: from a friend’s invite link, a promotion link, an ad, or the Play Store directly. This comes from Google Play’s install referrer. For invite and promotion links, Google Play Integrity also confirms the request came from the genuine app on a genuine device. We do not store your IP address, advertising ID or any device identifier for this. If a friend invited you, they see only a total number of friends who joined, never your name. There is no reward for inviting.',
+        },
       ],
     },
     {
@@ -135,7 +139,7 @@ export const PRIVACY: LegalDocument = {
       heading: 'Who we share it with',
       paragraphs: [
         'We never sell your data or share it with advertisers. We use these service providers only to run Regent for you:',
-        'Render (servers and database hosting); Google Gemini, Groq and Mistral (AI processing of Regent chat messages and of statements and screenshots you import, together with the balances and transactions needed to answer); Cloudinary (profile photos); Brevo and Gmail (account emails such as verification and password reset); Expo and Firebase Cloud Messaging (push notifications); Google Sign-In (if you choose to sign in with Google); Cloudflare Turnstile (bot protection at sign-in).',
+        'Render (servers and database hosting); Google Gemini, Groq and Mistral (AI processing of Regent chat messages and of statements and screenshots you import, together with the balances and transactions needed to answer); Cloudinary (profile photos); Brevo and Gmail (account emails such as verification and password reset); Expo and Firebase Cloud Messaging (push notifications); Google Sign-In (if you choose to sign in with Google); Google Play (the install referrer and the Play Integrity check described above); Cloudflare Turnstile (bot protection at sign-in).',
         'Some of these providers may process data outside India.',
       ],
     },

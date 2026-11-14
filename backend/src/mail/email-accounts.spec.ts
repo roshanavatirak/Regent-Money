@@ -6,17 +6,25 @@ function build(opts: {
   broadcastSent?: number;
   fallback?: boolean | null; // null = no row stored (default on)
   broadcastKey?: string | null;
+  welcomeSent?: number;
+  welcomeKey?: string | null;
 }) {
   const env: Record<string, string | null> = {
     BREVO_API_KEY: 'primary_key_1234567890',
     BREVO_SENDER_EMAIL: 'auth@example.com',
     BREVO_BROADCAST_API_KEY: opts.broadcastKey === undefined ? 'broadcast_key_1234567890' : opts.broadcastKey,
     BREVO_BROADCAST_SENDER_EMAIL: 'news@example.com',
+    BREVO_WELCOME_API_KEY: opts.welcomeKey === undefined ? null : opts.welcomeKey,
+    BREVO_WELCOME_SENDER_EMAIL: 'hello@example.com',
   };
   const configService: any = { get: jest.fn((k: string) => env[k] ?? null) };
   const dataSource: any = {
     query: jest.fn(async (q: string) => {
-      if (q.includes('FROM core.auth_email_logs')) return [{ account: 'primary', n: opts.primarySent ?? 0 }];
+      if (q.includes('FROM core.auth_email_logs'))
+        return [
+          { account: 'primary', is_welcome: false, n: opts.primarySent ?? 0 },
+          { account: 'welcome', is_welcome: true, n: opts.welcomeSent ?? 0 },
+        ];
       if (q.includes('FROM core.email_recipients')) return [{ account: 'broadcast', n: opts.broadcastSent ?? 0 }];
       if (q.includes('FROM core.email_settings')) return opts.fallback === null || opts.fallback === undefined ? [] : [{ value: opts.fallback }];
       return [];
@@ -81,9 +89,10 @@ describe('EmailAccountsService fallback', () => {
   });
 
   it('lets broadcasts borrow from primary only down to the sign-in reserve', async () => {
-    const cap = await build({ primarySent: 100, broadcastSent: 300 }).getBroadcastCapacity();
+    const cap = await build({ primarySent: 40, broadcastSent: 300 }).getBroadcastCapacity();
     expect(cap.own).toBe(0);
-    expect(cap.borrowable).toBe(300 - 100 - PRIMARY_RESERVE);
+    expect(cap.borrowable).toBe(300 - 40 - PRIMARY_RESERVE);
+    expect(PRIMARY_RESERVE).toBe(200);
   });
 
   it('gives broadcasts nothing extra when fallback is off', async () => {
@@ -109,6 +118,62 @@ describe('EmailAccountsService fallback', () => {
       termsUrl: 'https://raodevstudios.in/terms',
       privacyUrl: 'https://raodevstudios.in/privacy',
     });
+  });
+
+  it('keeps 200 sign-in emails: no borrowing once primary has 200 or fewer left', async () => {
+    const cap = await build({ primarySent: 100, broadcastSent: 300 }).getBroadcastCapacity();
+    expect(cap).toEqual({ own: 0, borrowable: 0 });
+  });
+
+  it('chains broadcasts: broadcast -> welcome -> primary (spare only)', async () => {
+    const chain = await build({ welcomeKey: 'welcome_key_1234567890', primarySent: 0, broadcastSent: 300, welcomeSent: 10 }).getChain('broadcast');
+    expect(chain).toEqual([
+      { account: 'welcome', left: 290 },
+      { account: 'primary', left: 100 },
+    ]);
+  });
+
+  it('chains welcome mail: welcome -> broadcast -> primary (spare only)', async () => {
+    const chain = await build({ welcomeKey: 'welcome_key_1234567890', primarySent: 50, broadcastSent: 20, welcomeSent: 0 }).getChain('welcome');
+    expect(chain).toEqual([
+      { account: 'welcome', left: 300 },
+      { account: 'broadcast', left: 280 },
+      { account: 'primary', left: 50 },
+    ]);
+  });
+
+  it('sends welcome mail through broadcast when Brevo says the welcome account is full', async () => {
+    const calls = mockBrevo({ welcome_key_1234567890: 402 });
+    const res = await build({ welcomeKey: 'welcome_key_1234567890' }).sendWithFallback('welcome', mail);
+    expect(res.success).toBe(true);
+    expect(res.account).toBe('broadcast');
+    expect(calls).toEqual(['welcome_key_1234567890', 'broadcast_key_1234567890']);
+  });
+
+  it('reports a quota error when every account the welcome mail may use is full', async () => {
+    const calls = mockBrevo({ welcome_key_1234567890: 402 });
+    const res = await build({ welcomeKey: 'welcome_key_1234567890', welcomeSent: 300, broadcastSent: 300, primarySent: 150 }).sendWithFallback('welcome', mail);
+    expect(res.success).toBe(false);
+    expect(res.isQuotaError).toBe(true);
+    expect(calls).toEqual(['welcome_key_1234567890']); // one probe of its own account, never the 200 sign-in reserve
+  });
+
+  it('uses the welcome account as the last fallback for sign-in mail', async () => {
+    const calls = mockBrevo({ primary_key_1234567890: 402, broadcast_key_1234567890: 429 });
+    const res = await build({ welcomeKey: 'welcome_key_1234567890' }).sendAuthEmail(mail);
+    expect(res.success).toBe(true);
+    expect(res.account).toBe('welcome');
+    expect(calls).toEqual(['primary_key_1234567890', 'broadcast_key_1234567890', 'welcome_key_1234567890']);
+  });
+
+  it('lets sign-in mail use the whole primary account (no reserve for itself)', async () => {
+    const chain = await build({ primarySent: 299 }).getChain('auth');
+    expect(chain[0]).toEqual({ account: 'primary', left: 1 });
+  });
+
+  it('counts an account that shares another account API key only once', async () => {
+    const chain = await build({ welcomeKey: 'broadcast_key_1234567890' }).getChain('welcome');
+    expect(chain.map((s) => s.account)).toEqual(['welcome', 'primary']);
   });
 
   it('does not treat a missing broadcast account as a second account', async () => {

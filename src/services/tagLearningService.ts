@@ -2,7 +2,6 @@ import { mmkvStorage } from '../db/mmkv';
 import {
   normalizeMerchantName,
   predictTagForTransaction,
-  PAYTM_TRANSACTION_TAGS,
 } from '../constants/transactionTags';
 import { authService } from './authService';
 import { getBackendUrl } from '../config/api';
@@ -170,11 +169,8 @@ class TagLearningService {
       console.warn('[TagLearningService] Failed to cache tag rule in MMKV:', e);
     }
 
-    // If tag is not in standard Paytm tags, save as custom tag as well
-    const isStandard = PAYTM_TRANSACTION_TAGS.some(
-      t => t.id === tag || t.label.toLowerCase() === tag.toLowerCase()
-    );
-    if (!isStandard) {
+    // A tag without a built-in tile (Food, Subscriptions, …) is also kept in "Your tags"
+    if (!isBuiltIn(tag)) {
       this.addCustomTag(tag);
     }
 

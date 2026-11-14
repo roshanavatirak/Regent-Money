@@ -19,6 +19,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme, useAuthStore } from '../store';
+import { RegentTreeIcon } from '../components/RegentTreeIcon';
 
 interface TabItemConfig {
   name: string;
@@ -44,11 +45,11 @@ const TABS: TabItemConfig[] = [
     size: 19,
   },
   {
-    name: 'Goals',
-    label: 'Goals',
-    activeIcon: 'trophy',
-    inactiveIcon: 'trophy-outline',
-    size: 19,
+    name: 'Regent',
+    label: 'Regent',
+    activeIcon: 'sparkles',
+    inactiveIcon: 'sparkles-outline',
+    size: 20,
   },
   {
     name: 'Banks',
@@ -58,11 +59,11 @@ const TABS: TabItemConfig[] = [
     size: 20,
   },
   {
-    name: 'Regent',
-    label: 'Regent',
-    activeIcon: 'sparkles',
-    inactiveIcon: 'sparkles-outline',
-    size: 20,
+    name: 'Goals',
+    label: 'Goals',
+    activeIcon: 'trophy',
+    inactiveIcon: 'trophy-outline',
+    size: 19,
   },
   {
     name: 'Settings',
@@ -303,6 +304,8 @@ const StandaloneTabButton = ({
               resizeMode="cover"
             />
           </View>
+        ) : config.name === 'Regent' ? (
+          <RegentTreeIcon size={iconSize} color={iconColor} filled={isFocused} />
         ) : (
           <Ionicons
             name={isFocused ? config.activeIcon : config.inactiveIcon}

@@ -1,16 +1,20 @@
 {
   "notes": [
     {
-      "title": "Email Verification Deep Links",
-      "detail": "Open Regent Money directly from verification emails to log in instantly."
+      "title": "New Categories",
+      "detail": "More categories to sort your spending accurately."
     },
     {
-      "title": "Smoother Sign Up",
-      "detail": "One-tap action to open your email app and complete registration quickly."
+      "title": "Voice Assistant",
+      "detail": "Hold Regent and say a transaction to add it hands-free."
     },
     {
-      "title": "Security & Usability Updates",
-      "detail": "Instant server-side session revocation, hardware keystore fixes, and enabled screenshots."
+      "title": "Enhanced UI",
+      "detail": "Swipe between tabs and a smoother, cleaner bottom bar."
+    },
+    {
+      "title": "Dynamic Cards",
+      "detail": "Home cards now adapt to your latest money activity."
     }
   ]
 }

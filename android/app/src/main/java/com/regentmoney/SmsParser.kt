@@ -76,6 +76,11 @@ object SmsParser {
     private val VPA_FROM = Regex("\\b(?:from|by)\\s+(?:vpa\\s+)?([a-z0-9][a-z0-9._-]{1,40})@[a-z0-9.-]{2,}", I)
     private val VPA_SEPARATORS = Regex("[._-]+")
     private val PAYEE_CREDITED = Regex(";\\s*([A-Za-z][A-Za-z0-9\\s&.*-]{1,40}?)\\s+credited\\b", I)
+    // Axis and others: "UPI/P2M/629349184814/UBER INDIA Not you?" - the payee follows the reference
+    private val UPI_PATH_PAYEE = Regex(
+        "\\bupi/(?:p2[am]|dr|cr)/\\d{9,14}/([A-Za-z][A-Za-z0-9 &.-]{1,38}?)(?=/|\\s+not\\b|\\s+if\\b|\\s+ref\\b|\\.\\s|\\.?\\s*$)",
+        I,
+    )
     private val TO_ACCOUNT = Regex("\\bto\\s+(?:a\\/c|acct|account|ac)\\s*(?:no\\.?\\s*)?[x*.]*(\\d{3,18})\\b", I)
     private val ON_MERCHANT = Regex("\\bon\\s+([A-Za-z][A-Za-z0-9\\s&*-]{1,40}?)(?=\\s*[.,;]|\\s+on\\b|\\s+avl|\\s+avail|\\s+if\\b|$)", I)
     private val HONORIFIC = Regex("^(?:mr|mrs|ms|dr)\\.?\\s+", I)
@@ -173,6 +178,9 @@ object SmsParser {
         // A UPI handle is the most precise counterparty: "to VPA swiggy@icici", "from priya.k@ybl"
         var merchant = (if (type == "debit") VPA_TO else VPA_FROM).find(clean)
             ?.let { usableMerchant(it.groupValues[1].replace(VPA_SEPARATORS, " ")) } ?: ""
+        if (merchant.isEmpty()) {
+            merchant = UPI_PATH_PAYEE.find(clean)?.let { usableMerchant(it.groupValues[1]) } ?: ""
+        }
 
         // Then the text after the amount, then the whole message
         val scopes = mutableListOf<String>()
@@ -272,26 +280,29 @@ object SmsParser {
         for ((rx, replacement) in SANITIZE_STEPS) cleaned = cleaned.replace(rx, replacement)
         cleaned = cleaned.trim()
 
+        // Well-known brands get one tidy name. Matched at the start of a word, so "Coca Cola" isn't Ola
+        // and "Ajio" or "JioMart" keep their own names. Jio/Airtel names are left as written
+        // ("Jio Recharge", "Airtel Postpaid") because the words after them decide the tag.
         val lower = cleaned.lowercase()
-        return when {
-            lower.contains("zomato") -> "Zomato"
-            lower.contains("swiggy") -> "Swiggy"
-            lower.contains("blinkit") -> "Blinkit"
-            lower.contains("zepto") -> "Zepto"
-            lower.contains("uber") -> "Uber"
-            lower.contains("ola") -> "Ola"
-            lower.contains("rapido") -> "Rapido"
-            lower.contains("netflix") -> "Netflix"
-            lower.contains("spotify") -> "Spotify"
-            lower.contains("hotstar") -> "Disney+ Hotstar"
-            lower.contains("amazon") -> "Amazon"
-            lower.contains("flipkart") -> "Flipkart"
-            lower.contains("jio") -> "Jio Recharge"
-            lower.contains("airtel") -> "Airtel Bill"
-            lower.contains("starbucks") -> "Starbucks"
-            else -> cleaned
-        }
+        return BRAND_NAMES.firstOrNull { it.first.containsMatchIn(lower) }?.second ?: cleaned
     }
+
+    private val BRAND_NAMES = listOf(
+        Regex("\\binstamart") to "Swiggy Instamart",
+        Regex("\\bzomato") to "Zomato",
+        Regex("\\bswiggy") to "Swiggy",
+        Regex("\\bblinkit") to "Blinkit",
+        Regex("\\bzepto") to "Zepto",
+        Regex("\\buber") to "Uber",
+        Regex("\\bola(?:\\b|cabs|money)") to "Ola",
+        Regex("\\brapido") to "Rapido",
+        Regex("\\bnetflix") to "Netflix",
+        Regex("\\bspotify") to "Spotify",
+        Regex("hotstar") to "Disney+ Hotstar",
+        Regex("\\bamazon") to "Amazon",
+        Regex("\\bflipkart") to "Flipkart",
+        Regex("\\bstarbucks") to "Starbucks",
+    )
 
     /** Identifies the bank from the DLT sender header (e.g. AD-SBIINB -> SBI). */
     fun detectBankFromSender(sender: String?): String? {

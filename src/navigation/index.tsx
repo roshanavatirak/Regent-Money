@@ -125,6 +125,8 @@ import { AdminEmailConfigScreen } from '../features/admin/AdminEmailConfigScreen
 import { AdminHomeCardsScreen } from '../features/admin/AdminHomeCardsScreen';
 import { DashboardSkeleton } from '../components/DashboardSkeleton';
 import { BrandWordmark } from '../components/BrandWordmark';
+import { RegentTreeIcon } from '../components/RegentTreeIcon';
+import { ProfileQuickSheet } from '../components/ProfileQuickSheet';
 import { StatusBar } from 'expo-status-bar';
 import { authService } from '../services/authService';
 import { notificationService } from '../services/notificationService';
@@ -142,10 +144,14 @@ import { EditProfileScreen } from './EditProfileScreen';
 import { EditBankScreen } from './EditBankScreen';
 import { LinkDebitCardScreen } from './LinkDebitCardScreen';
 import { ManualTransactionScreen } from './ManualTransactionScreen';
+import { requireOptionalNativeModule } from 'expo';
 import { TransactionDetailScreen } from './TransactionDetailScreen';
 import { SettingsScreen } from './SettingsScreen';
 import { PrivacyCenterScreen } from './PrivacyCenterScreen';
 import { SuggestFeatureScreen } from './SuggestFeatureScreen';
+import { InviteFriendScreen } from './InviteFriendScreen';
+import { AdminReferralsScreen } from '../features/admin/AdminReferralsScreen';
+import { attributionService } from '../services/attributionService';
 import { ReportBugScreen } from './ReportBugScreen';
 import { BudgetScreen } from './BudgetScreen';
 import { CreateBudgetScreen } from './CreateBudgetScreen';
@@ -2275,221 +2281,140 @@ const TAB_CONFIG: { [key: string]: TabItemConfig } = {
 const NAV_FOREST = '#0B3D2C';
 const NAV_LIME = '#B8F36B';
 
-const CustomTabButton = ({
-  route,
-  isFocused,
-  onPress,
-  onLongPress,
-  isSmall,
-  isDark,
-  activeWidth,
-  inactiveWidth,
-}: {
-  route: any;
-  isFocused: boolean;
-  onPress: () => void;
-  onLongPress: () => void;
-  isSmall: boolean;
-  isDark: boolean;
+/**
+ * Main tab bar.
+ *
+ * The pager reports `position`, the fractional tab index while a page is being dragged
+ * (1.4 = 40% of the way from Budgets to Regent). Everything that moves in the bar (ONE pill,
+ * each icon, each label) is a transform/opacity interpolation of that value, so:
+ *  - the bar follows the finger frame by frame during a swipe (on the native driver),
+ *  - a tap jumps the pager without animation and the pill simply appears on the new tab,
+ *  - there is only one pill element, so two tabs can never look active at the same time.
+ * Mid-swipe the pill's leading edge runs ahead of the finger and its trailing edge catches
+ * up later, so it stretches across both tabs and then settles on the new one.
+ */
+type TabBarGeometry = {
+  tabCount: number;
   activeWidth: number;
   inactiveWidth: number;
-}) => {
-  const user = useAuthStore((state) => state.user);
+  pillHeight: number;
+  iconBox: number;
+  labelGap: number;
+};
 
-  const config = TAB_CONFIG[route.name] || {
-    label: route.name,
-    activeIcon: 'apps' as const,
-    inactiveIcon: 'apps-outline' as const,
-    size: 20,
+type TabBarFrame = {
+  weights: number[];
+  widths: number[];
+  lefts: number[];
+  pillLeft: number;
+  pillRight: number;
+};
+
+const PILL_LEAD = 1.5; // leading edge reaches the next tab at 2/3 of the swipe
+const PILL_TRAIL_START = 0.33; // trailing edge starts moving after 1/3 of the swipe
+const PILL_MID_BASE = 100; // width of the pill's middle piece before it is scaled
+
+const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+
+/** Where everything in the bar sits when the pager is at fractional index `x`. */
+function tabBarFrame(x: number, g: TabBarGeometry): TabBarFrame {
+  const last = Math.max(g.tabCount - 1, 0);
+  const clamped = Math.min(Math.max(x, 0), last);
+  const from = Math.min(Math.floor(clamped), Math.max(last - 1, 0));
+  const to = Math.min(from + 1, last);
+  const p = to === from ? 0 : clamped - from;
+  const weights = Array.from({ length: g.tabCount }, (_, j) =>
+    to === from ? (j === from ? 1 : 0) : (j === from ? 1 - p : 0) + (j === to ? p : 0)
+  );
+  const widths = weights.map((w) => g.inactiveWidth + (g.activeWidth - g.inactiveWidth) * w);
+  const lefts: number[] = [];
+  let acc = 0;
+  widths.forEach((w) => {
+    lefts.push(acc);
+    acc += w;
+  });
+  const lead = clamp01(p * PILL_LEAD);
+  const trail = clamp01((p - PILL_TRAIL_START) / (1 - PILL_TRAIL_START));
+  return {
+    weights,
+    widths,
+    lefts,
+    pillLeft: lerp(lefts[from], lefts[to], trail),
+    pillRight: lerp(lefts[from] + widths[from], lefts[to] + widths[to], lead),
   };
+}
 
-  const iconSize = isSmall ? 18 : 20;
-  const activeBg = isDark ? NAV_LIME : NAV_FOREST;
-  const activeFg = isDark ? NAV_FOREST : NAV_LIME;
-  const inactiveFg = isDark ? 'rgba(234, 242, 238, 0.62)' : '#4F6159';
-  const showAvatar = route.name === 'Settings' && !!user?.avatarUrl;
+/** Sample points for the interpolations: every pill kink is included, so the pill is exact. */
+function tabBarSamplePoints(tabCount: number): number[] {
+  const steps = [0, 0.1, 0.2, 0.3, PILL_TRAIL_START, 0.4, 0.5, 0.6, 2 / 3, 0.7, 0.8, 0.9];
+  const xs: number[] = [];
+  for (let i = 0; i < tabCount - 1; i++) steps.forEach((s) => xs.push(i + s));
+  xs.push(Math.max(tabCount - 1, 0));
+  if (xs.length < 2) xs.push(xs[0] + 1);
+  return xs;
+}
 
-  // Fluid transition progress: 0 (inactive) -> 1 (active)
-  const focusAnim = useSharedValue(isFocused ? 1 : 0);
-  const scale = useSharedValue(1);
+/** Icon and label placement of tab `j`: icon + label are centred together in the slot. */
+function tabSlotContent(f: TabBarFrame, j: number, g: TabBarGeometry, labelWidth: number) {
+  const w = f.weights[j];
+  const groupWidth = g.iconBox + w * (g.labelGap + labelWidth);
+  const iconX = f.lefts[j] + (f.widths[j] - groupWidth) / 2;
+  const covered = Math.min(f.pillRight, iconX + g.iconBox) - Math.max(f.pillLeft, iconX);
+  return {
+    iconX,
+    labelX: iconX + g.iconBox + g.labelGap,
+    labelOpacity: clamp01((w - 0.35) / 0.65),
+    // How much of the icon sits on the pill: 1 = drawn in the pill's foreground colour.
+    iconOnPill: clamp01(covered / g.iconBox),
+  };
+}
 
-  useEffect(() => {
-    cancelAnimation(focusAnim);
-    if (isFocused) {
-      focusAnim.value = withTiming(1, {
-        duration: 200,
-        easing: Easing.out(Easing.cubic),
-      });
-    } else {
-      focusAnim.value = withTiming(0, {
-        duration: 140,
-        easing: Easing.in(Easing.cubic),
-      });
-    }
-    return () => {
-      cancelAnimation(focusAnim);
-    };
-  }, [isFocused]);
-
-  // Synchronized slot expansion/contraction: gained width equals lost width at every frame
-  const slotStyle = useAnimatedStyle(() => {
-    const w = interpolate(focusAnim.value, [0, 1], [inactiveWidth, activeWidth]);
-    return {
-      width: w,
-      height: '100%',
-      flexShrink: 1,
-    };
-  }, [inactiveWidth, activeWidth]);
-
-  const pressStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
-
-  // Background pill blooms and fades seamlessly - ONLY the currently focused tab can ever show it
-  const pillBgStyle = useAnimatedStyle(() => {
-    const activeProgress = isFocused ? focusAnim.value : 0;
-    return {
-      opacity: activeProgress,
-      transform: [{ scale: interpolate(activeProgress, [0, 1], [0.88, 1]) }],
-    };
-  }, [isFocused]);
-
-  // Label smoothly unrolls and fades in without harsh clipping - strictly gated to focused tab
-  const labelStyle = useAnimatedStyle(() => {
-    const activeProgress = isFocused ? focusAnim.value : 0;
-    return {
-      opacity: interpolate(activeProgress, [0.3, 1], [0, 1]),
-      maxWidth: interpolate(activeProgress, [0, 1], [0, 76]),
-      transform: [{ translateX: interpolate(activeProgress, [0, 1], [4, 0]) }],
-    };
-  }, [isFocused]);
-
-  // Smooth cross-fade between active (filled) and inactive (outline) icons
-  const activeIconStyle = useAnimatedStyle(() => ({
-    opacity: isFocused ? focusAnim.value : 0,
-  }), [isFocused]);
-
-  const inactiveIconStyle = useAnimatedStyle(() => ({
-    opacity: isFocused ? 1 - focusAnim.value : 1,
-  }), [isFocused]);
-
+const TabIcon = ({
+  routeName,
+  color,
+  active,
+  size,
+  avatarUrl,
+  ringColor,
+}: {
+  routeName: string;
+  color: string;
+  active: boolean;
+  size: number;
+  avatarUrl?: string | null;
+  ringColor: string;
+}) => {
+  const config = TAB_CONFIG[routeName];
+  if (routeName === 'Settings' && avatarUrl) {
+    return (
+      <Image
+        source={{ uri: avatarUrl }}
+        style={{ width: size + 4, height: size + 4, borderRadius: (size + 4) / 2, borderWidth: 1.5, borderColor: ringColor }}
+        resizeMode="cover"
+      />
+    );
+  }
+  if (routeName === 'Regent') return <RegentTreeIcon size={size} color={color} filled={active} />;
   return (
-    <Animated.View style={[{ height: '100%' }, slotStyle]}>
-      <Pressable
-        onPress={onPress}
-        onLongPress={onLongPress}
-        onPressIn={() => {
-          scale.value = withSpring(0.92, { damping: 14, stiffness: 300 });
-        }}
-        onPressOut={() => {
-          scale.value = withSpring(1, { damping: 14, stiffness: 300 });
-        }}
-        style={[
-          {
-            flex: 1,
-            alignItems: 'center',
-            justifyContent: 'center',
-            height: '100%',
-          },
-          Platform.OS === 'web' && ({ cursor: 'pointer', outlineStyle: 'none' } as any),
-        ]}
-        accessibilityRole="button"
-        accessibilityState={isFocused ? { selected: true } : {}}
-        accessibilityLabel={config.label}
-      >
-        <Animated.View
-          style={[
-            {
-              width: '100%',
-              height: isSmall ? 46 : 52,
-              borderRadius: 26,
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
-              paddingHorizontal: 8,
-              position: 'relative',
-              overflow: 'hidden',
-            },
-            pressStyle,
-          ]}
-        >
-          {/* Active pill background */}
-          <Animated.View
-            pointerEvents="none"
-            style={[
-              {
-                position: 'absolute',
-                top: 0,
-                bottom: 0,
-                left: 0,
-                right: 0,
-                borderRadius: 26,
-                backgroundColor: activeBg,
-              },
-              pillBgStyle,
-            ]}
-          />
-
-          {/* Icon with cross-fade */}
-          <View style={{ width: iconSize + 4, height: iconSize + 4, alignItems: 'center', justifyContent: 'center' }}>
-            {showAvatar ? (
-              <Image
-                source={{ uri: user?.avatarUrl || undefined }}
-                style={{
-                  width: iconSize + 4,
-                  height: iconSize + 4,
-                  borderRadius: (iconSize + 4) / 2,
-                  borderWidth: 1.5,
-                  borderColor: isFocused ? activeFg : 'transparent',
-                }}
-                resizeMode="cover"
-              />
-            ) : (
-              <>
-                <Animated.View style={[{ position: 'absolute' }, activeIconStyle]}>
-                  <Ionicons name={config.activeIcon} size={iconSize} color={activeFg} />
-                </Animated.View>
-                <Animated.View style={[{ position: 'absolute' }, inactiveIconStyle]}>
-                  <Ionicons name={config.inactiveIcon} size={iconSize} color={inactiveFg} />
-                </Animated.View>
-              </>
-            )}
-          </View>
-
-          {/* Label: smoothly unrolls & fades in */}
-          <Animated.View
-            style={[
-              {
-                overflow: 'hidden',
-                marginLeft: 4,
-                justifyContent: 'center',
-              },
-              labelStyle,
-            ]}
-          >
-            <Text
-              numberOfLines={1}
-              style={{
-                color: activeFg,
-                fontSize: isSmall ? 12 : 13,
-                fontWeight: '700',
-              }}
-            >
-              {config.label}
-            </Text>
-          </Animated.View>
-        </Animated.View>
-      </Pressable>
-    </Animated.View>
+    <Ionicons
+      name={config ? (active ? config.activeIcon : config.inactiveIcon) : active ? 'apps' : 'apps-outline'}
+      size={size}
+      color={color}
+    />
   );
 };
 
-const CustomBottomTabBar = ({ state, navigation }: MaterialTopTabBarProps) => {
+const CustomBottomTabBar = ({ state, navigation, position }: MaterialTopTabBarProps) => {
   const { isDark } = useTheme();
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
+  const user = useAuthStore((s) => s.user);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const [measuredWidth, setMeasuredWidth] = useState(0);
+  const [labelWidths, setLabelWidths] = useState<Record<string, number>>({});
+  // Holding the Profile tab opens a quick sheet: profile row + one-tap log out
+  const [profileSheetOpen, setProfileSheetOpen] = useState(false);
 
   useEffect(() => {
     const showSub = Keyboard.addListener(
@@ -2511,6 +2436,7 @@ const CustomBottomTabBar = ({ state, navigation }: MaterialTopTabBarProps) => {
   const maxBarWidth = 460;
   const availableWidth = measuredWidth > 0 ? measuredWidth : windowWidth;
   const barWidth = Math.min(availableWidth - barMarginHorizontal * 2, maxBarWidth);
+  const barHeight = isSmall ? 58 : 64;
 
   const BAR_PADDING = 6;
   const BORDER = 1;
@@ -2518,6 +2444,53 @@ const CustomBottomTabBar = ({ state, navigation }: MaterialTopTabBarProps) => {
   const tabCount = state.routes.length;
   const activeWidth = Math.min(isSmall ? 98 : 110, innerWidth * 0.34);
   const inactiveWidth = (innerWidth - activeWidth) / Math.max(tabCount - 1, 1);
+  const iconSize = isSmall ? 18 : 20;
+  const geometry: TabBarGeometry = {
+    tabCount,
+    activeWidth,
+    inactiveWidth,
+    pillHeight: barHeight - BAR_PADDING * 2 - BORDER * 2,
+    iconBox: iconSize + 4,
+    labelGap: 4,
+  };
+  const labelMaxWidth = Math.max(0, activeWidth - geometry.iconBox - geometry.labelGap - 16);
+  const H = geometry.pillHeight;
+
+  const activeBg = isDark ? NAV_LIME : NAV_FOREST;
+  const activeFg = isDark ? NAV_FOREST : NAV_LIME;
+  const inactiveFg = isDark ? 'rgba(234, 242, 238, 0.62)' : '#4F6159';
+
+  const routeNames = state.routes.map((r) => r.name).join('|');
+  const anim = useMemo(() => {
+    const xs = tabBarSamplePoints(tabCount);
+    const frames = xs.map((x) => tabBarFrame(x, geometry));
+    const interp = (values: number[]) =>
+      position.interpolate({ inputRange: xs, outputRange: values, extrapolate: 'clamp' });
+    const midWidth = (f: TabBarFrame) => Math.max(0, f.pillRight - f.pillLeft - H);
+    return {
+      leftCap: interp(frames.map((f) => f.pillLeft)),
+      rightCap: interp(frames.map((f) => f.pillRight - H)),
+      midX: interp(frames.map((f) => f.pillLeft + H / 2 + (midWidth(f) - PILL_MID_BASE) / 2)),
+      midScale: interp(frames.map((f) => Math.max(0.001, midWidth(f) / PILL_MID_BASE))),
+      slots: state.routes.map((route, j) => {
+        const label = TAB_CONFIG[route.name]?.label ?? route.name;
+        const lw = Math.min(labelWidths[route.name] ?? label.length * 7.5, labelMaxWidth);
+        const content = frames.map((f) => tabSlotContent(f, j, geometry, lw));
+        return {
+          iconX: interp(content.map((c) => c.iconX)),
+          labelX: interp(content.map((c) => c.labelX)),
+          labelOpacity: interp(content.map((c) => c.labelOpacity)),
+          iconOnPill: interp(content.map((c) => c.iconOnPill)),
+          iconOffPill: interp(content.map((c) => 1 - c.iconOnPill)),
+        };
+      }),
+    };
+    // geometry is rebuilt each render from the numbers listed here
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [position, tabCount, activeWidth, inactiveWidth, H, iconSize, labelMaxWidth, labelWidths, routeNames]);
+
+  // Tap targets follow the settled layout of the current tab.
+  const restFrame = tabBarFrame(state.index, geometry);
 
   const bottomOffset = Platform.OS === 'web'
     ? 18
@@ -2546,7 +2519,7 @@ const CustomBottomTabBar = ({ state, navigation }: MaterialTopTabBarProps) => {
       <View
         style={{
           width: barWidth,
-          height: isSmall ? 58 : 64,
+          height: barHeight,
           borderRadius: 32,
           backgroundColor: isDark ? '#0F1E18' : '#FFFFFF',
           borderWidth: BORDER,
@@ -2559,18 +2532,62 @@ const CustomBottomTabBar = ({ state, navigation }: MaterialTopTabBarProps) => {
           elevation: 8,
         }}
       >
-        <View
-          style={{
-            flex: 1,
-            height: '100%',
-            flexDirection: 'row',
-            alignItems: 'center',
-            overflow: 'hidden',
-            borderRadius: 26,
-          }}
-        >
-          {state.routes.map((route, index) => {
-            const isFocused = state.index === index;
+        <View style={{ width: innerWidth, height: H, overflow: 'hidden', borderRadius: H / 2 }}>
+          {/* The one active pill: two round caps and a middle piece, all moved by transforms */}
+          <RNAnimated.View
+            pointerEvents="none"
+            style={{ position: 'absolute', left: 0, top: 0, width: H, height: H, borderRadius: H / 2, backgroundColor: activeBg, transform: [{ translateX: anim.leftCap }] }}
+          />
+          <RNAnimated.View
+            pointerEvents="none"
+            style={{ position: 'absolute', left: 0, top: 0, width: H, height: H, borderRadius: H / 2, backgroundColor: activeBg, transform: [{ translateX: anim.rightCap }] }}
+          />
+          <RNAnimated.View
+            pointerEvents="none"
+            style={{ position: 'absolute', left: 0, top: 0, width: PILL_MID_BASE, height: H, backgroundColor: activeBg, transform: [{ translateX: anim.midX }, { scaleX: anim.midScale }] }}
+          />
+
+          {state.routes.map((route, j) => {
+            const slot = anim.slots[j];
+            const label = TAB_CONFIG[route.name]?.label ?? route.name;
+            const iconProps = { routeName: route.name, size: iconSize, avatarUrl: user?.avatarUrl };
+            return (
+              <React.Fragment key={route.key}>
+                <RNAnimated.View
+                  pointerEvents="none"
+                  style={{ position: 'absolute', left: 0, top: (H - geometry.iconBox) / 2, width: geometry.iconBox, height: geometry.iconBox, transform: [{ translateX: slot.iconX }] }}
+                >
+                  <RNAnimated.View style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, alignItems: 'center', justifyContent: 'center', opacity: slot.iconOffPill }}>
+                    <TabIcon {...iconProps} color={inactiveFg} active={false} ringColor="transparent" />
+                  </RNAnimated.View>
+                  <RNAnimated.View style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, alignItems: 'center', justifyContent: 'center', opacity: slot.iconOnPill }}>
+                    <TabIcon {...iconProps} color={activeFg} active ringColor={activeFg} />
+                  </RNAnimated.View>
+                </RNAnimated.View>
+                <RNAnimated.View
+                  pointerEvents="none"
+                  style={{ position: 'absolute', left: 0, top: 0, height: H, justifyContent: 'center', opacity: slot.labelOpacity, transform: [{ translateX: slot.labelX }] }}
+                >
+                  <Text
+                    numberOfLines={1}
+                    onLayout={(e) => {
+                      const w = Math.ceil(e.nativeEvent.layout.width);
+                      if (w > 0 && Math.abs((labelWidths[route.name] ?? 0) - w) > 1) {
+                        setLabelWidths((prev) => ({ ...prev, [route.name]: w }));
+                      }
+                    }}
+                    style={{ color: activeFg, fontSize: isSmall ? 12 : 13, fontWeight: '700', maxWidth: labelMaxWidth }}
+                  >
+                    {label}
+                  </Text>
+                </RNAnimated.View>
+              </React.Fragment>
+            );
+          })}
+
+          {state.routes.map((route, j) => {
+            const isFocused = state.index === j;
+            const label = TAB_CONFIG[route.name]?.label ?? route.name;
 
             const onPress = () => {
               if (Platform.OS === 'web' && typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
@@ -2592,24 +2609,45 @@ const CustomBottomTabBar = ({ state, navigation }: MaterialTopTabBarProps) => {
 
             const onLongPress = () => {
               navigation.emit({ type: 'tabLongPress', target: route.key });
+              if (route.name === 'Settings') {
+                setProfileSheetOpen(true);
+                return;
+              }
+              // Holding Regent opens voice entry: say a transaction instead of typing it
+              if (route.name === 'Regent') {
+                // An app installed before voice entry existed has no recorder built in
+                if (requireOptionalNativeModule('ExpoAudio') && requireOptionalNativeModule('ExpoHaptics')) {
+                  navigation.navigate('VoiceEntry' as never);
+                } else {
+                  Alert.alert('Update Regent Money', 'Voice entry needs the latest version of the app. Update it from the Play Store to add transactions by speaking.');
+                }
+              }
             };
 
             return (
-              <CustomTabButton
-                key={route.key}
-                route={route}
-                isFocused={isFocused}
+              <Pressable
+                key={`${route.key}-hit`}
                 onPress={onPress}
                 onLongPress={onLongPress}
-                isSmall={isSmall}
-                isDark={isDark}
-                activeWidth={activeWidth}
-                inactiveWidth={inactiveWidth}
+                delayLongPress={route.name === 'Regent' ? 350 : 500}
+                accessibilityHint={route.name === 'Regent' ? 'Hold to add a transaction by voice' : undefined}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: isFocused }}
+                accessibilityLabel={`${label}, tab ${j + 1} of ${tabCount}`}
+                style={[
+                  { position: 'absolute', top: 0, bottom: 0, left: restFrame.lefts[j], width: restFrame.widths[j] },
+                  Platform.OS === 'web' && ({ cursor: 'pointer', outlineStyle: 'none' } as any),
+                ]}
               />
             );
           })}
         </View>
       </View>
+      <ProfileQuickSheet
+        visible={profileSheetOpen}
+        onClose={() => setProfileSheetOpen(false)}
+        onOpenProfile={() => navigation.navigate('Settings' as never)}
+      />
     </View>
   );
 };
@@ -2621,7 +2659,9 @@ function TabNavigator() {
       backBehavior="history"
       tabBar={(props) => <CustomBottomTabBar {...props} />}
       screenOptions={{
-        swipeEnabled: false,
+        // Swipe moves one tab at a time with a page slide; tapping a tab jumps
+        // straight there without sliding (animationEnabled: false).
+        swipeEnabled: true,
         lazy: true,
         lazyPreloadDistance: 1,
         animationEnabled: false,
@@ -2629,11 +2669,12 @@ function TabNavigator() {
     >
       <Tab.Screen name="Home" component={DashboardScreen} />
       <Tab.Screen name="Budgets" component={BudgetTabScreen} />
-      <Tab.Screen name="Goals" component={GoalsTabScreen} />
+      {/* Regent sits third so the thumb reaches it: tap for chat, hold to add by voice */}
+      <Tab.Screen name="Regent" component={RegentChatScreen} />
       <Tab.Screen name="Banks">
         {() => <BanksScreen AppTopBarComponent={AppTopBar} />}
       </Tab.Screen>
-      <Tab.Screen name="Regent" component={RegentChatScreen} />
+      <Tab.Screen name="Goals" component={GoalsTabScreen} />
       <Tab.Screen name="Settings" component={TabProfileScreen} />
     </Tab.Navigator>
   );
@@ -3054,6 +3095,13 @@ export default function AppNavigator() {
     syncGrantedPermissions();
   }, [splashFinished, isLoading, user]);
 
+  // Record once, in the background, how this install arrived (invite link, campaign or organic).
+  // No screen is shown; see services/attributionService.ts and the Privacy center.
+  useEffect(() => {
+    if (!splashFinished || isLoading || !user?.id || !user.termsAccepted || Platform.OS !== 'android') return;
+    attributionService.claimIfNeeded(user.id);
+  }, [splashFinished, isLoading, user?.id, user?.termsAccepted]);
+
   useEffect(() => {
     let isMounted = true;
     const checkUpdates = async () => {
@@ -3256,6 +3304,16 @@ export default function AppNavigator() {
                     options={sidebarAwareOptions('slide_from_right')}
                   />
                   <Stack.Screen
+                    name="AdminReferrals"
+                    component={AdminReferralsScreen}
+                    options={sidebarAwareOptions('slide_from_right')}
+                  />
+                  <Stack.Screen
+                    name="InviteFriend"
+                    component={InviteFriendScreen}
+                    options={sidebarAwareOptions('slide_from_right')}
+                  />
+                  <Stack.Screen
                     name="EditProfile"
                     component={EditProfileScreen}
                     options={{
@@ -3325,6 +3383,17 @@ export default function AppNavigator() {
                     }}
                   />
                   <Stack.Screen
+                    name="VoiceEntry"
+                    // Loaded only when opened, so an older install without the recorder still starts
+                    getComponent={() => require('./VoiceEntryScreen').VoiceEntryScreen}
+                    options={{
+                      presentation: 'card',
+                      animation: 'slide_from_bottom',
+                      headerShown: false,
+                      gestureEnabled: false,
+                    }}
+                  />
+                  <Stack.Screen
                     name="CashWallet"
                     component={CashWalletScreen}
                     options={{
@@ -3364,6 +3433,16 @@ export default function AppNavigator() {
                   <Stack.Screen
                     name="PrivacyCenter"
                     component={PrivacyCenterScreen}
+                    options={sidebarAwareOptions('slide_from_right')}
+                  />
+                  <Stack.Screen
+                    name="InviteFriend"
+                    component={InviteFriendScreen}
+                    options={sidebarAwareOptions('slide_from_right')}
+                  />
+                  <Stack.Screen
+                    name="AdminReferrals"
+                    component={AdminReferralsScreen}
                     options={sidebarAwareOptions('slide_from_right')}
                   />
                   <Stack.Screen

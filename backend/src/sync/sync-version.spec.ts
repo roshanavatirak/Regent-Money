@@ -167,18 +167,24 @@ describe('SyncVersionInterceptor', () => {
   const ctx = (method: string, userId?: string) =>
     ({ switchToHttp: () => ({ getRequest: () => ({ method, user: userId ? { id: userId } : undefined }) }) }) as any;
 
-  it('bumps the version after a successful write, before the reply is sent', async () => {
-    const bump = jest.fn().mockResolvedValue(undefined);
-    const interceptor = new SyncVersionInterceptor({ bumpSyncVersion: bump } as any);
+  it('updates the cash wallet, then bumps the version, after a successful write and before the reply', async () => {
+    const order: string[] = [];
+    const bump = jest.fn(async () => void order.push('bump'));
+    const cash = jest.fn(async () => void order.push('cash'));
+    const interceptor = new SyncVersionInterceptor({ bumpSyncVersion: bump, reconcileCashWithdrawals: cash } as any);
     const out = await lastValueFrom(interceptor.intercept(ctx('POST', 'u1'), { handle: () => of({ ok: true }) }));
     expect(out).toEqual({ ok: true });
+    expect(cash).toHaveBeenCalledWith('u1');
     expect(bump).toHaveBeenCalledWith('u1');
+    expect(order).toEqual(['cash', 'bump']);
   });
 
   it('does nothing on reads', async () => {
     const bump = jest.fn();
-    const interceptor = new SyncVersionInterceptor({ bumpSyncVersion: bump } as any);
+    const cash = jest.fn();
+    const interceptor = new SyncVersionInterceptor({ bumpSyncVersion: bump, reconcileCashWithdrawals: cash } as any);
     await lastValueFrom(interceptor.intercept(ctx('GET', 'u1'), { handle: () => of({}) }));
     expect(bump).not.toHaveBeenCalled();
+    expect(cash).not.toHaveBeenCalled();
   });
 });

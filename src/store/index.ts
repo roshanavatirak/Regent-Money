@@ -623,6 +623,8 @@ export interface BankProfileType {
   smsConsent: boolean;
   /** Last 4 digits of debit cards on this account. */
   debitCardSuffixes?: string[];
+  /** Cash wallet only: ATM withdrawals from this time on are added to the wallet by the server. */
+  cashTrackingSince?: number;
 }
 
 export { parseDebitCardSuffixes } from '../services/bankMatching';

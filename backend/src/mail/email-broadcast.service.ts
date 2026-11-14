@@ -428,10 +428,10 @@ export class EmailBroadcastService implements OnModuleInit {
       }
 
       // 2. Check today's capacity: own account, plus what fallback may borrow from the sign-in account
-      const capacity = await this.accounts.getBroadcastCapacity();
-      let ownLeft = capacity.own;
-      let borrowLeft = capacity.borrowable;
-      if (ownLeft + borrowLeft <= 0) {
+      // Chain: broadcast account, then welcome account, then sign-in account down to its reserve.
+      const chain = await this.accounts.getChain('broadcast');
+      const totalLeft = () => chain.reduce((n, s) => n + s.left, 0);
+      if (totalLeft() <= 0) {
         this.logger.warn(`[EmailWorker] Daily email limit reached. Pausing broadcast ${broadcastId}.`);
         await this.dataSource.query(
           `UPDATE core.email_broadcasts 
@@ -454,7 +454,7 @@ export class EmailBroadcastService implements OnModuleInit {
            FOR UPDATE SKIP LOCKED
          )
          RETURNING id, user_id, custom_email, attempt_count;`,
-        [broadcastId, Math.min(batchSize, ownLeft + borrowLeft)],
+        [broadcastId, Math.min(batchSize, totalLeft())],
       );
 
       const claimedRecipients = extractQueryRows<{
@@ -552,7 +552,9 @@ export class EmailBroadcastService implements OnModuleInit {
                 : { 'List-Unsubscribe': `<${unsubUrl}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' },
           };
 
-          let account: EmailAccount | null = ownLeft > 0 ? 'broadcast' : borrowLeft > 0 ? 'primary' : null;
+          const nextStep = () => chain.find((s) => s.left > 0) || null;
+          let step = nextStep();
+          let account: EmailAccount | null = step?.account ?? null;
           let sendRes: { success: boolean; messageId?: string; isQuotaError?: boolean; errorMessage?: string } = {
             success: false,
             isQuotaError: true,
@@ -562,14 +564,13 @@ export class EmailBroadcastService implements OnModuleInit {
             sendRes = await this.accounts.sendVia(account, sendOptions);
             if (!sendRes.isQuotaError) break;
             // Brevo says this account is full even if our count disagrees: stop using it today.
-            if (account === 'broadcast') ownLeft = 0;
-            else borrowLeft = 0;
-            account = ownLeft > 0 ? 'broadcast' : borrowLeft > 0 ? 'primary' : null;
+            if (step) step.left = 0;
+            step = nextStep();
+            account = step?.account ?? null;
           }
 
           if (sendRes.success && account) {
-            if (account === 'broadcast') ownLeft--;
-            else borrowLeft--;
+            if (step) step.left--;
             await this.dataSource.query(
               `UPDATE core.email_recipients 
                SET status = 'sent', sent_at = $1, message_id = $2, sent_via = $3 
@@ -889,10 +890,8 @@ export class EmailBroadcastService implements OnModuleInit {
   ): Promise<{ success: boolean; message: string }> {
     const html = await this.renderDraftPreview({ ...draft, firstName });
     const subject = `[Test] ${draft.subject}`;
-    const capacity = await this.accounts.getBroadcastCapacity();
-    const account: EmailAccount | null = capacity.own > 0 ? 'broadcast' : capacity.borrowable > 0 ? 'primary' : null;
-    if (!account) return { success: false, message: 'No emails left today. Try again after 5:30 AM IST.' };
-    const res = await this.accounts.sendVia(account, { toEmail, toName: firstName, subject, htmlContent: html });
+    const res = await this.accounts.sendWithFallback('broadcast', { toEmail, toName: firstName, subject, htmlContent: html });
+    if (!res.success && res.isQuotaError) return { success: false, message: 'No emails left today. Try again after 5:30 AM IST.' };
     return res.success
       ? { success: true, message: `Test sent to ${toEmail}` }
       : { success: false, message: res.errorMessage || "Test email didn't send" };

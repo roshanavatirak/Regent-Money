@@ -59,6 +59,13 @@ const HOW_IT_WORKS: { icon: keyof typeof Feather.glyphMap; tone: Tone; title: st
     detail: 'When you ask Regent, it gets your balances, budgets and recent transactions to answer.',
   },
   {
+    icon: 'user-plus',
+    tone: 'green',
+    title: 'How you found Regent',
+    detail:
+      'Once, after you sign in, Regent records how the app was installed: a friend’s invite link, a promotion, or the Play Store directly. Google Play confirms the install is genuine. A friend who invited you sees only a total, never your name. No phone ID or IP address is stored, and this record is deleted with your account.',
+  },
+  {
     icon: 'slash',
     tone: 'orange',
     title: 'No ads, no data selling',

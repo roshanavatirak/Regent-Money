@@ -74,9 +74,9 @@ export class MailService implements OnModuleInit {
     return 'http://localhost:3000';
   }
 
-  private async logEmailSent(
+  async logEmailSent(
     email: string,
-    type: 'verification' | 'password_reset' | 'test',
+    type: 'verification' | 'password_reset' | 'test' | 'welcome',
     status: 'sent' | 'failed',
     messageId?: string,
     errorMessage?: string,

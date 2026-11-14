@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+  <!-- Android 15+ (API 35+) Edge-to-Edge compliant themes.
+       statusBarColor, navigationBarColor, windowLightStatusBar and windowLightNavigationBar
+       are deprecated in API 35 and omitted here. The platform enforces transparent system bars
+       and dynamic contrast automatically. -->
+
+  <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
+    <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
+    <item name="colorPrimary">@color/colorPrimary</item>
+    <item name="android:windowBackground">@color/splashscreen_background</item>
+  </style>
+
+  <style name="Theme.Intro" parent="Theme.AppCompat.Light.NoActionBar">
+    <item name="android:windowBackground">@color/intro_bg</item>
+    <item name="android:windowSplashScreenBackground">@color/intro_bg</item>
+    <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+    <item name="android:windowSplashScreenAnimationDuration">0</item>
+  </style>
+
+  <style name="Theme.App.SplashScreen" parent="AppTheme">
+    <item name="android:windowBackground">@drawable/splash_screen_view</item>
+    <item name="android:windowSplashScreenBackground">@color/splashscreen_background</item>
+    <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+    <item name="android:windowSplashScreenAnimationDuration">0</item>
+  </style>
+</resources>
+

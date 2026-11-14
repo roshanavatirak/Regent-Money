@@ -3,8 +3,8 @@
     "name": "Regent Money",
     "slug": "regent-money",
     "scheme": "regentmoney",
-    "version": "1.0.64",
-    "orientation": "portrait",
+    "version": "1.0.65",
+    "orientation": "default",
     "icon": "./assets/appicon.png",
     "notification": {
       "icon": "./assets/notification-icon.png",
@@ -30,7 +30,6 @@
       ],
       "blockedPermissions": [
         "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
         "android.permission.READ_MEDIA_IMAGES",
@@ -47,7 +46,7 @@
       ],
       "predictiveBackGestureEnabled": false,
       "package": "com.regentmoney",
-      "versionCode": 148,
+      "versionCode": 149,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#04190F"
@@ -84,7 +83,16 @@
           }
         }
       ],
-      "expo-status-bar"
+      "expo-status-bar",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Regent Money uses the microphone so you can add a transaction by speaking.",
+          "recordAudioAndroid": true,
+          "enableBackgroundRecording": false,
+          "enableBackgroundPlayback": false
+        }
+      ]
     ]
   }
 }

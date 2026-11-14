@@ -19,6 +19,7 @@ import {
   PanResponder,
   Animated as RNAnimated,
   useWindowDimensions,
+  Linking,
 } from 'react-native';
 import { KeyboardAvoidingView, useKeyboardHandler } from 'react-native-keyboard-controller';
 import Animated, {
@@ -40,6 +41,8 @@ import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import * as Clipboard from 'expo-clipboard';
 import * as Font from 'expo-font';
+import { getRecordingPermissionsAsync, requestRecordingPermissionsAsync } from 'expo-audio';
+import { startOnDeviceVoice, LocalVoiceErrorReason } from '../services/voiceRecognizer';
 
 import {
   useAIStore,
@@ -53,6 +56,7 @@ import {
   showGlobalConfirm,
 } from '../store';
 import { useSyncDb } from '../services/useSyncDb';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { askChatbot, ChatMessage } from '../services/aiService';
 import { sanitizeTransactions } from '../services/sanitizer';
 import { FormattedChatMessage } from '../components/FormattedChatMessage';
@@ -61,8 +65,36 @@ import { chatHistory as savedChats, newChatId } from '../services/chatHistorySer
 import { mmkvStorage } from '../db/mmkv';
 import { EXECUTIVE_PROMPT_SETS, getWeeklySetIndex } from '../constants/executivePrompts';
 import { getSessionGreeting } from '../constants/aiGreetings';
+import Svg, { Path, Rect } from 'react-native-svg';
 
 const TREE = require('../../assets/tree-transparent.png');
+
+/** Studio-style mic: rounded capsule with grille lines and a cradle stand. Solid while listening. */
+function MicGlyph({ size = 22, color, accent, active }: { size?: number; color: string; accent: string; active: boolean }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Rect
+        x={8.25}
+        y={2.75}
+        width={7.5}
+        height={12}
+        rx={3.75}
+        fill={active ? color : 'transparent'}
+        stroke={color}
+        strokeWidth={1.7}
+      />
+      <Path
+        d="M10.5 7.25h3M10.5 10.25h3"
+        stroke={active ? accent : color}
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        opacity={active ? 0.9 : 0.55}
+      />
+      <Path d="M5.5 11.25a6.5 6.5 0 0 0 13 0" stroke={color} strokeWidth={1.7} strokeLinecap="round" />
+      <Path d="M12 17.75v3.5M9 21.25h6" stroke={color} strokeWidth={1.7} strokeLinecap="round" />
+    </Svg>
+  );
+}
 
 /* ------------------------------------------------------------------ */
 /* Palettes                                                            */
@@ -322,40 +354,35 @@ const SwipeDeck: React.FC<{
     });
   };
 
-  const responder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => false,
-        onStartShouldSetPanResponderCapture: () => false,
-        onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 6 && Math.abs(g.dx) > Math.abs(g.dy),
-        onMoveShouldSetPanResponderCapture: (_, g) => Math.abs(g.dx) > 6 && Math.abs(g.dx) > Math.abs(g.dy),
-        onPanResponderGrant: () => {
-          isDraggingRef.current = false;
-        },
-        onPanResponderMove: (_, g) => {
-          if (Math.abs(g.dx) > 6) {
-            isDraggingRef.current = true;
-          }
-          pan.setValue(g.dx);
-        },
-        onPanResponderRelease: (_, g) => {
-          if (g.dx < -36 || g.vx < -0.2) fling(1);
-          else if (g.dx > 36 || g.vx > 0.2) fling(-1);
-          else {
-            RNAnimated.spring(pan, { toValue: 0, friction: 6, useNativeDriver: false }).start(() => {
-              isDraggingRef.current = false;
-            });
-          }
-        },
-        onPanResponderTerminationRequest: () => false,
-        onPanResponderTerminate: () => {
-          RNAnimated.spring(pan, { toValue: 0, friction: 6, useNativeDriver: false }).start(() => {
-            isDraggingRef.current = false;
-          });
-        },
-      }),
-    [count]
-  );
+  // A native pan (gesture handler) rather than a JS PanResponder: it claims a horizontal drag
+  // after 6 px, before the tab pager does, so swiping the deck never turns the page.
+  const swipeGesture = useMemo(() => {
+    const springBack = () =>
+      RNAnimated.spring(pan, { toValue: 0, friction: 6, useNativeDriver: false }).start(() => {
+        isDraggingRef.current = false;
+      });
+    return Gesture.Pan()
+      .runOnJS(true)
+      .activeOffsetX([-6, 6])
+      .failOffsetY([-12, 12])
+      .onStart(() => {
+        isDraggingRef.current = true;
+      })
+      .onUpdate((e) => {
+        pan.setValue(e.translationX);
+      })
+      .onEnd((e) => {
+        const vx = e.velocityX / 1000; // px/ms, as PanResponder reported it
+        if (e.translationX < -36 || vx < -0.2) fling(1);
+        else if (e.translationX > 36 || vx > 0.2) fling(-1);
+        else springBack();
+      })
+      .onFinalize((_e, success) => {
+        if (!success) springBack();
+      });
+    // fling only reads count
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [count]);
 
   if (count === 0) return null;
   const card = cards[index];
@@ -387,8 +414,8 @@ const SwipeDeck: React.FC<{
             style={[cardBase, { opacity: 0.8, transform: [{ translateY: nextLift }, { scale: nextScale }] }]}
           />
         )}
+        <GestureDetector gesture={swipeGesture}>
         <RNAnimated.View
-          {...responder.panHandlers}
           style={[
             cardBase,
             { borderColor: P.lineStrong, transform: [{ translateX: pan }, { rotate }] },
@@ -443,6 +470,7 @@ const SwipeDeck: React.FC<{
             </View>
           </Pressable>
         </RNAnimated.View>
+        </GestureDetector>
       </View>
 
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
@@ -558,6 +586,14 @@ export const RegentChatScreen: React.FC = () => {
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const inputRef = useRef<TextInput>(null);
+
+  /* Mic: on-device speech recognition only. Audio never leaves the phone, no cloud/AI fallback. */
+  const micSupported = Platform.OS === 'android';
+  const [listening, setListening] = useState(false);
+  const [voiceNote, setVoiceNote] = useState<string | null>(null);
+  const voiceRef = useRef<{ stop: () => void; cancel: () => void } | null>(null);
+  const voiceBaseRef = useRef('');
+  const voiceNoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [greeting, setGreeting] = useState(() => getSessionGreeting(user?.name));
   const [setIndex, setSetIndex] = useState<number>(() => {
     const saved = mmkvStorage.getNumber(SET_KEY);
@@ -676,6 +712,7 @@ export const RegentChatScreen: React.FC = () => {
   const send = async (text?: string) => {
     const query = (text ?? input).trim();
     if (!query || isThinking) return;
+    cancelVoice();
 
     const isEditing = editingIndex !== null && editingIndex >= 0 && editingIndex < chatHistory.length;
     const targetEditIdx = isEditing ? editingIndex : null;
@@ -821,6 +858,136 @@ export const RegentChatScreen: React.FC = () => {
       setTimeout(() => setCopiedIndex((p) => (p === index ? null : p)), 1800);
     } catch {}
   };
+
+  const flashVoiceNote = useCallback((msg: string) => {
+    if (voiceNoteTimer.current) clearTimeout(voiceNoteTimer.current);
+    setVoiceNote(msg);
+    voiceNoteTimer.current = setTimeout(() => setVoiceNote(null), 5000);
+  }, []);
+
+  function cancelVoice() {
+    const h = voiceRef.current;
+    voiceRef.current = null;
+    h?.cancel();
+    setListening(false);
+  }
+
+  // Stop the mic when leaving the tab or closing the screen
+  useFocusEffect(
+    useCallback(
+      () => () => {
+        voiceRef.current?.cancel();
+        voiceRef.current = null;
+        setListening(false);
+      },
+      []
+    )
+  );
+  useEffect(
+    () => () => {
+      if (voiceNoteTimer.current) clearTimeout(voiceNoteTimer.current);
+    },
+    []
+  );
+
+  const voiceErrorText = (reason: LocalVoiceErrorReason) => {
+    switch (reason) {
+      case 'no_speech':
+        return 'Didn\u2019t catch that. Tap the mic and try again.';
+      case 'permission':
+        return 'Microphone access is off. Allow it in Settings to talk to Regent.';
+      case 'language':
+        return 'Your language isn\u2019t downloaded for offline speech. Add it in your phone\u2019s speech settings.';
+      case 'language_downloading':
+        return 'Downloading offline speech for your language. Try the mic again in a minute.';
+      case 'busy':
+        return 'The mic is busy. Try again in a moment.';
+      case 'audio':
+        return 'Couldn\u2019t use the microphone. Try again.';
+      default:
+        return 'Couldn\u2019t recognise speech on this phone. Try again or type instead.';
+    }
+  };
+
+  const toggleMic = async () => {
+    if (listening) {
+      // Finish: the recogniser delivers what it heard, then the session ends
+      voiceRef.current?.stop();
+      setListening(false);
+      return;
+    }
+    if (isThinking) return;
+    voiceRef.current?.cancel();
+    voiceRef.current = null;
+    setVoiceNote(null);
+
+    let perm = await getRecordingPermissionsAsync();
+    if (!perm.granted && perm.canAskAgain) perm = await requestRecordingPermissionsAsync();
+    if (!perm.granted) {
+      if (!perm.canAskAgain) {
+        showGlobalConfirm({
+          title: 'Microphone is off',
+          message:
+            'To ask Regent by voice, allow microphone access in Settings. Speech is recognised on your phone and never uploaded.',
+          confirmText: 'Open Settings',
+          cancelText: 'Not now',
+          icon: 'info',
+          onConfirm: () => {
+            Linking.openSettings().catch(() => {});
+          },
+        });
+      } else {
+        flashVoiceNote('Microphone access is needed to talk to Regent.');
+      }
+      return;
+    }
+
+    voiceBaseRef.current = input.trim();
+    const join = (t: string) => (voiceBaseRef.current ? `${voiceBaseRef.current} ${t}` : t);
+
+    // '' = the phone's own language
+    const result = await startOnDeviceVoice('', {
+      onPartial: (t) => setInput(join(t)),
+      onFinal: (t) => {
+        voiceRef.current = null;
+        setListening(false);
+        if (t.trim()) setInput(join(t.trim()));
+      },
+      onError: (reason) => {
+        voiceRef.current = null;
+        setListening(false);
+        flashVoiceNote(voiceErrorText(reason));
+      },
+    });
+
+    if (result.status === 'started') {
+      voiceRef.current = result.handle;
+      setListening(true);
+    } else if (result.status === 'unavailable') {
+      showGlobalConfirm({
+        title: 'Voice isn\u2019t available offline',
+        message:
+          'This phone doesn\u2019t have on-device speech recognition (it needs Android 12 or newer with offline speech installed). Regent only listens on your phone and never sends audio anywhere, so please type your question instead.',
+        confirmText: 'OK',
+        icon: 'info',
+        onConfirm: () => {},
+      });
+    } else {
+      flashVoiceNote('Couldn\u2019t start the microphone. Try again.');
+    }
+  };
+
+  const micPulse = useSharedValue(0);
+  useEffect(() => {
+    micPulse.value = 0;
+    if (listening) {
+      micPulse.value = withRepeat(withTiming(1, { duration: 1200, easing: Easing.out(Easing.ease) }), -1, false);
+    }
+  }, [listening]);
+  const micRingStyle = useAnimatedStyle(() => ({
+    opacity: micPulse.value === 0 ? 0 : 0.45 * (1 - micPulse.value),
+    transform: [{ scale: 1 + 0.55 * micPulse.value }],
+  }));
 
   const canSend = input.trim().length > 0 && !isThinking;
   const sendScale = useSharedValue(0.9);
@@ -1091,13 +1258,14 @@ export const RegentChatScreen: React.FC = () => {
               styles.composer,
               input.length > 0 && { borderColor: P.lineStrong },
               editingIndex !== null && { borderColor: P.dot, borderWidth: 1.5 },
+              listening && { borderColor: P.dot },
             ]}
           >
             <TextInput
               ref={inputRef}
               value={input}
               onChangeText={setInput}
-              placeholder={editingIndex !== null ? 'Edit message...' : 'Ask Regent anything'}
+              placeholder={listening ? 'Listening\u2026' : editingIndex !== null ? 'Edit message...' : 'Ask Regent anything'}
               placeholderTextColor={P.faint}
               style={styles.input}
               editable={!isThinking}
@@ -1106,6 +1274,23 @@ export const RegentChatScreen: React.FC = () => {
               selectionColor={P.dot}
               accessibilityLabel="Ask Regent"
             />
+            {micSupported && (
+              <View style={styles.micWrap}>
+                <Animated.View pointerEvents="none" style={[styles.micRing, micRingStyle]} />
+                <Pressable
+                  onPress={toggleMic}
+                  disabled={isThinking && !listening}
+                  style={[styles.micBtn, listening && styles.micBtnActive, isThinking && !listening && { opacity: 0.4 }]}
+                  accessibilityRole="button"
+                  accessibilityLabel={listening ? 'Stop listening' : 'Speak your question'}
+                  accessibilityHint="Speech is recognised on your phone only. Audio is never uploaded."
+                  accessibilityState={{ selected: listening, disabled: isThinking && !listening }}
+                  hitSlop={4}
+                >
+                  <MicGlyph size={22} color={listening ? P.sendFg : P.text} accent={P.sendBg} active={listening} />
+                </Pressable>
+              </View>
+            )}
             <Animated.View style={sendStyle}>
               <Pressable
                 onPress={() => send()}
@@ -1118,8 +1303,12 @@ export const RegentChatScreen: React.FC = () => {
               </Pressable>
             </Animated.View>
           </View>
-          <Text style={styles.disclaimer}>
-            {openedFromHistory
+          <Text style={styles.disclaimer} accessibilityLiveRegion="polite">
+            {voiceNote
+              ? voiceNote
+              : listening
+              ? 'Listening on your phone. Audio never leaves your device.'
+              : openedFromHistory
               ? 'Saved chat. Numbers update when you continue.'
               : 'Regent can make mistakes. Check important numbers.'}
           </Text>
@@ -1347,5 +1536,21 @@ const makeStyles = (P: Palette) =>
       justifyContent: 'center',
     },
     sendBtnActive: { backgroundColor: P.sendBg },
+    micWrap: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+    micRing: {
+      position: 'absolute',
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: P.dot,
+    },
+    micBtn: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    micBtnActive: { backgroundColor: P.sendBg },
     disclaimer: { color: P.faint, fontSize: 11, textAlign: 'center', marginTop: 8 },
   });

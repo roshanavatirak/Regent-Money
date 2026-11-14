@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { Platform, LogBox, NativeModules } from 'react-native';
 import * as Font from 'expo-font';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import AppNavigator from './src/navigation';
 
 // Ignore benign React Native Web deprecation warnings
@@ -94,8 +95,11 @@ export default function App() {
   }, []);
 
   return (
-    <KeyboardProvider>
-      <AppNavigator />
-    </KeyboardProvider>
+    // Needed for native gestures (Regent's topic deck) to win over the tab pager's swipe.
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <KeyboardProvider>
+        <AppNavigator />
+      </KeyboardProvider>
+    </GestureHandlerRootView>
   );
 }

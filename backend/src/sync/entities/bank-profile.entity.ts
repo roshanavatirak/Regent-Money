@@ -48,6 +48,16 @@ export class BankProfile {
   @Column({ name: 'sms_consent', type: 'boolean', default: true })
   smsConsent: boolean;
 
+  /**
+   * Cash wallet only: ATM withdrawals from this moment on are added to the wallet
+   * (see cash-wallet-topups.ts). Set by the server, never by the phone.
+   */
+  @Column({ name: 'cash_tracking_since', type: 'bigint', nullable: true, transformer: {
+    to: (value: number | null) => value ? String(value) : null,
+    from: (value: string | null) => value ? Number(value) : null
+  }})
+  cashTrackingSince?: number | null;
+
   @Column({ name: 'updated_at', type: 'bigint', transformer: {
     to: (value: number) => value ? String(value) : null,
     from: (value: string) => value ? Number(value) : null

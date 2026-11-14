@@ -37,6 +37,8 @@ const REVERSAL = /\b(?:refund|refunded|reversed|reversal)\b/;
 const VPA_TO = /\bto\s+(?:vpa\s+)?([a-z0-9][a-z0-9._-]{1,40})@[a-z0-9.-]{2,}/i;
 const VPA_FROM = /\b(?:from|by)\s+(?:vpa\s+)?([a-z0-9][a-z0-9._-]{1,40})@[a-z0-9.-]{2,}/i;
 const PAYEE_CREDITED = /;\s*([A-Za-z][A-Za-z0-9\s&.*-]{1,40}?)\s+credited\b/i;
+// Axis and others: "UPI/P2M/629349184814/UBER INDIA Not you?" - the payee follows the reference
+const UPI_PATH_PAYEE = /\bupi\/(?:p2[am]|dr|cr)\/\d{9,14}\/([A-Za-z][A-Za-z0-9 &.-]{1,38}?)(?=\/|\s+not\b|\s+if\b|\s+ref\b|\.\s|\.?\s*$)/i;
 // Bare 12-digit UPI RRN: "UPI:432198765432", "(UPI 433398765432)"
 const UPI_RRN = /\bupi\s*[:\-]?\s*(\d{12})\b/i;
 const TO_ACCOUNT =/\bto\s+(?:a\/c|acct|account|ac)\s*(?:no\.?\s*)?[x*.]*(\d{3,18})\b/i;
@@ -224,6 +226,10 @@ export const parseSMS = (sender: string, body: string): ParsedTransaction | null
   // A UPI handle is the most precise counterparty: "to VPA swiggy@icici", "from priya.k@ybl"
   const vpa = clean.match(type === 'debit' ? VPA_TO : VPA_FROM);
   if (vpa) merchant = usableMerchant(vpa[1].replace(/[._-]+/g, ' ')) || '';
+  if (!merchant) {
+    const upiPath = clean.match(UPI_PATH_PAYEE);
+    if (upiPath) merchant = usableMerchant(upiPath[1]) || '';
+  }
 
   // Search scope order:
   // 1. Text AFTER the transaction amount (prevents capturing preamble text like "Reply YES to confirm your subscription")
@@ -359,25 +365,33 @@ function sanitizeMerchantName(name: string): string {
     .replace(/\s+/g, ' ')
     .trim();
 
+  // Well-known brands get one tidy name. Matched at the start of a word, so "Coca Cola" isn't Ola
+  // and "Ajio" or "JioMart" keep their own names. Jio/Airtel names are left as written
+  // ("Jio Recharge", "Airtel Postpaid") because the words after them decide the tag.
   const lower = cleaned.toLowerCase();
-  if (lower.includes('zomato')) return 'Zomato';
-  if (lower.includes('swiggy')) return 'Swiggy';
-  if (lower.includes('blinkit')) return 'Blinkit';
-  if (lower.includes('zepto')) return 'Zepto';
-  if (lower.includes('uber')) return 'Uber';
-  if (lower.includes('ola')) return 'Ola';
-  if (lower.includes('rapido')) return 'Rapido';
-  if (lower.includes('netflix')) return 'Netflix';
-  if (lower.includes('spotify')) return 'Spotify';
-  if (lower.includes('hotstar')) return 'Disney+ Hotstar';
-  if (lower.includes('amazon')) return 'Amazon';
-  if (lower.includes('flipkart')) return 'Flipkart';
-  if (lower.includes('jio')) return 'Jio Recharge';
-  if (lower.includes('airtel')) return 'Airtel Bill';
-  if (lower.includes('starbucks')) return 'Starbucks';
+  for (const [rx, brand] of BRAND_NAMES) {
+    if (rx.test(lower)) return brand;
+  }
 
   return cleaned;
 }
+
+const BRAND_NAMES: [RegExp, string][] = [
+  [/\binstamart/, 'Swiggy Instamart'],
+  [/\bzomato/, 'Zomato'],
+  [/\bswiggy/, 'Swiggy'],
+  [/\bblinkit/, 'Blinkit'],
+  [/\bzepto/, 'Zepto'],
+  [/\buber/, 'Uber'],
+  [/\bola(?:\b|cabs|money)/, 'Ola'],
+  [/\brapido/, 'Rapido'],
+  [/\bnetflix/, 'Netflix'],
+  [/\bspotify/, 'Spotify'],
+  [/hotstar/, 'Disney+ Hotstar'],
+  [/\bamazon/, 'Amazon'],
+  [/\bflipkart/, 'Flipkart'],
+  [/\bstarbucks/, 'Starbucks'],
+];
 
 /**
  * Authoritatively identifies bank from the SMS sender header (e.g. AD-SBIINB -> SBI, VK-KOTAKB -> Kotak).

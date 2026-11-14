@@ -1,3 +1,5 @@
+import { isNonSpendingCategory } from '../constants/nonSpendingCategories';
+
 /** Categories that never count as spending or income: money moving between your own accounts. */
 const SELF_TRANSFER_CATEGORIES = new Set(['self_transfer', 'self transfer', 'self-transfer', 'own_account']);
 
@@ -24,14 +26,21 @@ const storeExcludedSet = (): Set<string> => {
  * never from the SMS wording, the merchant name or whether it was credited or debited:
  *  - category is Self transfer (or the isSelfTransfer flag is set)
  *  - category is a Borrow & Lend entry (peer_*), which is tracked separately
+ *  - category is Cash withdrawal or Card bill (money moved, not spent), unless
+ *    `keepNonSpending` is set: a budget made for that category still counts it
  *  - the user excluded this transaction by hand (excludedFromBudget flag or excluded id list)
  */
-export function isExcludedFromBudget(tx: any, explicitExcludedIds?: string[] | Set<string>): boolean {
+export function isExcludedFromBudget(
+  tx: any,
+  explicitExcludedIds?: string[] | Set<string>,
+  options?: { keepNonSpending?: boolean },
+): boolean {
   if (!tx) return false;
   if (tx.isSelfTransfer === true || tx.excludedFromBudget === true) return true;
 
   const category = String(tx.category || tx.tag || '').toLowerCase().trim();
   if (SELF_TRANSFER_CATEGORIES.has(category) || category.startsWith('peer_')) return true;
+  if (!options?.keepNonSpending && isNonSpendingCategory(category)) return true;
 
   if (tx.id && explicitExcludedIds) {
     const has = explicitExcludedIds instanceof Set ? explicitExcludedIds.has(tx.id) : explicitExcludedIds.includes(tx.id);

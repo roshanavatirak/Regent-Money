@@ -27,6 +27,7 @@ import { ActivityFonts, ActivityRow, relativeDay } from '../components/ActivityF
 import { ActivityItem, useActivityFeed } from '../hooks/useActivityFeed';
 import { isExcludedFromBudget } from '../utils/budget';
 import { createCashAccount, getCashProfile, setCashBalance } from '../services/cashService';
+import { cashWalletItems } from '../services/cashTopups';
 
 const FOREST = '#0B3D2C';
 const FOREST_RAISED = '#124B37';
@@ -69,7 +70,8 @@ export const CashWalletScreen = () => {
   const line = isDark ? colors.border : '#E1E9E4';
   const accent = isDark ? LIME : FOREST;
 
-  const cashItems = useMemo(() => (cash ? items.filter((i) => i.bankProfileId === cash.id) : []), [items, cash]);
+  // Cash entries plus ATM withdrawals the server added to the wallet (shown as cash in)
+  const cashItems = useMemo(() => cashWalletItems(items, cash), [items, cash]);
 
   const month = useMemo(() => {
     const start = new Date();
@@ -78,8 +80,14 @@ export const CashWalletScreen = () => {
     let moneyIn = 0;
     let moneyOut = 0;
     for (const tx of cashItems) {
-      if (Number(tx.timestamp) < start.getTime() || isExcludedFromBudget(tx)) continue;
+      if (Number(tx.timestamp) < start.getTime()) continue;
       const amt = Math.abs(parseFloat(String(tx.amount)) || 0);
+      // ATM cash is money into the wallet (it is left out of overall spending, not out of here)
+      if (tx.atmTopup) {
+        moneyIn += amt;
+        continue;
+      }
+      if (isExcludedFromBudget(tx)) continue;
       if (tx.type === 'credit') moneyIn += amt;
       else moneyOut += amt;
     }
@@ -282,10 +290,15 @@ export const CashWalletScreen = () => {
                     tx={tx}
                     divider={i < section.data.length - 1}
                     font={font}
-                    meta={`${tx.type === 'credit' ? 'Money received' : getCategory(tx.category || 'miscellaneous').label} · ${timeOf(
-                      Number(tx.timestamp),
-                    )}`}
-                    onPress={(t) => navigation.navigate('TransactionDetail', { transaction: t })}
+                    meta={`${
+                      tx.atmTopup
+                        ? 'Cash from ATM'
+                        : tx.type === 'credit'
+                          ? 'Money received'
+                          : getCategory(tx.category || 'miscellaneous').label
+                    } · ${timeOf(Number(tx.timestamp))}`}
+                    // An ATM row opens the bank withdrawal it came from
+                    onPress={() => navigation.navigate('TransactionDetail', { transaction: tx.source ?? tx })}
                   />
                 ))}
               </View>

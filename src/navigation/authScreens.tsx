@@ -844,15 +844,15 @@ function WelcomeHero({ width }: { width: number }) {
 }
 
 /**
- * Welcome back hero: a forest ring (like the profile avatar) holding a rupee coin
- * that flips now and then, soft pulses around it and a twinkling lime badge.
+ * Welcome back hero: a forest ring (like the profile avatar) holding a rupee coin.
+ * The coin flips now and then; everything around it stays quiet: the hero fades up once,
+ * the badge fades in after it, and a single halo breathes in opacity only.
  */
 function WelcomeBackHero() {
   const reduceMotion = useReducedMotion();
   const display = useDisplayFont();
+  const glow = useSharedValue(0);
   const flip = useSharedValue(0);
-  const pulse = useSharedValue(0);
-  const twinkle = useSharedValue(0);
 
   useEffect(() => {
     if (reduceMotion) return;
@@ -867,33 +867,23 @@ function WelcomeBackHero() {
         false,
       ),
     );
-    pulse.value = withRepeat(withTiming(1, { duration: 2800, easing: Easing.out(Easing.quad) }), -1, false);
-    twinkle.value = withRepeat(withTiming(1, { duration: 1000, easing: Easing.inOut(Easing.sin) }), -1, true);
+    glow.value = withDelay(
+      700,
+      withRepeat(withTiming(1, { duration: 2600, easing: Easing.inOut(Easing.sin) }), -1, true),
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reduceMotion]);
 
+  const halo = useAnimatedStyle(() => ({ opacity: reduceMotion ? 0.3 : 0.18 + glow.value * 0.32 }));
   const coin = useAnimatedStyle(() => ({ transform: [{ perspective: 400 }, { rotateY: `${flip.value}deg` }] }));
-  const ring = (offset: number) =>
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    useAnimatedStyle(() => {
-      const t = (pulse.value + offset) % 1;
-      return {
-        opacity: reduceMotion ? 0 : t < 0.2 ? (t / 0.2) * 0.5 : 0.5 * (1 - (t - 0.2) / 0.8),
-        transform: [{ scale: 0.8 + t * 0.9 }],
-      };
-    });
-  const ringA = ring(0);
-  const ringB = ring(0.5);
-  const star = useAnimatedStyle(() => ({
-    opacity: 0.6 + twinkle.value * 0.4,
-    transform: [{ scale: 0.75 + twinkle.value * 0.3 }, { rotate: `${twinkle.value * 20}deg` }],
-  }));
 
   return (
     <View style={styles.backHero}>
-      <Animated.View entering={reduceMotion ? undefined : ZoomIn.delay(100).springify().damping(16)} style={styles.backRingWrap}>
-        <Animated.View style={[styles.backPulse, ringA]} />
-        <Animated.View style={[styles.backPulse, ringB]} />
+      <Animated.View
+        entering={reduceMotion ? undefined : FadeInDown.delay(80).duration(520).easing(Easing.out(Easing.cubic))}
+        style={styles.backRingWrap}
+      >
+        <Animated.View style={[styles.backPulse, { transform: [{ scale: 1.25 }] }, halo]} />
         <View style={styles.backRing}>
           <View style={styles.backRingInner}>
             <Animated.View style={[styles.backCoin, coin]}>
@@ -901,14 +891,15 @@ function WelcomeBackHero() {
             </Animated.View>
           </View>
         </View>
-        <View style={styles.backBadge}>
-          <Animated.View style={star}>
-            <Svg width={22} height={22} viewBox="0 0 24 24">
-              <Path d="M12 2.5l2.1 6.1 6.4 2.1-6.4 2.1L12 19l-2.1-6.2-6.4-2.1 6.4-2.1z" fill={C.forest} />
-              <Path d="M19 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" fill={C.forest} />
-            </Svg>
-          </Animated.View>
-        </View>
+        <Animated.View
+          entering={reduceMotion ? undefined : FadeIn.delay(420).duration(400)}
+          style={styles.backBadge}
+        >
+          <Svg width={22} height={22} viewBox="0 0 24 24">
+            <Path d="M12 2.5l2.1 6.1 6.4 2.1-6.4 2.1L12 19l-2.1-6.2-6.4-2.1 6.4-2.1z" fill={C.forest} />
+            <Path d="M19 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" fill={C.forest} />
+          </Svg>
+        </Animated.View>
       </Animated.View>
     </View>
   );

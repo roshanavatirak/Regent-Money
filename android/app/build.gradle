@@ -88,8 +88,8 @@ android {
     compileSdk rootProject.ext.compileSdkVersion
 
     namespace 'com.regentmoney'
-    def appVersionCode = Integer.parseInt(findProperty('versionCode') ?: '148')
-    def appVersionName = findProperty('versionName') ?: '1.0.64'
+    def appVersionCode = Integer.parseInt(findProperty('versionCode') ?: '149')
+    def appVersionName = findProperty('versionName') ?: '1.0.65'
 
     defaultConfig {
         applicationId 'com.regentmoney'
@@ -226,6 +226,9 @@ dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
     implementation("androidx.work:work-runtime-ktx:2.9.0")
+    // Invite and campaign tracking: which link led to this install, and proof the claim is genuine
+    implementation("com.android.installreferrer:installreferrer:2.2")
+    implementation("com.google.android.play:integrity:1.6.0")
 
     testImplementation("junit:junit:4.13.2")
     // Real org.json for JVM unit tests (android.jar only ships stubs)

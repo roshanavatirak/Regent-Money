@@ -3,21 +3,44 @@ import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 
 /**
- * Two Brevo sender accounts, each with its own free daily limit:
+ * Three Brevo sender accounts, each with its own free daily limit (300):
  *  - primary:   sign-in mail (verification, password reset)
- *  - broadcast: announcements and updates
+ *  - broadcast: announcements and updates ("custom" emails sent from the admin console)
+ *  - welcome:   the thank-you email new users get right after they verify or sign up with Google
  *
- * When "fallback" is on (the default), a sender that hits its daily limit borrows the other one:
- *  - sign-in mail may use all of the broadcast account's remaining emails;
- *  - broadcasts may use the primary account only down to PRIMARY_RESERVE, so sign-in mail
- *    always keeps some room for the rest of the day.
+ * When "fallback" is on (the default), a sender that hits its daily limit borrows the next one in
+ * its chain (FALLBACK_CHAIN). The sign-in account is always last, and other purposes may use it
+ * only down to PRIMARY_RESERVE, so verification and password reset keep 200 emails for the day.
  *
  * Usage is counted per account (not per purpose), from both log tables.
  */
-export type EmailAccount = 'primary' | 'broadcast';
+export type EmailAccount = 'primary' | 'broadcast' | 'welcome';
+export type EmailPurpose = 'auth' | 'broadcast' | 'welcome';
 
 export const DAILY_LIMIT = 300;
-export const PRIMARY_RESERVE = 50;
+/** Emails the sign-in account always keeps for verification/password reset (others may use only 300 - 200 = 100). */
+export const PRIMARY_RESERVE = 200;
+
+export const ACCOUNTS: EmailAccount[] = ['primary', 'broadcast', 'welcome'];
+
+/** Order in which each kind of email tries the accounts. The first one is the purpose's own account. */
+export const FALLBACK_CHAIN: Record<EmailPurpose, EmailAccount[]> = {
+  auth: ['primary', 'broadcast', 'welcome'],
+  broadcast: ['broadcast', 'welcome', 'primary'],
+  welcome: ['welcome', 'broadcast', 'primary'],
+};
+
+export const OWN_ACCOUNT: Record<EmailPurpose, EmailAccount> = {
+  auth: 'primary',
+  broadcast: 'broadcast',
+  welcome: 'welcome',
+};
+
+/** One step of a purpose's chain with how many emails it may still send for that purpose today. */
+export interface ChainStep {
+  account: EmailAccount;
+  left: number;
+}
 
 const SETTINGS_KEY = 'email_fallback_enabled';
 const TERMS_KEY = 'legal_terms_url';
@@ -75,17 +98,11 @@ export class EmailAccountsService implements OnModuleInit {
   /* ---------------- account credentials ---------------- */
 
   getAccountConfig(account: EmailAccount): { apiKey: string; senderEmail: string; senderName: string } {
-    if (account === 'primary') {
-      return {
-        apiKey: clean(this.configService.get<string>('BREVO_API_KEY')),
-        senderEmail: clean(this.configService.get<string>('BREVO_SENDER_EMAIL')),
-        senderName: clean(this.configService.get<string>('BREVO_SENDER_NAME')) || 'Regent Money',
-      };
-    }
+    const prefix = account === 'primary' ? 'BREVO' : account === 'broadcast' ? 'BREVO_BROADCAST' : 'BREVO_WELCOME';
     return {
-      apiKey: clean(this.configService.get<string>('BREVO_BROADCAST_API_KEY')),
-      senderEmail: clean(this.configService.get<string>('BREVO_BROADCAST_SENDER_EMAIL')),
-      senderName: clean(this.configService.get<string>('BREVO_BROADCAST_SENDER_NAME')) || 'Regent Money',
+      apiKey: clean(this.configService.get<string>(`${prefix}_API_KEY`)),
+      senderEmail: clean(this.configService.get<string>(`${prefix}_SENDER_EMAIL`)),
+      senderName: clean(this.configService.get<string>(`${prefix}_SENDER_NAME`)) || 'Regent Money',
     };
   }
 
@@ -94,13 +111,26 @@ export class EmailAccountsService implements OnModuleInit {
     return c.apiKey.length > 10 && !!c.senderEmail;
   }
 
-  /** Fallback only makes sense when both accounts exist and are actually different accounts. */
+  /**
+   * Accounts that really exist, each counted once: an account whose API key repeats an earlier
+   * account's key is the same Brevo account (same daily limit), so it is left out.
+   */
+  private distinctAccounts(order: EmailAccount[]): EmailAccount[] {
+    const seen = new Set<string>();
+    const out: EmailAccount[] = [];
+    for (const a of order) {
+      if (!this.isConfigured(a)) continue;
+      const key = this.getAccountConfig(a).apiKey;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(a);
+    }
+    return out;
+  }
+
+  /** Fallback only makes sense when at least two different accounts exist. */
   canFallBack(): boolean {
-    return (
-      this.isConfigured('primary') &&
-      this.isConfigured('broadcast') &&
-      this.getAccountConfig('primary').apiKey !== this.getAccountConfig('broadcast').apiKey
-    );
+    return this.distinctAccounts(ACCOUNTS).length >= 2;
   }
 
   /* ---------------- fallback setting ---------------- */
@@ -160,23 +190,31 @@ export class EmailAccountsService implements OnModuleInit {
 
   /**
    * Emails sent today by each account, whatever they were for.
-   * `borrowed` = emails this account sent on behalf of the other purpose.
+   * `borrowed` = emails this account sent on behalf of another purpose.
    */
-  async getUsageToday(): Promise<{
-    primary: { sent: number; borrowed: number };
-    broadcast: { sent: number; borrowed: number };
-  }> {
+  async getUsageToday(): Promise<Record<EmailAccount, { sent: number; borrowed: number }>> {
     const start = this.startOfTodayUtc();
-    let auth = { primary: 0, broadcast: 0 };
-    let bulk = { primary: 0, broadcast: 0 };
+    const usage: Record<EmailAccount, { sent: number; borrowed: number }> = {
+      primary: { sent: 0, borrowed: 0 },
+      broadcast: { sent: 0, borrowed: 0 },
+      welcome: { sent: 0, borrowed: 0 },
+    };
+    const isAccount = (v: any): v is EmailAccount => ACCOUNTS.includes(v);
     try {
+      // Sign-in and welcome emails. Welcome rows have type 'welcome'; every other type is sign-in mail.
       const rows = await this.dataSource.query(
-        `SELECT COALESCE(account, 'primary') AS account, COUNT(*)::int AS n
+        `SELECT COALESCE(account, 'primary') AS account, (type = 'welcome') AS is_welcome, COUNT(*)::int AS n
          FROM core.auth_email_logs WHERE status = 'sent' AND sent_at >= $1
-         GROUP BY 1;`,
+         GROUP BY 1, 2;`,
         [start],
       );
-      for (const r of rows || []) if (r.account === 'primary' || r.account === 'broadcast') auth[r.account as EmailAccount] = Number(r.n) || 0;
+      for (const r of rows || []) {
+        if (!isAccount(r.account)) continue;
+        const n = Number(r.n) || 0;
+        const own: EmailAccount = r.is_welcome === true ? 'welcome' : 'primary';
+        usage[r.account].sent += n;
+        if (r.account !== own) usage[r.account].borrowed += n;
+      }
     } catch {
       /* table not created yet */
     }
@@ -187,50 +225,60 @@ export class EmailAccountsService implements OnModuleInit {
          GROUP BY 1;`,
         [start],
       );
-      for (const r of rows || []) if (r.account === 'primary' || r.account === 'broadcast') bulk[r.account as EmailAccount] = Number(r.n) || 0;
+      for (const r of rows || []) {
+        if (!isAccount(r.account)) continue;
+        const n = Number(r.n) || 0;
+        usage[r.account].sent += n;
+        if (r.account !== 'broadcast') usage[r.account].borrowed += n;
+      }
     } catch {
       /* table not created yet */
     }
-    return {
-      primary: { sent: auth.primary + bulk.primary, borrowed: bulk.primary },
-      broadcast: { sent: auth.broadcast + bulk.broadcast, borrowed: auth.broadcast },
-    };
+    return usage;
   }
 
-  async getRemaining(): Promise<{ primary: number; broadcast: number }> {
+  async getRemaining(): Promise<Record<EmailAccount, number>> {
     const u = await this.getUsageToday();
     return {
       primary: Math.max(0, DAILY_LIMIT - u.primary.sent),
       broadcast: Math.max(0, DAILY_LIMIT - u.broadcast.sent),
+      welcome: Math.max(0, DAILY_LIMIT - u.welcome.sent),
     };
   }
 
-  /** How many emails broadcasts may still send today, including what they may borrow. */
-  async getBroadcastCapacity(): Promise<{ own: number; borrowable: number }> {
+  /**
+   * The accounts a purpose may use right now, in order, with how many emails each may still send
+   * for it today. Only steps with room are returned.
+   *  - its own account: everything left today
+   *  - another account (when fallback is on, or when the purpose has no account of its own):
+   *    everything left, except the sign-in account, which keeps PRIMARY_RESERVE for itself
+   */
+  async getChain(purpose: EmailPurpose): Promise<ChainStep[]> {
     const [remaining, fallback] = await Promise.all([this.getRemaining(), this.isFallbackEnabled()]);
-    const primarySpare = Math.max(0, remaining.primary - PRIMARY_RESERVE);
-    // No separate broadcast account set up: broadcasts have always used the primary one.
-    // Keep doing that, but never below the sign-in reserve.
-    if (!this.isConfigured('broadcast')) {
-      return { own: 0, borrowable: this.isConfigured('primary') ? primarySpare : 0 };
+    const own = OWN_ACCOUNT[purpose];
+    const mayBorrow = fallback || !this.isConfigured(own);
+    const steps: ChainStep[] = [];
+    for (const account of this.distinctAccounts(FALLBACK_CHAIN[purpose])) {
+      const isOwn = account === own;
+      if (!isOwn && !mayBorrow) continue;
+      const left =
+        isOwn || account !== 'primary' ? remaining[account] : Math.max(0, remaining.primary - PRIMARY_RESERVE);
+      if (left > 0) steps.push({ account, left });
     }
-    const borrowable = fallback && this.canFallBack() ? primarySpare : 0;
-    return { own: remaining.broadcast, borrowable };
+    return steps;
+  }
+
+  /** How many emails broadcasts may still send today: own account, plus what they may borrow. */
+  async getBroadcastCapacity(): Promise<{ own: number; borrowable: number }> {
+    const chain = await this.getChain('broadcast');
+    const own = chain.find((s) => s.account === 'broadcast')?.left ?? 0;
+    const borrowable = chain.filter((s) => s.account !== 'broadcast').reduce((n, s) => n + s.left, 0);
+    return { own, borrowable };
   }
 
   /* ---------------- sending ---------------- */
 
-  async sendVia(
-    account: EmailAccount,
-    options: {
-      toEmail: string;
-      toName?: string;
-      subject: string;
-      htmlContent: string;
-      textContent?: string;
-      headers?: Record<string, string>;
-    },
-  ): Promise<BrevoSendResult> {
+  async sendVia(account: EmailAccount, options: SendOptions): Promise<BrevoSendResult> {
     const cfg = this.getAccountConfig(account);
     if (!cfg.apiKey || !cfg.senderEmail) {
       return { success: false, errorMessage: `${account} email account is not configured` };
@@ -265,31 +313,41 @@ export class EmailAccountsService implements OnModuleInit {
   }
 
   /**
-   * Sends sign-in mail. Uses the primary account; if it is out of emails (by our count or by
-   * Brevo's answer) and fallback is on, sends through the broadcast account instead.
+   * Sends one email for a purpose, walking its chain until an account takes it. Moves on when an
+   * account is full or fails (wrong sender, Brevo down, network error).
+   * `account` is the one that sent it, or the last one tried. On failure, `isQuotaError` means
+   * every account it could use is out of emails today, so the caller should try again later.
    */
-  async sendAuthEmail(options: {
-    toEmail: string;
-    toName?: string;
-    subject: string;
-    htmlContent: string;
-    textContent?: string;
-  }): Promise<BrevoSendResult & { account: EmailAccount }> {
-    const [remaining, fallback] = await Promise.all([this.getRemaining(), this.isFallbackEnabled()]);
-    const mayBorrow = fallback && this.canFallBack();
-
-    let first: EmailAccount = 'primary';
-    if (remaining.primary <= 0 && mayBorrow && remaining.broadcast > 0) first = 'broadcast';
-
-    const res = await this.sendVia(first, options);
-    if (res.success || first === 'broadcast' || !mayBorrow) return { ...res, account: first };
-
-    // Primary refused because of its daily limit: try the broadcast account once.
-    if (res.isQuotaError && remaining.broadcast > 0) {
-      this.logger.warn('[EmailFallback] Primary account hit its daily limit; sending sign-in mail via broadcast account.');
-      const retry = await this.sendVia('broadcast', options);
-      return { ...retry, account: 'broadcast' };
+  async sendWithFallback(purpose: EmailPurpose, options: SendOptions): Promise<BrevoSendResult & { account: EmailAccount }> {
+    const chain = await this.getChain(purpose);
+    // Our count can drift from Brevo's: with nothing left by our count, still ask the own account once.
+    if (chain.length === 0 && this.isConfigured(OWN_ACCOUNT[purpose])) chain.push({ account: OWN_ACCOUNT[purpose], left: 0 });
+    if (chain.length === 0) {
+      return { success: false, isQuotaError: true, errorMessage: 'No emails left today on any account', account: OWN_ACCOUNT[purpose] };
     }
-    return { ...res, account: first };
+    let last: BrevoSendResult & { account: EmailAccount } = { success: false, errorMessage: 'Not sent', account: chain[0].account };
+    let allQuota = true;
+    for (const step of chain) {
+      const res = await this.sendVia(step.account, options);
+      if (res.success) return { ...res, account: step.account };
+      if (!res.isQuotaError) allQuota = false;
+      this.logger.warn(`[EmailFallback] ${purpose} email not sent via ${step.account} (${res.errorMessage}).`);
+      last = { ...res, account: step.account };
+    }
+    return { ...last, isQuotaError: allQuota };
   }
+
+  /** Sign-in mail (verification, password reset): primary, then broadcast, then welcome. */
+  async sendAuthEmail(options: SendOptions): Promise<BrevoSendResult & { account: EmailAccount }> {
+    return this.sendWithFallback('auth', options);
+  }
+}
+
+export interface SendOptions {
+  toEmail: string;
+  toName?: string;
+  subject: string;
+  htmlContent: string;
+  textContent?: string;
+  headers?: Record<string, string>;
 }

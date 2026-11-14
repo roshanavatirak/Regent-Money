@@ -19,6 +19,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { CreateBroadcastDto } from './dto/create-broadcast.dto';
 import { EmailBroadcastService } from '../mail/email-broadcast.service';
 import { MailService } from '../mail/mail.service';
+import { WelcomeEmailService } from '../mail/welcome-email.service';
 import { EmailAccountsService, PRIMARY_RESERVE } from '../mail/email-accounts.service';
 import { EmailDraftDto } from './dto/email-draft.dto';
 import { CreateEmailBroadcastDto } from './dto/create-email-broadcast.dto';
@@ -48,6 +49,11 @@ export const CASCADE_DELETE_TABLES = [
   { schema: 'core', table: 'chat_threads', column: 'user_id' },
   { schema: 'core', table: 'refresh_tokens', column: 'user_id' },
   { schema: 'core', table: 'feedback', column: 'user_id' },
+  // Install attribution: the user's own row, their invite link, and link opens they used.
+  // Rows of friends they invited keep only the (now deleted) link's id, which names no one.
+  { schema: 'core', table: 'install_attributions', column: 'user_id' },
+  { schema: 'core', table: 'link_clicks', column: 'claimed_by' },
+  { schema: 'core', table: 'tracking_links', column: 'owner_user_id' },
   { schema: 'core', table: 'users', column: 'id' },
 ] as const;
 
@@ -68,6 +74,7 @@ export class AdminService {
     private readonly emailBroadcastService: EmailBroadcastService,
     private readonly mailService: MailService,
     private readonly emailAccounts: EmailAccountsService,
+    private readonly welcomeEmails: WelcomeEmailService,
   ) {}
 
   private getHmac(email: string): string {
@@ -585,15 +592,17 @@ export class AdminService {
   }
 
   async getEmailSystemOverview() {
-    const [primary, broadcast, fallbackEnabled] = await Promise.all([
+    const [primary, broadcast, welcome, fallbackEnabled] = await Promise.all([
       this.mailService.getPrimaryEmailStats(),
       this.emailBroadcastService.getDailyQuotaStats(),
+      this.welcomeEmails.getStats(),
       this.emailAccounts.isFallbackEnabled(),
     ]);
 
     return {
       primary,
       broadcast,
+      welcome,
       fallback: {
         enabled: fallbackEnabled,
         // Both accounts must exist (and differ) for one to cover the other.

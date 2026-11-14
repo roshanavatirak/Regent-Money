@@ -38,6 +38,7 @@ import { authService } from '../services/authService';
 import { syncService } from '../services/syncService';
 import { outbox, isOutboxEnabled } from '../db/outbox';
 import { getBackendUrl } from '../config/api';
+import { SuccessCheck } from '../components/SuccessCheck';
 import { TagPaymentModal } from '../components/TagPaymentModal';
 import { DateTimePickerSheet } from '../components/DateTimePickerSheet';
 import { CategoryIcon } from '../components/CategoryIcon';
@@ -240,7 +241,10 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
       props.onBack();
       return;
     }
-    const returnToBankId = route?.params?.returnToBankId || transaction?.bankProfileId;
+    // Only reopen a bank's history when the caller explicitly came from it.
+    // Falling back to the transaction's own bank sent Home/All-transactions users
+    // to a bank history screen they never opened.
+    const returnToBankId = route?.params?.returnToBankId;
     if (returnToBankId) useBankStore.getState().setActiveBankModalId(returnToBankId);
     navigation?.goBack?.();
   };
@@ -251,7 +255,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
       return true;
     });
     return () => sub.remove();
-  }, [props.onBack, route?.params?.returnToBankId, transaction?.bankProfileId]);
+  }, [props.onBack, route?.params?.returnToBankId]);
 
   if (!transaction) {
     handleGoBack();
@@ -384,7 +388,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
         else if (typeof route?.params?.onSuccess === 'function') route.params.onSuccess('updated', payload);
 
         setSaved(true);
-        setTimeout(handleGoBack, 800);
+        setTimeout(handleGoBack, 1100);
         return;
       }
 
@@ -468,7 +472,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
       else if (typeof route?.params?.onSuccess === 'function') route.params.onSuccess('updated', payload);
 
       setSaved(true);
-      setTimeout(handleGoBack, 800);
+      setTimeout(handleGoBack, 1100);
     } catch (e: any) {
       setErrorText(e?.message || 'Could not save your changes. Try again.');
     } finally {
@@ -574,8 +578,11 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
             </Pressable>
           </View>
 
-          <Animated.View entering={ZoomIn.springify().damping(14)} style={{ marginTop: 12 }}>
-            <CategoryIcon category={category} size={60} />
+          {/* Small entrance: fades in while growing from 90% to full size, no bounce */}
+          <Animated.View entering={FadeIn.duration(200)} style={{ marginTop: 12 }}>
+            <Animated.View entering={ZoomIn.duration(200).withInitialValues({ scale: 0.9 })}>
+              <CategoryIcon category={category} size={60} />
+            </Animated.View>
           </Animated.View>
 
           <Text style={[styles.payee, { color: ink }]} numberOfLines={1}>
@@ -778,13 +785,14 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
       </KeyboardAvoidingView>
 
       {saved && (
-        <Animated.View entering={FadeIn.duration(150)} style={[StyleSheet.absoluteFill, styles.savedWrap, { backgroundColor: pageBg }]}>
-          <Animated.View entering={ZoomIn.springify().damping(12)} style={[styles.savedCircle, { backgroundColor: FOREST }]}>
-            <Feather name="check" size={40} color={LIME} />
-          </Animated.View>
-          <Text style={[styles.savedText, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}>
+        <Animated.View entering={FadeIn.duration(180)} style={[StyleSheet.absoluteFill, styles.savedWrap, { backgroundColor: pageBg }]}>
+          <SuccessCheck size={88} circleColor={FOREST} checkColor={LIME} />
+          <Animated.Text
+            entering={FadeInDown.delay(380).duration(320)}
+            style={[styles.savedText, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}
+          >
             Saved
-          </Text>
+          </Animated.Text>
         </Animated.View>
       )}
 

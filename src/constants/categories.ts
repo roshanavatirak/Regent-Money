@@ -4,7 +4,14 @@
 // its label, icon, colour family and the old names it should also match.
 // Use getCategory(anyKey) everywhere instead of hard-coding icons or colours.
 
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+// Type only (icon names), so this file loads in plain Node tests too
+import type { MaterialCommunityIcons } from '@expo/vector-icons';
+import {
+  CARD_BILL_ALIASES,
+  CARD_BILL_ID,
+  CASH_WITHDRAWAL_ALIASES,
+  CASH_WITHDRAWAL_ID,
+} from './nonSpendingCategories';
 
 export type CategoryIconName = keyof typeof MaterialCommunityIcons.glyphMap;
 
@@ -113,7 +120,7 @@ export const CATEGORIES: CategoryDef[] = [
   // Spending
   { id: 'food', label: 'Food', family: 'dining', group: 'spending', icon: 'silverware-fork-knife', aliases: ['dining', 'restaurant', 'restaurants', 'food_and_dining'] },
   { id: 'shopping', label: 'Shopping', family: 'lifestyle', group: 'spending', icon: 'shopping-outline', aliases: ['clothing', 'apparel'] },
-  { id: 'entertainment', label: 'Entertainment', family: 'lifestyle', group: 'spending', icon: 'ticket-outline', aliases: ['movies', 'subscriptions', 'ott'] },
+  { id: 'entertainment', label: 'Entertainment', family: 'lifestyle', group: 'spending', icon: 'ticket-outline', aliases: ['movies'] },
   { id: 'personal', label: 'Personal', family: 'lifestyle', group: 'spending', icon: 'account-outline', aliases: ['personal_care', 'grooming'] },
   { id: 'groceries', label: 'Groceries', family: 'essentials', group: 'spending', icon: 'cart-outline', aliases: ['grocery', 'supermarket'] },
   { id: 'rent', label: 'Rent', family: 'essentials', group: 'spending', icon: 'home-outline', aliases: ['housing', 'home'] },
@@ -121,6 +128,11 @@ export const CATEGORIES: CategoryDef[] = [
   { id: 'travel', label: 'Travel', family: 'mobility', group: 'spending', icon: 'airplane', aliases: ['flight', 'flights', 'hotel'] },
   { id: 'fuel', label: 'Fuel', family: 'mobility', group: 'spending', icon: 'gas-station-outline', aliases: ['petrol', 'diesel'] },
   { id: 'transport', label: 'Transport', family: 'mobility', group: 'spending', icon: 'car-outline', aliases: ['cab', 'taxi', 'metro', 'commute'] },
+  { id: 'subscriptions', label: 'Subscriptions', family: 'lifestyle', group: 'spending', icon: 'autorenew', aliases: ['subscription', 'ott', 'streaming'] },
+  { id: 'household_help', label: 'Household help', family: 'essentials', group: 'spending', icon: 'broom', aliases: ['maid', 'domestic_help', 'house_help', 'cook', 'driver'] },
+  { id: 'fitness', label: 'Fitness', family: 'lifestyle', group: 'spending', icon: 'dumbbell', aliases: ['gym', 'sports', 'yoga'] },
+  { id: 'festivals', label: 'Festivals', family: 'dining', group: 'spending', icon: 'star-four-points-outline', aliases: ['festival', 'festive'] },
+  { id: 'business_expense', label: 'Business expense', family: 'mobility', group: 'spending', icon: 'store-outline', aliases: ['business', 'work_expense', 'office'] },
 
   // Bills and care
   { id: 'bills', label: 'Bills', family: 'bills', group: 'billsCare', icon: 'receipt-text-outline', aliases: ['bill_payments', 'bill_payment', 'bill'] },
@@ -128,7 +140,9 @@ export const CATEGORIES: CategoryDef[] = [
   { id: 'services', label: 'Services', family: 'bills', group: 'billsCare', icon: 'wrench-outline', aliases: ['service', 'repairs'] },
   { id: 'medical', label: 'Medical', family: 'care', group: 'billsCare', icon: 'medical-bag', aliases: ['health', 'pharmacy', 'hospital'] },
   { id: 'education', label: 'Education', family: 'care', group: 'billsCare', icon: 'school-outline', aliases: ['fees', 'courses'] },
-  { id: 'donation', label: 'Donation', family: 'care', group: 'billsCare', icon: 'hand-heart-outline', aliases: ['charity', 'gift', 'gifts'] },
+  { id: 'donation', label: 'Donation', family: 'care', group: 'billsCare', icon: 'hand-heart-outline', aliases: ['charity'] },
+  { id: 'gifts', label: 'Gifts', family: 'care', group: 'billsCare', icon: 'gift-outline', aliases: ['gift', 'shagun'] },
+  { id: 'family_support', label: 'Family support', family: 'care', group: 'billsCare', icon: 'account-group-outline', aliases: ['family', 'parents'] },
 
   // Money
   { id: 'salary', label: 'Salary', family: 'money', group: 'money', icon: 'briefcase-outline', aliases: ['payroll', 'salaries'] },
@@ -139,7 +153,12 @@ export const CATEGORIES: CategoryDef[] = [
   { id: 'interest', label: 'Interest', family: 'money', group: 'money', icon: 'percent-outline' },
   { id: 'cashback', label: 'Cashback', family: 'money', group: 'money', icon: 'cash-refund', aliases: ['refund', 'rewards'] },
   { id: 'insurance', label: 'Insurance', family: 'money', group: 'money', icon: 'shield-check-outline' },
-  { id: 'financial_services', label: 'Finance', family: 'money', group: 'money', icon: 'bank-outline', aliases: ['financial', 'loan', 'emi'] },
+  { id: 'financial_services', label: 'Finance', family: 'money', group: 'money', icon: 'bank-outline', aliases: ['financial'] },
+  // Cash withdrawal and Card bill are money moved, not spent: see nonSpendingCategories.ts
+  { id: CASH_WITHDRAWAL_ID, label: 'Cash withdrawal', family: 'money', group: 'money', icon: 'atm', aliases: CASH_WITHDRAWAL_ALIASES },
+  { id: 'emi_loans', label: 'EMI & loans', family: 'money', group: 'money', icon: 'calendar-sync-outline', aliases: ['emi', 'loan', 'loans', 'emi_and_loans'] },
+  { id: CARD_BILL_ID, label: 'Card bill', family: 'money', group: 'money', icon: 'credit-card-outline', aliases: CARD_BILL_ALIASES },
+  { id: 'tax', label: 'Tax', family: 'money', group: 'money', icon: 'file-percent-outline', aliases: ['taxes', 'income_tax', 'gst', 'property_tax'] },
 
   // Friends & Lending (Borrow & Lend)
   { id: 'peer_lent', label: 'Lent to friend', family: 'peer_lend', group: 'money', icon: 'hand-coin-outline', aliases: ['lent', 'lend', 'udhaar', 'udhaar_diya', 'gave_to_friend'] },

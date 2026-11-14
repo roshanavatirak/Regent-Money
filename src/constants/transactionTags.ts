@@ -4,6 +4,8 @@
  * icons, pastel backgrounds, and comprehensive Indian merchant brand mappings.
  */
 
+import { predictTag } from './merchantTagRules';
+
 export interface TransactionTagDef {
   id: string;
   label: string;
@@ -336,124 +338,10 @@ export function normalizeMerchantName(name: string): string {
 }
 
 /**
- * Extensive Indian Merchant / Brand Keyword Mappings to Paytm Tags
- */
-export const INDIAN_MERCHANT_KEYWORD_RULES: Record<string, string[]> = {
-  groceries: [
-    'blinkit', 'zepto', 'instamart', 'bigbasket', 'dmart', 'supermarket',
-    'kirana', 'provision', 'nature basket', 'spencer', 'more retail',
-    'fresh', 'vegetable', 'fruits', 'dairy', 'milk', 'bakery', 'market',
-  ],
-  food: [
-    'zomato', 'swiggy', 'starbucks', 'mcdonald', 'burger king', 'kfc',
-    'pizza hut', 'domino', 'haldiram', 'subway', 'barbeque', 'cafe',
-    'restaurant', 'dhaba', 'tea', 'chai', 'coffee', 'bhojanalaya',
-    'biryani', 'sweets', 'tiffin', 'hotel food', 'canteen', 'dining',
-  ],
-  commute: [
-    'uber', 'ola', 'rapido', 'metro', 'chalo', 'fastag', 'toll',
-    'parking', 'auto', 'taxi', 'ride', 'cab', 'transit',
-  ],
-  travel: [
-    'makemytrip', 'goibibo', 'easemytrip', 'irctc', 'yatra', 'indigo',
-    'air india', 'vistara', 'spicejet', 'akasa', 'hotel', 'flight',
-    'resort', 'train ticket', 'railways', 'bus', 'redbus', 'abhibus',
-  ],
-  fuel: [
-    'indian oil', 'iocl', 'bharat petroleum', 'bpcl', 'hindustan petroleum',
-    'hpcl', 'shell', 'petrol', 'diesel', 'cng', 'fuel', 'gas station',
-  ],
-  shopping: [
-    'amazon', 'flipkart', 'myntra', 'ajio', 'nykaa', 'tata cliq',
-    'meesho', 'zara', 'h&m', 'uniqlo', 'shoppers stop', 'lifestyle',
-    'max fashion', 'westside', 'decathlon', 'croma', 'reliance digital',
-    'mall', 'store', 'clothing', 'footwear', 'apparel',
-  ],
-  entertainment: [
-    'netflix', 'prime video', 'hotstar', 'disney', 'spotify', 'pvr',
-    'inox', 'cinepolis', 'bookmyshow', 'sonyliv', 'zee5', 'youtube',
-    'gaming', 'steam', 'playstation', 'movies', 'theatre',
-  ],
-  medical: [
-    'apollo', 'pharmeasy', '1mg', 'tata 1mg', 'netmeds', 'medplus',
-    'hospital', 'clinic', 'diagnostic', 'doctor', 'dr.', 'pharmacy',
-    'chemist', 'pathology', 'lab', 'health', 'dental', 'opticals',
-  ],
-  bill_payments: [
-    'jio', 'airtel', 'vodafone', 'vi bill', 'bsnl', 'tatasky', 'tata play',
-    'dth', 'dish tv', 'sun direct', 'broadband', 'act fibernet', 'hathway',
-    'recharge', 'mobile bill',
-  ],
-  utilities: [
-    'bescom', 'tata power', 'adani electricity', 'bses', 'mahavitaran',
-    'wbsetcl', 'uppcl', 'torrent power', 'water board', 'igl', 'indraprastha gas',
-    'mahanagar gas', 'gujarat gas', 'piped gas', 'electricity', 'cylinder',
-    'hp gas', 'indane', 'bharat gas',
-  ],
-  rent: [
-    'nobroker', 'magicbricks', 'housing', 'house rent', 'flat rent',
-    'society maintenance', 'landlord', 'rent payment', 'property tax',
-  ],
-  emi_loans: [
-    'bajaj finserv', 'home credit', 'kreditbee', 'lazypay', 'simpl',
-    'loan', 'emi', 'hdfc loan', 'sbi loan', 'icici loan', 'finance emi',
-    'car loan', 'home loan', 'personal loan',
-  ],
-  financial_services: [
-    'zerodha', 'groww', 'upstox', 'angelone', 'indmoney', 'motilal oswal',
-    'demat', 'brokerage', 'sharekhan', '5paisa',
-  ],
-  insurance: [
-    'lic', 'hdfc ergo', 'icici lombard', 'star health', 'policybazaar',
-    'care health', 'max life', 'sbi life', 'tata aia', 'insurance premium',
-  ],
-  investment: [
-    'mutual fund', 'sip', 'fixed deposit', 'recurring deposit', 'sgb',
-    'gold bond', 'nps', 'ppf', 'crypto', 'coin', 'securities',
-  ],
-  education: [
-    'school', 'college', 'university', 'tuition', 'coaching', 'fees',
-    'unacademy', 'byju', 'coursera', 'udemy', 'allen', 'fiitjee',
-  ],
-  fitness: [
-    'cult.fit', 'cure.fit', 'gold gym', 'anytime fitness', 'gym',
-    'fitness', 'yoga', 'crossfit', 'swimming', 'sports club', 'protein',
-  ],
-  personal_care: [
-    'salon', 'spa', 'urban company', 'geetanjali', 'enrich', 'barber',
-    'parlour', 'grooming', 'haircut', 'cosmetics',
-  ],
-  cash_withdrawals: [
-    'atm', 'cash wdl', 'cash withdrawal', 'nfs cash', 'atmsbi',
-  ],
-  salary: [
-    'salary', 'payroll', 'stipend', 'employer', 'batchid', 'wages',
-  ],
-  cashback: [
-    'cashback', 'refund', 'reversal', 'reward', 'promo credit',
-  ],
-  interest: [
-    'interest', 'savings bank interest', 'fd interest', 'int.pd',
-  ],
-  self_transfer: [
-    'self transfer', 'self-transfer', 'self_transfer', 'self trf', 'self-trf',
-    'transfer to own', 'transfer from own', 'trf to own', 'trf from own',
-    'transferred to own', 'transferred from own', 'transfer to self', 'transfer from self',
-    'sent to self', 'received from self', 'same bank transfer',
-    'own a/c', 'own ac', 'own acc', 'own account', 'self acc', 'self a/c',
-    'to self', 'from self', 'internal transfer', 'internal trf',
-    'account transfer', 'a/c transfer', 'own bank', 'transfer xx', 'trf xx',
-    'trf to', 'trf from',
-  ],
-};
-
-/**
- * Predicts the most accurate category tag for a transaction based on:
- * 1. User memory map (passed in or queried)
- * 2. Self-transfer detection (credit & debit)
- * 3. Credit vs Debit semantics
- * 4. 30+ Indian merchant & brand keywords
- * 5. Fallback to 'miscellaneous' (NEVER generic 'shopping')
+ * Predicts the tag for a transaction:
+ * 1. The user's own "Always tag" choices (exact merchant, then a merchant that contains it)
+ * 2. The shared rules in merchantTagRules.ts (self transfer, money in, brands, payments to people)
+ * 3. 'miscellaneous' when nothing fits (never a guessed 'shopping')
  */
 export function predictTagForTransaction(
   merchant: string,
@@ -478,15 +366,10 @@ export function predictTagForTransaction(
   }
 
   const normMerchant = normalizeMerchantName(merchant);
-  const normBody = (body || '').toLowerCase();
-  const targetText = `${normMerchant} ${normBody}`;
-
-  // 1. User's previously chosen/custom tag takes supreme priority
   if (userLearnedTags && normMerchant) {
     if (userLearnedTags[normMerchant]) {
       return userLearnedTags[normMerchant];
     }
-    // Substring match in learned map
     for (const [learnedMerchant, tag] of Object.entries(userLearnedTags)) {
       if (normMerchant.includes(learnedMerchant) || learnedMerchant.includes(normMerchant)) {
         return tag;
@@ -494,40 +377,7 @@ export function predictTagForTransaction(
     }
   }
 
-  // 2. Self-transfer detection (both credit & debit)
-  const selfTransferKeywords = INDIAN_MERCHANT_KEYWORD_RULES.self_transfer || [];
-  for (const kw of selfTransferKeywords) {
-    if (targetText.includes(kw)) {
-      return 'self_transfer';
-    }
-  }
-
-  // 3. Credit-specific resolution
-  if (type === 'credit') {
-    if (isSalary || normMerchant.includes('salary') || normBody.includes('salary') || normBody.includes('payroll')) {
-      return 'salary';
-    }
-    if (normMerchant.includes('refund') || normBody.includes('refund') || normBody.includes('cashback')) {
-      return 'cashback';
-    }
-    if (normMerchant.includes('interest') || normBody.includes('interest')) {
-      return 'interest';
-    }
-    return 'money_received';
-  }
-
-  // 4. Indian Brand & Keyword Classification
-  for (const [tag, keywords] of Object.entries(INDIAN_MERCHANT_KEYWORD_RULES)) {
-    if (tag === 'self_transfer') continue; // Handled above
-    for (const kw of keywords) {
-      if (targetText.includes(kw)) {
-        return tag;
-      }
-    }
-  }
-
-  // 5. Default: miscellaneous (NOT hardcoded shopping)
-  return 'miscellaneous';
+  return predictTag(merchant, body, type, isSalary);
 }
 
 /**

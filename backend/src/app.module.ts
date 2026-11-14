@@ -40,6 +40,7 @@ import { EmailRecipient } from './mail/entities/email-recipient.entity';
 import { EmailUnsubscribe } from './mail/entities/email-unsubscribe.entity';
 import { MailModule } from './mail/mail.module';
 import { HomeCardsModule } from './home-cards/home-cards.module';
+import { AttributionModule } from './attribution/attribution.module';
 import * as dns from 'dns';
 
 // Helper to resolve host to IPv4 address programmatically
@@ -159,6 +160,7 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
     CryptoModule,
     ChatHistoryModule,
     HomeCardsModule,
+    AttributionModule,
     ScheduleModule.forRoot(),
     ThrottlerModule.forRoot([
       {

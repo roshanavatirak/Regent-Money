@@ -1,6 +1,6 @@
 {
   "name": "regent-money",
-  "version": "1.0.64",
+  "version": "1.0.65",
   "main": "index.ts",
   "dependencies": {
     "@expo-google-fonts/bricolage-grotesque": "^0.4.1",
@@ -20,12 +20,14 @@
     "buffer": "^6.0.3",
     "date-fns": "^4.4.0",
     "expo": "^57.0.0",
+    "expo-audio": "~57.0.5",
     "expo-background-fetch": "~57.0.21",
     "expo-build-properties": "~57.0.22",
     "expo-clipboard": "~57.0.2",
     "expo-document-picker": "~57.0.3",
     "expo-file-system": "~57.0.7",
     "expo-font": "~57.0.4",
+    "expo-haptics": "~57.0.3",
     "expo-image-picker": "~57.0.20",
     "expo-intent-launcher": "~57.0.1",
     "expo-linear-gradient": "~57.0.2",

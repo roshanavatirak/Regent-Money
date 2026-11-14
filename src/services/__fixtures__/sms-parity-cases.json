@@ -453,6 +453,88 @@
       },
       "smsId": "sms_671842755",
       "contentId": "sms_671842755"
+    },
+    {
+      "sender": "AD-AXISBK",
+      "body": "INR 450.00 debited A/c no. XX1234 02-11-26, 10:15:42 UPI/P2M/629349184814/UBER INDIA Not you? SMS BLOCKUPI Cust ID to 919951860002 Axis Bank",
+      "otp": false,
+      "expected": {
+        "amount": 450,
+        "type": "debit",
+        "merchant": "Uber",
+        "accountSuffix": "1234",
+        "bankName": "Axis",
+        "isSalary": false
+      }
+    },
+    {
+      "sender": "AD-AXISBK",
+      "body": "INR 230.00 debited A/c no. XX1234 03-11-26, 18:02:11 UPI/P2A/629349184815/ARJUN MEHTA Not you? SMS BLOCKUPI Cust ID to 919951860002 Axis Bank",
+      "otp": false,
+      "expected": {
+        "amount": 230,
+        "type": "debit",
+        "merchant": "ARJUN MEHTA",
+        "accountSuffix": "1234",
+        "bankName": "Axis",
+        "isSalary": false
+      }
+    },
+    {
+      "sender": "JD-ICICIB",
+      "body": "ICICI Bank Acct XX6090 debited for Rs 1,299.00 on 02-Nov-26; AJIO credited. UPI:432198765434. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766",
+      "otp": false,
+      "expected": {
+        "amount": 1299,
+        "type": "debit",
+        "merchant": "AJIO",
+        "accountSuffix": "6090",
+        "bankName": "ICICI",
+        "isSalary": false,
+        "referenceId": "432198765434"
+      }
+    },
+    {
+      "sender": "VM-KOTAKB",
+      "body": "Kotak Bank: Rs 640.00 debited on your Debit Card ending 1479 on 04-Nov-26 at JIOMART. Avail Bal in A/c XX5039 is Rs 1,420.50.",
+      "otp": false,
+      "expected": {
+        "amount": 640,
+        "type": "debit",
+        "merchant": "JIOMART",
+        "accountSuffix": "5039",
+        "bankName": "Kotak",
+        "isSalary": false,
+        "availableBalance": 1420.5
+      }
+    },
+    {
+      "sender": "VM-KOTAKB",
+      "body": "Kotak Bank: Rs 40.00 debited on your Debit Card ending 1479 on 04-Nov-26 at COCA COLA VENDING. Avail Bal in A/c XX5039 is Rs 1,380.50.",
+      "otp": false,
+      "expected": {
+        "amount": 40,
+        "type": "debit",
+        "merchant": "COCA COLA VENDING",
+        "accountSuffix": "5039",
+        "bankName": "Kotak",
+        "isSalary": false,
+        "availableBalance": 1380.5
+      }
+    },
+    {
+      "sender": "VM-SBIINB",
+      "body": "Dear UPI user A/C X5039 debited by 512.0 on date 02Nov26 trf to Swiggy Instamart Refno 433355556668. If not u? call 1800111109. -SBI",
+      "otp": false,
+      "expected": {
+        "amount": 512,
+        "type": "debit",
+        "merchant": "Swiggy Instamart",
+        "accountSuffix": "5039",
+        "bankName": "SBI",
+        "isSalary": false,
+        "referenceId": "433355556668"
+      }
     }
   ]
 }

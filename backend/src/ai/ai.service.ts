@@ -1,15 +1,31 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { RedisService } from '../redis/redis.service';
+import { redactFinancialPii } from './pii-redaction';
 
 /** Give up on an AI provider after this long and try the next one. */
 export const PROVIDER_TIMEOUT_MS = 8000;
 /** After a provider says "too many requests" or fails on its side, skip it for this long. */
 export const PROVIDER_COOLDOWN_MS = 60_000;
+/** Reading a statement or screenshot takes longer than a chat answer: wait this long per AI. */
+export const SCAN_STEP_TIMEOUT_MS = 30_000;
+/**
+ * All the AIs together must answer within this, so the phone is still waiting when the result
+ * comes back (it gives up after 60 s on a screenshot and 120 s on a statement).
+ */
+export const SCAN_IMAGE_BUDGET_MS = 50_000;
+export const SCAN_STATEMENT_BUDGET_MS = 110_000;
+/** With less time than this left, the next AI isn't tried. */
+export const MIN_SCAN_STEP_MS = 5_000;
+/** Groq models used for scans when both Gemini keys fail (override with GROQ_SCAN_TEXT_MODEL / GROQ_SCAN_VISION_MODEL). */
+export const DEFAULT_GROQ_SCAN_TEXT_MODEL = 'openai/gpt-oss-120b';
+export const DEFAULT_GROQ_SCAN_VISION_MODEL = 'qwen/qwen3.8-27b';
 /** Default questions per user per day (override with AI_DAILY_LIMIT). */
 export const DEFAULT_AI_DAILY_LIMIT = 40;
 /** Default statement / screenshot scans per user per day (override with AI_DAILY_SCAN_LIMIT). */
 export const DEFAULT_AI_DAILY_SCAN_LIMIT = 20;
+/** Default voice entries per user per day (override with AI_DAILY_VOICE_LIMIT). */
+export const DEFAULT_AI_DAILY_VOICE_LIMIT = 40;
 /** What one chat request may carry, whatever the phone sends. */
 export const MAX_QUESTION_CHARS = 2000;
 export const MAX_HISTORY_MESSAGES = 8;
@@ -32,6 +48,68 @@ export const classifyProviderStatus = (status: number): 'next-cooldown' | 'next'
   if (status === 429 || status >= 500) return 'next-cooldown';
   if (status === 400 || status === 413 || status === 422) return 'stop';
   return 'next'; // 401/403/404 etc.: a problem with this provider's key or model; others may work
+};
+
+/**
+ * Reads the JSON an AI sent back, even when it wrapped it in ```json fences, added its
+ * thinking in <think> tags, or wrote a sentence around it. Returns null if there is none.
+ */
+export const parseJsonAnswer = (raw: string): any | null => {
+  const text = String(raw || '')
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/```(?:json)?/gi, '')
+    .trim();
+  const tryParse = (s: string) => {
+    try {
+      const v = JSON.parse(s);
+      return v && typeof v === 'object' ? v : null;
+    } catch {
+      return null;
+    }
+  };
+  const direct = tryParse(text);
+  if (direct) return direct;
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  return start >= 0 && end > start ? tryParse(text.slice(start, end + 1)) : null;
+};
+
+/** One statement (as text) or one screenshot, with the instructions every AI gets. */
+export type ScanInput =
+  | { kind: 'text'; system: string; prompt: string }
+  | { kind: 'image'; system: string; prompt: string; base64: string; mimeType: string };
+
+interface ScanProvider {
+  /** Name used for the cooldown; the same key shares it with chat. */
+  name: string;
+  label: string;
+  type: 'gemini' | 'groq';
+  key: string;
+  model?: string;
+}
+
+/** The tags the statement / screenshot prompts let the AI choose from (same list as in the prompts). */
+export const SCAN_CATEGORIES = [
+  'food', 'groceries', 'shopping', 'transport', 'fuel', 'travel', 'entertainment', 'subscriptions', 'bills',
+  'recharge', 'utilities', 'rent', 'medical', 'education', 'fitness', 'personal', 'services', 'emi_loans',
+  'insurance', 'investment', 'tax', 'card_bill', 'cash_withdrawals', 'salary', 'interest', 'cashback',
+  'money_received', 'money_transfer', 'self_transfer', 'miscellaneous',
+];
+const SCAN_CATEGORY_SET = new Set(SCAN_CATEGORIES);
+/** Words older prompts used, or the AI still sometimes answers with. */
+const OLD_SCAN_WORDS: Record<string, string> = {
+  health: 'medical',
+  transfer: 'money_transfer',
+  general: 'miscellaneous',
+  utility: 'utilities',
+  income: 'money_received',
+};
+
+/** The AI's category as one of the app's tags, or null when it isn't one (never a made-up tag). */
+export const normalizeScanCategory = (raw?: string | null): string | null => {
+  const key = String(raw || '').toLowerCase().trim().replace(/[\s-]+/g, '_');
+  const mapped = OLD_SCAN_WORDS[key] ?? key;
+  return SCAN_CATEGORY_SET.has(mapped) ? mapped : null;
 };
 
 /** Today's date in India, so the daily limit resets at midnight IST. */
@@ -136,13 +214,15 @@ export class AiService {
    */
   async consumeDailyQuota(
     userId: string,
-    kind: 'chat' | 'scan' = 'chat',
+    kind: 'chat' | 'scan' | 'voice' = 'chat',
   ): Promise<{ allowed: boolean; used: number; limit: number }> {
     const limit =
-      kind === 'scan'
+      kind === 'voice'
+        ? Math.max(1, Number(this.configService.get<string>('AI_DAILY_VOICE_LIMIT')) || DEFAULT_AI_DAILY_VOICE_LIMIT)
+        : kind === 'scan'
         ? Math.max(1, Number(this.configService.get<string>('AI_DAILY_SCAN_LIMIT')) || DEFAULT_AI_DAILY_SCAN_LIMIT)
         : Math.max(1, Number(this.configService.get<string>('AI_DAILY_LIMIT')) || DEFAULT_AI_DAILY_LIMIT);
-    const key = `ai:${kind === 'scan' ? 's' : 'q'}:${userId}:${istDay()}`;
+    const key = `ai:${kind === 'voice' ? 'v' : kind === 'scan' ? 's' : 'q'}:${userId}:${istDay()}`;
     let used: number | null = null;
     try {
       const n = await this.redis?.executeCommand(['INCR', key]);
@@ -173,12 +253,13 @@ export class AiService {
     provider: string,
     send: (signal: AbortSignal) => Promise<Response>,
     extract: (json: any) => string | undefined,
+    timeoutMs = PROVIDER_TIMEOUT_MS,
   ): Promise<ProviderOutcome> {
     if (this.inCooldown(provider)) {
       return { kind: 'next', cooldown: false };
     }
     try {
-      const response = await send(AbortSignal.timeout(PROVIDER_TIMEOUT_MS));
+      const response = await send(AbortSignal.timeout(timeoutMs));
       if (response.ok) {
         const json = await response.json();
         const answer = extract(json)?.trim();
@@ -195,12 +276,118 @@ export class AiService {
     } catch (err: any) {
       const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
       this.logger.warn(
-        `[AI] ${provider} ${timedOut ? `timed out after ${PROVIDER_TIMEOUT_MS} ms` : `error: ${err?.message || err}`}`,
+        `[AI] ${provider} ${timedOut ? `timed out after ${timeoutMs} ms` : `error: ${err?.message || err}`}`,
       );
       // A timeout or network error looks like an outage: rest the provider briefly.
       this.cooldownUntil.set(provider, Date.now() + PROVIDER_COOLDOWN_MS);
       return { kind: 'next', cooldown: true };
     }
+  }
+
+  /**
+   * The AIs that read statements and screenshots, in the order they are tried:
+   * Gemini (main key) → Gemini (second key) → Groq. A key that isn't set is left out.
+   */
+  private scanProviders(kind: ScanInput['kind']): ScanProvider[] {
+    const get = (k: string) => this.configService.get<string>(k)?.trim() || undefined;
+    const list: ScanProvider[] = [];
+
+    const gemini1 = get('GEMINI_API_KEY');
+    const gemini2 = get('GEMINI_API_KEY_2');
+    if (gemini1) list.push({ name: 'gemini', label: 'gemini-2.5-flash', type: 'gemini', key: gemini1 });
+    if (gemini2 && gemini2 !== gemini1) {
+      list.push({ name: 'gemini-2', label: 'gemini-2.5-flash (key 2)', type: 'gemini', key: gemini2 });
+    }
+
+    // Scans use their own Groq key when set, otherwise the chat one
+    const groqOwn = get('GROQ_API_KEY_2');
+    const groqKey = groqOwn || get('GROQ_API_KEY');
+    if (groqKey) {
+      const model =
+        kind === 'image'
+          ? get('GROQ_SCAN_VISION_MODEL') || DEFAULT_GROQ_SCAN_VISION_MODEL
+          : get('GROQ_SCAN_TEXT_MODEL') || DEFAULT_GROQ_SCAN_TEXT_MODEL;
+      list.push({ name: groqOwn ? 'groq-2' : 'groq', label: `groq/${model}`, type: 'groq', key: groqKey, model });
+    }
+    return list;
+  }
+
+  private sendScan(p: ScanProvider, input: ScanInput, signal: AbortSignal): Promise<Response> {
+    if (p.type === 'gemini') {
+      const parts: any[] =
+        input.kind === 'image'
+          ? [{ inlineData: { mimeType: input.mimeType, data: input.base64 } }, { text: input.prompt }]
+          : [{ text: input.prompt }];
+      return fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${p.key}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts }],
+            systemInstruction: { parts: [{ text: input.system }] },
+            generationConfig: { responseMimeType: 'application/json' },
+          }),
+          signal,
+        },
+      );
+    }
+    const userContent =
+      input.kind === 'image'
+        ? [
+            { type: 'text', text: input.prompt },
+            { type: 'image_url', image_url: { url: `data:${input.mimeType};base64,${input.base64}` } },
+          ]
+        : input.prompt;
+    return fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${p.key}` },
+      body: JSON.stringify({
+        model: p.model,
+        messages: [
+          { role: 'system', content: input.system },
+          { role: 'user', content: userContent },
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0,
+      }),
+      signal,
+    });
+  }
+
+  /**
+   * Sends one statement or screenshot to each AI in turn until one returns readable JSON.
+   * Every AI gets the same instructions. All of them together stay within `budgetMs`.
+   * Returns null when none of them could read it.
+   */
+  async scanWithFallback(input: ScanInput, budgetMs: number): Promise<any | null> {
+    const deadline = Date.now() + budgetMs;
+    const providers = this.scanProviders(input.kind);
+    for (const [i, p] of providers.entries()) {
+      const left = deadline - Date.now();
+      if (left < MIN_SCAN_STEP_MS) {
+        this.logger.warn(`[AI] Scan ran out of time before trying ${providers.slice(i).map((x) => x.label).join(', ')}.`);
+        break;
+      }
+      const outcome = await this.callProvider(
+        p.name,
+        (signal) => this.sendScan(p, input, signal),
+        p.type === 'gemini'
+          ? (json) => json?.candidates?.[0]?.content?.parts?.[0]?.text
+          : (json) => json?.choices?.[0]?.message?.content,
+        Math.min(SCAN_STEP_TIMEOUT_MS, left),
+      );
+      // Unlike chat, a request one AI refuses (for example Gemini's 400 for a bad key) may
+      // still work on another, so every outcome other than an answer moves on.
+      if (outcome.kind !== 'ok') continue;
+      const parsed = parseJsonAnswer(outcome.answer);
+      if (parsed) {
+        if (i > 0) this.logger.log(`[AI] Scan read by fallback ${p.label}.`);
+        return parsed;
+      }
+      this.logger.warn(`[AI] ${p.label} returned unreadable JSON for a scan. Trying the next one.`);
+    }
+    return null;
   }
 
   private buildSystemPrompt(context?: ChatContextDto): string {
@@ -400,27 +587,7 @@ ${txsSummary}
     };
   }
 
-  private sanitizeFinancialPii(rawText: string): string {
-    if (!rawText) return '';
-    return rawText
-      // 1. Redact Indian Aadhaar numbers (12 digits with spaces or hyphens)
-      .replace(/\b\d{4}[-\s]\d{4}[-\s]\d{4}\b/g, '[AADHAAR_REDACTED]')
-      // 2. Redact Indian PAN numbers (5 letters + 4 digits + 1 letter)
-      .replace(/\b[A-Z]{5}[0-9]{4}[A-Z]\b/g, '[PAN_REDACTED]')
-      // 3. Redact Email addresses
-      .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, '[EMAIL_REDACTED]')
-      // 4. Redact Indian Phone numbers
-      .replace(/(?:\+91[-\s]?)?[6-9]\d{9}\b/g, '[PHONE_REDACTED]')
-      // 5. Redact IFSC codes
-      .replace(/\b[A-Z]{4}0[A-Z0-9]{6}\b/g, '[IFSC_REDACTED]')
-      // 6. Redact explicit account number headers while preserving transaction line UTRs
-      .replace(/(?:A\/c(?:\s*No\.?)?|Account(?:\s*(?:Number|No\.?))?|Acc\s*No\.?)\s*[:#-]?\s*([0-9A-Za-z*X]{6,22})/gi, 'Account No: [ACCOUNT_REDACTED]')
-      // 7. Redact CIF / Customer ID patterns
-      .replace(/(?:CIF(?:\s*No\.?)?|Customer\s*ID)\s*[:#-]?\s*([0-9A-Za-z]{6,16})/gi, 'CIF No: [CUSTOMER_ID_REDACTED]');
-  }
-
   async parseStatementText(text: string): Promise<StatementValidationResult> {
-    const geminiKey = this.configService.get<string>('GEMINI_API_KEY')?.trim();
     if (!text || text.trim().length === 0) {
       return {
         isValid: false,
@@ -445,7 +612,7 @@ Each transaction in the array must have:
 - amount: number (positive value, no commas)
 - type: 'debit' or 'credit' (debit for withdrawal/spend/DR/Paid; credit for deposit/salary/CR/Received)
 - merchant: string (clean merchant/payee/payer name or transaction details, remove generic bank noise if possible)
-- category: string ('food', 'shopping', 'transfer', 'entertainment', 'utilities', 'salary', 'investment', 'health', 'travel', or 'general')
+- category: string, exactly one of: 'food', 'groceries', 'shopping', 'transport', 'fuel', 'travel', 'entertainment', 'subscriptions', 'bills', 'recharge', 'utilities', 'rent', 'medical', 'education', 'fitness', 'personal', 'services', 'emi_loans', 'insurance', 'investment', 'tax', 'card_bill', 'cash_withdrawals', 'salary', 'interest', 'cashback', 'money_received', 'money_transfer', 'self_transfer', 'miscellaneous' (use 'money_transfer' for a payment to a person, 'miscellaneous' if unsure)
 - balanceAfter: number or null (CRITICAL: if the statement has a "Balance" column or indicates the account balance after this transaction, extract that exact numeric balance here!)
 - referenceId: string or null (CRITICAL: Look in the transaction description/narration/details for 12-digit UPI reference numbers / UTRs, IMPS reference numbers, NEFT numbers, Cheque numbers, or transaction IDs, e.g. 'UPI/CR/629349184814' -> '629349184814', or 'TRANSFER TO.../629349830131' -> '629349830131'. If present, extract the exact numeric or alphanumeric reference string; otherwise return null).
 
@@ -464,7 +631,7 @@ Return ONLY a valid JSON object matching:
       "amount": 0.00,
       "type": "debit" | "credit",
       "merchant": "Name",
-      "category": "transfer",
+      "category": "food",
       "balanceAfter": 0.00,
       "referenceId": "629349184814" or null
     }
@@ -472,63 +639,47 @@ Return ONLY a valid JSON object matching:
 }
 `;
 
-    const sanitizedText = this.sanitizeFinancialPii(text);
+    const sanitizedText = redactFinancialPii(text);
     const prompt = `Sanitized Statement Text (PII Redacted):\n${sanitizedText.slice(0, 30000)}\n\nAnalyze and extract transactions:`;
 
-    if (geminiKey) {
+    // Gemini (main key) → Gemini (second key) → Groq, all with the same instructions
+    const parsed = await this.scanWithFallback(
+      { kind: 'text', system: systemInstruction, prompt },
+      SCAN_STATEMENT_BUDGET_MS,
+    );
+
+    if (parsed) {
       try {
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: prompt }] }],
-              systemInstruction: { parts: [{ text: systemInstruction }] },
-              generationConfig: { responseMimeType: 'application/json' },
-            }),
-            // Reading a statement takes longer than a chat answer, but never wait forever
-            signal: AbortSignal.timeout(30_000),
-          }
-        );
+        const rawList = Array.isArray(parsed.transactions)
+          ? parsed.transactions
+          : Array.isArray(parsed)
+          ? parsed
+          : [];
+        const txs: OcrTransactionExtracted[] = rawList.map((t: any) => ({
+          ...t,
+          referenceId: t.referenceId ? String(t.referenceId).trim() : null,
+          balanceAfter: typeof t.balanceAfter === 'number' && !isNaN(t.balanceAfter) ? t.balanceAfter : null,
+        }));
 
-        if (response.ok) {
-          const json = await response.json();
-          const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (rawText) {
-            const parsed = JSON.parse(rawText.trim());
-            const rawList = Array.isArray(parsed.transactions)
-              ? parsed.transactions
-              : Array.isArray(parsed)
-              ? parsed
-              : [];
-            const txs: OcrTransactionExtracted[] = rawList.map((t: any) => ({
-              ...t,
-              referenceId: t.referenceId ? String(t.referenceId).trim() : null,
-              balanceAfter: typeof t.balanceAfter === 'number' && !isNaN(t.balanceAfter) ? t.balanceAfter : null,
-            }));
-
-            let finalBal = parsed.finalDetectedBalance;
-            if (finalBal === undefined || finalBal === null) {
-              // Try to find the latest transaction that has balanceAfter
-              for (let i = txs.length - 1; i >= 0; i--) {
-                const b = txs[i].balanceAfter;
-                if (typeof b === 'number' && !isNaN(b)) {
-                  finalBal = b;
-                  break;
-                }
-              }
+        let finalBal = parsed.finalDetectedBalance;
+        if (finalBal === undefined || finalBal === null) {
+          // Try to find the latest transaction that has balanceAfter
+          for (let i = txs.length - 1; i >= 0; i--) {
+            const b = txs[i].balanceAfter;
+            if (typeof b === 'number' && !isNaN(b)) {
+              finalBal = b;
+              break;
             }
-
-            const isValid = (parsed.isValid ?? txs.length > 0) && txs.length > 0;
-            return {
-              isValid,
-              rejectionReason: isValid ? null : (parsed.rejectionReason || 'No recognizable bank transaction entries found in this statement.'),
-              finalDetectedBalance: typeof finalBal === 'number' ? finalBal : null,
-              transactions: txs,
-            };
           }
         }
+
+        const isValid = (parsed.isValid ?? txs.length > 0) && txs.length > 0;
+        return {
+          isValid,
+          rejectionReason: isValid ? null : (parsed.rejectionReason || 'No recognizable bank transaction entries found in this statement.'),
+          finalDetectedBalance: typeof finalBal === 'number' ? finalBal : null,
+          transactions: txs,
+        };
       } catch (err: any) {
         this.logger.warn(`[AiService] parseStatementText error: ${err?.message || err}`);
       }
@@ -543,9 +694,8 @@ Return ONLY a valid JSON object matching:
   }
 
   async parseImageOcr(imageBuffer: Buffer, mimeType: string = 'image/jpeg'): Promise<OcrValidationResult> {
-    const geminiKey = this.configService.get<string>('GEMINI_API_KEY')?.trim();
-    if (!geminiKey) {
-      throw new Error('GEMINI_API_KEY is not configured on the backend.');
+    if (this.scanProviders('image').length === 0) {
+      throw new Error('No AI key (GEMINI_API_KEY, GEMINI_API_KEY_2 or GROQ_API_KEY) is configured on the backend.');
     }
 
     const now = new Date();
@@ -590,7 +740,7 @@ Carefully evaluate the image and classify it into ONE of these categories:
      * amount: number (positive value, no commas or currency symbols)
      * type: 'debit' or 'credit' (debit for withdrawal/spend/DR/Paid; credit for deposit/salary/CR/Received)
      * merchant: string (clean merchant/payee/payer name or description, remove generic noise)
-     * category: string ('food', 'shopping', 'transfer', 'entertainment', 'utilities', 'salary', 'investment', 'health', 'travel', or 'general')
+     * category: string, exactly one of: 'food', 'groceries', 'shopping', 'transport', 'fuel', 'travel', 'entertainment', 'subscriptions', 'bills', 'recharge', 'utilities', 'rent', 'medical', 'education', 'fitness', 'personal', 'services', 'emi_loans', 'insurance', 'investment', 'tax', 'card_bill', 'cash_withdrawals', 'salary', 'interest', 'cashback', 'money_received', 'money_transfer', 'self_transfer', 'miscellaneous' (use 'money_transfer' for a payment to a person, 'miscellaneous' if unsure)
      * balanceAfter: number or null (CRITICAL: if the table or screenshot has a "Balance" column or indicates the running account balance after that transaction, extract that exact numeric balance here!)
      * referenceId: string or null (CRITICAL: Look for 12-digit UPI reference numbers / UTRs, IMPS reference numbers, NEFT numbers, Cheque numbers, or transaction IDs in the narration, description, or payment receipt screen, e.g. 'UPI/CR/629349184814' -> '629349184814', or 'TRANSFER TO.../629349830131' -> '629349830131'. If present, extract the exact numeric or alphanumeric reference string; otherwise return null).
 
@@ -610,7 +760,7 @@ Return ONLY a valid JSON object matching this schema:
       "amount": 0.00,
       "type": "debit" | "credit",
       "merchant": "Name",
-      "category": "transfer",
+      "category": "food",
       "balanceAfter": 0.00,
       "referenceId": "629349184814" or null
     }
@@ -620,50 +770,25 @@ Return ONLY a valid JSON object matching this schema:
 
     const prompt = `Today is ${todayIso}. Validate this image and extract any financial transactions and balance details according to the instructions (assume year ${currentYear} if no year is written on screen):`;
 
+    // Gemini (main key) → Gemini (second key) → Groq vision, all with the same instructions
+    const parsed = await this.scanWithFallback(
+      { kind: 'image', system: systemInstruction, prompt, base64: base64Data, mimeType: mimeType || 'image/jpeg' },
+      SCAN_IMAGE_BUDGET_MS,
+    );
+
+    if (!parsed) {
+      this.logger.error('[AiService] No AI could read this image.');
+      return {
+        isValid: false,
+        category: 'blurry_or_unreadable',
+        rejectionReason: 'Unable to analyze image at this time. Please ensure the image is clear and try again.',
+        finalDetectedBalance: null,
+        transactions: [],
+      };
+    }
+
     try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  {
-                    inlineData: {
-                      mimeType: mimeType || 'image/jpeg',
-                      data: base64Data,
-                    },
-                  },
-                  { text: prompt },
-                ],
-              },
-            ],
-            systemInstruction: { parts: [{ text: systemInstruction }] },
-            generationConfig: { responseMimeType: 'application/json' },
-          }),
-          // Reading a screenshot takes longer than a chat answer, but never wait forever
-          signal: AbortSignal.timeout(30_000),
-        }
-      );
-
-      if (!response.ok) {
-        const errText = await response.text();
-        this.logger.error(`[AiService] Gemini Vision error: ${errText}`);
-        return {
-          isValid: false,
-          category: 'blurry_or_unreadable',
-          rejectionReason: 'Unable to analyze image at this time. Please ensure the image is clear and try again.',
-          finalDetectedBalance: null,
-          transactions: [],
-        };
-      }
-
-      const json = await response.json();
-      const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (rawText) {
-        const parsed = JSON.parse(rawText.trim());
+      if (typeof parsed === 'object') {
         const category = parsed.category || (parsed.isValid ? 'transaction_screenshot' : 'unrelated_image');
         const transactions: OcrTransactionExtracted[] = Array.isArray(parsed.transactions) ? parsed.transactions : [];
 

@@ -200,6 +200,7 @@ export const AppSidebarDrawer: React.FC = () => {
             { key: 'email_config', label: 'Email', icon: 'mail', onPress: () => nav('AdminEmailConfig') },
             { key: 'home_cards', label: 'Home cards', icon: 'layout', onPress: () => nav('AdminHomeCards') },
             { key: 'users', label: 'Users', icon: 'users', onPress: () => nav('AdminUsers') },
+            { key: 'referrals', label: 'Referrals', icon: 'share-2', onPress: () => nav('AdminReferrals') },
             { key: 'logs', label: 'Audit logs', icon: 'activity', onPress: () => nav('AdminLogs') },
             { key: 'asettings', label: 'Admin settings', icon: 'sliders', onPress: () => nav('AdminSettings') },
           ],
@@ -230,6 +231,10 @@ export const AppSidebarDrawer: React.FC = () => {
         { key: 'privacy', label: 'Privacy center', icon: 'shield', onPress: () => nav('PrivacyCenter') },
         { key: 'terms', label: 'Terms and conditions', icon: 'file-text', onPress: () => go(() => openTermsModal(true), 160) },
       ],
+    },
+    {
+      title: 'Referral',
+      items: [{ key: 'invite', label: 'Invite a friend', icon: 'user-plus', onPress: () => nav('InviteFriend') }],
     },
     {
       title: 'Help',

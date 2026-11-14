@@ -1,0 +1,1097 @@
+{
+ "note": "Labelled bank SMS for measuring auto-tagging; expected = the tag a person would pick. Read by src/services/tagBenchmark.test.ts (app) and backend/src/sync/tag-benchmark.spec.ts (server). Add a case whenever a payment is tagged wrong.",
+ "cases": [
+  {
+   "name": "Swiggy",
+   "kind": "brand",
+   "expected": "food",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 100.00 on 02-Nov-26; Swiggy credited. UPI:432198765432. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "Zomato",
+   "kind": "brand",
+   "expected": "food",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 137.0 on date 02Nov26 trf to Zomato Refno 433355556666. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "Dominos Pizza",
+   "kind": "brand",
+   "expected": "food",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak welcomes you. Rs.174.00 spent via Kotak Debit Card XX1479 at Dominos Pizza on 05/11/2026. Avl bal Rs.255.90 Not you?Tap https://kotak.bank.in/KBANKT/Fraud"
+  },
+  {
+   "name": "McDonalds",
+   "kind": "brand",
+   "expected": "food",
+   "sender": "AX-HDFCBK",
+   "body": "Spent Rs.211 From HDFC Bank Card x4321 At McDonalds On 2026-11-04:20:11:02 Bal Rs.12,340.50 Not You? Call 18002586161"
+  },
+  {
+   "name": "Starbucks",
+   "kind": "brand",
+   "expected": "food",
+   "sender": "VM-UCOBNK-S",
+   "body": "A/c XX9911 debited INR 248.00 on 02/11/26 towards Starbucks. Bal INR 2,345.67 UCO Bank"
+  },
+  {
+   "name": "KFC",
+   "kind": "brand",
+   "expected": "food",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.285.00 debited from A/c XX1234 on 02-11-26 to VPA kfc@ybl (UPI Ref No 432112345678). Not you? Call 18002586161"
+  },
+  {
+   "name": "Haldiram",
+   "kind": "brand",
+   "expected": "food",
+   "sender": "VK-KOTAKB",
+   "body": "Sent Rs.322.00 from Kotak Bank AC X4020 to haldiram@okaxis on 02-11-26.UPI Ref 312345678901. Not you, https://kotak.com/fraud"
+  },
+  {
+   "name": "Burger King",
+   "kind": "brand",
+   "expected": "food",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 359.00 on 02-Nov-26; Burger King credited. UPI:432198765432. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "Chaayos",
+   "kind": "brand",
+   "expected": "food",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 396.0 on date 02Nov26 trf to Chaayos Refno 433355556666. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "EatSure",
+   "kind": "brand",
+   "expected": "food",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak welcomes you. Rs.433.00 spent via Kotak Debit Card XX1479 at EatSure on 05/11/2026. Avl bal Rs.255.90 Not you?Tap https://kotak.bank.in/KBANKT/Fraud"
+  },
+  {
+   "name": "Blinkit",
+   "kind": "brand",
+   "expected": "groceries",
+   "sender": "AX-HDFCBK",
+   "body": "Spent Rs.470 From HDFC Bank Card x4321 At Blinkit On 2026-11-04:20:11:02 Bal Rs.12,340.50 Not You? Call 18002586161"
+  },
+  {
+   "name": "Zepto",
+   "kind": "brand",
+   "expected": "groceries",
+   "sender": "VM-UCOBNK-S",
+   "body": "A/c XX9911 debited INR 507.00 on 02/11/26 towards Zepto. Bal INR 2,345.67 UCO Bank"
+  },
+  {
+   "name": "BigBasket",
+   "kind": "brand",
+   "expected": "groceries",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.544.00 debited from A/c XX1234 on 02-11-26 to VPA bigbasket@ybl (UPI Ref No 432112345678). Not you? Call 18002586161"
+  },
+  {
+   "name": "DMart",
+   "kind": "brand",
+   "expected": "groceries",
+   "sender": "VK-KOTAKB",
+   "body": "Sent Rs.581.00 from Kotak Bank AC X4020 to dmart@okaxis on 02-11-26.UPI Ref 312345678901. Not you, https://kotak.com/fraud"
+  },
+  {
+   "name": "Swiggy Instamart",
+   "kind": "brand",
+   "expected": "groceries",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 618.00 on 02-Nov-26; Swiggy Instamart credited. UPI:432198765432. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "JioMart",
+   "kind": "brand",
+   "expected": "groceries",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 655.0 on date 02Nov26 trf to JioMart Refno 433355556666. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "Reliance Fresh",
+   "kind": "brand",
+   "expected": "groceries",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak welcomes you. Rs.692.00 spent via Kotak Debit Card XX1479 at Reliance Fresh on 05/11/2026. Avl bal Rs.255.90 Not you?Tap https://kotak.bank.in/KBANKT/Fraud"
+  },
+  {
+   "name": "Amazon",
+   "kind": "brand",
+   "expected": "shopping",
+   "sender": "AX-HDFCBK",
+   "body": "Spent Rs.729 From HDFC Bank Card x4321 At Amazon On 2026-11-04:20:11:02 Bal Rs.12,340.50 Not You? Call 18002586161"
+  },
+  {
+   "name": "Flipkart",
+   "kind": "brand",
+   "expected": "shopping",
+   "sender": "VM-UCOBNK-S",
+   "body": "A/c XX9911 debited INR 766.00 on 02/11/26 towards Flipkart. Bal INR 2,345.67 UCO Bank"
+  },
+  {
+   "name": "Myntra",
+   "kind": "brand",
+   "expected": "shopping",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.803.00 debited from A/c XX1234 on 02-11-26 to VPA myntra@ybl (UPI Ref No 432112345678). Not you? Call 18002586161"
+  },
+  {
+   "name": "Ajio",
+   "kind": "brand",
+   "expected": "shopping",
+   "sender": "VK-KOTAKB",
+   "body": "Sent Rs.840.00 from Kotak Bank AC X4020 to ajio@okaxis on 02-11-26.UPI Ref 312345678901. Not you, https://kotak.com/fraud"
+  },
+  {
+   "name": "Nykaa",
+   "kind": "brand",
+   "expected": "shopping",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 877.00 on 02-Nov-26; Nykaa credited. UPI:432198765432. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "Meesho",
+   "kind": "brand",
+   "expected": "shopping",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 914.0 on date 02Nov26 trf to Meesho Refno 433355556666. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "Decathlon",
+   "kind": "brand",
+   "expected": "shopping",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak welcomes you. Rs.951.00 spent via Kotak Debit Card XX1479 at Decathlon on 05/11/2026. Avl bal Rs.255.90 Not you?Tap https://kotak.bank.in/KBANKT/Fraud"
+  },
+  {
+   "name": "Croma",
+   "kind": "brand",
+   "expected": "shopping",
+   "sender": "AX-HDFCBK",
+   "body": "Spent Rs.988 From HDFC Bank Card x4321 At Croma On 2026-11-04:20:11:02 Bal Rs.12,340.50 Not You? Call 18002586161"
+  },
+  {
+   "name": "Lenskart",
+   "kind": "brand",
+   "expected": "shopping",
+   "sender": "VM-UCOBNK-S",
+   "body": "A/c XX9911 debited INR 125.00 on 02/11/26 towards Lenskart. Bal INR 2,345.67 UCO Bank"
+  },
+  {
+   "name": "Uber",
+   "kind": "brand",
+   "expected": "transport",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.162.00 debited from A/c XX1234 on 02-11-26 to VPA uber@ybl (UPI Ref No 432112345678). Not you? Call 18002586161"
+  },
+  {
+   "name": "Ola Cabs",
+   "kind": "brand",
+   "expected": "transport",
+   "sender": "VK-KOTAKB",
+   "body": "Sent Rs.199.00 from Kotak Bank AC X4020 to olacabs@okaxis on 02-11-26.UPI Ref 312345678901. Not you, https://kotak.com/fraud"
+  },
+  {
+   "name": "Rapido",
+   "kind": "brand",
+   "expected": "transport",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 236.00 on 02-Nov-26; Rapido credited. UPI:432198765432. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "Namma Metro",
+   "kind": "brand",
+   "expected": "transport",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 273.0 on date 02Nov26 trf to Namma Metro Refno 433355556666. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "Indian Oil",
+   "kind": "brand",
+   "expected": "fuel",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak welcomes you. Rs.310.00 spent via Kotak Debit Card XX1479 at Indian Oil on 05/11/2026. Avl bal Rs.255.90 Not you?Tap https://kotak.bank.in/KBANKT/Fraud"
+  },
+  {
+   "name": "HP Petrol Pump",
+   "kind": "brand",
+   "expected": "fuel",
+   "sender": "AX-HDFCBK",
+   "body": "Spent Rs.347 From HDFC Bank Card x4321 At HP Petrol Pump On 2026-11-04:20:11:02 Bal Rs.12,340.50 Not You? Call 18002586161"
+  },
+  {
+   "name": "Shell",
+   "kind": "brand",
+   "expected": "fuel",
+   "sender": "VM-UCOBNK-S",
+   "body": "A/c XX9911 debited INR 384.00 on 02/11/26 towards Shell. Bal INR 2,345.67 UCO Bank"
+  },
+  {
+   "name": "BPCL",
+   "kind": "brand",
+   "expected": "fuel",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.421.00 debited from A/c XX1234 on 02-11-26 to VPA bpcl@ybl (UPI Ref No 432112345678). Not you? Call 18002586161"
+  },
+  {
+   "name": "MakeMyTrip",
+   "kind": "brand",
+   "expected": "travel",
+   "sender": "VK-KOTAKB",
+   "body": "Sent Rs.458.00 from Kotak Bank AC X4020 to makemytrip@okaxis on 02-11-26.UPI Ref 312345678901. Not you, https://kotak.com/fraud"
+  },
+  {
+   "name": "IndiGo",
+   "kind": "brand",
+   "expected": "travel",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 495.00 on 02-Nov-26; IndiGo credited. UPI:432198765432. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "Goibibo",
+   "kind": "brand",
+   "expected": "travel",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 532.0 on date 02Nov26 trf to Goibibo Refno 433355556666. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "RedBus",
+   "kind": "brand",
+   "expected": "travel",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak welcomes you. Rs.569.00 spent via Kotak Debit Card XX1479 at RedBus on 05/11/2026. Avl bal Rs.255.90 Not you?Tap https://kotak.bank.in/KBANKT/Fraud"
+  },
+  {
+   "name": "OYO Rooms",
+   "kind": "brand",
+   "expected": "travel",
+   "sender": "AX-HDFCBK",
+   "body": "Spent Rs.606 From HDFC Bank Card x4321 At OYO Rooms On 2026-11-04:20:11:02 Bal Rs.12,340.50 Not You? Call 18002586161"
+  },
+  {
+   "name": "IRCTC",
+   "kind": "brand",
+   "expected": "travel",
+   "sender": "VM-UCOBNK-S",
+   "body": "A/c XX9911 debited INR 643.00 on 02/11/26 towards IRCTC. Bal INR 2,345.67 UCO Bank"
+  },
+  {
+   "name": "BookMyShow",
+   "kind": "brand",
+   "expected": "entertainment",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.680.00 debited from A/c XX1234 on 02-11-26 to VPA bookmyshow@ybl (UPI Ref No 432112345678). Not you? Call 18002586161"
+  },
+  {
+   "name": "PVR Cinemas",
+   "kind": "brand",
+   "expected": "entertainment",
+   "sender": "VK-KOTAKB",
+   "body": "Sent Rs.717.00 from Kotak Bank AC X4020 to pvrcinemas@okaxis on 02-11-26.UPI Ref 312345678901. Not you, https://kotak.com/fraud"
+  },
+  {
+   "name": "Netflix",
+   "kind": "brand",
+   "expected": "subscriptions",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 754.00 on 02-Nov-26; Netflix credited. UPI:432198765432. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "Spotify",
+   "kind": "brand",
+   "expected": "subscriptions",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 791.0 on date 02Nov26 trf to Spotify Refno 433355556666. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "Disney Hotstar",
+   "kind": "brand",
+   "expected": "subscriptions",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak welcomes you. Rs.828.00 spent via Kotak Debit Card XX1479 at Disney Hotstar on 05/11/2026. Avl bal Rs.255.90 Not you?Tap https://kotak.bank.in/KBANKT/Fraud"
+  },
+  {
+   "name": "YouTube Premium",
+   "kind": "brand",
+   "expected": "subscriptions",
+   "sender": "AX-HDFCBK",
+   "body": "Spent Rs.865 From HDFC Bank Card x4321 At YouTube Premium On 2026-11-04:20:11:02 Bal Rs.12,340.50 Not You? Call 18002586161"
+  },
+  {
+   "name": "Apollo Pharmacy",
+   "kind": "brand",
+   "expected": "medical",
+   "sender": "VM-UCOBNK-S",
+   "body": "A/c XX9911 debited INR 902.00 on 02/11/26 towards Apollo Pharmacy. Bal INR 2,345.67 UCO Bank"
+  },
+  {
+   "name": "PharmEasy",
+   "kind": "brand",
+   "expected": "medical",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.939.00 debited from A/c XX1234 on 02-11-26 to VPA pharmeasy@ybl (UPI Ref No 432112345678). Not you? Call 18002586161"
+  },
+  {
+   "name": "Tata 1mg",
+   "kind": "brand",
+   "expected": "medical",
+   "sender": "VK-KOTAKB",
+   "body": "Sent Rs.976.00 from Kotak Bank AC X4020 to tata1mg@okaxis on 02-11-26.UPI Ref 312345678901. Not you, https://kotak.com/fraud"
+  },
+  {
+   "name": "MedPlus",
+   "kind": "brand",
+   "expected": "medical",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 113.00 on 02-Nov-26; MedPlus credited. UPI:432198765432. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "Dr Lal PathLabs",
+   "kind": "brand",
+   "expected": "medical",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 150.0 on date 02Nov26 trf to Dr Lal PathLabs Refno 433355556666. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "BESCOM",
+   "kind": "brand",
+   "expected": "utilities",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak welcomes you. Rs.187.00 spent via Kotak Debit Card XX1479 at BESCOM on 05/11/2026. Avl bal Rs.255.90 Not you?Tap https://kotak.bank.in/KBANKT/Fraud"
+  },
+  {
+   "name": "Tata Power",
+   "kind": "brand",
+   "expected": "utilities",
+   "sender": "AX-HDFCBK",
+   "body": "Spent Rs.224 From HDFC Bank Card x4321 At Tata Power On 2026-11-04:20:11:02 Bal Rs.12,340.50 Not You? Call 18002586161"
+  },
+  {
+   "name": "Mahanagar Gas",
+   "kind": "brand",
+   "expected": "utilities",
+   "sender": "VM-UCOBNK-S",
+   "body": "A/c XX9911 debited INR 261.00 on 02/11/26 towards Mahanagar Gas. Bal INR 2,345.67 UCO Bank"
+  },
+  {
+   "name": "Airtel Postpaid",
+   "kind": "brand",
+   "expected": "bills",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.298.00 debited from A/c XX1234 on 02-11-26 to VPA airtelpostpaid@ybl (UPI Ref No 432112345678). Not you? Call 18002586161"
+  },
+  {
+   "name": "ACT Fibernet",
+   "kind": "brand",
+   "expected": "bills",
+   "sender": "VK-KOTAKB",
+   "body": "Sent Rs.335.00 from Kotak Bank AC X4020 to actfibernet@okaxis on 02-11-26.UPI Ref 312345678901. Not you, https://kotak.com/fraud"
+  },
+  {
+   "name": "Jio Recharge",
+   "kind": "brand",
+   "expected": "recharge",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 372.00 on 02-Nov-26; Jio Recharge credited. UPI:432198765432. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "Airtel Prepaid",
+   "kind": "brand",
+   "expected": "recharge",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 409.0 on date 02Nov26 trf to Airtel Prepaid Refno 433355556666. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "NoBroker",
+   "kind": "brand",
+   "expected": "rent",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak welcomes you. Rs.446.00 spent via Kotak Debit Card XX1479 at NoBroker on 05/11/2026. Avl bal Rs.255.90 Not you?Tap https://kotak.bank.in/KBANKT/Fraud"
+  },
+  {
+   "name": "Unacademy",
+   "kind": "brand",
+   "expected": "education",
+   "sender": "AX-HDFCBK",
+   "body": "Spent Rs.483 From HDFC Bank Card x4321 At Unacademy On 2026-11-04:20:11:02 Bal Rs.12,340.50 Not You? Call 18002586161"
+  },
+  {
+   "name": "Coursera",
+   "kind": "brand",
+   "expected": "education",
+   "sender": "VM-UCOBNK-S",
+   "body": "A/c XX9911 debited INR 520.00 on 02/11/26 towards Coursera. Bal INR 2,345.67 UCO Bank"
+  },
+  {
+   "name": "DPS School Fees",
+   "kind": "brand",
+   "expected": "education",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.557.00 debited from A/c XX1234 on 02-11-26 to VPA dpsschoolfees@ybl (UPI Ref No 432112345678). Not you? Call 18002586161"
+  },
+  {
+   "name": "Cult Fit",
+   "kind": "brand",
+   "expected": "fitness",
+   "sender": "VK-KOTAKB",
+   "body": "Sent Rs.594.00 from Kotak Bank AC X4020 to cultfit@okaxis on 02-11-26.UPI Ref 312345678901. Not you, https://kotak.com/fraud"
+  },
+  {
+   "name": "Anytime Fitness",
+   "kind": "brand",
+   "expected": "fitness",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 631.00 on 02-Nov-26; Anytime Fitness credited. UPI:432198765432. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "LIC of India",
+   "kind": "brand",
+   "expected": "insurance",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 668.0 on date 02Nov26 trf to LIC of India Refno 433355556666. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "Star Health",
+   "kind": "brand",
+   "expected": "insurance",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak welcomes you. Rs.705.00 spent via Kotak Debit Card XX1479 at Star Health on 05/11/2026. Avl bal Rs.255.90 Not you?Tap https://kotak.bank.in/KBANKT/Fraud"
+  },
+  {
+   "name": "PolicyBazaar",
+   "kind": "brand",
+   "expected": "insurance",
+   "sender": "AX-HDFCBK",
+   "body": "Spent Rs.742 From HDFC Bank Card x4321 At PolicyBazaar On 2026-11-04:20:11:02 Bal Rs.12,340.50 Not You? Call 18002586161"
+  },
+  {
+   "name": "Zerodha",
+   "kind": "brand",
+   "expected": "investment",
+   "sender": "VM-UCOBNK-S",
+   "body": "A/c XX9911 debited INR 779.00 on 02/11/26 towards Zerodha. Bal INR 2,345.67 UCO Bank"
+  },
+  {
+   "name": "Groww",
+   "kind": "brand",
+   "expected": "investment",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.816.00 debited from A/c XX1234 on 02-11-26 to VPA groww@ybl (UPI Ref No 432112345678). Not you? Call 18002586161"
+  },
+  {
+   "name": "Bajaj Finserv",
+   "kind": "brand",
+   "expected": "emi_loans",
+   "sender": "VK-KOTAKB",
+   "body": "Sent Rs.853.00 from Kotak Bank AC X4020 to bajajfinserv@okaxis on 02-11-26.UPI Ref 312345678901. Not you, https://kotak.com/fraud"
+  },
+  {
+   "name": "Home Credit",
+   "kind": "brand",
+   "expected": "emi_loans",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 890.00 on 02-Nov-26; Home Credit credited. UPI:432198765432. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "Urban Company",
+   "kind": "brand",
+   "expected": "personal",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 927.0 on date 02Nov26 trf to Urban Company Refno 433355556666. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "Lakme Salon",
+   "kind": "brand",
+   "expected": "personal",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak welcomes you. Rs.964.00 spent via Kotak Debit Card XX1479 at Lakme Salon on 05/11/2026. Avl bal Rs.255.90 Not you?Tap https://kotak.bank.in/KBANKT/Fraud"
+  },
+  {
+   "name": "Pawar Petroleum",
+   "kind": "local",
+   "expected": "fuel",
+   "sender": "AX-HDFCBK",
+   "body": "Spent Rs.101 From HDFC Bank Card x4321 At Pawar Petroleum On 2026-11-04:20:11:02 Bal Rs.12,340.50 Not You? Call 18002586161"
+  },
+  {
+   "name": "Sai Kirana Stores",
+   "kind": "local",
+   "expected": "groceries",
+   "sender": "VM-UCOBNK-S",
+   "body": "A/c XX9911 debited INR 138.00 on 02/11/26 towards Sai Kirana Stores. Bal INR 2,345.67 UCO Bank"
+  },
+  {
+   "name": "Hotel Sagar",
+   "kind": "local",
+   "expected": "food",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.175.00 debited from A/c XX1234 on 02-11-26 to VPA hotelsagar@ybl (UPI Ref No 432112345678). Not you? Call 18002586161"
+  },
+  {
+   "name": "Sharma Sweets",
+   "kind": "local",
+   "expected": "food",
+   "sender": "VK-KOTAKB",
+   "body": "Sent Rs.212.00 from Kotak Bank AC X4020 to sharmasweets@okaxis on 02-11-26.UPI Ref 312345678901. Not you, https://kotak.com/fraud"
+  },
+  {
+   "name": "Krishna Dairy",
+   "kind": "local",
+   "expected": "groceries",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 249.00 on 02-Nov-26; Krishna Dairy credited. UPI:432198765432. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "Balaji Fruits",
+   "kind": "local",
+   "expected": "groceries",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 286.0 on date 02Nov26 trf to Balaji Fruits Refno 433355556666. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "Shree Ganesh Medical",
+   "kind": "local",
+   "expected": "medical",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak welcomes you. Rs.323.00 spent via Kotak Debit Card XX1479 at Shree Ganesh Medical on 05/11/2026. Avl bal Rs.255.90 Not you?Tap https://kotak.bank.in/KBANKT/Fraud"
+  },
+  {
+   "name": "City Hospital",
+   "kind": "local",
+   "expected": "medical",
+   "sender": "AX-HDFCBK",
+   "body": "Spent Rs.360 From HDFC Bank Card x4321 At City Hospital On 2026-11-04:20:11:02 Bal Rs.12,340.50 Not You? Call 18002586161"
+  },
+  {
+   "name": "Sunrise Clinic",
+   "kind": "local",
+   "expected": "medical",
+   "sender": "VM-UCOBNK-S",
+   "body": "A/c XX9911 debited INR 397.00 on 02/11/26 towards Sunrise Clinic. Bal INR 2,345.67 UCO Bank"
+  },
+  {
+   "name": "New Fashion Garments",
+   "kind": "local",
+   "expected": "shopping",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.434.00 debited from A/c XX1234 on 02-11-26 to VPA newfashiongarments@ybl (UPI Ref No 432112345678). Not you? Call 18002586161"
+  },
+  {
+   "name": "Ravi Auto Works",
+   "kind": "local",
+   "expected": "services",
+   "sender": "VK-KOTAKB",
+   "body": "Sent Rs.471.00 from Kotak Bank AC X4020 to raviautoworks@okaxis on 02-11-26.UPI Ref 312345678901. Not you, https://kotak.com/fraud"
+  },
+  {
+   "name": "Annapurna Bhojanalaya",
+   "kind": "local",
+   "expected": "food",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 508.00 on 02-Nov-26; Annapurna Bhojanalaya credited. UPI:432198765432. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "Laxmi Vegetables",
+   "kind": "local",
+   "expected": "groceries",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 545.0 on date 02Nov26 trf to Laxmi Vegetables Refno 433355556666. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "Om Sai Tea Stall",
+   "kind": "local",
+   "expected": "food",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak welcomes you. Rs.582.00 spent via Kotak Debit Card XX1479 at Om Sai Tea Stall on 05/11/2026. Avl bal Rs.255.90 Not you?Tap https://kotak.bank.in/KBANKT/Fraud"
+  },
+  {
+   "name": "Kumar Tailors",
+   "kind": "local",
+   "expected": "services",
+   "sender": "AX-HDFCBK",
+   "body": "Spent Rs.619 From HDFC Bank Card x4321 At Kumar Tailors On 2026-11-04:20:11:02 Bal Rs.12,340.50 Not You? Call 18002586161"
+  },
+  {
+   "name": "Rahul Sharma",
+   "kind": "person",
+   "expected": "money_transfer",
+   "sender": "VM-UCOBNK-S",
+   "body": "A/c XX9911 debited INR 656.00 on 02/11/26 towards Rahul Sharma. Bal INR 2,345.67 UCO Bank"
+  },
+  {
+   "name": "Priya Patel",
+   "kind": "person",
+   "expected": "money_transfer",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.693.00 debited from A/c XX1234 on 02-11-26 to VPA priyapatel@ybl (UPI Ref No 432112345678). Not you? Call 18002586161"
+  },
+  {
+   "name": "Ramesh Kumar",
+   "kind": "person",
+   "expected": "money_transfer",
+   "sender": "VK-KOTAKB",
+   "body": "Sent Rs.730.00 from Kotak Bank AC X4020 to rameshkumar@okaxis on 02-11-26.UPI Ref 312345678901. Not you, https://kotak.com/fraud"
+  },
+  {
+   "name": "Amit Singh",
+   "kind": "person",
+   "expected": "money_transfer",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 767.00 on 02-Nov-26; Amit Singh credited. UPI:432198765432. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "Sunita Devi",
+   "kind": "person",
+   "expected": "money_transfer",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 804.0 on date 02Nov26 trf to Sunita Devi Refno 433355556666. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "Suresh Yadav",
+   "kind": "person",
+   "expected": "money_transfer",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak welcomes you. Rs.841.00 spent via Kotak Debit Card XX1479 at Suresh Yadav on 05/11/2026. Avl bal Rs.255.90 Not you?Tap https://kotak.bank.in/KBANKT/Fraud"
+  },
+  {
+   "name": "Mohammed Irfan",
+   "kind": "person",
+   "expected": "money_transfer",
+   "sender": "AX-HDFCBK",
+   "body": "Spent Rs.878 From HDFC Bank Card x4321 At Mohammed Irfan On 2026-11-04:20:11:02 Bal Rs.12,340.50 Not You? Call 18002586161"
+  },
+  {
+   "name": "Anjali Gupta",
+   "kind": "person",
+   "expected": "money_transfer",
+   "sender": "VM-UCOBNK-S",
+   "body": "A/c XX9911 debited INR 915.00 on 02/11/26 towards Anjali Gupta. Bal INR 2,345.67 UCO Bank"
+  },
+  {
+   "name": "Vikram Reddy",
+   "kind": "person",
+   "expected": "money_transfer",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.952.00 debited from A/c XX1234 on 02-11-26 to VPA vikramreddy@ybl (UPI Ref No 432112345678). Not you? Call 18002586161"
+  },
+  {
+   "name": "Neha Joshi",
+   "kind": "person",
+   "expected": "money_transfer",
+   "sender": "VK-KOTAKB",
+   "body": "Sent Rs.989.00 from Kotak Bank AC X4020 to nehajoshi@okaxis on 02-11-26.UPI Ref 312345678901. Not you, https://kotak.com/fraud"
+  },
+  {
+   "name": "CRED Club",
+   "kind": "special",
+   "expected": "card_bill",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 126.00 on 02-Nov-26; CRED Club credited. UPI:432198765432. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "HDFC Credit Card Bill",
+   "kind": "special",
+   "expected": "card_bill",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 163.0 on date 02Nov26 trf to HDFC Credit Card Bill Refno 433355556666. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "Income Tax Department",
+   "kind": "special",
+   "expected": "tax",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak welcomes you. Rs.200.00 spent via Kotak Debit Card XX1479 at Income Tax Department on 05/11/2026. Avl bal Rs.255.90 Not you?Tap https://kotak.bank.in/KBANKT/Fraud"
+  },
+  {
+   "name": "HDFC Home Loan EMI",
+   "kind": "special",
+   "expected": "emi_loans",
+   "sender": "AX-HDFCBK",
+   "body": "Spent Rs.237 From HDFC Bank Card x4321 At HDFC Home Loan EMI On 2026-11-04:20:11:02 Bal Rs.12,340.50 Not You? Call 18002586161"
+  },
+  {
+   "name": "ATM",
+   "kind": "special",
+   "expected": "cash_withdrawals",
+   "sender": "BW-HDFCBK",
+   "body": "Rs 3000.00 withdrawn from A/c XX1234 at ATM MUMBAI on 02-11-26. Avl bal: Rs 12,000.00. Never share OTP/PIN with anyone."
+  },
+  {
+   "name": "ATM SBI",
+   "kind": "special",
+   "expected": "cash_withdrawals",
+   "sender": "VM-SBIINB",
+   "body": "Dear Customer, Rs.2000 withdrawn at SBI ATM S1BW000123 from A/c X5039 on 02Nov26. Avl Bal Rs 8,000.00 -SBI"
+  },
+  {
+   "name": "Salary",
+   "kind": "credit",
+   "expected": "salary",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.85,000.00 credited to A/c XX1234 on 03-11-26 by NEFT from ACME TECHNOLOGIES PVT LTD - SALARY OCT. Avl bal Rs 1,09,651.00"
+  },
+  {
+   "name": "Refund",
+   "kind": "credit",
+   "expected": "cashback",
+   "sender": "AX-HDFCBK",
+   "body": "Rs 349.00 credited to your A/c XX1234 on 05-11-26 towards Refund from AMAZON. Avl bal Rs 5,000.00 -HDFC Bank"
+  },
+  {
+   "name": "Interest",
+   "kind": "credit",
+   "expected": "interest",
+   "sender": "VM-SBIINB",
+   "body": "Dear Customer, interest of Rs 120.00 has been credited to your A/c X5039 on 30-09-26. -SBI"
+  },
+  {
+   "name": "Friend paid",
+   "kind": "credit",
+   "expected": "money_received",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.500.00 credited to A/c XX1234 on 02-11-26 from VPA rahulsharma@okaxis (UPI Ref No 432112345679). Not you? Call 18002586161"
+  },
+  {
+   "name": "Pizza Hut",
+   "kind": "brand",
+   "expected": "food",
+   "sender": "AD-AXISBK",
+   "body": "INR 120.00 debited A/c no. XX1234 02-11-26, 10:15:42 UPI/P2M/629349184814/Pizza Hut Not you? SMS BLOCKUPI Cust ID to 919951860002 Axis Bank"
+  },
+  {
+   "name": "Box8",
+   "kind": "brand",
+   "expected": "food",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 173.0 on date 03Nov26 trf to Box8 Refno 433355556667. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "Faasos",
+   "kind": "brand",
+   "expected": "food",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 226.00 on 03-Nov-26; Faasos credited. UPI:432198765433. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "Licious",
+   "kind": "brand",
+   "expected": "groceries",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.279.00 debited from A/c XX1234 on 03-11-26 to VPA licious@okhdfcbank (UPI Ref No 432112345670). Not you? Call 18002586161"
+  },
+  {
+   "name": "Country Delight",
+   "kind": "brand",
+   "expected": "groceries",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak Bank: Rs 332.00 debited on your Debit Card ending 1479 on 04-Nov-26 at Country Delight. Avail Bal in A/c XX5039 is Rs 1,420.50."
+  },
+  {
+   "name": "Tanishq",
+   "kind": "brand",
+   "expected": "shopping",
+   "sender": "AD-AXISBK",
+   "body": "INR 385.00 debited A/c no. XX1234 02-11-26, 10:15:42 UPI/P2M/629349184814/Tanishq Not you? SMS BLOCKUPI Cust ID to 919951860002 Axis Bank"
+  },
+  {
+   "name": "Bata",
+   "kind": "brand",
+   "expected": "shopping",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 438.0 on date 03Nov26 trf to Bata Refno 433355556667. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "Uniqlo",
+   "kind": "brand",
+   "expected": "shopping",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 491.00 on 03-Nov-26; Uniqlo credited. UPI:432198765433. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "Cleartrip",
+   "kind": "brand",
+   "expected": "travel",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.544.00 debited from A/c XX1234 on 03-11-26 to VPA cleartrip@okhdfcbank (UPI Ref No 432112345670). Not you? Call 18002586161"
+  },
+  {
+   "name": "Ixigo",
+   "kind": "brand",
+   "expected": "travel",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak Bank: Rs 597.00 debited on your Debit Card ending 1479 on 04-Nov-26 at Ixigo. Avail Bal in A/c XX5039 is Rs 1,420.50."
+  },
+  {
+   "name": "Air India Express",
+   "kind": "brand",
+   "expected": "travel",
+   "sender": "AD-AXISBK",
+   "body": "INR 650.00 debited A/c no. XX1234 02-11-26, 10:15:42 UPI/P2M/629349184814/Air India Express Not you? SMS BLOCKUPI Cust ID to 919951860002 Axis Bank"
+  },
+  {
+   "name": "Yulu",
+   "kind": "brand",
+   "expected": "transport",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 703.0 on date 03Nov26 trf to Yulu Refno 433355556667. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "Delhi Metro",
+   "kind": "brand",
+   "expected": "transport",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 756.00 on 03-Nov-26; Delhi Metro credited. UPI:432198765433. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "Nayara Energy",
+   "kind": "brand",
+   "expected": "fuel",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.809.00 debited from A/c XX1234 on 03-11-26 to VPA nayaraenergy@okhdfcbank (UPI Ref No 432112345670). Not you? Call 18002586161"
+  },
+  {
+   "name": "Jio Fiber",
+   "kind": "brand",
+   "expected": "bills",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak Bank: Rs 862.00 debited on your Debit Card ending 1479 on 04-Nov-26 at Jio Fiber. Avail Bal in A/c XX5039 is Rs 1,420.50."
+  },
+  {
+   "name": "Vi Recharge",
+   "kind": "brand",
+   "expected": "recharge",
+   "sender": "AD-AXISBK",
+   "body": "INR 915.00 debited A/c no. XX1234 02-11-26, 10:15:42 UPI/P2M/629349184814/Vi Recharge Not you? SMS BLOCKUPI Cust ID to 919951860002 Axis Bank"
+  },
+  {
+   "name": "Tata Play",
+   "kind": "brand",
+   "expected": "recharge",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 168.0 on date 03Nov26 trf to Tata Play Refno 433355556667. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "Adani Electricity",
+   "kind": "brand",
+   "expected": "utilities",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 221.00 on 03-Nov-26; Adani Electricity credited. UPI:432198765433. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "Torrent Power",
+   "kind": "brand",
+   "expected": "utilities",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.274.00 debited from A/c XX1234 on 03-11-26 to VPA torrentpower@okhdfcbank (UPI Ref No 432112345670). Not you? Call 18002586161"
+  },
+  {
+   "name": "Indane Gas",
+   "kind": "brand",
+   "expected": "utilities",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak Bank: Rs 327.00 debited on your Debit Card ending 1479 on 04-Nov-26 at Indane Gas. Avail Bal in A/c XX5039 is Rs 1,420.50."
+  },
+  {
+   "name": "Practo",
+   "kind": "brand",
+   "expected": "medical",
+   "sender": "AD-AXISBK",
+   "body": "INR 380.00 debited A/c no. XX1234 02-11-26, 10:15:42 UPI/P2M/629349184814/Practo Not you? SMS BLOCKUPI Cust ID to 919951860002 Axis Bank"
+  },
+  {
+   "name": "Netmeds",
+   "kind": "brand",
+   "expected": "medical",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 433.0 on date 03Nov26 trf to Netmeds Refno 433355556667. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "Max Hospital",
+   "kind": "brand",
+   "expected": "medical",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 486.00 on 03-Nov-26; Max Hospital credited. UPI:432198765433. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "Physics Wallah",
+   "kind": "brand",
+   "expected": "education",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.539.00 debited from A/c XX1234 on 03-11-26 to VPA physicswallah@okhdfcbank (UPI Ref No 432112345670). Not you? Call 18002586161"
+  },
+  {
+   "name": "Udemy",
+   "kind": "brand",
+   "expected": "education",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak Bank: Rs 592.00 debited on your Debit Card ending 1479 on 04-Nov-26 at Udemy. Avail Bal in A/c XX5039 is Rs 1,420.50."
+  },
+  {
+   "name": "ACKO",
+   "kind": "brand",
+   "expected": "insurance",
+   "sender": "AD-AXISBK",
+   "body": "INR 645.00 debited A/c no. XX1234 02-11-26, 10:15:42 UPI/P2M/629349184814/ACKO Not you? SMS BLOCKUPI Cust ID to 919951860002 Axis Bank"
+  },
+  {
+   "name": "HDFC Ergo",
+   "kind": "brand",
+   "expected": "insurance",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 698.0 on date 03Nov26 trf to HDFC Ergo Refno 433355556667. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "Kuvera",
+   "kind": "brand",
+   "expected": "investment",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 751.00 on 03-Nov-26; Kuvera credited. UPI:432198765433. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "Upstox",
+   "kind": "brand",
+   "expected": "investment",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.804.00 debited from A/c XX1234 on 03-11-26 to VPA upstox@okhdfcbank (UPI Ref No 432112345670). Not you? Call 18002586161"
+  },
+  {
+   "name": "KreditBee",
+   "kind": "brand",
+   "expected": "emi_loans",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak Bank: Rs 857.00 debited on your Debit Card ending 1479 on 04-Nov-26 at KreditBee. Avail Bal in A/c XX5039 is Rs 1,420.50."
+  },
+  {
+   "name": "JioCinema",
+   "kind": "brand",
+   "expected": "subscriptions",
+   "sender": "AD-AXISBK",
+   "body": "INR 910.00 debited A/c no. XX1234 02-11-26, 10:15:42 UPI/P2M/629349184814/JioCinema Not you? SMS BLOCKUPI Cust ID to 919951860002 Axis Bank"
+  },
+  {
+   "name": "Shiv Sagar Restaurant",
+   "kind": "local",
+   "expected": "food",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 163.0 on date 03Nov26 trf to Shiv Sagar Restaurant Refno 433355556667. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "Gupta General Store",
+   "kind": "local",
+   "expected": "groceries",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 216.00 on 03-Nov-26; Gupta General Store credited. UPI:432198765433. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "Mahalaxmi Medical Store",
+   "kind": "local",
+   "expected": "medical",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.269.00 debited from A/c XX1234 on 03-11-26 to VPA mahalaxmimedicalstore@okhdfcbank (UPI Ref No 432112345670). Not you? Call 18002586161"
+  },
+  {
+   "name": "Royal Bakery",
+   "kind": "local",
+   "expected": "food",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak Bank: Rs 322.00 debited on your Debit Card ending 1479 on 04-Nov-26 at Royal Bakery. Avail Bal in A/c XX5039 is Rs 1,420.50."
+  },
+  {
+   "name": "Lucky Hair Salon",
+   "kind": "local",
+   "expected": "personal",
+   "sender": "AD-AXISBK",
+   "body": "INR 375.00 debited A/c no. XX1234 02-11-26, 10:15:42 UPI/P2M/629349184814/Lucky Hair Salon Not you? SMS BLOCKUPI Cust ID to 919951860002 Axis Bank"
+  },
+  {
+   "name": "Sai Dhaba",
+   "kind": "local",
+   "expected": "food",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 428.0 on date 03Nov26 trf to Sai Dhaba Refno 433355556667. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "Om Petroleum",
+   "kind": "local",
+   "expected": "fuel",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 481.00 on 03-Nov-26; Om Petroleum credited. UPI:432198765433. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "Patil Kirana",
+   "kind": "local",
+   "expected": "groceries",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.534.00 debited from A/c XX1234 on 03-11-26 to VPA patilkirana@okhdfcbank (UPI Ref No 432112345670). Not you? Call 18002586161"
+  },
+  {
+   "name": "Classic Dry Cleaners",
+   "kind": "local",
+   "expected": "services",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak Bank: Rs 587.00 debited on your Debit Card ending 1479 on 04-Nov-26 at Classic Dry Cleaners. Avail Bal in A/c XX5039 is Rs 1,420.50."
+  },
+  {
+   "name": "Arjun Mehta",
+   "kind": "person",
+   "expected": "money_transfer",
+   "sender": "AD-AXISBK",
+   "body": "INR 640.00 debited A/c no. XX1234 02-11-26, 10:15:42 UPI/P2M/629349184814/Arjun Mehta Not you? SMS BLOCKUPI Cust ID to 919951860002 Axis Bank"
+  },
+  {
+   "name": "Kavita Nair",
+   "kind": "person",
+   "expected": "money_transfer",
+   "sender": "VM-SBIINB",
+   "body": "Dear UPI user A/C X5039 debited by 693.0 on date 03Nov26 trf to Kavita Nair Refno 433355556667. If not u? call 1800111109. -SBI"
+  },
+  {
+   "name": "Imran Shaikh",
+   "kind": "person",
+   "expected": "money_transfer",
+   "sender": "JD-ICICIB",
+   "body": "ICICI Bank Acct XX6090 debited for Rs 746.00 on 03-Nov-26; Imran Shaikh credited. UPI:432198765433. Call 18002662 for dispute. SMS BLOCK 6090 to 9215676766"
+  },
+  {
+   "name": "Pooja Iyer",
+   "kind": "person",
+   "expected": "money_transfer",
+   "sender": "AX-HDFCBK",
+   "body": "Rs.799.00 debited from A/c XX1234 on 03-11-26 to VPA poojaiyer@okhdfcbank (UPI Ref No 432112345670). Not you? Call 18002586161"
+  },
+  {
+   "name": "Deepak Verma",
+   "kind": "person",
+   "expected": "money_transfer",
+   "sender": "VM-KOTAKB",
+   "body": "Kotak Bank: Rs 852.00 debited on your Debit Card ending 1479 on 04-Nov-26 at Deepak Verma. Avail Bal in A/c XX5039 is Rs 1,420.50."
+  },
+  {
+   "name": "Sanjay",
+   "kind": "person",
+   "expected": "money_transfer",
+   "sender": "AD-AXISBK",
+   "body": "INR 905.00 debited A/c no. XX1234 02-11-26, 10:15:42 UPI/P2M/629349184814/Sanjay Not you? SMS BLOCKUPI Cust ID to 919951860002 Axis Bank"
+  },
+  {
+   "name": "Card bill (Axis)",
+   "kind": "special",
+   "expected": "card_bill",
+   "sender": "AD-AXISBK",
+   "body": "INR 12,450.00 debited from A/c XX1234 on 05-11-26 towards Credit Card bill payment. Avl Bal INR 3,210.00 Axis Bank"
+  },
+  {
+   "name": "Interest (HDFC)",
+   "kind": "credit",
+   "expected": "interest",
+   "sender": "AX-HDFCBK",
+   "body": "Rs 212.00 credited to A/c XX1234 on 30-09-26 towards Savings Interest. Avl bal Rs 9,000.00 -HDFC Bank"
+  }
+ ]
+}

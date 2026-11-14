@@ -34,7 +34,6 @@ import {
   getBudgetStatus,
   isExcludedFromBudget,
 } from '../services/budgetService';
-import { StandaloneBottomTabBar } from './StandaloneBottomTabBar';
 import { getBackendUrl } from '../config/api';
 import { authService } from '../services/authService';
 import { CategoryIcon } from '../components/CategoryIcon';
@@ -992,7 +991,6 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
         )}
       </Sheet>
 
-      <StandaloneBottomTabBar activeTab="Budgets" />
     </View>
   );
 };

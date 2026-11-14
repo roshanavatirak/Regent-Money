@@ -1,5 +1,6 @@
 package com.regentmoney
 
+import android.content.pm.ActivityInfo
 import android.os.Build
 import android.os.Bundle
 import android.view.View
@@ -43,6 +44,15 @@ class MainActivity : ReactActivity() {
     // coloring the background, status bar, and navigation bar.
     setTheme(R.style.AppTheme)
     super.onCreate(null)
+
+    // Android 16 & large-screen compliance:
+    // For standard phones (smallestScreenWidthDp < 600), lock strictly to portrait
+    // to preserve a solid, predictable financial app user experience.
+    // For large screens (tablets & foldables >= 600dp), allow dynamic rotation and multi-window resizing.
+    val isLargeScreen = resources.configuration.smallestScreenWidthDp >= 600
+    if (!isLargeScreen) {
+      requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+    }
 
     // Remove default Android 12+ splash animation immediately so custom animation plays seamlessly
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
