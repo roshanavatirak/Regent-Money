@@ -1,24 +1,24 @@
 {
   "notes": [
     {
-      "title": "Better Borrow & Lend",
-      "detail": "Keeping track of money you've lent to friends and paid back is now smoother and clearer."
+      "title": "Smart Auto-Tagging",
+      "detail": "Transactions are sorted into the right category more accurately."
     },
     {
-      "title": "Suggestions and bug reports",
-      "detail": "Improved screens for suggesting a feature or reporting a problem, so it's quicker to tell us what you need."
+      "title": "Voice Assistant",
+      "detail": "Hold Regent and say a transaction to add it hands-free."
     },
     {
-      "title": "Notifications open the right screen",
-      "detail": "Tapping a notification now takes you straight to the screen it's about, or to Google Play when an update is ready."
+      "title": "New Categories",
+      "detail": "More categories to sort your spending accurately."
     },
     {
-      "title": "Cleaner emails",
-      "detail": "Sign-up and password reset emails have a fresh, simpler design that's easier to read."
+      "title": "Enhanced UI",
+      "detail": "Swipe between tabs and a smoother, cleaner bottom bar."
     },
     {
-      "title": "More reliable sign-in emails",
-      "detail": "Verification and password reset emails keep arriving even on busy days, with a clear timer before you can ask for a new link."
+      "title": "Dynamic Cards",
+      "detail": "Home cards now adapt to your latest money activity."
     }
   ]
 }

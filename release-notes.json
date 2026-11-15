@@ -1,12 +1,16 @@
 {
   "notes": [
     {
-      "title": "New Categories",
-      "detail": "More categories to sort your spending accurately."
+      "title": "Smart Auto-Tagging",
+      "detail": "Transactions are sorted into the right category more accurately."
     },
     {
       "title": "Voice Assistant",
       "detail": "Hold Regent and say a transaction to add it hands-free."
+    },
+    {
+      "title": "New Categories",
+      "detail": "More categories to sort your spending accurately."
     },
     {
       "title": "Enhanced UI",
