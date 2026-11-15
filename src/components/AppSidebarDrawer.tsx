@@ -58,7 +58,6 @@ export const AppSidebarDrawer: React.FC = () => {
 
   const currentVersion = getAppCurrentVersion();
   const isAdmin = !!user?.role && ['admin', 'superadmin'].includes(user.role);
-  const canAccessAdmin = isAdmin || __DEV__;
   const display = Font.isLoaded('BricolageGrotesque_800ExtraBold') ? 'BricolageGrotesque_800ExtraBold' : undefined;
 
   const [mounted, setMounted] = useState(isOpen);
@@ -191,7 +190,8 @@ export const AppSidebarDrawer: React.FC = () => {
     });
   };
 
-  const groups: { title: string; items: MenuItem[] }[] = canAccessAdmin
+  // Admin menu only for admin roles (also in dev builds): its screens exist only in the admin stack.
+  const groups: { title: string; items: MenuItem[] }[] = isAdmin
     ? [
         {
           title: 'Admin',
@@ -210,8 +210,6 @@ export const AppSidebarDrawer: React.FC = () => {
         {
           title: 'Plan',
           items: [
-            { key: 'budgets', label: 'Budgets', icon: 'pie-chart', onPress: () => nav('Main', { screen: 'Budgets' }) },
-            { key: 'goals', label: 'Goals', icon: 'target', onPress: () => nav('Main', { screen: 'Goals' }) },
             { key: 'borrow-lend', label: 'Borrow & Lend', icon: 'users', onPress: () => nav('BorrowLend') },
             {
               key: 'calendar',

@@ -49,6 +49,7 @@ import { isExcludedFromBudget } from '../services/budgetService';
 import { CategoryIcon } from '../components/CategoryIcon';
 import { ActivityFilterChips, ActivityRow } from '../components/ActivityFeed';
 import { SpendingPetalCard } from '../components/SpendingPetalCard';
+import { attributionService } from '../services/attributionService';
 import { ActivityBank, ActivityFilter, ActivityItem, filterActivity } from '../hooks/useActivityFeed';
 
 /* ------------------------------------------------------------------ */
@@ -105,6 +106,10 @@ export interface HomeDashboardProps {
   onAddExpense: () => void;
   onOpenCalendar: () => void;
   onOpenBudgets: () => void;
+  /** Money lent to / borrowed from friends. */
+  onOpenBorrowLend?: () => void;
+  /** Invite a friend screen (fallback when the invite link can't be loaded). */
+  onOpenInvite?: () => void;
   onOpenGoals: () => void;
   onOpenCash?: () => void;
   onOpenRegent: () => void;
@@ -593,8 +598,19 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
       open_budgets: props.onOpenBudgets,
       open_goals: props.onOpenGoals,
       open_calendar: props.onOpenCalendar,
-      invite: () => {
-        Share.share({ message: 'I track my money with Regent Money. Try it: https://regentmoney.com' }).catch(() => {});
+      // Share the user's own tracked invite link (same as the Invite a friend screen), so sign-ups are credited.
+      // If it can't be loaded, open that screen instead: it shows the error and a retry.
+      invite: async () => {
+        try {
+          const link = (await attributionService.getMyInvite())?.link;
+          if (link) {
+            Share.share({ message: `I track my money with Regent Money. Try it: ${link}` }).catch(() => {});
+            return;
+          }
+        } catch {
+          // fall through to the invite screen
+        }
+        props.onOpenInvite?.();
       },
       url: undefined,
     };
@@ -644,6 +660,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
     props.onOpenBudgets,
     props.onOpenGoals,
     props.onOpenCalendar,
+    props.onOpenInvite,
   ]);
 
 
@@ -788,7 +805,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
           { label: 'Add expense', icon: 'plus' as const, onPress: props.onAddExpense, bg: FOREST, fg: LIME },
           { label: 'Cash', icon: 'credit-card' as const, onPress: props.onOpenCash ?? props.onOpenGoals, bg: isDark ? 'rgba(184, 243, 107, 0.16)' : '#E3F2E8', fg: isDark ? LIME : FOREST },
           { label: 'Calendar', icon: 'calendar' as const, onPress: props.onOpenCalendar, bg: isDark ? 'rgba(59, 130, 246, 0.18)' : '#DCEBFF', fg: isDark ? '#93C5FD' : '#1450A3' },
-          { label: 'Budgets', icon: 'pie-chart' as const, onPress: props.onOpenBudgets, bg: isDark ? 'rgba(255, 138, 107, 0.18)' : '#FFE3D6', fg: isDark ? '#FFB29E' : '#A63A12' },
+          { label: 'Borrow & Lend', icon: 'users' as const, onPress: props.onOpenBorrowLend, bg: isDark ? 'rgba(255, 138, 107, 0.18)' : '#FFE3D6', fg: isDark ? '#FFB29E' : '#A63A12' },
 
         ].map((a) => (
           <PressableScale key={a.label} onPress={a.onPress} style={styles.quickItem} accessibilityLabel={a.label}>
@@ -1199,13 +1216,14 @@ const getStyles = (
     quickRow: {
       flexDirection: 'row',
       justifyContent: 'space-between',
-      paddingHorizontal: 16,
+      paddingHorizontal: 12,
       paddingTop: 18,
     },
+    // Equal share of the row, so "Borrow & Lend" fits at the same text size as the others.
     quickItem: {
+      flex: 1,
       alignItems: 'center',
       gap: 8,
-      width: 76,
     },
     quickTile: {
       width: 60,

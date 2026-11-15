@@ -49,6 +49,7 @@ import { useFonts } from 'expo-font';
 import { BricolageGrotesque_800ExtraBold } from '@expo-google-fonts/bricolage-grotesque';
 import { showGlobalAlert, useTermsModalStore, usePrivacyModalStore } from '../store';
 import { StatusBar } from 'expo-status-bar';
+import * as IntentLauncher from 'expo-intent-launcher';
 import { CloudflareTurnstile } from '../components/CloudflareTurnstile';
 import { BrandWordmark } from '../components/BrandWordmark';
 
@@ -397,17 +398,27 @@ function EmailVerificationModal({ visible, email, onClose, onProceedToLogin }: E
   };
 
   const handleOpenEmailApp = async () => {
-    try {
-      const url = Platform.OS === 'android' ? 'mailto:' : 'message:';
-      const supported = await Linking.canOpenURL(url).catch(() => false);
-      if (supported) {
-        await Linking.openURL(url);
-      } else if (Platform.OS === 'android') {
-        await Linking.openURL('https://mail.google.com').catch(() => {});
+    if (Platform.OS === 'android') {
+      // Open the phone's default email app on its inbox (not a compose screen, not the browser).
+      try {
+        await IntentLauncher.startActivityAsync('android.intent.action.MAIN', {
+          category: 'android.intent.category.APP_EMAIL',
+          flags: 0x10000000, // FLAG_ACTIVITY_NEW_TASK: start it as its own app
+        });
+        return;
+      } catch {
+        // No default email app set; try Gmail directly.
       }
-    } catch {
-      // Fallback
+      try {
+        IntentLauncher.openApplication('com.google.android.gm');
+        return;
+      } catch {
+        // Gmail not installed either.
+      }
+      await Linking.openURL('https://mail.google.com').catch(() => {});
+      return;
     }
+    await Linking.openURL('message:').catch(() => {});
   };
 
   return (
@@ -443,12 +454,13 @@ function EmailVerificationModal({ visible, email, onClose, onProceedToLogin }: E
           )}
 
           {/* Primary Action: Open Email App */}
-          <Button
-            label="Open Email App"
-            onPress={handleOpenEmailApp}
-            leading={<Feather name="external-link" size={16} color={C.lime} style={{ marginRight: 8 }} />}
-            style={styles.verifyPrimaryBtn}
-          />
+          <View style={styles.verifyPrimaryBtn}>
+            <Button
+              label="Open Email App"
+              onPress={handleOpenEmailApp}
+              leading={<Feather name="external-link" size={16} color={C.lime} style={{ marginRight: 8 }} />}
+            />
+          </View>
 
           {/* Secondary Action: Go to Log In */}
           <Pressable
@@ -2311,7 +2323,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   verifyPrimaryBtn: {
-    width: '100%',
+    alignSelf: 'stretch',
     marginTop: 22,
   },
   verifyLoginLinkBtn: {

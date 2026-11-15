@@ -80,6 +80,11 @@ export const BANK_DEFAULT_SMS_SUGGESTIONS: Record<string, string[]> = {
   'PYTM': ['PAYTM', 'PAYTMB'],
   'PAYTM': ['PAYTM', 'PAYTMB'],
 
+  // India Post Payments Bank
+  'IPOS': ['IPBSMS'],
+  'IPPB': ['IPBSMS'],
+  'INDIA POST': ['IPBSMS'],
+
   // Airtel Payments Bank
   'AIRP': ['AIRTEL', 'AIRBNK'],
   'AIRTEL': ['AIRTEL', 'AIRBNK'],

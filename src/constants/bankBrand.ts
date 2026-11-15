@@ -57,7 +57,7 @@ export const POPULAR_BANKS = [
 ];
 
 export const KNOWN_SVG_CODES = new Set([
-  'BARB', 'BKID', 'CNRB', 'HDFC', 'ICIC', 'IDFB', 'IDIB', 'JIOP', 'KKBK', 'MAHB', 'PUNB', 'SBIN', 'UBIN', 'UTIB', 'YESB',
+  'BARB', 'BKID', 'CNRB', 'HDFC', 'ICIC', 'IDFB', 'IDIB', 'IPOS', 'JIOP', 'KKBK', 'MAHB', 'PUNB', 'SBIN', 'UBIN', 'UTIB', 'YESB',
 ]);
 
 export const resolveBankCode = (bankName?: string, senderId?: string, explicitCode?: string): string => {
@@ -71,6 +71,7 @@ export const resolveBankCode = (bankName?: string, senderId?: string, explicitCo
     if (cleanSender.includes(code)) return code;
   }
 
+  if (cleanSender.includes('IPPB') || cleanName.includes('india post') || cleanName.includes('ippb')) return 'IPOS';
   if (cleanName.includes('state bank') || cleanName.includes('sbi')) return 'SBIN';
   if (cleanName.includes('hdfc')) return 'HDFC';
   if (cleanName.includes('icici')) return 'ICIC';

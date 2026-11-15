@@ -12,6 +12,7 @@ export const LOCAL_SVG_MAP: { [key: string]: any } = {
   'ICIC': require('../../assets/Banks logo/icic.svg'),
   'IDFB': require('../../assets/Banks logo/idfc.svg'),
   'IDIB': require('../../assets/Banks logo/idib.svg'),
+  'IPOS': require('../../assets/Banks logo/ippb.svg'),
   'JIOP': require('../../assets/Banks logo/jiop.svg'),
   'KKBK': require('../../assets/Banks logo/kkbk.svg'),
   'MAHB': require('../../assets/Banks logo/mahb.svg'),

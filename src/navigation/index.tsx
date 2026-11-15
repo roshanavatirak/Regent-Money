@@ -2121,6 +2121,8 @@ const DashboardScreen = () => {
         onAddExpense={handleAddExpense}
         onOpenCalendar={() => navigation.navigate('FinancialCalendar', { userCreatedAt: user?.createdAt })}
         onOpenBudgets={() => navigation.navigate('Budgets')}
+        onOpenBorrowLend={() => navigation.navigate('BorrowLend')}
+        onOpenInvite={() => navigation.navigate('InviteFriend')}
         onOpenGoals={() => navigation.navigate('Goals')}
         onOpenCash={() => navigation.navigate('CashWallet')}
         onOpenRegent={() => navigation.navigate('Regent')}
