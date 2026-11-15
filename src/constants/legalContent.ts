@@ -34,7 +34,7 @@ export const DELETE_ACCOUNT_URL = 'https://raodevstudios.in/regent-money/delete-
 
 export const TERMS: LegalDocument = {
   title: 'Terms of service',
-  version: '2.2',
+  version: '2.3',
   effective: 'November 2026',
   summary: [
     'Regent tracks your money. It can’t move it.',
@@ -58,6 +58,10 @@ export const TERMS: LegalDocument = {
         { title: 'Not a bank', text: 'Regent is not a bank, broker or payment app. It never moves, holds or withdraws your money.' },
         { title: 'Bank messages only', text: 'Regent reads only transaction alerts from bank senders you add. It does not read personal messages or OTPs.' },
         { title: 'Your imports', text: 'Statements and screenshots you choose to import are processed to find transactions.' },
+        {
+          title: 'Microphone (optional)',
+          text: 'Voice entry and the mic in Regent chat need microphone permission. The mic is on only while you are using it. Without this permission, you can still type everything.',
+        },
       ],
     },
     {
@@ -96,7 +100,7 @@ export const TERMS: LegalDocument = {
 
 export const PRIVACY: LegalDocument = {
   title: 'Privacy policy',
-  version: '2.5',
+  version: '2.6',
   effective: 'November 2026',
   summary: [
     'We read only bank messages, on your phone. The message text never leaves it.',
@@ -113,6 +117,10 @@ export const PRIVACY: LegalDocument = {
           text: 'With your permission, Regent reads SMS from known bank senders and any you add, including in the background as they arrive. Each message is read on your phone; only the amount, type, merchant, date, last digits of the account, available balance and bank reference number are sent to your account. The message text never leaves your phone. Personal messages and OTPs are skipped.',
         },
         { title: 'Files you import', text: 'Statements and screenshots you choose to upload, to find the transactions in them. If a statement PDF is password protected, the password you enter is sent with it only to open that file; on your phone it is kept in the device’s secure keystore.' },
+        {
+          title: 'Your voice (optional)',
+          text: 'With microphone permission, you can speak to Regent chat and to voice entry. The mic is on only while you are using it. In Regent chat, your speech is turned into text on your phone; the audio never leaves it, and the text is sent like any chat message. Voice entry also tries your phone first. If the phone can’t recognise speech, or you ask to speak again, your recording is sent once to a speech service to turn it into text. It is not stored and is deleted from your phone right after. The text may be sent to our AI providers to read the transaction.',
+        },
         { title: 'Profile photo', text: 'A photo, if you choose to add one.' },
         { title: 'Profile details', text: 'Things you add yourself, like date of birth, gender, occupation and income.' },
         { title: 'Device and security', text: 'A push notification token so we can send you alerts, device details in bug reports you choose to send, and a bot-protection check when you sign in.' },
@@ -139,7 +147,7 @@ export const PRIVACY: LegalDocument = {
       heading: 'Who we share it with',
       paragraphs: [
         'We never sell your data or share it with advertisers. We use these service providers only to run Regent for you:',
-        'Render (servers and database hosting); Google Gemini, Groq and Mistral (AI processing of Regent chat messages and of statements and screenshots you import, together with the balances and transactions needed to answer); Cloudinary (profile photos); Brevo and Gmail (account emails such as verification and password reset); Expo and Firebase Cloud Messaging (push notifications); Google Sign-In (if you choose to sign in with Google); Google Play (the install referrer and the Play Integrity check described above); Cloudflare Turnstile (bot protection at sign-in).',
+        'Render (servers and database hosting); Google Gemini, Groq and Mistral (AI processing of Regent chat messages, voice entries, and statements and screenshots you import, together with the balances and transactions needed to answer); Sarvam AI, Groq and Google Gemini (turning voice entry recordings into text, only when your phone can’t); Cloudinary (profile photos); Brevo and Gmail (account emails such as verification and password reset); Expo and Firebase Cloud Messaging (push notifications); Google Sign-In (if you choose to sign in with Google); Google Play (the install referrer and the Play Integrity check described above); Cloudflare Turnstile (bot protection at sign-in).',
         'Some of these providers may process data outside India.',
       ],
     },
@@ -147,6 +155,7 @@ export const PRIVACY: LegalDocument = {
       heading: 'Your choices',
       points: [
         { title: 'SMS access', text: 'Turn off auto-tracking for a bank in the app, or revoke SMS access any time in your phone’s settings.' },
+        { title: 'Microphone', text: 'Allow it only if you want to speak instead of type. Revoke it any time in your phone’s settings; everything still works by typing.' },
         { title: 'Regent chat', text: 'Clear your conversation from Privacy in the app.' },
         { title: 'Delete your account', text: `Go to Settings, then Delete account, or email ${LEGAL_CONTACT} from your registered email address. Your account and its data are permanently deleted after 7 days; signing back in before then cancels it.` },
         { title: 'Your rights', text: 'Under India’s Digital Personal Data Protection Act, 2023, you can ask for a summary of your data, correct it, erase it, withdraw consent, and nominate someone to act for you.' },
