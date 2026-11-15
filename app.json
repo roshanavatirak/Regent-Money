@@ -46,7 +46,7 @@
       ],
       "predictiveBackGestureEnabled": false,
       "package": "com.regentmoney",
-      "versionCode": 149,
+      "versionCode": 150,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#04190F"
