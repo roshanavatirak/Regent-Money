@@ -199,10 +199,12 @@ export const AppSidebarDrawer: React.FC = () => {
             { key: 'dash', label: 'Console', icon: 'grid', onPress: () => nav('AdminDashboard') },
             { key: 'email_config', label: 'Email', icon: 'mail', onPress: () => nav('AdminEmailConfig') },
             { key: 'home_cards', label: 'Home cards', icon: 'layout', onPress: () => nav('AdminHomeCards') },
-            { key: 'users', label: 'Users', icon: 'users', onPress: () => nav('AdminUsers') },
+            // Users, Audit logs and Admin settings are tabs inside the admin tab navigator ("Main"),
+            // so they must be reached through it: React Navigation 7 won't find a nested tab by name.
+            { key: 'users', label: 'Users', icon: 'users', onPress: () => nav('Main', { screen: 'AdminUsers' }) },
             { key: 'referrals', label: 'Referrals', icon: 'share-2', onPress: () => nav('AdminReferrals') },
-            { key: 'logs', label: 'Audit logs', icon: 'activity', onPress: () => nav('AdminLogs') },
-            { key: 'asettings', label: 'Admin settings', icon: 'sliders', onPress: () => nav('AdminSettings') },
+            { key: 'logs', label: 'Audit logs', icon: 'activity', onPress: () => nav('Main', { screen: 'AdminLogs' }) },
+            { key: 'asettings', label: 'Admin settings', icon: 'sliders', onPress: () => nav('Main', { screen: 'AdminSettings' }) },
           ],
         },
       ]
