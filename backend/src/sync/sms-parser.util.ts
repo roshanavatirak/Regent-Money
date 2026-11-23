@@ -12,6 +12,34 @@ export interface ParsedTransaction {
   referenceId?: string;
   /** Set only when the suffix is a debit card (e.g. "Kotak Debit Card XX1479"). */
   isDebitCard?: boolean;
+  /**
+   * The most stable way to recognise who the money went to or came from, even when the bank
+   * prints their name differently each time: "vpa:rohit.c@okaxis" or "acct:4821".
+   */
+  counterpartyKey?: string;
+}
+
+// Counterparty key, kept identical in src/services/smsParser.ts and android SmsParser.kt.
+// The whole UPI handle, not just the part before "@": two people can both be "rohit".
+const VPA_HANDLE_TO = /\bto\s+(?:vpa\s+)?([a-z0-9][a-z0-9._-]{1,40}@[a-z0-9-]{2,}(?:\.[a-z0-9-]+)*)/i;
+const VPA_HANDLE_FROM = /\b(?:from|by)\s+(?:vpa\s+)?([a-z0-9][a-z0-9._-]{1,40}@[a-z0-9-]{2,}(?:\.[a-z0-9-]+)*)/i;
+const TO_ACCOUNT_KEY = /\bto\s+(?:a\/c|acct|account|ac)\s*(?:no\.?\s*)?[x*.]*(\d{3,18})\b/i;
+const FROM_ACCOUNT_KEY = /\bfrom\s+(?:a\/c|acct|account|ac)\s*(?:no\.?\s*)?[x*.]*(\d{3,18})\b/i;
+
+/**
+ * "vpa:<handle>" when the SMS names a UPI ID, else "acct:<last 4>" for the other side's
+ * account, else undefined. Never the user's own account.
+ */
+export function extractCounterpartyKey(clean: string, type: 'debit' | 'credit', ownSuffix: string): string | undefined {
+  const vpa = clean.match(type === 'debit' ? VPA_HANDLE_TO : VPA_HANDLE_FROM);
+  if (vpa) return `vpa:${vpa[1].toLowerCase()}`;
+  const acct = clean.match(type === 'debit' ? TO_ACCOUNT_KEY : FROM_ACCOUNT_KEY);
+  if (acct) {
+    const last4 = acct[1].slice(-4);
+    const own = (ownSuffix || '').replace(/\D/g, '').slice(-4);
+    if (last4 !== own) return `acct:${last4}`;
+  }
+  return undefined;
 }
 
 // OTP rule, kept identical in src/services/smsParser.ts and android SmsParser.kt.
@@ -332,6 +360,8 @@ export const parseSMS = (sender: string, body: string): ParsedTransaction | null
     referenceId = refMatch[1].trim();
   }
 
+  const counterpartyKey = extractCounterpartyKey(clean, type, accountSuffix);
+
   // 8. Heuristic for Salary credit detection
   const isSalary =
     type === 'credit' &&
@@ -350,6 +380,7 @@ export const parseSMS = (sender: string, body: string): ParsedTransaction | null
     availableBalance,
     referenceId,
     ...(isDebitCardSuffix(clean, accountSuffix) ? { isDebitCard: true } : {}),
+    ...(counterpartyKey ? { counterpartyKey } : {}),
   };
 };
 

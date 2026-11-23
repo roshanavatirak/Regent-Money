@@ -16,6 +16,7 @@ import {
 } from './token.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { ALLOW_INGEST_TOKEN } from './allow-ingest-token.decorator';
+import { ALLOW_TERMS_PENDING } from './allow-terms-pending.decorator';
 
 const jwt = new JwtService({ secret: 'test-secret' });
 
@@ -23,7 +24,7 @@ const jwt = new JwtService({ secret: 'test-secret' });
 const setup = (userOverrides: Record<string, any> = {}) => {
   const rows = new Map<string, any>();
   const users: Record<string, any> = {
-    u1: { id: 'u1', email: 'a@b.c', role: 'user', is_banned: false, is_deleted: false, tokens_valid_after: null, ...userOverrides },
+    u1: { id: 'u1', email: 'a@b.c', role: 'user', is_banned: false, is_deleted: false, tokens_valid_after: null, terms_accepted: true, ...userOverrides },
   };
   const matches = (row: any, where: any) =>
     Object.entries(where).every(([k, v]: any) => (v && v._type === 'isNull' ? row[k] == null : row[k] === v));
@@ -172,8 +173,11 @@ describe('TokenService', () => {
 });
 
 describe('JwtAuthGuard with the new tokens', () => {
-  const makeGuard = (service: TokenService, allowIngest = false) => {
-    const reflector = { getAllAndOverride: (key: string) => (key === ALLOW_INGEST_TOKEN ? allowIngest : undefined) } as unknown as Reflector;
+  const makeGuard = (service: TokenService, allowIngest = false, allowTermsPending = false) => {
+    const reflector = {
+      getAllAndOverride: (key: string) =>
+        key === ALLOW_INGEST_TOKEN ? allowIngest : key === ALLOW_TERMS_PENDING ? allowTermsPending : undefined,
+    } as unknown as Reflector;
     const redis: any = { get: jest.fn(), set: jest.fn() };
     const dataSource: any = { query: jest.fn() };
     return { guard: new JwtAuthGuard(jwt, redis, dataSource, service, reflector), redis, dataSource };
@@ -206,5 +210,41 @@ describe('JwtAuthGuard with the new tokens', () => {
     const pair = await service.issuePair(user);
     await expect(makeGuard(service, false).guard.canActivate(ctx(pair.ingestToken).context)).rejects.toBeDefined();
     await expect(makeGuard(service, true).guard.canActivate(ctx(pair.ingestToken).context)).resolves.toBe(true);
+  });
+
+  it('an account that has not accepted the Terms is refused everywhere except the Terms routes', async () => {
+    const { service } = setup();
+    const pair = await service.issuePair({ ...user, termsPending: true });
+    expect((jwt.decode(pair.accessToken) as any).tp).toBe(1);
+    await expect(makeGuard(service).guard.canActivate(ctx(pair.accessToken).context)).rejects.toMatchObject({
+      response: { code: 'TERMS_REQUIRED' },
+    });
+    await expect(makeGuard(service, false, true).guard.canActivate(ctx(pair.accessToken).context)).resolves.toBe(true);
+    // Background SMS sync is refused too
+    await expect(makeGuard(service, true).guard.canActivate(ctx(pair.ingestToken).context)).rejects.toMatchObject({
+      response: { code: 'TERMS_REQUIRED' },
+    });
+  });
+
+  it('accepted accounts carry no mark, and the refresh after accepting drops it', async () => {
+    const { service, users } = setup({ terms_accepted: false });
+    const first = await service.issuePair({ ...user, termsPending: true });
+    const stillPending = await service.refresh(first.refreshToken);
+    expect((jwt.decode(stillPending.accessToken) as any).tp).toBe(1);
+
+    users.u1.terms_accepted = true; // accepted on the Terms screen
+    const after = await service.refresh(stillPending.refreshToken);
+    expect((jwt.decode(after.accessToken) as any).tp).toBeUndefined();
+    await expect(makeGuard(service).guard.canActivate(ctx(after.accessToken).context)).resolves.toBe(true);
+  });
+
+  it('older 30-day tokens are refused too while the Terms are pending', async () => {
+    const { service } = setup();
+    const legacy = jwt.sign({ sub: 'u1', email: 'a@b.c', role: 'user' });
+    const { guard, redis, dataSource } = makeGuard(service);
+    redis.get.mockResolvedValue(null);
+    redis.set.mockResolvedValue(true);
+    dataSource.query.mockResolvedValue([{ id: 'u1', is_banned: false, is_deleted: false, tokens_valid_after: null, terms_accepted: false }]);
+    await expect(guard.canActivate(ctx(legacy).context)).rejects.toMatchObject({ response: { code: 'TERMS_REQUIRED' } });
   });
 });

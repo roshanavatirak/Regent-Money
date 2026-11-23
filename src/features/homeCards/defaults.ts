@@ -8,13 +8,14 @@ export const DEFAULT_CARDS: HomeCard[] = [
   { id: 'cash', template: 'cash', title: 'Got cash? Add it to your net worth', cta: 'Add cash', art: 'cash', theme: 'lime', action: 'open_cash', rule: 'no_cash', platform: 'all', enabled: true },
   { id: 'sms', template: 'sms', title: 'Track every rupee without typing', cta: 'Turn on auto-tracking', art: 'sms', theme: 'lilac', action: 'setup_tracking', rule: 'sms_off', platform: 'android', enabled: true },
   { id: 'regent', template: 'regent', title: 'Ask Regent where your money went this month', cta: 'Ask Regent', art: 'regent', theme: 'lime', action: 'open_regent', rule: 'always', platform: 'all', enabled: true },
+  { id: 'voice', template: 'voice', title: "Just say it. We'll add it.", cta: 'Try voice entry', art: 'voice', theme: 'lime', action: 'open_voice', rule: 'no_voice', platform: 'all', enabled: true },
 ];
 
 /** The 10 standard templates admins start from. */
 export const TEMPLATES: { key: ArtKey; name: string; card: Omit<HomeCard, 'id'> }[] = [
   ...DEFAULT_CARDS.map(({ id: _id, ...card }) => ({
     key: card.template,
-    name: ({ bank: 'Link a bank', overspend: 'Overspend alert', kept: 'Savings win', cash: 'Add cash', sms: 'Auto-tracking', regent: 'Ask Regent' } as Record<string, string>)[card.template],
+    name: ({ bank: 'Link a bank', overspend: 'Overspend alert', kept: 'Savings win', cash: 'Add cash', sms: 'Auto-tracking', regent: 'Ask Regent', voice: 'Voice entry' } as Record<string, string>)[card.template],
     card,
   })),
   { key: 'budget', name: 'Start a budget', card: { template: 'budget', title: 'Set a monthly budget and get a nudge before you overspend', cta: 'Create budget', art: 'budget', theme: 'sky', action: 'open_budgets', rule: 'no_budget', platform: 'all', enabled: true } },

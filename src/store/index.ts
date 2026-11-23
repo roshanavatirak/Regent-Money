@@ -116,6 +116,10 @@ export interface IncomeRecordType {
   bankProfileId: string | null;
   updatedAt?: number;
   type: 'credit';
+  /** From the bank SMS: "vpa:rohit.c@okaxis" / "acct:4821" (see services/counterpartyResolver.ts). */
+  counterpartyKey?: string;
+  /** The person or merchant the user linked this to. */
+  counterpartyId?: string;
 }
 
 export interface IncomeState {
@@ -554,6 +558,22 @@ export interface UserProfile {
   occupation?: string | null;
   currentIncome?: number | null;
   incomeSourcesCount?: number | null;
+  /** Day salary usually comes, 1–31 (31 = month end). 0 = not fixed (calendar months). null/absent = not set yet. */
+  salaryDay?: number | null;
+  /** Weekly / every 2 weeks / irregular pay, or a second monthly salary. See utils/moneyCycle PaySchedule. */
+  paySchedule?: {
+    kind: 'monthly' | 'weekly' | 'fortnightly' | 'irregular';
+    weekday?: number | null;
+    anchor?: number | null;
+    secondPayday?: number | null;
+    secondLabel?: string | null;
+  } | null;
+  /** Yearly costs and "Salary received" marks, synced (see store/moneyCycleStore). */
+  moneyCycleData?: {
+    yearlyCosts: Array<{ id: string; name: string; amount: number; month: number; category?: string | null }>;
+    salaryMarks: number[];
+    updatedAt: number;
+  } | null;
   termsAccepted?: boolean;
   termsAcceptedAt?: number | null;
   role?: 'user' | 'admin' | 'superadmin';
@@ -823,13 +843,15 @@ export const useNotificationStore = create<NotificationState>((set) => ({
       if (state.notifications.some((n) => n.title === notification.title && n.body === notification.body)) {
         return state;
       }
-      // 3. Deduplicate salary cycle nudge for same salary amount
+      // 3. Deduplicate salary cycle nudge for the same salary credit. Same amount alone is not
+      // enough: a fixed salary repeats every month and each payday should get its own nudge.
       if (
         notification.payload?.isSalaryCycleNudge &&
         state.notifications.some(
           (n) =>
             n.payload?.isSalaryCycleNudge &&
-            Math.abs(Number(n.payload?.amount || 0) - Number(notification.payload?.amount || 0)) < 1
+            Math.abs(Number(n.payload?.amount || 0) - Number(notification.payload?.amount || 0)) < 1 &&
+            Math.abs(Number(n.createdAt || 0) - Number(notification.createdAt || 0)) <= 15 * 24 * 60 * 60 * 1000
         )
       ) {
         return state;

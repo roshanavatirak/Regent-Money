@@ -21,6 +21,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useAuthStore } from '../../store';
 import { adminService, EmailSystemOverview } from '../../services/adminService';
 import { useAdminTheme, ff, FOREST, LIME, CORAL } from './adminTheme';
+import { AdminContactAddressesCard } from './AdminContactAddressesCard';
 
 type Feedback = { type: 'success' | 'error'; message: string } | null;
 
@@ -201,6 +202,28 @@ export const AdminEmailConfigScreen: React.FC = () => {
           accent={accent}
         />
 
+        <QuotaCard
+          icon="smile"
+          title="Welcome emails"
+          caption="Thank-you email for new users"
+          sender={data?.welcome?.senderEmail}
+          configured={data?.welcome?.isConfigured}
+          remaining={data?.welcome?.remainingToday}
+          limit={data?.welcome?.dailyLimit}
+          stats={
+            data?.welcome
+              ? [
+                  { label: 'Sent', value: data.welcome.welcomesSentToday },
+                  { label: 'Waiting', value: data.welcome.queued },
+                ]
+              : []
+          }
+          loading={loading}
+          p={p}
+          font={font}
+          accent={accent}
+        />
+
         <Text style={[styles.footnote, ff(font.body, '500'), { color: p.muted }]}>
           Limits reset at 00:00 UTC (5:30 AM IST). Broadcasts pause at the limit and continue the next day.
         </Text>
@@ -214,7 +237,7 @@ export const AdminEmailConfigScreen: React.FC = () => {
               <Text style={[styles.switchSub, ff(font.body, '500'), { color: p.sub }]}>
                 {fallback && !fallback.available
                   ? 'Needs both senders set up.'
-                  : `Sign-in emails can use the broadcast sender. Broadcasts can use the sign-in sender but always leave ${fallback?.signInReserve ?? 50} for sign-ins.`}
+                  : `When a sender hits its limit, the next one in its order takes over. The sign-in sender always keeps ${fallback?.signInReserve ?? 200} for sign-ins.`}
               </Text>
             </View>
             {savingFallback ? (
@@ -235,6 +258,49 @@ export const AdminEmailConfigScreen: React.FC = () => {
             <Text style={[styles.switchError, ff(font.bodySemi, '600'), { color: p.danger }]}>{fallbackError}</Text>
           )}
         </View>
+
+        {/* Sender order for each kind of email */}
+        {fallback?.chains &&
+          CHAIN_ROWS.map((row) => (
+            <View key={row.key} style={[styles.card, { backgroundColor: p.card, borderColor: p.line, marginTop: 12 }]}>
+              <View style={styles.cardTop}>
+                <View style={[styles.cardIcon, { backgroundColor: p.soft }]}>
+                  <Feather name={row.icon} size={16} color={p.text} />
+                </View>
+                <Text style={[styles.cardTitle, ff(font.bodyBold, '700'), { color: p.text, flex: 1 }]}>{row.title}</Text>
+              </View>
+              {(fallback.chains![row.key] || []).map((step, i) => {
+                const off = !step.usable || (i > 0 && !fallback.enabled);
+                const note = !step.usable
+                  ? 'Not set up'
+                  : i > 0 && !fallback.enabled
+                    ? 'Backup is off'
+                    : step.reserve
+                      ? `Keeps ${step.reserve} for sign-ins`
+                      : i === 0
+                        ? 'Used first'
+                        : 'Used when the one above is full';
+                return (
+                  <View key={step.account} style={[styles.stepRow, { borderTopColor: p.line, opacity: off ? 0.5 : 1 }]}>
+                    <View style={[styles.stepNum, { backgroundColor: i === 0 ? FOREST : p.soft }]}>
+                      <Text style={[styles.stepNumText, ff(font.bodyBold, '700'), { color: i === 0 ? LIME : p.sub }]}>{i + 1}</Text>
+                    </View>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={[styles.stepTitle, ff(font.bodySemi, '600'), { color: p.text }]}>{SENDER_NAMES[step.account]}</Text>
+                      <Text style={[styles.cardCaption, ff(font.body, '500'), { color: p.muted }]} numberOfLines={1}>
+                        {step.senderEmail || 'No sender address'}
+                      </Text>
+                    </View>
+                    <Text style={[styles.stepNote, ff(font.body, '500'), { color: p.sub }]}>{note}</Text>
+                  </View>
+                );
+              })}
+            </View>
+          ))}
+
+        {/* Contact addresses */}
+        <Text style={[styles.section, ff(font.bodyBold, '700'), { color: p.muted }]}>Contact addresses</Text>
+        <AdminContactAddressesCard p={p} font={font} />
 
         {/* Test send */}
         <Text style={[styles.section, ff(font.bodyBold, '700'), { color: p.muted }]}>Send a test</Text>
@@ -303,6 +369,14 @@ export const AdminEmailConfigScreen: React.FC = () => {
     </KeyboardAvoidingView>
   );
 };
+
+const SENDER_NAMES = { primary: 'Sign-in sender', broadcast: 'Broadcast sender', welcome: 'Welcome sender' } as const;
+
+const CHAIN_ROWS: { key: 'auth' | 'broadcast' | 'welcome'; title: string; icon: React.ComponentProps<typeof Feather>['name'] }[] = [
+  { key: 'auth', title: 'Sign-in emails', icon: 'shield' },
+  { key: 'broadcast', title: 'Broadcast emails', icon: 'send' },
+  { key: 'welcome', title: 'Welcome emails', icon: 'smile' },
+];
 
 const QuotaCard: React.FC<{
   icon: React.ComponentProps<typeof Feather>['name'];
@@ -411,6 +485,11 @@ const styles = StyleSheet.create({
   switchSub: { fontSize: 12.5, lineHeight: 18, marginTop: 4 },
   switchSpinner: { width: 51, height: 31 },
   switchError: { fontSize: 12, marginTop: 10 },
+  stepRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 12, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth },
+  stepNum: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  stepNumText: { fontSize: 12 },
+  stepTitle: { fontSize: 13.5 },
+  stepNote: { fontSize: 11.5, maxWidth: 120, textAlign: 'right' },
   inputRow: { flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 12, paddingHorizontal: 12, height: 46 },
   input: { flex: 1, fontSize: 14, paddingVertical: 0 },
   notice: { flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 4 },

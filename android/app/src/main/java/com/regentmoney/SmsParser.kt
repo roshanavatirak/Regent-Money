@@ -22,7 +22,29 @@ object SmsParser {
         val referenceId: String?,
         /** True only when the suffix is a debit card ("Kotak Debit Card XX1479"). */
         val isDebitCard: Boolean = false,
+        /** "vpa:rohit.c@okaxis" or "acct:4821": who the money went to or came from. */
+        val counterpartyKey: String? = null,
     )
+
+    // Counterparty key, kept identical in src/services/smsParser.ts and backend sms-parser.util.ts.
+    // The whole UPI handle, not just the part before "@": two people can both be "rohit".
+    private val VPA_HANDLE_TO = Regex("\\bto\\s+(?:vpa\\s+)?([a-z0-9][a-z0-9._-]{1,40}@[a-z0-9-]{2,}(?:\\.[a-z0-9-]+)*)", RegexOption.IGNORE_CASE)
+    private val VPA_HANDLE_FROM = Regex("\\b(?:from|by)\\s+(?:vpa\\s+)?([a-z0-9][a-z0-9._-]{1,40}@[a-z0-9-]{2,}(?:\\.[a-z0-9-]+)*)", RegexOption.IGNORE_CASE)
+    private val TO_ACCOUNT_KEY = Regex("\\bto\\s+(?:a\\/c|acct|account|ac)\\s*(?:no\\.?\\s*)?[x*.]*(\\d{3,18})\\b", RegexOption.IGNORE_CASE)
+    private val FROM_ACCOUNT_KEY = Regex("\\bfrom\\s+(?:a\\/c|acct|account|ac)\\s*(?:no\\.?\\s*)?[x*.]*(\\d{3,18})\\b", RegexOption.IGNORE_CASE)
+
+    /** "vpa:<handle>", else "acct:<last 4>" of the other side's account, else null. Never the user's own account. */
+    internal fun counterpartyKey(clean: String, type: String, ownSuffix: String): String? {
+        (if (type == "debit") VPA_HANDLE_TO else VPA_HANDLE_FROM).find(clean)?.let {
+            return "vpa:${it.groupValues[1].lowercase()}"
+        }
+        (if (type == "debit") TO_ACCOUNT_KEY else FROM_ACCOUNT_KEY).find(clean)?.let {
+            val last4 = it.groupValues[1].takeLast(4)
+            val own = ownSuffix.filter { ch -> ch.isDigit() }.takeLast(4)
+            if (last4 != own) return "acct:$last4"
+        }
+        return null
+    }
 
     private val I = RegexOption.IGNORE_CASE
 
@@ -247,7 +269,10 @@ object SmsParser {
             (lower.contains("salary") || lower.contains("employer") || lower.contains("stipend") ||
                 merchant.lowercase().contains("payroll"))
 
-        return ParsedSms(amount, type, merchant, accountSuffix, bankName, isSalary, availableBalance, referenceId, isDebitCardSuffix(clean, accountSuffix))
+        return ParsedSms(
+            amount, type, merchant, accountSuffix, bankName, isSalary, availableBalance, referenceId,
+            isDebitCardSuffix(clean, accountSuffix), counterpartyKey(clean, type, accountSuffix),
+        )
     }
 
     /**

@@ -4,6 +4,8 @@
 // the agent's face, and keeps suggestions as compact right-aligned bubbles
 // so the screen has room to breathe.
 
+import { cycleSummaryForAI } from '../utils/cycleLabels';
+import { getCurrentCycle } from '../services/moneyCycleService';
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   View,
@@ -19,7 +21,6 @@ import {
   PanResponder,
   Animated as RNAnimated,
   useWindowDimensions,
-  Linking,
 } from 'react-native';
 import { KeyboardAvoidingView, useKeyboardHandler } from 'react-native-keyboard-controller';
 import Animated, {
@@ -58,6 +59,7 @@ import {
 import { useSyncDb } from '../services/useSyncDb';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { askChatbot, ChatMessage } from '../services/aiService';
+import { feedbackService } from '../services/feedbackService';
 import { sanitizeTransactions } from '../services/sanitizer';
 import { FormattedChatMessage } from '../components/FormattedChatMessage';
 import { ChatHistoryDrawer } from '../components/ChatHistoryDrawer';
@@ -585,6 +587,8 @@ export const RegentChatScreen: React.FC = () => {
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  // AI answers reported in this session, keyed by "timestamp|start of text"
+  const [reportedKeys, setReportedKeys] = useState<Set<string>>(() => new Set());
   const inputRef = useRef<TextInput>(null);
 
   /* Mic: on-device speech recognition only. Audio never leaves the phone, no cloud/AI fallback. */
@@ -764,6 +768,8 @@ export const RegentChatScreen: React.FC = () => {
           currentIncome: user?.currentIncome ? Number(user.currentIncome) : undefined,
           incomeSourcesCount: user?.incomeSourcesCount,
         },
+        // How the user is paid and where they are in the cycle, so "this month" means the pay cycle.
+        payCycle: cycleSummaryForAI(getCurrentCycle()),
         totalBalance,
         accounts: bankProfiles.map((b) => ({
           bankName: b.bankName,
@@ -859,6 +865,52 @@ export const RegentChatScreen: React.FC = () => {
     } catch {}
   };
 
+  /**
+   * Google Play's AI content policy: people must be able to report an AI answer
+   * without leaving the app. Sends the answer and the question before it to the
+   * feedback inbox (shown in the admin Feedback tab under "ai_report").
+   */
+  const reportAnswer = (answer: string, question: string, key: string) => {
+    if (reportedKeys.has(key)) return;
+    showGlobalConfirm({
+      title: 'Report this answer?',
+      message:
+        'Tell us if this answer is offensive, harmful or wrong. We’ll send this answer and your question to the Regent team to review.',
+      confirmText: 'Report',
+      cancelText: 'Cancel',
+      icon: 'flag',
+      onConfirm: async () => {
+        try {
+          await feedbackService.submit({
+            kind: 'bug',
+            area: 'ai_report',
+            priority: 'high',
+            title: 'Reported Regent AI answer',
+            description:
+              `AI answer:\n${answer.slice(0, 2200)}` +
+              (question ? `\n\nUser question:\n${question.slice(0, 600)}` : ''),
+          });
+          setReportedKeys((prev) => new Set(prev).add(key));
+          showGlobalConfirm({
+            title: 'Thanks for reporting',
+            message: 'The Regent team will review this answer.',
+            confirmText: 'OK',
+            icon: 'check-circle',
+            onConfirm: () => {},
+          });
+        } catch (e: any) {
+          showGlobalConfirm({
+            title: 'Couldn’t send the report',
+            message: e?.message || 'Check your connection and try again.',
+            confirmText: 'OK',
+            icon: 'alert-triangle',
+            onConfirm: () => {},
+          });
+        }
+      },
+    });
+  };
+
   const flashVoiceNote = useCallback((msg: string) => {
     if (voiceNoteTimer.current) clearTimeout(voiceNoteTimer.current);
     setVoiceNote(msg);
@@ -921,24 +973,11 @@ export const RegentChatScreen: React.FC = () => {
     voiceRef.current = null;
     setVoiceNote(null);
 
+    // Always ask with the system dialog in the app; never send the user to phone settings
     let perm = await getRecordingPermissionsAsync();
-    if (!perm.granted && perm.canAskAgain) perm = await requestRecordingPermissionsAsync();
+    if (!perm.granted) perm = await requestRecordingPermissionsAsync();
     if (!perm.granted) {
-      if (!perm.canAskAgain) {
-        showGlobalConfirm({
-          title: 'Microphone is off',
-          message:
-            'To ask Regent by voice, allow microphone access in Settings. Speech is recognised on your phone and never uploaded.',
-          confirmText: 'Open Settings',
-          cancelText: 'Not now',
-          icon: 'info',
-          onConfirm: () => {
-            Linking.openSettings().catch(() => {});
-          },
-        });
-      } else {
-        flashVoiceNote('Microphone access is needed to talk to Regent.');
-      }
+      flashVoiceNote('Microphone access is needed to talk to Regent. You can type instead.');
       return;
     }
 
@@ -1183,6 +1222,25 @@ export const RegentChatScreen: React.FC = () => {
                           color={copiedIndex === index ? P.link : P.muted}
                         />
                       </Pressable>
+                      {(() => {
+                        const reportKey = `${item.timestamp ?? ''}|${textContent.slice(0, 40)}`;
+                        const reported = reportedKeys.has(reportKey);
+                        const prev = index > 0 ? chatHistory[index - 1] : null;
+                        const question = prev && prev.role === 'user' && typeof prev.content === 'string' ? prev.content : '';
+                        return (
+                          <Pressable
+                            onPress={() => reportAnswer(textContent, question, reportKey)}
+                            disabled={reported}
+                            style={styles.iconActionBtn}
+                            hitSlop={8}
+                            accessibilityRole="button"
+                            accessibilityLabel={reported ? 'Answer reported' : 'Report answer'}
+                            accessibilityState={{ disabled: reported }}
+                          >
+                            <Feather name="flag" size={13} color={reported ? P.link : P.muted} />
+                          </Pressable>
+                        );
+                      })()}
                     </View>
                   </View>
                 </Animated.View>

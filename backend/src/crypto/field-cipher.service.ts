@@ -43,6 +43,14 @@ export class DecryptionTamperingException extends Error {
   }
 }
 
+/** Table name bound into the counterparty field's AAD. */
+const counterpartyTable = (ledger: 'transactions' | 'income') =>
+  ledger === 'transactions' ? 'finance.transactions' : 'finance.income_records';
+
+/** Key version stamped in an envelope (bytes 4–7), as the sweeper reads it from enc_amount. */
+const envKeyVersion = (env: Buffer | null | undefined): number | null =>
+  env && env.length >= 8 ? env.readUInt32BE(4) : null;
+
 @Injectable()
 export class FieldCipherService implements OnModuleDestroy {
   private readonly logger = new Logger(FieldCipherService.name);
@@ -222,6 +230,30 @@ export class FieldCipherService implements OnModuleDestroy {
       return decryptField(() => session.kEnc, env, ctx).toString('utf8');
     } catch (err) {
       throw new DecryptionTamperingException(rowId, table, err);
+    }
+  }
+
+  /**
+   * Counterparty key of a transaction or income row ("vpa:rohit.c@okaxis"). Encrypted on its own
+   * (row version fixed at 1, like encryptText) so edits that bump row_version leave it readable.
+   */
+  async encryptCounterparty(userId: string, ledger: 'transactions' | 'income', rowId: string, key: string): Promise<Buffer> {
+    return this.encryptText(userId, counterpartyTable(ledger), 'enc_counterparty', rowId, key);
+  }
+
+  /** The counterparty key, or undefined when missing or unreadable (never fails the caller). */
+  async decryptCounterparty(
+    userId: string,
+    ledger: 'transactions' | 'income',
+    rowId: string,
+    env: Buffer | null | undefined,
+  ): Promise<string | undefined> {
+    if (!env) return undefined;
+    try {
+      return await this.decryptText(userId, counterpartyTable(ledger), 'enc_counterparty', rowId, env);
+    } catch (err) {
+      this.logger.warn(`Could not read counterparty of ${ledger} row ${rowId}`);
+      return undefined;
     }
   }
 
@@ -762,7 +794,7 @@ export class FieldCipherService implements OnModuleDestroy {
 
     // 1. Transactions
     const txRows = await this.dataSource.query(
-      `SELECT id, amount, merchant, note, enc_amount, enc_merchant, enc_note, row_version
+      `SELECT id, amount, merchant, note, enc_amount, enc_merchant, enc_note, enc_counterparty, row_version
        FROM finance.transactions
        WHERE user_id = $1 AND enc_amount IS NOT NULL
        LIMIT $2`,
@@ -773,7 +805,9 @@ export class FieldCipherService implements OnModuleDestroy {
     for (const r of txRows) {
       const encAmount: Buffer = r.enc_amount;
       const keyVer = encAmount.readUInt32BE(4);
-      if (keyVer < active.keyVersion) {
+      // The counterparty is written separately, so it can be on an older key than the amount
+      const cpVer = envKeyVersion(r.enc_counterparty);
+      if (keyVer < active.keyVersion || (cpVer != null && cpVer < active.keyVersion)) {
         try {
           const expectedVer = BigInt(r.row_version ?? 1);
           const txObj = {
@@ -792,15 +826,21 @@ export class FieldCipherService implements OnModuleDestroy {
             expectedVer,
           );
 
+          const counterparty = await this.decryptCounterparty(userId, 'transactions', r.id, r.enc_counterparty);
+          const encCounterparty = counterparty
+            ? await this.encryptCounterparty(userId, 'transactions', r.id, counterparty)
+            : null;
+
           const res = await this.dataSource.query(
             `UPDATE finance.transactions
              SET enc_amount = $2,
                  enc_merchant = $3,
                  enc_note = $4,
                  merchant_idx = $5,
-                 row_version = $6
+                 row_version = $6,
+                 enc_counterparty = $8
              WHERE id = $1 AND row_version = $7 RETURNING 1`,
-            [r.id, reEnc.encAmount, reEnc.encMerchant, reEnc.encNote, reEnc.merchantIdx, reEnc.rowVersion.toString(), expectedVer.toString()],
+            [r.id, reEnc.encAmount, reEnc.encMerchant, reEnc.encNote, reEnc.merchantIdx, reEnc.rowVersion.toString(), expectedVer.toString(), encCounterparty],
           );
           if (Array.isArray(res) && res.length > 0) sweptTx++;
         } catch (err) {
@@ -811,7 +851,7 @@ export class FieldCipherService implements OnModuleDestroy {
 
     // 2. Income records
     const incRows = await this.dataSource.query(
-      `SELECT id, amount, source, note, enc_amount, enc_source, enc_note, row_version
+      `SELECT id, amount, source, note, enc_amount, enc_source, enc_note, enc_counterparty, row_version
        FROM finance.income_records
        WHERE user_id = $1 AND enc_amount IS NOT NULL
        LIMIT $2`,
@@ -822,7 +862,8 @@ export class FieldCipherService implements OnModuleDestroy {
     for (const r of incRows) {
       const encAmount: Buffer = r.enc_amount;
       const keyVer = encAmount.readUInt32BE(4);
-      if (keyVer < active.keyVersion) {
+      const cpVer = envKeyVersion(r.enc_counterparty);
+      if (keyVer < active.keyVersion || (cpVer != null && cpVer < active.keyVersion)) {
         try {
           const expectedVer = BigInt(r.row_version ?? 1);
           const incObj = {
@@ -841,15 +882,21 @@ export class FieldCipherService implements OnModuleDestroy {
             expectedVer,
           );
 
+          const counterparty = await this.decryptCounterparty(userId, 'income', r.id, r.enc_counterparty);
+          const encCounterparty = counterparty
+            ? await this.encryptCounterparty(userId, 'income', r.id, counterparty)
+            : null;
+
           const res = await this.dataSource.query(
             `UPDATE finance.income_records
              SET enc_amount = $2,
                  enc_source = $3,
                  enc_note = $4,
                  source_idx = $5,
-                 row_version = $6
+                 row_version = $6,
+                 enc_counterparty = $8
              WHERE id = $1 AND row_version = $7 RETURNING 1`,
-            [r.id, reEnc.encAmount, reEnc.encSource, reEnc.encNote, reEnc.sourceIdx, reEnc.rowVersion.toString(), expectedVer.toString()],
+            [r.id, reEnc.encAmount, reEnc.encSource, reEnc.encNote, reEnc.sourceIdx, reEnc.rowVersion.toString(), expectedVer.toString(), encCounterparty],
           );
           if (Array.isArray(res) && res.length > 0) sweptInc++;
         } catch (err) {
@@ -868,15 +915,23 @@ export class FieldCipherService implements OnModuleDestroy {
         if (rk.keyVersion < active.keyVersion) {
           const [anyTx] = await this.dataSource.query(
             `SELECT 1 FROM finance.transactions 
-             WHERE user_id = $1 AND enc_amount IS NOT NULL 
-               AND get_byte(enc_amount, 4)*16777216 + get_byte(enc_amount, 5)*65536 + get_byte(enc_amount, 6)*256 + get_byte(enc_amount, 7) = $2
+             WHERE user_id = $1 AND (
+               (enc_amount IS NOT NULL
+                 AND get_byte(enc_amount, 4)*16777216 + get_byte(enc_amount, 5)*65536 + get_byte(enc_amount, 6)*256 + get_byte(enc_amount, 7) = $2)
+               OR (enc_counterparty IS NOT NULL
+                 AND get_byte(enc_counterparty, 4)*16777216 + get_byte(enc_counterparty, 5)*65536 + get_byte(enc_counterparty, 6)*256 + get_byte(enc_counterparty, 7) = $2)
+             )
              LIMIT 1`,
             [userId, rk.keyVersion],
           );
           const [anyInc] = await this.dataSource.query(
             `SELECT 1 FROM finance.income_records 
-             WHERE user_id = $1 AND enc_amount IS NOT NULL 
-               AND get_byte(enc_amount, 4)*16777216 + get_byte(enc_amount, 5)*65536 + get_byte(enc_amount, 6)*256 + get_byte(enc_amount, 7) = $2
+             WHERE user_id = $1 AND (
+               (enc_amount IS NOT NULL
+                 AND get_byte(enc_amount, 4)*16777216 + get_byte(enc_amount, 5)*65536 + get_byte(enc_amount, 6)*256 + get_byte(enc_amount, 7) = $2)
+               OR (enc_counterparty IS NOT NULL
+                 AND get_byte(enc_counterparty, 4)*16777216 + get_byte(enc_counterparty, 5)*65536 + get_byte(enc_counterparty, 6)*256 + get_byte(enc_counterparty, 7) = $2)
+             )
              LIMIT 1`,
             [userId, rk.keyVersion],
           );

@@ -1,6 +1,11 @@
 import { useMemo, useState } from 'react';
-import { useTransactionStore, useBankStore } from '../store';
+import { useTransactionStore, useBankStore, useAuthStore } from '../store';
 import { isExcludedFromBudget } from '../utils/budget';
+import { recurringBillsFrom } from '../services/budgetService';
+import { spendableBalance } from '../services/moneyCycleService';
+import { billsDueBetween } from '../utils/recurringBills';
+import { safeToSpend } from '../utils/billPacing';
+import { detectPayday, nextPayday, type PaydayCredit } from '../utils/payday';
 
 export interface DayFinancialData {
   dateKey: string; // YYYY-MM-DD
@@ -62,6 +67,7 @@ export interface CalendarRecordsState {
 export function useCalendarAnalytics(currentDate: Date, userCreatedAt?: string | number | null) {
   const transactions = useTransactionStore((state: any) => state.transactions) || [];
   const bankProfiles = useBankStore((state: any) => state.bankProfiles) || [];
+  const userSalaryDay = useAuthStore((state: any) => state.user?.salaryDay);
 
   // Excluded transaction IDs for records (user can toggle unusual one-offs like laptop repair)
   const [excludedRecordTxIds, setExcludedRecordTxIds] = useState<Set<string>>(new Set());
@@ -156,46 +162,24 @@ export function useCalendarAnalytics(currentDate: Date, userCreatedAt?: string |
     return map;
   }, [eligibleTransactions]);
 
-  // Detect likely salary payday (day of month with explicit salary credit or highest high-value credit)
+  // Detect the usual salary payday: the day seen in the most months, not the single biggest credit.
   const salaryPayday = useMemo<number | null>(() => {
-    const salaryCredits: Array<{ day: number; amount: number }> = [];
-    const highCreditsByDay = new Map<number, number>();
-
+    const credits: PaydayCredit[] = [];
     eligibleTransactions.forEach((item: any) => {
       if (item.type !== 'credit') return;
       const t = Number(item.timestamp || 0);
       if (!t) return;
-      const d = new Date(t);
-      const day = d.getDate();
-      const amt = Number(item.amount || 0);
       const desc = ((item.merchant || '') + ' ' + (item.category || '')).toLowerCase();
-
-      if (desc.includes('salary') || desc.includes('payroll') || desc.includes('stipend')) {
-        salaryCredits.push({ day, amount: amt });
-      } else if (amt >= 5000) {
-        highCreditsByDay.set(day, (highCreditsByDay.get(day) || 0) + amt);
-      }
-    });
-
-    if (salaryCredits.length > 0) {
-      salaryCredits.sort((a, b) => b.amount - a.amount);
-      return salaryCredits[0].day;
-    }
-
-    if (highCreditsByDay.size > 0) {
-      let bestDay: number | null = null;
-      let maxCredit = 0;
-      highCreditsByDay.forEach((total, day) => {
-        if (total > maxCredit) {
-          maxCredit = total;
-          bestDay = day;
-        }
+      credits.push({
+        timestamp: t,
+        amount: Number(item.amount || 0),
+        isSalary: !!item.isSalary || desc.includes('salary') || desc.includes('payroll') || desc.includes('stipend'),
       });
-      return bestDay;
-    }
-
-    return null;
-  }, [eligibleTransactions]);
+    });
+    // The salary day the user set wins over a guess.
+    if (typeof userSalaryDay === 'number' && userSalaryDay >= 1 && userSalaryDay <= 31) return userSalaryDay;
+    return detectPayday(credits);
+  }, [eligibleTransactions, userSalaryDay]);
 
   // Salary cycle daily allowance calculation
   const salaryCycleStats = useMemo(() => {
@@ -215,18 +199,14 @@ export function useCalendarAnalytics(currentDate: Date, userCreatedAt?: string |
     }
 
     const today = new Date();
-    const currentDay = today.getDate();
-    let nextSalaryDate: Date;
-
-    if (currentDay < salaryPayday) {
-      nextSalaryDate = new Date(today.getFullYear(), today.getMonth(), salaryPayday);
-    } else {
-      nextSalaryDate = new Date(today.getFullYear(), today.getMonth() + 1, salaryPayday);
-    }
+    const nextSalaryDate = nextPayday(today, salaryPayday);
 
     const diffMs = nextSalaryDate.getTime() - today.getTime();
     const daysLeft = Math.max(1, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
-    const dailyAllowance = Math.max(0, Math.round(totalBalance / daysLeft));
+    // Spendable money (not card or overdraft limits) less bills due before salary, per day.
+    const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+    const dues = billsDueBetween(recurringBillsFrom(transactions), transactions, startOfToday, nextSalaryDate.getTime() - 1);
+    const dailyAllowance = safeToSpend(spendableBalance(bankProfiles), dues, daysLeft).perDay ?? 0;
 
     return {
       daysLeft,
@@ -235,7 +215,7 @@ export function useCalendarAnalytics(currentDate: Date, userCreatedAt?: string |
       dailyAllowance,
       payday: salaryPayday,
     };
-  }, [salaryPayday, bankProfiles]);
+  }, [salaryPayday, bankProfiles, transactions]);
 
   // Compute all-time records and wins
   const records: CalendarRecordsState = useMemo(() => {

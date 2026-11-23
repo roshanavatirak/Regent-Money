@@ -15,7 +15,10 @@ import { Ionicons, Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import * as Font from 'expo-font';
-import { format, addDays, addMonths, endOfMonth, startOfMonth, isValid, parseISO } from 'date-fns';
+import { format, addDays, addMonths, endOfMonth, startOfMonth, isValid, parseISO, differenceInCalendarDays } from 'date-fns';
+import { useMoneyCycle } from '../hooks/useMoneyCycle';
+import { cycleMonthFor, expectedCycleForMonth } from '../utils/moneyCycle';
+import { payPeriodLabel } from '../utils/cycleBudgets';
 import { useTheme, useBudgetStore, BudgetCustomCategory } from '../store';
 import { BUDGET_DEBIT_CATEGORIES, getBudgetPeriodRange, getCategoryMeta, budgetService, getBudgetTemplateData } from '../services/budgetService';
 import { CategoryIcon } from '../components/CategoryIcon';
@@ -69,8 +72,57 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
 
   /* ---------------- Months ---------------- */
 
+  // Salary mode: each "month" is a salary cycle, named as in cycleBudgets (31 Oct → November).
+  const { cycle } = useMoneyCycle();
+
   const months = useMemo(() => {
     const now = new Date();
+    // Weekly or every-2-weeks pay: one budget per pay period, renewed at each payout.
+    if (cycle.mode === 'weekly' || cycle.mode === 'fortnightly') {
+      const step = cycle.mode === 'weekly' ? 7 : 14;
+      return Array.from({ length: 6 }, (_, i) => {
+        const start = addDays(new Date(cycle.start), i * step).getTime();
+        const end = addDays(new Date(start), step).getTime() - 1;
+        const key = payPeriodLabel(cycle.mode, start, end);
+        const hasBudget = budgets.some(
+          (b) => b.isOverall && (!b.periodType || b.periodType === 'monthly') && (b.period || '').toLowerCase().trim() === key.toLowerCase()
+        );
+        return {
+          index: i,
+          date: new Date(start),
+          short: i === 0 ? (cycle.mode === 'weekly' ? 'This week' : 'This payout') : format(start, 'd MMM'),
+          fullLabel: key,
+          hasBudget,
+          days: step,
+          sub: `${format(start, 'd MMM')} – ${format(end, 'd MMM')}`,
+          startDateStr: format(start, 'yyyy-MM-dd'),
+          endDateStr: format(end, 'yyyy-MM-dd'),
+        };
+      });
+    }
+    if (cycle.mode === 'salary' && cycle.payday) {
+      const payday = cycle.payday;
+      const base = cycleMonthFor(cycle.anchor, payday);
+      return Array.from({ length: 6 }, (_, i) => {
+        const m = addMonths(base, i);
+        const key = format(m, 'MMMM yyyy');
+        const span = i === 0 ? { start: cycle.start, end: cycle.end } : expectedCycleForMonth(m, payday);
+        const hasBudget = budgets.some(
+          (b) => b.isOverall && (!b.periodType || b.periodType === 'monthly') && (b.period || '').toLowerCase().trim() === key.toLowerCase()
+        );
+        return {
+          index: i,
+          date: m,
+          short: format(m, 'MMMM'),
+          fullLabel: key,
+          hasBudget,
+          days: differenceInCalendarDays(span.end, span.start) + 1,
+          sub: `${format(span.start, 'd MMM')} – ${format(span.end, 'd MMM')}`,
+          startDateStr: format(span.start, 'yyyy-MM-dd'),
+          endDateStr: format(span.end, 'yyyy-MM-dd'),
+        };
+      });
+    }
     return Array.from({ length: 6 }, (_, i) => {
       const m = addMonths(now, i);
       const key = format(m, 'MMMM yyyy');
@@ -81,9 +133,9 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
         if (p && (p.includes(k) || k.includes(p))) return true;
         return !!b.startDate && format(new Date(b.startDate), 'MMMM yyyy').toLowerCase() === k;
       });
-      return { index: i, date: m, short: format(m, 'MMMM'), fullLabel: key, hasBudget, days: endOfMonth(m).getDate(), startDateStr: format(startOfMonth(m), 'yyyy-MM-dd'), endDateStr: format(endOfMonth(m), 'yyyy-MM-dd') };
+      return { index: i, date: m, short: format(m, 'MMMM'), fullLabel: key, hasBudget, days: endOfMonth(m).getDate(), sub: `${endOfMonth(m).getDate()} days`, startDateStr: format(startOfMonth(m), 'yyyy-MM-dd'), endDateStr: format(endOfMonth(m), 'yyyy-MM-dd') };
     });
-  }, [budgets]);
+  }, [budgets, cycle]);
 
   const [monthIdx, setMonthIdx] = useState(() => {
     const p = route.params || {};
@@ -285,8 +337,18 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
       const e = parseISO(endDateStr);
       if (isValid(s) && isValid(e) && e >= s) return getBudgetPeriodRange('monthly', s, { start: s, end: e });
     }
-    return getBudgetPeriodRange('monthly', (months[monthIdx] || months[0]).date);
-  }, [budgetType, monthlyDateMode, monthIdx, months, startDateStr, endDateStr]);
+    const chosen = months[monthIdx] || months[0];
+    if (cycle.mode === 'salary' || cycle.mode === 'weekly' || cycle.mode === 'fortnightly') {
+      // Salary cycle dates for this month, named after the month.
+      const r = getBudgetPeriodRange('custom', new Date(), { start: parseISO(chosen.startDateStr), end: parseISO(chosen.endDateStr) });
+      return { ...r, label: chosen.fullLabel };
+    }
+    return getBudgetPeriodRange('monthly', chosen.date);
+  }, [budgetType, monthlyDateMode, monthIdx, months, startDateStr, endDateStr, cycle.mode]);
+
+  // The name a monthly budget is saved under: the chosen month, or the start month for custom dates.
+  const monthlyPeriodLabel =
+    monthlyDateMode === 'calendar' && months[monthIdx] ? months[monthIdx].fullLabel : format(range.startDate, 'MMMM yyyy');
 
   const amount = parseFloat(amountStr.replace(/[^0-9.]/g, '')) || 0;
   const perDay = amount > 0 && range.totalDays > 0 ? amount / range.totalDays : 0;
@@ -347,7 +409,7 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
       const toTime = (v: any) => (typeof v === 'number' ? v : new Date(v).getTime());
       const startDate = parentBudget?.startDate ? toTime(parentBudget.startDate) : range.startDate;
       const endDate = parentBudget?.endDate ? toTime(parentBudget.endDate) : range.endDate;
-      const period = parentBudget?.period || format(startDate, 'MMMM yyyy');
+      const period = parentBudget?.period || monthlyPeriodLabel;
       const kept = new Set<string>();
 
       for (const [catId, it] of entries) {
@@ -388,7 +450,7 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
     setErrorText('');
     try {
       if (budgetType === 'monthly') {
-        const period = format(range.startDate, 'MMMM yyyy');
+        const period = monthlyPeriodLabel;
         const exists = budgets.find(
           (b) =>
             b.isOverall &&
@@ -399,7 +461,7 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
         if (allocSum > amount) throw new Error(`The copied categories add up to ${inr(allocSum)}, more than ${inr(amount)}. Raise the amount or remove some.`);
 
         const created = await budgetService.createBudget({
-          name: budgetName.trim() || `Monthly budget (${period})`,
+          name: budgetName.trim() || `${cycle.mode === 'weekly' ? 'Weekly' : cycle.mode === 'fortnightly' ? 'Payout' : 'Monthly'} budget (${period})`,
           category: 'all',
           limitAmount: amount,
           period,
@@ -525,7 +587,7 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
     <>
       <Animated.View entering={FadeInDown.duration(380)} style={s.hero}>
         <View pointerEvents="none" style={s.heroRing} />
-        <Text style={s.heroLabel}>{parentBudget?.period || format(range.startDate, 'MMMM yyyy')} budget</Text>
+        <Text style={s.heroLabel}>{parentBudget?.period || monthlyPeriodLabel} budget</Text>
         <Text style={[s.heroAmount, heading]}>{inr(parentLimit)}</Text>
         <View style={s.barTrack}>
           {entries.map(([catId, it]) => {
@@ -631,7 +693,7 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
 
       {budgetType === 'monthly' ? (
         <Animated.View key="monthly" entering={FadeIn.duration(220)}>
-          {label('Which month')}
+          {label(cycle.mode === 'weekly' ? 'Which week' : cycle.mode === 'fortnightly' ? 'Which pay period' : 'Which month')}
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.monthRow}>
             {months.map((m) => {
               const on = monthlyDateMode === 'calendar' && monthIdx === m.index;
@@ -650,7 +712,7 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
                   accessibilityState={{ selected: on }}
                 >
                   <Text style={[s.monthName, { color: on ? accentInk : ink }]}>{m.short}</Text>
-                  <Text style={[s.monthSub, { color: on ? (isDark ? FOREST : LIME) : m.hasBudget ? red : muted }]}>{m.hasBudget ? 'Has budget' : `${m.days} days`}</Text>
+                  <Text style={[s.monthSub, { color: on ? (isDark ? FOREST : LIME) : m.hasBudget ? red : muted }]}>{m.hasBudget ? 'Has budget' : m.sub}</Text>
                 </Pressable>
               );
             })}
@@ -799,7 +861,7 @@ export const CreateBudgetScreen: React.FC<CreateBudgetScreenProps> = ({ AppTopBa
           <Feather name="arrow-left" size={20} color={ink} />
         </Pressable>
         <Text style={[s.headerTitle, { color: ink }]}>
-          {isCategoryMode ? `Split ${(parentBudget?.period || format(range.startDate, 'MMMM yyyy')).split(' ')[0]}` : 'New budget'}
+          {isCategoryMode ? `Split ${(parentBudget?.period || monthlyPeriodLabel).split(' ')[0]}` : 'New budget'}
         </Text>
         <View style={{ width: 44 }} />
       </View>

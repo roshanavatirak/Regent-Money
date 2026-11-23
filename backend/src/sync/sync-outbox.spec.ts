@@ -159,6 +159,11 @@ describe('SyncService - Offline Outbox (applyOutbox)', () => {
               row.source = vals[2] ?? row.source;
               row.timestamp = vals[3] ?? row.timestamp;
             }
+            // Columns the positional mapping above doesn't know, read from "col=$n" in SET
+            const setPart = cleanSql.split(/\bSET\b/i)[1]?.split(/\bWHERE\b/i)[0] || '';
+            for (const m of setPart.matchAll(/(\w+)=\$(\d+)/g)) {
+              if (m[1] === 'counterparty_id') row.counterparty_id = params[Number(m[2]) - 1];
+            }
             return [{ '?column?': 1 }];
           }
           return [];
@@ -660,5 +665,52 @@ describe('SyncService - Offline Outbox (applyOutbox)', () => {
     } finally {
       setErasedRowsReady(false);
     }
+  });
+
+  it('Counterparty: linking an SMS row to a person stores the id, null unlinks it', async () => {
+    mockTransactions.set('tx_sms_link01', {
+      id: 'tx_sms_link01',
+      user_id: 'user_A',
+      amount: 4000,
+      updated_at: 1000,
+      row_version: 1,
+      bank_profile_id: 'bank_hdfc_123',
+      is_deleted: false,
+    });
+    const link = (key: string, counterpartyId: string | null) => ({
+      idemKey: key,
+      entity: 'transaction',
+      op: 'upsert',
+      entityId: 'tx_sms_link01',
+      payload: { counterpartyId, updatedAt: Date.now() },
+    });
+
+    const res = await service.applyOutbox('user_A', [link('op_cp_link_0001', 'contact_1731000000000_ab12c')]);
+    expect(res.results).toEqual([{ idemKey: 'op_cp_link_0001', status: 'applied' }]);
+    expect(mockTransactions.get('tx_sms_link01').counterparty_id).toBe('contact_1731000000000_ab12c');
+
+    await service.applyOutbox('user_A', [link('op_cp_unlink_002', null)]);
+    expect(mockTransactions.get('tx_sms_link01').counterparty_id).toBeNull();
+  });
+
+  it('Counterparty: a malformed id is rejected', async () => {
+    mockTransactions.set('tx_sms_link02', {
+      id: 'tx_sms_link02',
+      user_id: 'user_A',
+      amount: 10,
+      updated_at: 1000,
+      row_version: 1,
+      is_deleted: false,
+    });
+    const res = await service.applyOutbox('user_A', [
+      {
+        idemKey: 'op_cp_bad_00003',
+        entity: 'transaction',
+        op: 'upsert',
+        entityId: 'tx_sms_link02',
+        payload: { counterpartyId: "x'; DROP TABLE users;--", updatedAt: Date.now() },
+      },
+    ]);
+    expect(res.results).toEqual([{ idemKey: 'op_cp_bad_00003', status: 'rejected', reason: 'bad_counterparty' }]);
   });
 });

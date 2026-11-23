@@ -7,6 +7,18 @@
 export const RESEND_GAP_MS = 60_000;
 export const DAILY_MAX = 5;
 
+/** A verification link works for 15 minutes from the email it came in. */
+export const VERIFY_LINK_TTL_MS = 15 * 60 * 1000;
+
+/**
+ * True when a link issued at `issuedAt` is too old to use. No known issue time counts as
+ * expired: the person can always ask for a fresh link from the app.
+ */
+export function verificationLinkExpired(issuedAt: number | null | undefined, now: number): boolean {
+  if (!issuedAt || !Number.isFinite(issuedAt)) return true;
+  return now - issuedAt > VERIFY_LINK_TTL_MS;
+}
+
 export const utcDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
 export function msUntilNextUtcDay(now: number): number {

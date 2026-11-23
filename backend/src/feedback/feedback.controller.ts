@@ -46,6 +46,16 @@ interface UpdateFeedbackStatusDto {
   status?: FeedbackStatus;
   priority?: FeedbackPriority;
   adminNotes?: string;
+  notify?: boolean;
+}
+
+const STATUSES: FeedbackStatus[] = ['open', 'investigating', 'in_progress', 'fixed', 'resolved', 'closed'];
+const PRIORITIES: FeedbackPriority[] = ['low', 'medium', 'high', 'critical'];
+const KINDS: FeedbackKind[] = ['feature', 'bug'];
+
+/** Returns the value only if it is one of the allowed options. */
+function pick<T extends string>(value: unknown, allowed: T[]): T | undefined {
+  return allowed.includes(value as T) ? (value as T) : undefined;
 }
 
 @Controller('feedback')
@@ -165,20 +175,49 @@ export class FeedbackController {
 
   /**
    * Admin endpoint: View all feedback tickets with optional filtering.
+   * Filters: status, priority, kind (feature|bug), area, search (title/message/id/sender), since (epoch ms).
    */
   @Get('admin/all')
   @UseGuards(JwtAuthGuard, AdminGuard)
   async getAllFeedback(
-    @Query('status') status?: FeedbackStatus,
-    @Query('priority') priority?: FeedbackPriority,
-    @Query('limit') limit = 50,
-    @Query('offset') offset = 0,
+    @Query('status') status?: string,
+    @Query('priority') priority?: string,
+    @Query('kind') kind?: string,
+    @Query('area') area?: string,
+    @Query('search') search?: string,
+    @Query('since') since?: string,
+    @Query('limit') limit = '50',
+    @Query('offset') offset = '0',
   ) {
-    return this.feedbackService.getAllFeedback(status, priority, Number(limit), Number(offset));
+    return this.feedbackService.getAllFeedback({
+      status: pick(status, STATUSES),
+      priority: pick(priority, PRIORITIES),
+      kind: pick(kind, KINDS),
+      area: area ? String(area).slice(0, 50) : undefined,
+      search: search ? String(search) : undefined,
+      since: since ? Number(since) || undefined : undefined,
+      limit: Number(limit),
+      offset: Number(offset),
+    });
+  }
+
+  /** Admin endpoint: counts for the inbox header. */
+  @Get('admin/stats')
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  async getStats() {
+    return this.feedbackService.getStats();
+  }
+
+  /** Admin endpoint: one ticket with the sender's details. */
+  @Get('admin/:id')
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  async getOne(@Param('id') id: string) {
+    return this.feedbackService.getOneForAdmin(id);
   }
 
   /**
-   * Admin endpoint: Update ticket status, priority, or resolution notes.
+   * Admin endpoint: Update ticket status, priority, or the team reply (adminNotes).
+   * notify: true also tells the sender (in-app notification + push).
    */
   @Patch('admin/:id/status')
   @UseGuards(JwtAuthGuard, AdminGuard)
@@ -186,6 +225,20 @@ export class FeedbackController {
     @Param('id') id: string,
     @Body() body: UpdateFeedbackStatusDto,
   ) {
-    return this.feedbackService.updateStatus(id, body.status, body.priority, body.adminNotes);
+    if (body.status !== undefined && !pick(body.status, STATUSES)) {
+      throw new BadRequestException('Unknown status.');
+    }
+    if (body.priority !== undefined && !pick(body.priority, PRIORITIES)) {
+      throw new BadRequestException('Unknown priority.');
+    }
+    if (body.adminNotes !== undefined && typeof body.adminNotes !== 'string') {
+      throw new BadRequestException('Reply must be text.');
+    }
+    return this.feedbackService.adminUpdate(id, {
+      status: body.status,
+      priority: body.priority,
+      adminNotes: body.adminNotes,
+      notify: body.notify === true,
+    });
   }
 }

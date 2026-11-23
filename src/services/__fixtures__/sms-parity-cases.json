@@ -12,7 +12,8 @@
         "accountSuffix": "1234",
         "bankName": "HDFC",
         "isSalary": false,
-        "referenceId": "432112345678"
+        "referenceId": "432112345678",
+        "counterpartyKey": "vpa:swiggy@icici"
       },
       "smsId": "ref_432112345678",
       "contentId": "sms_1500625970"
@@ -59,7 +60,8 @@
         "accountSuffix": "4020",
         "bankName": "Kotak",
         "isSalary": false,
-        "referenceId": "312345678901"
+        "referenceId": "312345678901",
+        "counterpartyKey": "vpa:zepto.payu@hdfcbank"
       },
       "smsId": "ref_312345678901",
       "contentId": "sms_554694475"
@@ -180,7 +182,8 @@
         "bankName": "HDFC",
         "isSalary": false,
         "availableBalance": 4560,
-        "referenceId": "431234567890"
+        "referenceId": "431234567890",
+        "counterpartyKey": "acct:9988"
       },
       "smsId": "ref_431234567890",
       "contentId": "sms_114167917"
@@ -243,7 +246,8 @@
         "accountSuffix": "1234",
         "bankName": "HDFC",
         "isSalary": false,
-        "referenceId": "433398765432"
+        "referenceId": "433398765432",
+        "counterpartyKey": "vpa:rahul.sharma@okaxis"
       },
       "smsId": "ref_433398765432",
       "contentId": "sms_1242639023"
@@ -259,7 +263,8 @@
         "accountSuffix": "6090",
         "bankName": "ICICI",
         "isSalary": false,
-        "referenceId": "433311112222"
+        "referenceId": "433311112222",
+        "counterpartyKey": "vpa:priya.k@ybl"
       },
       "smsId": "ref_433311112222",
       "contentId": "sms_448297668"
@@ -305,7 +310,8 @@
         "accountSuffix": "4020",
         "bankName": "Kotak",
         "isSalary": false,
-        "referenceId": "312312312312"
+        "referenceId": "312312312312",
+        "counterpartyKey": "vpa:ankit@okhdfcbank"
       },
       "smsId": "ref_312312312312",
       "contentId": "sms_622799753"
@@ -417,7 +423,8 @@
         "merchant": "Credits",
         "accountSuffix": "1234",
         "bankName": "HDFC",
-        "isSalary": false
+        "isSalary": false,
+        "counterpartyKey": "acct:5039"
       },
       "smsId": "sms_415473457",
       "contentId": "sms_415473457"
@@ -465,7 +472,9 @@
         "accountSuffix": "1234",
         "bankName": "Axis",
         "isSalary": false
-      }
+      },
+      "smsId": "sms_974880487",
+      "contentId": "sms_974880487"
     },
     {
       "sender": "AD-AXISBK",
@@ -478,7 +487,9 @@
         "accountSuffix": "1234",
         "bankName": "Axis",
         "isSalary": false
-      }
+      },
+      "smsId": "sms_1508309141",
+      "contentId": "sms_1508309141"
     },
     {
       "sender": "JD-ICICIB",
@@ -492,7 +503,9 @@
         "bankName": "ICICI",
         "isSalary": false,
         "referenceId": "432198765434"
-      }
+      },
+      "smsId": "ref_432198765434",
+      "contentId": "sms_149185822"
     },
     {
       "sender": "VM-KOTAKB",
@@ -506,7 +519,9 @@
         "bankName": "Kotak",
         "isSalary": false,
         "availableBalance": 1420.5
-      }
+      },
+      "smsId": "sms_1100310015",
+      "contentId": "sms_1100310015"
     },
     {
       "sender": "VM-KOTAKB",
@@ -520,7 +535,9 @@
         "bankName": "Kotak",
         "isSalary": false,
         "availableBalance": 1380.5
-      }
+      },
+      "smsId": "sms_144864430",
+      "contentId": "sms_144864430"
     },
     {
       "sender": "VM-SBIINB",
@@ -534,7 +551,110 @@
         "bankName": "SBI",
         "isSalary": false,
         "referenceId": "433355556668"
-      }
+      },
+      "smsId": "ref_433355556668",
+      "contentId": "sms_465844079"
+    },
+    {
+      "sender": "AX-HDFCBK",
+      "body": "Rs.4000.00 credited to A/c XX1234 on 12-11-26 from VPA rohit.c@okaxis (UPI Ref No 512398765401). -HDFC Bank",
+      "otp": false,
+      "expected": {
+        "amount": 4000,
+        "type": "credit",
+        "merchant": "rohit c",
+        "accountSuffix": "1234",
+        "bankName": "HDFC",
+        "isSalary": false,
+        "referenceId": "512398765401",
+        "counterpartyKey": "vpa:rohit.c@okaxis"
+      },
+      "smsId": "ref_512398765401",
+      "contentId": "sms_338014038"
+    },
+    {
+      "sender": "AX-HDFCBK",
+      "body": "Rs.3500.00 credited to A/c XX1234 on 13-11-26 from VPA rohitchunarkar@ybl (UPI Ref No 512398765402). -HDFC Bank",
+      "otp": false,
+      "expected": {
+        "amount": 3500,
+        "type": "credit",
+        "merchant": "rohitchunarkar",
+        "accountSuffix": "1234",
+        "bankName": "HDFC",
+        "isSalary": false,
+        "referenceId": "512398765402",
+        "counterpartyKey": "vpa:rohitchunarkar@ybl"
+      },
+      "smsId": "ref_512398765402",
+      "contentId": "sms_81375832"
+    },
+    {
+      "sender": "VM-ICICIB",
+      "body": "Dear Customer, Acct XX6090 is credited with Rs 2500.00 on 14-Nov-26 by rohit.c@okaxis. UPI:512398765403",
+      "otp": false,
+      "expected": {
+        "amount": 2500,
+        "type": "credit",
+        "merchant": "rohit c",
+        "accountSuffix": "6090",
+        "bankName": "ICICI",
+        "isSalary": false,
+        "referenceId": "512398765403",
+        "counterpartyKey": "vpa:rohit.c@okaxis"
+      },
+      "smsId": "ref_512398765403",
+      "contentId": "sms_115381655"
+    },
+    {
+      "sender": "VM-SBIINB",
+      "body": "Dear Customer, Your A/c XX5039 is credited by Rs.1,200.00 on 15Nov26 transfer from A/c XX7781 Ref No 512398765404 -SBI",
+      "otp": false,
+      "expected": {
+        "amount": 1200,
+        "type": "credit",
+        "merchant": "Credits",
+        "accountSuffix": "5039",
+        "bankName": "SBI",
+        "isSalary": false,
+        "referenceId": "512398765404",
+        "counterpartyKey": "acct:7781"
+      },
+      "smsId": "ref_512398765404",
+      "contentId": "sms_909693416"
+    },
+    {
+      "sender": "AX-HDFCBK",
+      "body": "Rs.900.00 debited from A/c XX1234 on 16-11-26 to A/c XX4821 (IMPS Ref No 512398765405). Not you? Call 18002586161",
+      "otp": false,
+      "expected": {
+        "amount": 900,
+        "type": "debit",
+        "merchant": "Transfer XX4821",
+        "accountSuffix": "1234",
+        "bankName": "HDFC",
+        "isSalary": false,
+        "referenceId": "512398765405",
+        "counterpartyKey": "acct:4821"
+      },
+      "smsId": "ref_512398765405",
+      "contentId": "sms_701007865"
+    },
+    {
+      "sender": "AX-HDFCBK",
+      "body": "Rs.250.00 debited from A/c XX1234 on 17-11-26 to A/c XX1234 (IMPS Ref No 512398765406). Not you? Call 18002586161",
+      "otp": false,
+      "expected": {
+        "amount": 250,
+        "type": "debit",
+        "merchant": "Transfer XX1234",
+        "accountSuffix": "1234",
+        "bankName": "HDFC",
+        "isSalary": false,
+        "referenceId": "512398765406"
+      },
+      "smsId": "ref_512398765406",
+      "contentId": "sms_905385036"
     }
   ]
 }

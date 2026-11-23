@@ -12,6 +12,16 @@ import { Request } from 'express';
 import { RedisService } from '../redis/redis.service';
 import { TokenService } from './token.service';
 import { ALLOW_INGEST_TOKEN } from './allow-ingest-token.decorator';
+import { ALLOW_TERMS_PENDING } from './allow-terms-pending.decorator';
+
+/** Answer for an account that hasn't accepted the Terms yet; the app shows the Terms screen. */
+export const termsRequired = () =>
+  new ForbiddenException({
+    statusCode: 403,
+    error: 'Forbidden',
+    code: 'TERMS_REQUIRED',
+    message: 'Accept the Terms of Service to start using your account.',
+  });
 
 /**
  * How long this server remembers an account's status in its own memory. Matches the 60 s
@@ -70,6 +80,7 @@ export class JwtAuthGuard implements CanActivate {
           message: 'You have been signed out. Please sign in again.',
         });
       }
+      if (payload.tp && !this.allowsTermsPending(context)) throw termsRequired();
       this.attachUser(request, payload);
       return true;
     }
@@ -87,6 +98,7 @@ export class JwtAuthGuard implements CanActivate {
       if (this.tokenService.isAccessDenied({ sub: userId, iat: payload.iat })) {
         throw new UnauthorizedException({ statusCode: 401, error: 'Unauthorized', code: 'SESSION_REVOKED', message: 'Signed out.' });
       }
+      if (payload.tp) throw termsRequired();
       const alive = await this.tokenService.isIngestSessionAlive(userId, payload.fid);
       if (!alive) {
         throw new UnauthorizedException({ statusCode: 401, error: 'Unauthorized', code: 'SESSION_REVOKED', message: 'Signed out.' });
@@ -100,8 +112,9 @@ export class JwtAuthGuard implements CanActivate {
 
     const cacheKey = `user:status:${userId}`;
 
-    // 1. Fast Redis Status Check ('active[:<tokensValidAfter>]' | 'banned' | 'deleted')
-    let status: 'active' | 'banned' | 'deleted' | null = null;
+    // 1. Fast Redis Status Check ('active[:<tokensValidAfter>]' | 'terms[:<tokensValidAfter>]' |
+    //    'banned' | 'deleted'); 'terms' = active but the Terms aren't accepted yet.
+    let status: 'active' | 'terms' | 'banned' | 'deleted' | null = null;
     let tokensValidAfter = 0;
     try {
       const cached = await this.redisService.get(cacheKey, { l1TtlMs: STATUS_MEMORY_MS });
@@ -117,7 +130,7 @@ export class JwtAuthGuard implements CanActivate {
     // 2. Database Fallback on Cache Miss / Redis Failure
     if (!status) {
       const rows = await this.dataSource.query(
-        `SELECT id, is_banned, is_deleted, tokens_valid_after FROM core.users WHERE id = $1`,
+        `SELECT id, is_banned, is_deleted, tokens_valid_after, terms_accepted FROM core.users WHERE id = $1`,
         [userId],
       );
 
@@ -130,10 +143,12 @@ export class JwtAuthGuard implements CanActivate {
         // 1-hour self-healing TTL so any stale ban can re-verify with DB
         await this.redisService.set(cacheKey, 'banned', 3600).catch(() => {});
       } else {
-        status = 'active';
+        status = rows[0].terms_accepted === true ? 'active' : 'terms';
         tokensValidAfter = Number(rows[0].tokens_valid_after) || 0;
         // Cache active status (with the sign-out cutoff) for 60s
-        await this.redisService.set(cacheKey, `active:${tokensValidAfter}`, 60, { l1TtlMs: STATUS_MEMORY_MS }).catch(() => {});
+        await this.redisService
+          .set(cacheKey, `${status}:${tokensValidAfter}`, 60, { l1TtlMs: STATUS_MEMORY_MS })
+          .catch(() => {});
       }
     }
 
@@ -166,8 +181,14 @@ export class JwtAuthGuard implements CanActivate {
       });
     }
 
+    if (status === 'terms' && !this.allowsTermsPending(context)) throw termsRequired();
+
     this.attachUser(request, payload);
     return true;
+  }
+
+  private allowsTermsPending(context: ExecutionContext): boolean {
+    return !!this.reflector.getAllAndOverride<boolean>(ALLOW_TERMS_PENDING, [context.getHandler(), context.getClass()]);
   }
 
   private attachUser(request: Request, payload: any) {
@@ -176,6 +197,7 @@ export class JwtAuthGuard implements CanActivate {
       email: payload.email,
       role: payload.role,
       tokenType: payload.typ || 'legacy',
+      termsPending: !!payload.tp,
       jti: payload.jti,
       familyId: payload.fid,
       exp: payload.exp,

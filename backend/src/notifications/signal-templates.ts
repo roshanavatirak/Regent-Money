@@ -3,7 +3,7 @@
 // Regent Money: The Witty Indian Friend Template Bank
 // Quick, a little cheeky, always on your side. Never hurtful.
 
-export type SignalType = 'pace' | 'spike' | 'habit' | 'runway' | 'win' | 'salary' | 'summary';
+export type SignalType = 'pace' | 'spike' | 'habit' | 'runway' | 'win' | 'salary' | 'summary' | 'bill_risk';
 export type SignalTone = 'playful' | 'nudging' | 'straight';
 
 export interface TemplateDefinition {
@@ -28,6 +28,8 @@ export interface SignalFacts {
   gap?: number;
   ratio?: number | string;
   pctDown?: number;
+  /** "today", "tomorrow" or "in 3 days". */
+  dueWhen?: string;
 }
 
 // Sensitive categories must NEVER be joked about
@@ -587,6 +589,22 @@ export const TEMPLATE_BANK: Record<SignalType, TemplateDefinition[]> = {
   /* ------------------------------------------------------------------ */
   /* 7. SUMMARY / PULSE (Weekly or low-activity pulse)                 */
   /* ------------------------------------------------------------------ */
+  /* ------------------------------------------------------------------ */
+  /* EMI BOUNCE RISK (calm and plain: EMI is a sensitive category)      */
+  /* ------------------------------------------------------------------ */
+  bill_risk: [
+    {
+      tone: 'straight',
+      title: '{merchant} EMI of {amount} is due {due_when}',
+      body: 'The account it’s paid from has {runway_amount}. Add {gap} before then to avoid a bounce charge.',
+    },
+    {
+      tone: 'straight',
+      title: 'Top up before your {merchant} EMI',
+      body: '{amount} is due {due_when} and the account has {runway_amount}. Moving {gap} in now keeps the EMI from bouncing.',
+    },
+  ],
+
   summary: [
     {
       tone: 'playful',
@@ -629,7 +647,8 @@ export const renderTemplate = (
       .replace(/{pct}/g, `${facts.pct || 0}%`)
       .replace(/{gap}/g, formatINR(facts.gap))
       .replace(/{ratio}/g, typeof facts.ratio === 'number' ? `${facts.ratio.toFixed(1)}×` : facts.ratio || '2×')
-      .replace(/{pct_down}/g, `${facts.pctDown || 0}%`);
+      .replace(/{pct_down}/g, `${facts.pctDown || 0}%`)
+      .replace(/{due_when}/g, facts.dueWhen || 'soon');
   };
 
   return {

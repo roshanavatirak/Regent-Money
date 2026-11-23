@@ -8,6 +8,7 @@ import {
   KeyboardAvoidingView,
   Linking,
   Modal,
+  BackHandler,
   Platform,
   Pressable,
   StyleProp,
@@ -29,6 +30,7 @@ import Animated, {
   FadeIn,
   FadeInDown,
   FadeInLeft,
+  FadeInRight,
   FadeOut,
   SlideInDown,
   ZoomIn,
@@ -52,6 +54,8 @@ import { StatusBar } from 'expo-status-bar';
 import * as IntentLauncher from 'expo-intent-launcher';
 import { CloudflareTurnstile } from '../components/CloudflareTurnstile';
 import { BrandWordmark } from '../components/BrandWordmark';
+import { notificationService } from '../services/notificationService';
+import { requestPhoneHint } from '../services/phoneHint';
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
@@ -81,6 +85,7 @@ const C = {
   dangerBg: '#FDF1F1',
   dangerLine: '#F4CCCC',
   amber: '#d9930d',
+  amberInk: '#7A4F00',
 };
 
 const SOFT = { damping: 16, stiffness: 190 };
@@ -183,14 +188,6 @@ function Button({ label, onPress, variant = 'primary', loading, disabled, leadin
           <Text style={[styles.btnText, !primary && styles.btnTextSecondary]}>{label}</Text>
         </>
       )}
-    </PressScale>
-  );
-}
-
-function BackButton({ onPress }: { onPress: () => void }) {
-  return (
-    <PressScale onPress={onPress} style={styles.back} accessibilityLabel="Go back">
-      <Feather name="arrow-left" size={20} color={C.ink} />
     </PressScale>
   );
 }
@@ -350,29 +347,37 @@ function Sheet({
   );
 }
 
-interface EmailVerificationModalProps {
-  visible: boolean;
-  email: string;
-  onClose: () => void;
-  onProceedToLogin: () => void;
+/** Opens the phone's email app on its inbox (not a compose screen, not the browser). */
+async function openEmailApp() {
+  if (Platform.OS === 'android') {
+    try {
+      await IntentLauncher.startActivityAsync('android.intent.action.MAIN', {
+        category: 'android.intent.category.APP_EMAIL',
+        flags: 0x10000000, // FLAG_ACTIVITY_NEW_TASK: start it as its own app
+      });
+      return;
+    } catch {
+      // No default email app set; try Gmail directly.
+    }
+    try {
+      IntentLauncher.openApplication('com.google.android.gm');
+      return;
+    } catch {
+      // Gmail not installed either.
+    }
+    await Linking.openURL('https://mail.google.com').catch(() => {});
+    return;
+  }
+  await Linking.openURL('message:').catch(() => {});
 }
 
-/**
- * Clean, lightweight, professional verification popup shown immediately after signup.
- */
-function EmailVerificationModal({ visible, email, onClose, onProceedToLogin }: EmailVerificationModalProps) {
-  const { width: W } = useWindowDimensions();
-  const [cooldown, setCooldown] = useState(0);
+/** Last sign-up step: the account exists and the verification email is on its way. */
+function VerifyEmailStep({ email, onGoToLogin }: { email: string; onGoToLogin: () => void }) {
+  const display = useDisplayFont();
+  // The signup email was just sent; the server won't send another for 60 seconds.
+  const [cooldown, setCooldown] = useState(60);
   const [resending, setResending] = useState(false);
   const [resendStatus, setResendStatus] = useState<string | null>(null);
-
-  // The signup email was just sent; the server won't send another for 60 seconds.
-  useEffect(() => {
-    if (visible) {
-      setCooldown(60);
-      setResendStatus(null);
-    }
-  }, [visible]);
 
   useEffect(() => {
     if (cooldown <= 0) return;
@@ -397,109 +402,69 @@ function EmailVerificationModal({ visible, email, onClose, onProceedToLogin }: E
     }
   };
 
-  const handleOpenEmailApp = async () => {
-    if (Platform.OS === 'android') {
-      // Open the phone's default email app on its inbox (not a compose screen, not the browser).
-      try {
-        await IntentLauncher.startActivityAsync('android.intent.action.MAIN', {
-          category: 'android.intent.category.APP_EMAIL',
-          flags: 0x10000000, // FLAG_ACTIVITY_NEW_TASK: start it as its own app
-        });
-        return;
-      } catch {
-        // No default email app set; try Gmail directly.
-      }
-      try {
-        IntentLauncher.openApplication('com.google.android.gm');
-        return;
-      } catch {
-        // Gmail not installed either.
-      }
-      await Linking.openURL('https://mail.google.com').catch(() => {});
-      return;
-    }
-    await Linking.openURL('message:').catch(() => {});
-  };
+  const resendLabel =
+    cooldown > 0
+      ? cooldown > 3600
+        ? 'Resend tomorrow'
+        : cooldown > 90
+          ? `Resend in ${Math.ceil(cooldown / 60)} min`
+          : `Resend in 0:${cooldown < 10 ? '0' : ''}${cooldown}`
+      : 'Resend link';
 
   return (
-    <Modal visible={visible} transparent animationType="fade" statusBarTranslucent onRequestClose={onClose}>
-      <View style={styles.verifyModalBackdrop}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close modal" />
-        <Animated.View
-          entering={ZoomIn.duration(200)}
-          exiting={FadeOut.duration(150)}
-          style={[styles.verifyModalCard, { width: Math.min(W - 48, 340) }]}
-        >
-          {/* Close button */}
-          <Pressable onPress={onClose} style={styles.verifyModalCloseBtn} hitSlop={10} accessibilityLabel="Close">
-            <Feather name="x" size={16} color={C.muted} />
-          </Pressable>
-
-          {/* Clean circle with mail icon */}
-          <View style={styles.verifyIconClean}>
-            <Feather name="mail" size={24} color={C.green} />
-          </View>
-
-          {/* Title & message */}
-          <Text style={styles.verifyModalTitle}>Check your email</Text>
-          <Text style={styles.verifyModalBody}>
-            We've sent a verification link to{'\n'}
-            <Text style={styles.verifyEmailHighlight}>{email}</Text>
-          </Text>
-
-          {resendStatus && (
-            <Animated.Text entering={FadeIn.duration(180)} style={styles.verifyResendNotice}>
-              {resendStatus}
-            </Animated.Text>
-          )}
-
-          {/* Primary Action: Open Email App */}
-          <View style={styles.verifyPrimaryBtn}>
-            <Button
-              label="Open Email App"
-              onPress={handleOpenEmailApp}
-              leading={<Feather name="external-link" size={16} color={C.lime} style={{ marginRight: 8 }} />}
-            />
-          </View>
-
-          {/* Secondary Action: Go to Log In */}
-          <Pressable
-            onPress={onProceedToLogin}
-            hitSlop={10}
-            style={styles.verifyLoginLinkBtn}
-            accessibilityRole="button"
-            accessibilityLabel="Go to Log In"
-          >
-            <Text style={styles.verifyLoginLinkText}>Go to Log In</Text>
-          </Pressable>
-
-          {/* Subtle Resend option */}
-          <Pressable
-            onPress={handleResend}
-            disabled={cooldown > 0 || resending}
-            hitSlop={8}
-            style={styles.verifyResendRow}
-          >
-            {resending ? (
-              <ActivityIndicator size="small" color={C.green} />
-            ) : (
-              <Text style={styles.verifyResendText}>
-                Didn't receive it?{' '}
-                <Text style={[styles.verifyResendHighlight, cooldown > 0 && { color: C.muted }]}>
-                  {cooldown > 0
-                    ? cooldown > 3600
-                      ? 'Resend tomorrow'
-                      : cooldown > 90
-                        ? `Resend in ${Math.ceil(cooldown / 60)} min`
-                        : `Resend (${cooldown}s)`
-                    : 'Resend link'}
-                </Text>
-              </Text>
-            )}
-          </Pressable>
-        </Animated.View>
+    <View style={styles.vsWrap}>
+      <Animated.View entering={ZoomIn.duration(300)} style={styles.vsArt}>
+        <Feather name="mail" size={48} color={C.forest} />
+        <View style={styles.vsTick}>
+          <Feather name="check" size={16} color={C.forest} />
+        </View>
+      </Animated.View>
+      <Text style={[styles.vsTitle, display]} accessibilityRole="header">
+        Check your inbox
+      </Text>
+      <Text style={styles.vsSub}>We sent a verification link to</Text>
+      <View style={styles.vsEmailPill}>
+        <Text style={styles.vsEmail} numberOfLines={1}>
+          {email}
+        </Text>
       </View>
-    </Modal>
+      <Text style={styles.vsHint}>
+        Tap the link in the email within 15 minutes to activate your account. Can’t find it? Check Spam or
+        Promotions.
+      </Text>
+      {resendStatus ? (
+        <Animated.Text entering={FadeIn.duration(180)} style={styles.vsNotice} accessibilityLiveRegion="polite">
+          {resendStatus}
+        </Animated.Text>
+      ) : null}
+
+      <View style={styles.formSpacer} />
+      <Button
+        label="Open email app"
+        onPress={openEmailApp}
+        leading={<Feather name="external-link" size={16} color={C.lime} style={{ marginRight: 8 }} />}
+      />
+      <Pressable
+        onPress={handleResend}
+        disabled={cooldown > 0 || resending}
+        hitSlop={8}
+        style={styles.vsResendRow}
+        accessibilityRole="button"
+        accessibilityLabel={resendLabel}
+      >
+        {resending ? (
+          <ActivityIndicator size="small" color={C.green} />
+        ) : (
+          <Text style={styles.vsResendText}>
+            Didn’t get it?{' '}
+            <Text style={[styles.vsResendLink, cooldown > 0 && styles.vsResendWait]}>{resendLabel}</Text>
+          </Text>
+        )}
+      </Pressable>
+      <Pressable onPress={onGoToLogin} hitSlop={8} style={styles.vsLogin} accessibilityRole="button">
+        <Text style={styles.vsLoginText}>Go to Log in</Text>
+      </Pressable>
+    </View>
   );
 }
 
@@ -510,9 +475,11 @@ function EmailVerificationModal({ visible, email, onClose, onProceedToLogin }: E
 interface GoogleAuthButtonProps {
   loading: boolean;
   setLoading: (val: boolean) => void;
+  /** Sign up: never show the "Last used" card, and always open Google's account list. */
+  alwaysPickAccount?: boolean;
 }
 
-const GoogleAuthButton: React.FC<GoogleAuthButtonProps> = ({ loading, setLoading }) => {
+const GoogleAuthButton: React.FC<GoogleAuthButtonProps> = ({ loading, setLoading, alwaysPickAccount = false }) => {
   const [lastGoogleUser, setLastGoogleUser] = useState<LastGoogleUser | null>(() =>
     authService.getLastGoogleUser(),
   );
@@ -554,7 +521,7 @@ const GoogleAuthButton: React.FC<GoogleAuthButtonProps> = ({ loading, setLoading
     }
   };
 
-  if (lastGoogleUser?.email) {
+  if (lastGoogleUser?.email && !alwaysPickAccount) {
     const displayName = lastGoogleUser.name || lastGoogleUser.email.split('@')[0];
     const firstName = displayName.split(' ')[0];
     const initial = (lastGoogleUser.name || lastGoogleUser.email).charAt(0).toUpperCase();
@@ -617,7 +584,7 @@ const GoogleAuthButton: React.FC<GoogleAuthButtonProps> = ({ loading, setLoading
       variant="secondary"
       label="Continue with Google"
       leading={<Ionicons name="logo-google" size={18} color={C.ink} style={styles.btnIcon} />}
-      onPress={() => signIn(false)}
+      onPress={() => signIn(alwaysPickAccount)}
       loading={loading}
     />
   );
@@ -932,11 +899,36 @@ function LegalNotice() {
   );
 }
 
+/** "Terms of Service · Privacy Policy" links at the foot of the Log in screen. */
+function LegalLinks() {
+  return (
+    <View style={styles.legalLinks}>
+      <Pressable onPress={openTerms} hitSlop={10} accessibilityRole="link">
+        <Text style={styles.legalLinkText}>Terms of Service</Text>
+      </Pressable>
+      <Text style={styles.legalDot}>·</Text>
+      <Pressable onPress={openPrivacy} hitSlop={10} accessibilityRole="link">
+        <Text style={styles.legalLinkText}>Privacy Policy</Text>
+      </Pressable>
+    </View>
+  );
+}
+
 function Landing({ navigation, returning }: { navigation: any; returning: boolean }) {
   const insets = useSafeAreaInsets();
   const { width: W, height: H } = useWindowDimensions();
   const [loading, setLoading] = useState(false);
   const display = useDisplayFont();
+
+  // Once onboarding is over, ask for notifications with the system dialog, right here in
+  // the app. If refused, it is asked again 7 days later. A short delay lets the page draw first.
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    const timer = setTimeout(() => {
+      notificationService.requestPermissionIfDue().catch(() => {});
+    }, 700);
+    return () => clearTimeout(timer);
+  }, []);
 
   const heroW = Math.min(W - 48, 380);
   // Shrink the card stack on short screens so the buttons always fit.
@@ -1002,9 +994,13 @@ function Landing({ navigation, returning }: { navigation: any; returning: boolea
           </Pressable>
         </Animated.View>
 
-        <Animated.View entering={FadeIn.delay(660).duration(600)} style={styles.legalWrap}>
-          <LegalNotice />
-        </Animated.View>
+        {/* Returning users have already accepted the Terms (asked once after signing in), so the
+            Welcome back screen doesn't repeat it. */}
+        {!returning && (
+          <Animated.View entering={FadeIn.delay(660).duration(600)} style={styles.legalWrap}>
+            <LegalNotice />
+          </Animated.View>
+        )}
       </View>
     </View>
   );
@@ -1161,17 +1157,19 @@ const landingStyles = {
 /* Shared form header                                                 */
 /* ------------------------------------------------------------------ */
 
-/** Back button, centred wordmark, then the animated icon tile and the title. */
-function FormHeader({ title, icon, onBack }: { title: string; icon: ReactNode; onBack: () => void }) {
+/**
+ * Centred wordmark, the animated icon tile, then the title. The same on Log in and Sign up,
+ * so both line up. No back arrow: phones have their own back (button or gesture).
+ */
+function FormHeader({ title, icon }: { title: string; icon: ReactNode }) {
   const display = useDisplayFont();
   return (
     <>
       <Animated.View entering={FadeIn.duration(400)} style={styles.formTop}>
-        <BackButton onPress={onBack} />
         <BrandWordmark size={15} />
-        <View style={styles.formTopSpacer} />
       </Animated.View>
-      <Animated.View entering={ZoomIn.delay(60).springify().damping(15)} style={styles.iconTile}>
+      {/* A plain fade, no spring zoom: the tile just appears. */}
+      <Animated.View entering={FadeIn.delay(60).duration(400)} style={styles.iconTile}>
         {icon}
       </Animated.View>
       <Animated.Text entering={FadeInDown.delay(120).duration(550)} style={[styles.formTitle, display]}>
@@ -1181,110 +1179,28 @@ function FormHeader({ title, icon, onBack }: { title: string; icon: ReactNode; o
   );
 }
 
-/** Lock that bobs gently, and swings open while you type the password. */
+/** Lock that sits still and gives one small tilt when it opens or closes (while you type the password). */
 function LockIcon({ open }: { open: boolean }) {
   const reduceMotion = useReducedMotion();
-  const bob = useSharedValue(0);
   const swing = useSharedValue(0);
+  const first = useRef(true);
   useEffect(() => {
+    if (first.current) {
+      first.current = false; // no tilt when the screen opens
+      return;
+    }
     if (reduceMotion) return;
-    bob.value = withRepeat(withTiming(1, { duration: 1300, easing: Easing.inOut(Easing.sin) }), -1, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reduceMotion]);
-  useEffect(() => {
-    swing.value = withSequence(withTiming(1, { duration: 120 }), withSpring(0, SOFT));
+    swing.value = withSequence(
+      withTiming(1, { duration: 140, easing: Easing.out(Easing.quad) }),
+      withTiming(0, { duration: 220, easing: Easing.inOut(Easing.quad) }),
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
-  const style = useAnimatedStyle(() => ({
-    transform: [{ translateY: -3 * bob.value }, { rotate: `${swing.value * -12}deg` }],
-  }));
+  const style = useAnimatedStyle(() => ({ transform: [{ rotate: `${swing.value * -8}deg` }] }));
   return (
     <Animated.View style={style}>
       <Feather name={open ? 'unlock' : 'lock'} size={26} color={C.forest} />
     </Animated.View>
-  );
-}
-
-/** Add-person icon with a twinkling spark in the corner. */
-function NewUserIcon() {
-  const reduceMotion = useReducedMotion();
-  const t = useSharedValue(reduceMotion ? 1 : 0);
-  useEffect(() => {
-    if (reduceMotion) return;
-    t.value = withRepeat(withTiming(1, { duration: 900, easing: Easing.inOut(Easing.sin) }), -1, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reduceMotion]);
-  const spark = useAnimatedStyle(() => ({
-    opacity: 0.35 + t.value * 0.65,
-    transform: [{ scale: 0.6 + t.value * 0.4 }, { rotate: `${t.value * 30}deg` }],
-  }));
-  return (
-    <View>
-      <Feather name="user-plus" size={26} color={C.forest} />
-      <Animated.View style={[styles.spark, spark]}>
-        <Svg width={16} height={16} viewBox="0 0 24 24">
-          <Path d="M12 2.5l2.1 6.1 6.4 2.1-6.4 2.1L12 19l-2.1-6.2-6.4-2.1 6.4-2.1z" fill={C.brandGreen} />
-        </Svg>
-      </Animated.View>
-    </View>
-  );
-}
-
-/** One bar per sign-up field; each fills forest once that field is valid. */
-function StepBar({ done }: { done: boolean[] }) {
-  return (
-    <View style={styles.steps} accessibilityLabel={`${done.filter(Boolean).length} of ${done.length} fields done`}>
-      {done.map((d, i) => (
-        <StepSegment key={i} done={d} />
-      ))}
-    </View>
-  );
-}
-
-function StepSegment({ done }: { done: boolean }) {
-  const v = useSharedValue(done ? 1 : 0);
-  useEffect(() => {
-    v.value = withTiming(done ? 1 : 0, { duration: 300 });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [done]);
-  const style = useAnimatedStyle(() => ({ backgroundColor: interpolateColor(v.value, [0, 1], [C.line, C.forest]) }));
-  return <Animated.View style={[styles.step, style]} />;
-}
-
-/** Password strength, 0-4, matched to the sign-up rule of 6+ characters. */
-function passwordScore(pw: string) {
-  if (!pw) return 0;
-  let s = 0;
-  if (pw.length >= 6) s++;
-  if (pw.length >= 10) s++;
-  if (/[A-Z]/.test(pw) && /[a-z]/.test(pw)) s++;
-  if (/\d/.test(pw) && /[^A-Za-z0-9]/.test(pw)) s++;
-  return Math.max(1, s);
-}
-
-function StrengthMeter({ password }: { password: string }) {
-  const score = passwordScore(password);
-  const w = useSharedValue(0);
-  useEffect(() => {
-    w.value = withTiming(score / 4, { duration: 300 });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [score]);
-  const color = score >= 3 ? C.forest : score === 2 ? C.brandGreen : C.danger;
-  const bar = useAnimatedStyle(() => ({ width: `${w.value * 100}%` }));
-  const label = !password
-    ? 'Use 6 or more characters'
-    : password.length < 6
-      ? 'Too short'
-      : score >= 3
-        ? 'Strong password'
-        : 'Good, could be stronger';
-  return (
-    <View style={styles.strength}>
-      <View style={styles.strengthTrack}>
-        <Animated.View style={[styles.strengthFill, { backgroundColor: color }, bar]} />
-      </View>
-      <Text style={styles.strengthText}>{label}</Text>
-    </View>
   );
 }
 
@@ -1407,6 +1323,178 @@ function GroupRow({ icon, inputRef, prefix, right, onActive, onFocus, onBlur, st
   );
 }
 
+/* ------------------------------------------------------------------ */
+/* Log in with an unconfirmed email                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Shown above the log in form when the password was right but the email isn't confirmed yet
+ * (the server only says so after checking the password). One tap emails a fresh link.
+ */
+function UnverifiedCard({
+  email,
+  linkExpired,
+  sending,
+  onSend,
+}: {
+  email: string;
+  linkExpired: boolean;
+  sending: boolean;
+  onSend: () => void;
+}) {
+  return (
+    <Animated.View
+      entering={FadeInDown.duration(300)}
+      style={styles.uvCard}
+      accessibilityRole="alert"
+      accessibilityLiveRegion="polite"
+    >
+      <View style={styles.uvTop}>
+        <View style={styles.uvIcon}>
+          <Feather name="mail" size={19} color={C.amberInk} />
+        </View>
+        <View style={styles.uvTextWrap}>
+          <Text style={styles.uvTitle}>Confirm your email first</Text>
+          <Text style={styles.uvBody}>
+            Your password is right, but{email ? ' ' : ''}
+            {email ? <Text style={styles.uvEmail}>{email}</Text> : 'your email'} isn’t confirmed yet.
+            {linkExpired ? ' Your last link has expired.' : ' Check your inbox for our link.'}
+          </Text>
+        </View>
+      </View>
+      <Button
+        label={linkExpired ? 'Send a new link' : 'Send another link'}
+        onPress={onSend}
+        loading={sending}
+        style={styles.uvBtn}
+      />
+      <Text style={styles.uvNote}>New links work for 15 minutes</Text>
+    </Animated.View>
+  );
+}
+
+type LinkSheetMode = 'sent' | 'limit';
+
+/**
+ * Bottom sheet after "Send a new link": check your inbox (with resend countdown and
+ * "I've confirmed, log me in"), or the daily limit message.
+ */
+function VerifyLinkSheet({
+  visible,
+  mode,
+  email,
+  notice,
+  cooldown,
+  resending,
+  retrying,
+  onResend,
+  onRetryLogin,
+  onClose,
+}: {
+  visible: boolean;
+  mode: LinkSheetMode;
+  email: string;
+  notice?: string;
+  cooldown: number;
+  resending: boolean;
+  retrying: boolean;
+  onResend: () => void;
+  onRetryLogin: () => void;
+  onClose: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+  const display = useDisplayFont();
+  const limit = mode === 'limit';
+  return (
+    <Modal visible={visible} transparent animationType="fade" statusBarTranslucent onRequestClose={onClose}>
+      <View style={styles.sheetWrap}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close" />
+        <Animated.View
+          entering={SlideInDown.springify().damping(20)}
+          style={[styles.sheet, styles.lsSheet, { paddingBottom: 24 + insets.bottom }]}
+        >
+          <View style={styles.grabber} />
+          <View style={[styles.lsOrb, { backgroundColor: limit ? 'rgba(242,184,75,0.14)' : 'rgba(184,243,107,0.18)' }]}>
+            <View style={[styles.lsOrb2, { backgroundColor: limit ? 'rgba(242,184,75,0.26)' : 'rgba(184,243,107,0.38)' }]}>
+              <View style={[styles.lsOrb3, { backgroundColor: limit ? '#FFE3A6' : C.lime }]}>
+                <Feather name={limit ? 'clock' : 'mail'} size={24} color={limit ? C.amberInk : C.forest} />
+              </View>
+            </View>
+          </View>
+
+          <Text style={[styles.lsTitle, display]} accessibilityRole="header">
+            {limit ? 'That’s 5 links today' : 'Check your inbox'}
+          </Text>
+          {limit ? (
+            <Text style={styles.lsBody}>
+              {notice || 'To protect your inbox, we send up to 5 a day. Use the newest email we sent, or try again tomorrow.'}
+            </Text>
+          ) : (
+            <>
+              <Text style={styles.lsBody}>
+                Tap the link in the next <Text style={styles.lsStrong}>15 minutes</Text>, then come back here.
+              </Text>
+              {!!email && (
+                <View style={styles.lsPill}>
+                  <Text style={styles.lsPillText} numberOfLines={1}>
+                    {email}
+                  </Text>
+                </View>
+              )}
+            </>
+          )}
+
+          {!!notice && !limit && (
+            <Animated.Text entering={FadeIn.duration(180)} style={styles.lsNotice} accessibilityLiveRegion="polite">
+              {notice}
+            </Animated.Text>
+          )}
+
+          <View style={styles.lsActions}>
+            <Button
+              label="Open email app"
+              onPress={openEmailApp}
+              leading={<Feather name="external-link" size={16} color={C.lime} style={{ marginRight: 8 }} />}
+            />
+            {limit ? (
+              <Button variant="secondary" label="New link available tomorrow" disabled style={styles.lsSecond} />
+            ) : (
+              <Button
+                variant="secondary"
+                label="I’ve confirmed, log me in"
+                onPress={onRetryLogin}
+                loading={retrying}
+                style={styles.lsSecond}
+              />
+            )}
+          </View>
+
+          {!limit && (
+            <Pressable
+              onPress={onResend}
+              disabled={cooldown > 0 || resending}
+              hitSlop={8}
+              style={styles.vsResendRow}
+              accessibilityRole="button"
+            >
+              {resending ? (
+                <ActivityIndicator size="small" color={C.green} />
+              ) : (
+                <Text style={styles.vsResendText}>
+                  Didn’t get it?{' '}
+                  <Text style={[styles.vsResendLink, cooldown > 0 && styles.vsResendWait]}>
+                    {cooldown > 0 ? `Resend in 0:${cooldown < 10 ? '0' : ''}${cooldown}` : 'Resend link'}
+                  </Text>
+                </Text>
+              )}
+            </Pressable>
+          )}
+        </Animated.View>
+      </View>
+    </Modal>
+  );
+}
+
 export const LoginScreen = ({ navigation }: { navigation: any }) => {
   useWebAutofillFix();
   const insets = useSafeAreaInsets();
@@ -1436,7 +1524,20 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
   const [resetSending, setResetSending] = useState<boolean>(false);
   const [resetMsg, setResetMsg] = useState<{ text: string; error: boolean } | null>(null);
 
+  // Right password, email not confirmed: card + "Send a new link" sheet
+  const [unverified, setUnverified] = useState<{ email: string; linkExpired: boolean } | null>(null);
+  const [linkSheet, setLinkSheet] = useState<{ mode: LinkSheetMode; notice?: string } | null>(null);
+  const [sendingLink, setSendingLink] = useState(false);
+  const [retryingLogin, setRetryingLogin] = useState(false);
+  const [linkCooldown, setLinkCooldown] = useState(0);
+
   const locked = lockoutRemainingSec > 0;
+
+  useEffect(() => {
+    if (linkCooldown <= 0) return;
+    const t = setInterval(() => setLinkCooldown(c => Math.max(0, c - 1)), 1000);
+    return () => clearInterval(t);
+  }, [linkCooldown]);
 
   const fail = (message: string) => {
     setError(message);
@@ -1464,7 +1565,8 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
     setShowForgotModal(true);
   };
 
-  const handleLogin = async () => {
+  const handleLogin = async (opts?: { fromSheet?: boolean }) => {
+    const fromSheet = !!opts?.fromSheet;
     if (locked) {
       fail(`Your account is locked. Try again in ${formatRemainingTime(lockoutRemainingSec)} or reset your password.`);
       return;
@@ -1478,15 +1580,34 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
       return;
     }
     if (!turnstileToken) {
+      if (fromSheet) {
+        setLinkSheet(s => (s ? { ...s, notice: 'Finishing a quick security check. Try again in a moment.' } : s));
+        return;
+      }
       fail('Complete the security check to continue.');
       return;
     }
     setError('');
-    setLoading(true);
+    if (fromSheet) setRetryingLogin(true);
+    else setLoading(true);
     try {
       await authService.logIn(emailOrMobile, password, rememberMe, turnstileToken);
+      setUnverified(null);
+      setLinkSheet(null);
     } catch (e: any) {
       human.refresh();
+      if (e.code === 'EMAIL_NOT_VERIFIED') {
+        setUnverified({
+          email: e.email || (emailOrMobile.includes('@') ? emailOrMobile.trim().toLowerCase() : ''),
+          linkExpired: e.linkExpired !== false,
+        });
+        setError('');
+        if (fromSheet) {
+          setLinkSheet(s => (s ? { ...s, notice: 'Not confirmed yet. Tap the link in your email first.' } : s));
+        }
+        return;
+      }
+      if (fromSheet) setLinkSheet(null);
       if (e.rateLimited) {
         // the live countdown banner replaces the error text
         human.rateLimit(e.retryAfterSeconds || 60);
@@ -1503,6 +1624,40 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
       }
     } finally {
       setLoading(false);
+      setRetryingLogin(false);
+    }
+  };
+
+  /** Emails a fresh verification link to the unconfirmed account, then shows the right sheet. */
+  const sendNewLink = async () => {
+    const email = unverified?.email;
+    if (!email) {
+      fail('Log in with your email address to get a new link.');
+      return;
+    }
+    setSendingLink(true);
+    try {
+      const res = await authService.resendVerificationEmail(email);
+      const wait = typeof res.retryAfterSeconds === 'number' ? res.retryAfterSeconds : 60;
+      if (res.sent) {
+        setLinkCooldown(wait);
+        setLinkSheet({ mode: 'sent' });
+        setUnverified(u => (u ? { ...u, linkExpired: false } : u));
+      } else if (wait > 3600) {
+        setLinkSheet({ mode: 'limit', notice: res.message });
+      } else if (wait > 0) {
+        // A link went out moments ago: that one is still good.
+        setLinkCooldown(wait);
+        setLinkSheet({ mode: 'sent', notice: res.message });
+      } else {
+        // Already confirmed in the meantime: just log in.
+        setUnverified(null);
+        handleLogin();
+      }
+    } catch (err: any) {
+      fail(err?.message || 'Couldn’t send a new link. Try again.');
+    } finally {
+      setSendingLink(false);
     }
   };
 
@@ -1533,11 +1688,7 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
         showsVerticalScrollIndicator={false}
         keyboardDismissMode="on-drag"
       >
-        <FormHeader
-          title="Let’s get you in"
-          icon={<LockIcon open={pwFocus || password.length > 0} />}
-          onBack={() => navigation.goBack()}
-        />
+        <FormHeader title="Let’s get you in" icon={<LockIcon open={pwFocus || password.length > 0} />} />
         <View style={styles.formGap} />
 
         {locked ? (
@@ -1563,6 +1714,13 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
           <ErrorBanner message={`Too many attempts. Try again in ${formatRemainingTime(human.cooldown)}.`} />
         ) : error ? (
           <ErrorBanner key={errorTick} message={error} />
+        ) : unverified ? (
+          <UnverifiedCard
+            email={unverified.email}
+            linkExpired={unverified.linkExpired}
+            sending={sendingLink}
+            onSend={sendNewLink}
+          />
         ) : null}
 
         <Animated.View
@@ -1579,7 +1737,10 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
             autoComplete="username"
             returnKeyType="next"
             value={emailOrMobile}
-            onChangeText={setEmailOrMobile}
+            onChangeText={v => {
+              setEmailOrMobile(v);
+              setUnverified(null);
+            }}
             onSubmitEditing={() => passwordRef.current?.focus()}
             onActive={setActive}
           />
@@ -1594,8 +1755,11 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
             autoComplete="password"
             returnKeyType="go"
             value={password}
-            onChangeText={setPassword}
-            onSubmitEditing={handleLogin}
+            onChangeText={v => {
+              setPassword(v);
+              setUnverified(null);
+            }}
+            onSubmitEditing={() => handleLogin()}
             onActive={setActive}
             right={<EyeToggle hidden={secureText} onToggle={() => setSecureText(s => !s)} />}
             onFocus={() => setPwFocus(true)}
@@ -1632,7 +1796,7 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
                   ? `Try again in ${formatRemainingTime(human.cooldown)}`
                   : 'Log in'
             }
-            onPress={handleLogin}
+            onPress={() => handleLogin()}
             loading={loading}
             disabled={locked || human.cooldown > 0}
             style={styles.suSubmit}
@@ -1648,7 +1812,21 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
             <Text style={styles.link}>Create account</Text>
           </Pressable>
         </View>
+        <LegalLinks />
       </KeyboardScreen>
+
+      <VerifyLinkSheet
+        visible={!!linkSheet}
+        mode={linkSheet?.mode || 'sent'}
+        email={unverified?.email || ''}
+        notice={linkSheet?.notice}
+        cooldown={linkCooldown}
+        resending={sendingLink}
+        retrying={retryingLogin}
+        onResend={sendNewLink}
+        onRetryLogin={() => handleLogin({ fromSheet: true })}
+        onClose={() => setLinkSheet(null)}
+      />
 
       <Sheet visible={showForgotModal} title="Reset your password" onClose={() => setShowForgotModal(false)}>
         <Text style={styles.sheetBody}>
@@ -1696,20 +1874,72 @@ export const LoginScreen = ({ navigation }: { navigation: any }) => {
 /* ------------------------------------------------------------------ */
 
 
+type StepFieldProps = TextInputProps & {
+  label: string;
+  inputRef?: React.Ref<TextInput>;
+  prefix?: string;
+  right?: ReactNode;
+};
+
+/** Outlined field with its label sitting in the top border; forest outline while focused. */
+function StepField({ label, inputRef, prefix, right, onFocus, onBlur, style, ...input }: StepFieldProps) {
+  const [focused, setFocused] = useState(false);
+  return (
+    <View style={[styles.sfBox, focused && styles.sfBoxFocused]}>
+      <Text style={[styles.sfLabel, focused && styles.sfLabelFocused]}>{label}</Text>
+      {prefix ? (
+        <View style={styles.sfPrefix}>
+          <Text style={styles.sfPrefixText}>{prefix}</Text>
+        </View>
+      ) : null}
+      <TextInput
+        ref={inputRef}
+        style={[styles.sfInput, style]}
+        placeholderTextColor={C.muted}
+        selectionColor={C.green}
+        accessibilityLabel={label}
+        onFocus={e => {
+          setFocused(true);
+          onFocus?.(e);
+        }}
+        onBlur={e => {
+          setFocused(false);
+          onBlur?.(e);
+        }}
+        {...input}
+      />
+      {right}
+    </View>
+  );
+}
+
+const SIGNUP_STEPS = 5; // name, email, mobile, password, terms
+const VERIFY_STEP = SIGNUP_STEPS; // shown after the account is created
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Sign up, one question per screen: name (or Google), email, mobile, password + confirm,
+ * then privacy and terms, where "I agree" creates the account. The last screen says the
+ * verification email was sent.
+ */
 export const SignupScreen = ({ navigation }: { navigation: any }) => {
   useWebAutofillFix();
   const insets = useSafeAreaInsets();
-  const emailRef = useRef<TextInput>(null);
+  const display = useDisplayFont();
+  const confirmRef = useRef<TextInput>(null);
   const phoneRef = useRef<TextInput>(null);
-  const passwordRef = useRef<TextInput>(null);
+  const phoneHintAsked = useRef(false);
+
+  const [step, setStep] = useState(0);
+  const [dir, setDir] = useState<1 | -1>(1);
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
 
-  const [secureText, setSecureText] = useState(true);
-  const [active, setActive] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState('');
@@ -1717,38 +1947,104 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
   const human = useHumanCheck();
   const turnstileToken = human.token;
   const setTurnstileToken = human.setToken;
-  const [showVerifyModal, setShowVerifyModal] = useState(false);
   const [registeredEmail, setRegisteredEmail] = useState('');
-  // Consent must be an active choice, so the box starts unticked.
-  const [agreeTerms, setAgreeTerms] = useState(false);
 
-  const steps = [!!name.trim(), email.includes('@'), phone.length === 10, password.length >= 6];
+  const trimmedName = name.trim();
+  const firstName = trimmedName.split(/\s+/)[0] || '';
+  const initials =
+    trimmedName
+      .split(/\s+/)
+      .slice(0, 2)
+      .map(p => p.charAt(0).toUpperCase())
+      .join('') || '?';
 
   const fail = (message: string) => {
     setError(message);
     setErrorTick(t => t + 1);
   };
 
+  const goTo = (next: number) => {
+    setDir(next > step ? 1 : -1);
+    setError('');
+    setStep(next);
+  };
+
+  /** Error for one input step, or null when it is fine. */
+  const validate = (s: number): string | null => {
+    switch (s) {
+      case 0:
+        return trimmedName ? null : 'Enter your full name.';
+      case 1:
+        return EMAIL_RE.test(email.trim()) ? null : 'Enter a valid email address.';
+      case 2:
+        return phone.length === 10 ? null : 'Enter your 10-digit mobile number.';
+      case 3:
+        if (password.length < 6) return 'Use at least 6 characters for your password.';
+        if (confirm !== password) return 'Passwords don’t match.';
+        return null;
+      default:
+        return null;
+    }
+  };
+
+  const handleNext = () => {
+    const msg = validate(step);
+    if (msg) {
+      fail(msg);
+      return;
+    }
+    goTo(step + 1);
+  };
+
+  const handleProceedToLogin = () => navigation.replace('Login');
+
+  const handleBack = () => {
+    if (step === VERIFY_STEP) handleProceedToLogin();
+    else if (step > 0) goTo(step - 1);
+    else if (navigation.canGoBack()) navigation.goBack();
+    else navigation.navigate('Login');
+  };
+
+  // Mobile step: first offer Google's "Choose a phone number" sheet (Android, once per sign-up).
+  // A picked number fills the field; otherwise, or on iOS, the keyboard opens as usual.
+  useEffect(() => {
+    if (step !== 2) return;
+    if (phone || phoneHintAsked.current) {
+      phoneRef.current?.focus();
+      return;
+    }
+    phoneHintAsked.current = true;
+    let stillHere = true;
+    requestPhoneHint().then(picked => {
+      if (picked) setPhone(picked);
+      else if (stillHere) phoneRef.current?.focus();
+    });
+    return () => {
+      stillHere = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
+
+  // Android back steps back through the form instead of leaving it.
+  useEffect(() => {
+    if (step === 0) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      handleBack();
+      return true;
+    });
+    return () => sub.remove();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
+
+  /** "I agree": the active consent, which also creates the account. */
   const handleSignup = async () => {
-    if (!name.trim() || !email.trim() || !phone || !password) {
-      fail('Fill in all four fields to continue.');
-      return;
-    }
-    if (!email.includes('@')) {
-      fail('Enter a valid email address.');
-      return;
-    }
-    if (phone.length !== 10) {
-      fail('Enter your 10-digit mobile number.');
-      return;
-    }
-    if (password.length < 6) {
-      fail('Use at least 6 characters for your password.');
-      return;
-    }
-    if (!agreeTerms) {
-      fail('Agree to the Terms of Use and Privacy Policy to continue.');
-      return;
+    for (let s = 0; s < SIGNUP_STEPS - 1; s++) {
+      const msg = validate(s);
+      if (msg) {
+        goTo(s);
+        fail(msg);
+        return;
+      }
     }
     if (human.cooldown > 0) {
       fail(`Too many attempts. Try again in ${formatRemainingTime(human.cooldown)}.`);
@@ -1762,10 +2058,10 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
     setError('');
     setLoading(true);
     try {
-      const result = await authService.signUp(name.trim(), email.trim(), phone, password, turnstileToken);
+      const result = await authService.signUp(trimmedName, email.trim(), phone, password, turnstileToken);
       if (!result.sessionConfirmed) {
         setRegisteredEmail(email.trim());
-        setShowVerifyModal(true);
+        goTo(VERIFY_STEP);
       }
     } catch (e: any) {
       human.refresh();
@@ -1775,29 +2071,29 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
         setError('');
         return;
       }
-      fail(e.message);
+      const message: string = e.message || 'Something went wrong. Please try again.';
+      // Send the person back to the screen that holds the problem field.
+      if (/email/i.test(message)) goTo(1);
+      else if (/phone|mobile/i.test(message)) goTo(2);
+      else if (/password/i.test(message)) goTo(3);
+      fail(message);
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    const unsubscribe = navigation.addListener('blur', () => {
-      setShowVerifyModal(false);
-    });
-    return unsubscribe;
-  }, [navigation]);
+  const heading = [
+    { title: 'What should we call you?', sub: 'Your name shows on your profile and greetings.' },
+    {
+      title: firstName ? `Hi ${firstName}, what’s your email?` : 'What’s your email?',
+      sub: 'We’ll send receipts and security alerts here.',
+    },
+    { title: 'Add your mobile number', sub: 'It helps us match bank SMS to your account.' },
+    { title: 'Create a strong password', sub: 'Use 6 or more characters. Mixing letters and numbers makes it stronger.' },
+    { title: 'Privacy and Terms', sub: 'To create your account, review how Regent Money handles your data.' },
+  ][Math.min(step, SIGNUP_STEPS - 1)];
 
-  const closeVerify = () => {
-    setShowVerifyModal(false);
-  };
-
-  const handleProceedToLogin = () => {
-    setShowVerifyModal(false);
-    setTimeout(() => {
-      navigation.replace('Login');
-    }, 100);
-  };
+  const passwordsMatch = confirm.length > 0 && confirm === password;
 
   return (
     <View style={styles.screen}>
@@ -1808,145 +2104,221 @@ export const SignupScreen = ({ navigation }: { navigation: any }) => {
         showsVerticalScrollIndicator={false}
         keyboardDismissMode="on-drag"
       >
-        <FormHeader title="Let’s get you set up" icon={<NewUserIcon />} onBack={() => navigation.goBack()} />
-        <Animated.View entering={FadeInDown.delay(160).duration(550)}>
-          <StepBar done={steps} />
+        <Animated.View entering={FadeIn.duration(400)} style={styles.formTop}>
+          <BrandWordmark size={15} />
         </Animated.View>
-        <View style={styles.formGap} />
-
-        {human.cooldown > 0 ? (
-          <ErrorBanner message={`Too many attempts. Try again in ${formatRemainingTime(human.cooldown)}.`} />
-        ) : error ? (
-          <ErrorBanner key={errorTick} message={error} />
-        ) : null}
 
         <Animated.View
-          entering={FadeInDown.delay(160).duration(550)}
-          style={[styles.group, active && styles.groupActive]}
+          key={step}
+          entering={(dir > 0 ? FadeInRight : FadeInLeft).duration(320)}
+          style={styles.suStep}
         >
-          <GroupRow
-            icon="user"
-            placeholder="Full name"
-            autoCapitalize="words"
-            textContentType="name"
-            autoComplete="name"
-            returnKeyType="next"
-            value={name}
-            onChangeText={setName}
-            onSubmitEditing={() => emailRef.current?.focus()}
-            onActive={setActive}
-          />
-          <View style={styles.gDivider} />
-          <GroupRow
-            icon="mail"
-            inputRef={emailRef}
-            placeholder="Email address"
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="email-address"
-            textContentType="emailAddress"
-            autoComplete="email"
-            returnKeyType="next"
-            value={email}
-            onChangeText={setEmail}
-            onSubmitEditing={() => phoneRef.current?.focus()}
-            onActive={setActive}
-          />
-          <View style={styles.gDivider} />
-          <GroupRow
-            icon="smartphone"
-            inputRef={phoneRef}
-            prefix="+91"
-            placeholder="Mobile number"
-            keyboardType="number-pad"
-            textContentType="telephoneNumber"
-            autoComplete="tel"
-            maxLength={10}
-            returnKeyType="next"
-            value={phone}
-            onChangeText={t => {
-              const digits = t.replace(/\D/g, '');
-              setPhone(digits);
-            }}
-            onSubmitEditing={() => passwordRef.current?.focus()}
-            onActive={setActive}
-          />
-          <View style={styles.gDivider} />
-          <GroupRow
-            icon="lock"
-            inputRef={passwordRef}
-            placeholder="Password"
-            secureTextEntry={secureText}
-            autoCapitalize="none"
-            textContentType="newPassword"
-            autoComplete="password-new"
-            returnKeyType="done"
-            value={password}
-            onChangeText={setPassword}
-            onSubmitEditing={handleSignup}
-            onActive={setActive}
-            right={<EyeToggle hidden={secureText} onToggle={() => setSecureText(s => !s)} />}
-          />
-        </Animated.View>
-        <StrengthMeter password={password} />
-
-        <Animated.View entering={FadeInDown.delay(240).duration(550)}>
-          <View style={styles.suTerms}>
-            <Checkbox
-              checked={agreeTerms}
-              onToggle={() => setAgreeTerms(prev => !prev)}
-              label="I agree to the Terms of Use and Privacy Policy"
-            >
-              <Text style={styles.termsText}>
-                I agree to the{' '}
-                <Text style={styles.noticeLink} onPress={openTerms}>
-                  Terms of Use
-                </Text>{' '}
-                and{' '}
-                <Text style={styles.noticeLink} onPress={openPrivacy}>
-                  Privacy Policy
-                </Text>
+          {step === VERIFY_STEP ? (
+            <VerifyEmailStep email={registeredEmail} onGoToLogin={handleProceedToLogin} />
+          ) : (
+            <>
+              <Text style={[styles.suStepTitle, display]} accessibilityRole="header">
+                {heading.title}
               </Text>
-            </Checkbox>
-          </View>
+              <Text style={styles.suStepSub}>{heading.sub}</Text>
 
-          <CloudflareTurnstile
-            key={human.widgetKey}
-            theme="light"
-            onVerify={token => {
-              setTurnstileToken(token);
-              setError('');
-            }}
-            onExpire={() => setTurnstileToken('')}
-            onError={() => setTurnstileToken('')}
-          />
+              {step === SIGNUP_STEPS - 1 && human.cooldown > 0 ? (
+                <ErrorBanner message={`Too many attempts. Try again in ${formatRemainingTime(human.cooldown)}.`} />
+              ) : error ? (
+                <ErrorBanner key={errorTick} message={error} />
+              ) : null}
 
-          <Button
-            label={human.cooldown > 0 ? `Try again in ${formatRemainingTime(human.cooldown)}` : 'Create account'}
-            onPress={handleSignup}
-            loading={loading}
-            disabled={human.cooldown > 0}
-            style={styles.suSubmit}
-          />
-          <OrDivider />
-          <GoogleAuthButton loading={googleLoading} setLoading={setGoogleLoading} />
+              {step === 0 && (
+                <>
+                  <StepField
+                    label="Full name"
+                    autoCapitalize="words"
+                    textContentType="name"
+                    autoComplete="name"
+                    returnKeyType="next"
+                    value={name}
+                    onChangeText={setName}
+                    onSubmitEditing={handleNext}
+                  />
+                  <View style={styles.suGoogle}>
+                    <OrDivider />
+                    <GoogleAuthButton loading={googleLoading} setLoading={setGoogleLoading} alwaysPickAccount />
+                  </View>
+                </>
+              )}
+
+              {step === 1 && (
+                <>
+                  <StepField
+                    label="Email address"
+                    autoFocus
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="email-address"
+                    textContentType="emailAddress"
+                    autoComplete="email"
+                    returnKeyType="next"
+                    value={email}
+                    onChangeText={setEmail}
+                    onSubmitEditing={handleNext}
+                  />
+                  <View style={styles.suHelp}>
+                    <Feather name="info" size={14} color={C.body} />
+                    <Text style={styles.suHelpText}>You’ll verify it with a link we email you.</Text>
+                  </View>
+                </>
+              )}
+
+              {step === 2 && (
+                <>
+                  <StepField
+                    label="Mobile number"
+                    inputRef={phoneRef}
+                    prefix="+91"
+                    keyboardType="number-pad"
+                    textContentType="telephoneNumber"
+                    autoComplete="tel"
+                    maxLength={10}
+                    returnKeyType="next"
+                    value={phone}
+                    onChangeText={t => setPhone(t.replace(/\D/g, ''))}
+                    onSubmitEditing={handleNext}
+                  />
+                  <View style={styles.suHelp}>
+                    <Feather name="lock" size={14} color={C.body} />
+                    <Text style={styles.suHelpText}>We never share your number.</Text>
+                  </View>
+                </>
+              )}
+
+              {step === 3 && (
+                <>
+                  <StepField
+                    label="Password"
+                    autoFocus
+                    secureTextEntry={!showPassword}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    textContentType="newPassword"
+                    autoComplete="password-new"
+                    returnKeyType="next"
+                    value={password}
+                    onChangeText={setPassword}
+                    onSubmitEditing={() => confirmRef.current?.focus()}
+                  />
+                  <View style={styles.sfGap} />
+                  <StepField
+                    label="Confirm password"
+                    inputRef={confirmRef}
+                    secureTextEntry={!showPassword}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    textContentType="newPassword"
+                    autoComplete="password-new"
+                    returnKeyType="done"
+                    value={confirm}
+                    onChangeText={setConfirm}
+                    onSubmitEditing={handleNext}
+                  />
+                  {confirm.length > 0 ? (
+                    <View style={styles.suHelp}>
+                      <Feather
+                        name={passwordsMatch ? 'check' : 'x'}
+                        size={15}
+                        color={passwordsMatch ? C.forest : C.muted}
+                      />
+                      <Text style={[styles.suHelpText, passwordsMatch && styles.suMatchText]}>
+                        {passwordsMatch ? 'Passwords match' : 'Passwords don’t match yet'}
+                      </Text>
+                    </View>
+                  ) : null}
+                  <View style={styles.suShow}>
+                    <Checkbox
+                      checked={showPassword}
+                      onToggle={() => setShowPassword(s => !s)}
+                      label="Show password"
+                    >
+                      <Text style={styles.suShowText}>Show password</Text>
+                    </Checkbox>
+                  </View>
+                </>
+              )}
+
+              {step === 4 && (
+                <>
+                  <View style={styles.suUser}>
+                    <View style={styles.suUserAvatar}>
+                      <Text style={styles.suUserInitials}>{initials}</Text>
+                    </View>
+                    <View style={styles.suUserMeta}>
+                      <Text style={styles.suUserName} numberOfLines={1}>
+                        {trimmedName}
+                      </Text>
+                      <Text style={styles.suUserEmail} numberOfLines={1}>
+                        {email.trim()}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={styles.suTermHead}>Data we read</Text>
+                  <Text style={styles.suTermBody}>
+                    Bank SMS and email receipts you choose to connect, to track your spending automatically.
+                  </Text>
+                  <Text style={styles.suTermHead}>How we use it</Text>
+                  <Text style={styles.suTermBody}>Only to build your insights. We never sell your data.</Text>
+                  <Text style={styles.suTermHead}>You’re in control</Text>
+                  <Text style={styles.suTermBody}>
+                    Export or delete your data any time from Settings. Read the full{' '}
+                    <Text style={styles.noticeLink} onPress={openTerms}>
+                      Terms of Use
+                    </Text>{' '}
+                    and{' '}
+                    <Text style={styles.noticeLink} onPress={openPrivacy}>
+                      Privacy Policy
+                    </Text>
+                    .
+                  </Text>
+                  <View style={styles.suTurnstile}>
+                    <CloudflareTurnstile
+                      key={human.widgetKey}
+                      theme="light"
+                      onVerify={token => {
+                        setTurnstileToken(token);
+                        setError('');
+                      }}
+                      onExpire={() => setTurnstileToken('')}
+                      onError={() => setTurnstileToken('')}
+                    />
+                  </View>
+                </>
+              )}
+
+              <View style={styles.formSpacer} />
+              <View style={styles.suFoot}>
+                {step === 0 ? (
+                  <Pressable onPress={() => navigation.navigate('Login')} hitSlop={8} accessibilityRole="button">
+                    <Text style={styles.suGhost}>Sign in instead</Text>
+                  </Pressable>
+                ) : (
+                  <Pressable onPress={handleBack} hitSlop={8} accessibilityRole="button" disabled={loading}>
+                    <Text style={styles.suGhost}>Back</Text>
+                  </Pressable>
+                )}
+                {step === SIGNUP_STEPS - 1 ? (
+                  <Button
+                    label={human.cooldown > 0 ? `Try again in ${formatRemainingTime(human.cooldown)}` : 'I agree'}
+                    onPress={handleSignup}
+                    loading={loading}
+                    disabled={human.cooldown > 0}
+                    style={styles.suNext}
+                  />
+                ) : (
+                  <Button label="Next" onPress={handleNext} style={styles.suNext} />
+                )}
+              </View>
+            </>
+          )}
         </Animated.View>
-
-        <View style={styles.formSpacer} />
-        <View style={styles.switchRow}>
-          <Text style={styles.switchLabel}>Have an account? </Text>
-          <Pressable onPress={() => navigation.navigate('Login')} hitSlop={8} accessibilityRole="button">
-            <Text style={styles.link}>Log in</Text>
-          </Pressable>
-        </View>
       </KeyboardScreen>
-
-      <EmailVerificationModal
-        visible={showVerifyModal}
-        email={registeredEmail}
-        onClose={closeVerify}
-        onProceedToLogin={handleProceedToLogin}
-      />
     </View>
   );
 };
@@ -2020,8 +2392,8 @@ const styles = StyleSheet.create({
   ring: { position: 'absolute', borderWidth: 1, borderColor: 'rgba(11,61,44,0.08)' },
 
   /* form header */
-  formTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  formTopSpacer: { width: 44 },
+  // Same height the back arrow had, so the title below doesn't move.
+  formTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', minHeight: 44 },
   iconTile: {
     marginTop: 28,
     width: 60,
@@ -2034,13 +2406,6 @@ const styles = StyleSheet.create({
   formTitle: { marginTop: 18, fontSize: 30, lineHeight: 36, color: C.ink, letterSpacing: -0.7 },
   formGap: { height: 20 },
   formSpacer: { flexGrow: 1, minHeight: 24 },
-  spark: { position: 'absolute', right: -9, top: -9 },
-  steps: { flexDirection: 'row', gap: 6, marginTop: 14 },
-  step: { flex: 1, height: 4, borderRadius: 2 },
-  strength: { marginTop: 10, marginHorizontal: 2 },
-  strengthTrack: { height: 4, borderRadius: 2, backgroundColor: C.line, overflow: 'hidden' },
-  strengthFill: { height: '100%', borderRadius: 2 },
-  strengthText: { marginTop: 6, fontSize: 12, color: C.body },
 
   /* buttons */
   btn: {
@@ -2058,17 +2423,6 @@ const styles = StyleSheet.create({
   btnConnecting: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   btnTextSecondary: { color: C.ink },
   btnIcon: { marginRight: 10 },
-  back: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: C.white,
-    borderWidth: 1,
-    borderColor: C.line,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
   divider: { flexDirection: 'row', alignItems: 'center', marginVertical: 16 },
   dividerLine: { flex: 1, height: 1, backgroundColor: C.line },
   dividerText: { marginHorizontal: 12, fontSize: 13, color: C.muted },
@@ -2084,6 +2438,10 @@ const styles = StyleSheet.create({
     ...(Platform.OS === 'web' ? ({ whiteSpace: 'nowrap' } as any) : {}),
   },
   noticeLink: { color: C.greenDeep, fontWeight: '600', textDecorationLine: 'underline' },
+  // A quiet footer: well below "Create account", smaller and lighter, so the two don't compete.
+  legalLinks: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 28 },
+  legalLinkText: { fontSize: 11.5, fontWeight: '400', color: C.body, textDecorationLine: 'underline', textDecorationColor: C.line },
+  legalDot: { fontSize: 11.5, color: C.line },
   trust: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 14 },
   trustText: { fontSize: 12, fontWeight: '600', color: C.greenDeep },
 
@@ -2259,96 +2617,174 @@ const styles = StyleSheet.create({
   },
   verifyEmail: { marginTop: -10, marginBottom: 14, fontSize: 16, fontWeight: '700', color: C.ink, textAlign: 'center' },
 
-  /* Clean, Lightweight Email Verification Popup */
-  verifyModalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.45)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  verifyModalCard: {
+  /* step-by-step sign up */
+  suStep: { flexGrow: 1 },
+  suStepTitle: { marginTop: 36, fontSize: 30, lineHeight: 36, color: C.ink, letterSpacing: -0.7 },
+  suStepSub: { marginTop: 10, marginBottom: 26, fontSize: 15, lineHeight: 21, color: C.body },
+  sfBox: {
+    marginTop: 10,
+    height: 60,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: C.mistInk,
     backgroundColor: C.white,
-    borderRadius: 24,
-    paddingHorizontal: 24,
-    paddingTop: 30,
-    paddingBottom: 22,
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+  },
+  sfBoxFocused: { borderWidth: 2, borderColor: C.forest, paddingHorizontal: 15.5 },
+  sfLabel: {
+    position: 'absolute',
+    top: -10,
+    left: 12,
+    paddingHorizontal: 6,
+    backgroundColor: C.bg,
+    fontSize: 12.5,
+    fontWeight: '600',
+    color: C.body,
+  },
+  sfLabelFocused: { color: C.forest },
+  sfInput: { flex: 1, height: '100%', fontSize: 17, color: C.ink },
+  sfPrefix: { paddingRight: 12, borderRightWidth: 1, borderRightColor: C.line, justifyContent: 'center' },
+  sfPrefixText: { fontSize: 17, fontWeight: '600', color: C.ink },
+  sfGap: { height: 22 },
+  suHelp: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, marginHorizontal: 2 },
+  suHelpText: { fontSize: 13, color: C.body },
+  suMatchText: { color: C.forest, fontWeight: '600' },
+  suShow: { marginTop: 18 },
+  suShowText: { fontSize: 15, color: C.ink },
+  suGoogle: { marginTop: 18 },
+  suFoot: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 24 },
+  suGhost: { fontSize: 15, fontWeight: '700', color: C.greenDeep, paddingVertical: 12, paddingHorizontal: 4 },
+  suNext: { paddingHorizontal: 36, minWidth: 128 },
+  suUser: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
+    paddingVertical: 8,
+    paddingLeft: 8,
+    paddingRight: 18,
+    borderRadius: 999,
+    backgroundColor: C.white,
     borderWidth: 1,
     borderColor: C.line,
-    ...shadow('rgba(15, 23, 42, 0.12)', 0.18, 20, 8, 8),
+    marginBottom: 6,
   },
-  verifyModalCloseBtn: {
+  suUserAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: C.forest,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  suUserInitials: { color: C.lime, fontSize: 14, fontWeight: '800' },
+  suUserMeta: { flexShrink: 1 },
+  suUserName: { fontSize: 14, fontWeight: '700', color: C.ink },
+  suUserEmail: { fontSize: 12.5, color: C.body },
+  suTermHead: { marginTop: 14, fontSize: 15, fontWeight: '700', color: C.ink },
+  suTermBody: { marginTop: 4, fontSize: 14, lineHeight: 20, color: C.body },
+  suTurnstile: { marginTop: 18 },
+
+  /* verification email sent (last sign-up step) */
+  vsWrap: { flexGrow: 1 },
+  vsArt: {
+    alignSelf: 'center',
+    marginTop: 56,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: C.white,
+    borderWidth: 1,
+    borderColor: C.line,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...shadow(C.ink, 0.08, 18, 10, 4),
+  },
+  vsTick: {
     position: 'absolute',
-    top: 14,
-    right: 14,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    right: 2,
+    top: 4,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 3,
+    borderColor: C.bg,
+    backgroundColor: C.lime,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  verifyIconClean: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    backgroundColor: C.mist,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 14,
+  vsTitle: { marginTop: 30, fontSize: 30, lineHeight: 36, color: C.ink, letterSpacing: -0.7, textAlign: 'center' },
+  vsSub: { marginTop: 10, fontSize: 15, lineHeight: 21, color: C.body, textAlign: 'center' },
+  vsEmailPill: {
+    alignSelf: 'center',
+    maxWidth: '100%',
+    marginTop: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 999,
+    backgroundColor: C.white,
+    borderWidth: 1,
+    borderColor: C.line,
   },
-  verifyModalTitle: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: C.ink,
-    letterSpacing: -0.3,
-    textAlign: 'center',
+  vsEmail: { fontSize: 15, fontWeight: '700', color: C.ink },
+  vsHint: { marginTop: 18, paddingHorizontal: 8, fontSize: 14, lineHeight: 20, color: C.body, textAlign: 'center' },
+  vsNotice: { marginTop: 12, fontSize: 13, fontWeight: '600', color: C.greenDeep, textAlign: 'center' },
+  vsResendRow: { marginTop: 16, minHeight: 24, alignItems: 'center', justifyContent: 'center' },
+  vsResendText: { fontSize: 14, color: C.body },
+  vsResendLink: { fontWeight: '700', color: C.greenDeep },
+  vsResendWait: { color: C.muted },
+  vsLogin: { marginTop: 6, paddingVertical: 10, alignItems: 'center' },
+  vsLoginText: { fontSize: 14, fontWeight: '700', color: C.greenDeep },
+
+  /* log in: email not confirmed */
+  uvCard: {
+    marginBottom: 18,
+    padding: 18,
+    borderRadius: 22,
+    borderWidth: 1.5,
+    borderColor: '#F2D49A',
+    backgroundColor: C.white,
+    ...shadow('#7A4F00', 0.12, 18, 10, 3),
   },
-  verifyModalBody: {
-    fontSize: 14,
-    lineHeight: 21,
-    color: C.body,
-    textAlign: 'center',
-    marginTop: 8,
-  },
-  verifyEmailHighlight: {
-    fontWeight: '700',
-    color: C.ink,
-  },
-  verifyResendNotice: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: C.greenDeep,
-    marginTop: 10,
-    textAlign: 'center',
-  },
-  verifyPrimaryBtn: {
-    alignSelf: 'stretch',
-    marginTop: 22,
-  },
-  verifyLoginLinkBtn: {
-    marginTop: 10,
-    marginBottom: 4,
-    paddingVertical: 8,
+  uvTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  uvIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 13,
+    backgroundColor: '#FFF1D4',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  verifyLoginLinkText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: C.green,
-  },
-  verifyResendRow: {
+  uvTextWrap: { flex: 1 },
+  uvTitle: { fontSize: 16, fontWeight: '800', color: C.ink },
+  uvBody: { marginTop: 4, fontSize: 13.5, lineHeight: 19, color: C.body },
+  uvEmail: { fontWeight: '700', color: C.ink },
+  uvBtn: { marginTop: 16, height: 50 },
+  uvNote: { marginTop: 10, fontSize: 12.5, color: C.muted, textAlign: 'center' },
+
+  lsSheet: { alignItems: 'center' },
+  lsOrb: { marginTop: 6, width: 120, height: 120, borderRadius: 60, alignItems: 'center', justifyContent: 'center' },
+  lsOrb2: { width: 88, height: 88, borderRadius: 44, alignItems: 'center', justifyContent: 'center' },
+  lsOrb3: { width: 58, height: 58, borderRadius: 29, alignItems: 'center', justifyContent: 'center' },
+  lsTitle: { marginTop: 18, fontSize: 26, lineHeight: 30, color: C.ink, textAlign: 'center', letterSpacing: -0.4 },
+  lsBody: { marginTop: 8, fontSize: 14.5, lineHeight: 21, color: C.body, textAlign: 'center', paddingHorizontal: 4 },
+  lsStrong: { fontWeight: '700', color: C.ink },
+  lsPill: {
     marginTop: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
+    maxWidth: '100%',
+    paddingVertical: 9,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    backgroundColor: C.white,
+    borderWidth: 1,
+    borderColor: C.line,
   },
-  verifyResendText: {
-    fontSize: 13,
-    color: C.muted,
-  },
-  verifyResendHighlight: {
-    fontWeight: '700',
-    color: C.green,
-  },
+  lsPillText: { fontSize: 14, fontWeight: '600', color: C.ink },
+  lsNotice: { marginTop: 12, fontSize: 13, fontWeight: '600', color: C.amberInk, textAlign: 'center' },
+  lsActions: { alignSelf: 'stretch', marginTop: 22 },
+  lsSecond: { marginTop: 10 },
 });

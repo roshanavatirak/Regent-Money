@@ -130,6 +130,8 @@ export interface ChatContextDto {
     currentIncome?: number;
     incomeSourcesCount?: number;
   };
+  /** Plain-language pay cycle from the app: how the user is paid and where they are in it. */
+  payCycle?: string;
   totalBalance?: number;
   accounts?: Array<{
     bankName: string;
@@ -393,6 +395,8 @@ export class AiService {
   private buildSystemPrompt(context?: ChatContextDto): string {
     const user = context?.user;
     const totalBalance = Number(context?.totalBalance || 0).toLocaleString('en-IN');
+    // Sent by the app; bounded and kept to one line so it can't reshape the prompt.
+    const payCycle = String(context?.payCycle || '').replace(/[\r\n#]+/g, ' ').trim().slice(0, 500);
 
     const accountsSummary =
       context?.accounts && context.accounts.length > 0
@@ -447,6 +451,9 @@ You have direct, real-time access to the user's financial database, bank account
 - Stated Income: ₹${user?.currentIncome ? Number(user.currentIncome).toLocaleString('en-IN') : 'Not specified'}
 - Income Streams Count: ${user?.incomeSourcesCount || 1}
 
+### PAY CYCLE
+- ${payCycle || 'Not set; the app uses calendar months.'}
+
 ### CURRENT LIQUID BALANCE & ACCOUNTS
 - Total Current Balance Across Banks: ₹${totalBalance}
 - Bank Accounts:
@@ -466,6 +473,7 @@ ${txsSummary}
 2. When asked about savings goals, income, occupation, gender, or personal profile, cite the exact real-time values from the profile and goals above.
 3. Tailor insights to Indian wealth practices (UPI, Emergency Funds, SIPs, ELSS, 80C/80D, Fixed Deposits).
 4. Be accurate, polite, executive, and encouraging. Use clean, readable formatting.
+5. When the user says "this month", "my salary month" or "till salary", mean the current pay cycle under PAY CYCLE (not the calendar month) unless they name a calendar month. Say which dates you mean.
 `;
   }
 

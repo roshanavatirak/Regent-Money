@@ -1,5 +1,14 @@
-import { Injectable, UnauthorizedException, BadRequestException, ConflictException, ForbiddenException, NotFoundException, HttpException, HttpStatus, OnModuleInit } from '@nestjs/common';
-import { CLAIM_SEND_SQL, refusal, utcDay, RESEND_GAP_MS } from './verification-limit';
+import { cleanMoneyCycleData, parseMoneyCycleData } from '../users/money-cycle-data';
+import { cleanPaySchedule, parsePaySchedule } from '../users/pay-schedule';
+import { Injectable, UnauthorizedException, BadRequestException, ConflictException, ForbiddenException, NotFoundException, HttpException, HttpStatus, OnModuleInit, Logger } from '@nestjs/common';
+import { CLAIM_SEND_SQL, refusal, utcDay, RESEND_GAP_MS, verificationLinkExpired } from './verification-limit';
+import {
+  RESET_REQUEST_REPLY,
+  RESET_TOKEN_TTL_SECONDS,
+  claimResetSlot,
+  resetLatestKey,
+  resetTokenKey,
+} from './password-reset-limit';
 import { TokenService } from './token.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -14,8 +23,16 @@ import { MailService } from '../mail/mail.service';
 import { WelcomeEmailService } from '../mail/welcome-email.service';
 import { RedisService } from '../redis/redis.service';
 
+/** What a tapped verification link did; the controller turns it into a page. */
+export type VerifyEmailOutcome =
+  | { status: 'verified'; name: string; email: string }
+  | { status: 'expired' }
+  | { status: 'invalid' };
+
 @Injectable()
 export class AuthService implements OnModuleInit {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
@@ -49,6 +66,16 @@ export class AuthService implements OnModuleInit {
       `);
       await this.userRepository.query(`
         ALTER TABLE core.users ADD COLUMN IF NOT EXISTS income_sources_count INTEGER DEFAULT 1;
+      `);
+      // Day salary usually comes (1–31, 31 = month end); 0 = not fixed; NULL = not set.
+      await this.userRepository.query(`
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS salary_day SMALLINT;
+      `);
+      await this.userRepository.query(`
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS pay_schedule TEXT;
+      `);
+      await this.userRepository.query(`
+        ALTER TABLE core.users ADD COLUMN IF NOT EXISTS money_cycle_data TEXT;
       `);
       await this.userRepository.query(`
         ALTER TABLE core.users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user';
@@ -297,14 +324,23 @@ export class AuthService implements OnModuleInit {
     };
   }
 
-  async verifyEmail(token: string) {
-    const user = await this.userRepository.findOne({
-      where: { verificationToken: token, isDeleted: false },
-    });
+  /**
+   * Confirms the email behind a verification link. A link works once, only while it is the
+   * newest one sent (a resend replaces it), and for 15 minutes from its email.
+   */
+  async verifyEmail(token: string): Promise<VerifyEmailOutcome> {
+    const user = await this.findByVerificationToken(token);
+    if (!user) return { status: 'invalid' };
 
-    if (!user) {
-      throw new BadRequestException('Invalid or expired verification token.');
-    }
+    // The token's issue time: the last verification email sent (signup or resend). Older
+    // accounts without one fall back to when they signed up, which is when their token was made.
+    const [sent] = await this.userRepository.query(
+      `SELECT verification_last_sent_at AS last FROM core.users WHERE id = $1;`,
+      [user.id],
+    );
+    const issuedAt = sent?.last ? Number(sent.last) : Number(user.createdAt);
+    // Kept as is: the expired page can still use it to send a fresh link (resendVerificationByToken).
+    if (verificationLinkExpired(issuedAt, Date.now())) return { status: 'expired' };
 
     const wasVerified = user.isVerified;
     user.isVerified = true;
@@ -315,7 +351,30 @@ export class AuthService implements OnModuleInit {
     // New email signup just confirmed: send the thank-you email right away (Redis queue worker).
     if (!wasVerified) await this.welcomeEmails.schedule(user, 'email_verified');
 
-    return { message: 'Your email has been successfully verified! You can now log in.' };
+    return { status: 'verified', name: user.name || '', email: user.email || '' };
+  }
+
+  /** The account a verification token belongs to, or null for a malformed, used or replaced token. */
+  private async findByVerificationToken(token: unknown): Promise<User | null> {
+    if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) return null;
+    return this.userRepository.findOne({ where: { verificationToken: token, isDeleted: false } });
+  }
+
+  /**
+   * "Email me a new link" on the expired-link page. The expired link still names its account
+   * (only the newest link does, and only until it is used), so a fresh link goes to that same
+   * address. The normal resend limits apply.
+   */
+  async resendVerificationByToken(token: string): Promise<{ sent: boolean; message: string }> {
+    const user = await this.findByVerificationToken(token);
+    if (!user?.email) {
+      return {
+        sent: false,
+        message: 'This link was already used or replaced by a newer email. Use the newest email we sent, or log in.',
+      };
+    }
+    const res = await this.resendVerificationEmail(user.email);
+    return { sent: res.sent, message: res.message };
   }
 
   /**
@@ -323,7 +382,7 @@ export class AuthService implements OnModuleInit {
    * 5 a day (signup included), so the button can't flood an inbox or use up the daily email limit.
    * `retryAfterSeconds` tells the app how long to keep the button disabled.
    */
-  async resendVerificationEmail(email: string): Promise<{ message: string; retryAfterSeconds: number }> {
+  async resendVerificationEmail(email: string): Promise<{ message: string; retryAfterSeconds: number; sent: boolean }> {
     const sanitizedEmail = email.trim().toLowerCase();
     const gap = Math.round(RESEND_GAP_MS / 1000);
     const user = await this.userRepository.findOne({
@@ -331,11 +390,11 @@ export class AuthService implements OnModuleInit {
     });
 
     if (!user) {
-      return { message: 'If this email is registered, a new verification link has been sent.', retryAfterSeconds: gap };
+      return { message: 'If this email is registered, a new verification link has been sent.', retryAfterSeconds: gap, sent: false };
     }
 
     if (user.isVerified) {
-      return { message: 'Your account is already verified. You can log in directly.', retryAfterSeconds: 0 };
+      return { message: 'Your account is already verified. You can log in directly.', retryAfterSeconds: 0, sent: false };
     }
 
     const now = Date.now();
@@ -356,15 +415,17 @@ export class AuthService implements OnModuleInit {
         ? {
             message: "You've asked for 5 links today. Use the newest email we sent, or try again tomorrow.",
             retryAfterSeconds: why.retryAfterSeconds,
+            sent: false,
           }
         : {
             message: `Please wait ${why.retryAfterSeconds} seconds before asking for another link.`,
             retryAfterSeconds: why.retryAfterSeconds,
+            sent: false,
           };
     }
 
     await this.mailService.sendVerificationEmail(user.email || sanitizedEmail, user.name || '', verificationToken);
-    return { message: 'A new verification link has been sent to your email.', retryAfterSeconds: gap };
+    return { message: 'A new verification link has been sent to your email.', retryAfterSeconds: gap, sent: true };
   }
 
   /**
@@ -608,12 +669,24 @@ export class AuthService implements OnModuleInit {
     }
 
     // 5. Check email verification status
+    // Reached only with the right password, so returning the email and link state reveals
+    // nothing to someone guessing; the app uses them to offer "Send a new link".
     if (!user.isVerified) {
-      throw new UnauthorizedException('Please verify your email address before logging in.');
+      const [sent] = await this.userRepository
+        .query(`SELECT verification_last_sent_at AS last FROM core.users WHERE id = $1;`, [user.id])
+        .catch(() => [null]);
+      throw new UnauthorizedException({
+        statusCode: 401,
+        code: 'EMAIL_NOT_VERIFIED',
+        message: 'Please verify your email address before logging in.',
+        email: user.email,
+        linkExpired: verificationLinkExpired(sent?.last ? Number(sent.last) : null, Date.now()),
+      });
     }
 
-    // Auto-heal termsAccepted for verified manual registrations (consented during signup)
-    if (!user.termsAccepted) {
+    // Auto-heal termsAccepted for verified email sign-ups (they ticked the box on the form).
+    // Never for Google accounts: those accept on the Terms screen, even if they later set a password.
+    if (!user.termsAccepted && user.authProvider !== 'google') {
       user.termsAccepted = true;
       user.termsAcceptedAt = user.createdAt || Date.now();
       await this.userRepository.save(user).catch(() => {});
@@ -650,26 +723,34 @@ export class AuthService implements OnModuleInit {
 
   /**
    * Request password reset link. Generates a secure token stored in Redis with 15-min TTL.
+   * Always gives the same reply (registered, unknown, or limited), so it can't reveal who has an
+   * account. Per account per day: 3 emails, a 2-hour cooldown, up to 6, then a 1-day cooldown (see
+   * password-reset-limit.ts). A new link cancels the previous one.
    */
   async requestPasswordReset(email: string): Promise<{ message: string }> {
+    const reply = { message: RESET_REQUEST_REPLY };
     const sanitizedEmail = email.trim().toLowerCase();
     const user = await this.userRepository.findOne({
       where: { email: sanitizedEmail, isDeleted: false },
     });
+    if (!user) return reply;
 
-    // To prevent email enumeration, always return friendly message
-    if (!user) {
-      return { message: 'If an account exists with this email, a password reset link has been dispatched.' };
+    const slot = await claimResetSlot(this.redisService, user.id);
+    if (!slot.allowed) {
+      this.logger.log(`Password reset email held back for ${user.id} (${slot.reason}, ${slot.retryAfterSeconds}s left).`);
+      return reply;
     }
 
+    // Only the newest link works: cancel the one sent before, if it's still live.
+    const previous = await this.redisService.get(resetLatestKey(user.id), { l1TtlMs: 0 });
+    if (previous) await this.redisService.del(resetTokenKey(previous));
+
     const resetToken = crypto.randomBytes(24).toString('hex');
-    // Store in Redis for 15 minutes (900 seconds)
-    await this.redisService.set(`pwd_reset:${resetToken}`, user.id, 900);
+    await this.redisService.set(resetTokenKey(resetToken), user.id, RESET_TOKEN_TTL_SECONDS);
+    await this.redisService.set(resetLatestKey(user.id), resetToken, RESET_TOKEN_TTL_SECONDS);
 
-    // Send email via MailService
     await this.mailService.sendPasswordResetEmail(user.email || sanitizedEmail, user.name || '', resetToken);
-
-    return { message: 'Password reset link sent to your email. Check your inbox.' };
+    return reply;
   }
 
   /**
@@ -681,7 +762,7 @@ export class AuthService implements OnModuleInit {
     }
 
     // 1. Verify token from Redis
-    const userId = await this.redisService.get(`pwd_reset:${token}`);
+    const userId = await this.redisService.get(resetTokenKey(token), { l1TtlMs: 0 });
     if (!userId) {
       throw new BadRequestException('Password reset token is invalid or has expired. Please request a new link.');
     }
@@ -701,7 +782,8 @@ export class AuthService implements OnModuleInit {
     await this.userRepository.save(user);
 
     // 4. Immediately clear token from Redis
-    await this.redisService.del(`pwd_reset:${token}`);
+    await this.redisService.del(resetTokenKey(token));
+    await this.redisService.del(resetLatestKey(user.id));
 
     // A reset must end every existing session: whoever had the old password (or a stolen
     // session) is signed out on all devices.
@@ -814,6 +896,11 @@ export class AuthService implements OnModuleInit {
       if (!user.isVerified) {
         user.passwordHash = null;
         user.verificationToken = null;
+        // Whoever ticked the Terms box on that sign-up may not be the email's owner: the owner,
+        // now proved by Google, accepts the Terms themselves.
+        user.termsAccepted = false;
+        user.termsAcceptedAt = null;
+        user.authProvider = 'google';
         joinedNow = true; // first time this email is confirmed
       }
       user.isVerified = true; // Auto-verify email via Google
@@ -837,8 +924,10 @@ export class AuthService implements OnModuleInit {
         isDeleted: false,
         isVerified: true,
         verificationToken: null,
-        termsAccepted: true,
-        termsAcceptedAt: now,
+        // Accepted on the Terms screen after this first sign-in. Until then the account can't be
+        // used on any device: its tokens carry "terms pending" and the API refuses them.
+        termsAccepted: false,
+        termsAcceptedAt: null,
       });
       user = (await this.userRepository.save(user)) as User;
       joinedNow = true;
@@ -985,6 +1074,9 @@ export class AuthService implements OnModuleInit {
       occupation: user.occupation,
       currentIncome: user.currentIncome ? Number(user.currentIncome) : null,
       incomeSourcesCount: user.incomeSourcesCount ?? 1,
+      salaryDay: user.salaryDay ?? null,
+      paySchedule: parsePaySchedule(user.paySchedule),
+      moneyCycleData: parseMoneyCycleData(user.moneyCycleData),
       authProvider: user.authProvider,
       role: user.role || 'user',
       isBanned: user.isBanned ?? false,
@@ -1008,6 +1100,9 @@ export class AuthService implements OnModuleInit {
       occupation?: string;
       currentIncome?: number;
       incomeSourcesCount?: number;
+      salaryDay?: number | null;
+      paySchedule?: unknown;
+      moneyCycleData?: unknown;
     },
   ) {
     const user = await this.userRepository.findOne({
@@ -1035,6 +1130,24 @@ export class AuthService implements OnModuleInit {
     if (dto.incomeSourcesCount !== undefined) {
       const count = Math.floor(Number(dto.incomeSourcesCount));
       if (Number.isFinite(count) && count >= 0 && count <= 50) user.incomeSourcesCount = count;
+    }
+    if (dto.salaryDay === null) {
+      user.salaryDay = null;
+    } else if (dto.salaryDay !== undefined) {
+      const day = Number(dto.salaryDay);
+      if (Number.isInteger(day) && day >= 0 && day <= 31) user.salaryDay = day;
+    }
+    if (dto.paySchedule === null) {
+      user.paySchedule = null;
+    } else if (dto.paySchedule !== undefined) {
+      const schedule = cleanPaySchedule(dto.paySchedule);
+      if (schedule) user.paySchedule = JSON.stringify(schedule);
+    }
+    if (dto.moneyCycleData !== undefined) {
+      const data = cleanMoneyCycleData(dto.moneyCycleData);
+      const current = parseMoneyCycleData(user.moneyCycleData);
+      // Two phones: the newer copy wins.
+      if (data && (!current || data.updatedAt >= current.updatedAt)) user.moneyCycleData = JSON.stringify(data);
     }
     user.updatedAt = Date.now();
 
@@ -1106,6 +1219,8 @@ export class AuthService implements OnModuleInit {
       user.termsAcceptedAt = now;
       user.updatedAt = now;
       await this.userRepository.save(user);
+      // Older-session status is cached for a minute; drop it so the account works at once.
+      await this.redisService.del(`user:status:${userId}`).catch(() => false);
 
       return {
         success: true,

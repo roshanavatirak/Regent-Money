@@ -1,24 +1,36 @@
 {
   "notes": [
     {
-      "title": "Smart Auto-Tagging",
-      "detail": "Transactions are sorted into the right category more accurately."
+      "title": "Net Worth Analytics",
+      "detail": "Clearer stats and a better view of your net worth."
     },
     {
-      "title": "Voice Assistant",
-      "detail": "Hold Regent and say a transaction to add it hands-free."
+      "title": "Smarter Auto-Tagging",
+      "detail": "More transactions land in the right category."
     },
     {
-      "title": "New Categories",
-      "detail": "More categories to sort your spending accurately."
+      "title": "Borrow & Lend",
+      "detail": "A simpler way to track who owes what."
     },
     {
-      "title": "Enhanced UI",
-      "detail": "Swipe between tabs and a smoother, cleaner bottom bar."
+      "title": "Slice Bank",
+      "detail": "Slice is now supported in Banks."
     },
     {
-      "title": "Dynamic Cards",
-      "detail": "Home cards now adapt to your latest money activity."
+      "title": "New Profile",
+      "detail": "A cleaner, simpler profile screen."
+    },
+    {
+      "title": "Report AI Answers",
+      "detail": "Flag any Regent AI reply that looks wrong."
+    },
+    {
+      "title": "Fresh Notifications",
+      "detail": "A new Regent icon and colour on every alert."
+    },
+    {
+      "title": "Fixes & Polish",
+      "detail": "Budget fixes, a cleaner intro, updated support emails and goal returns shown as estimates."
     }
   ]
 }

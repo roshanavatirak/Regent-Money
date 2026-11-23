@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -19,9 +19,13 @@ import { useNavigation } from '@react-navigation/native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import Constants from 'expo-constants';
 import * as Font from 'expo-font';
-import { useTheme, useAuthStore, showGlobalConfirm } from '../store';
+import { useTheme, useAuthStore } from '../store';
 import { authService } from '../services/authService';
 import { pickImageFromDevice, LUXURY_PRESET_AVATARS } from '../services/imageService';
+import { occupationLabel } from '../constants/occupations';
+import { useMoneyCycle } from '../hooks/useMoneyCycle';
+import { ordinal } from '../utils/cycleLabels';
+
 
 export interface ProfileScreenProps {
   AppTopBarComponent?: React.ComponentType;
@@ -65,57 +69,6 @@ const providerLabel = (p?: string | null) => {
   if (!p || p === 'local' || p === 'email') return 'email';
   return titleCase(p);
 };
-
-/* ------------------------------------------------------------------ */
-/* Row                                                                 */
-/* ------------------------------------------------------------------ */
-
-type RowProps = {
-  icon: keyof typeof Feather.glyphMap;
-  title: string;
-  subtitle?: string;
-  value?: string;
-  onPress?: () => void;
-  isLast?: boolean;
-  danger?: boolean;
-  styles: ReturnType<typeof getStyles>;
-  isDark: boolean;
-  colors: any;
-};
-
-const Row: React.FC<RowProps> = ({ icon, title, subtitle, value, onPress, isLast, danger, styles, isDark, colors }) => {
-  const tileBg = danger
-    ? isDark ? 'rgba(224, 49, 49, 0.2)' : '#FFE3E3'
-    : isDark ? 'rgba(184, 243, 107, 0.14)' : '#E3F2E8';
-  const tileFg = danger ? (isDark ? '#FFA8A8' : '#C92A2A') : isDark ? LIME : FOREST;
-
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      disabled={!onPress}
-      activeOpacity={0.6}
-      style={styles.row}
-      accessibilityRole={onPress ? 'button' : undefined}
-    >
-      <View style={[styles.rowIcon, { backgroundColor: tileBg }]}>
-        <Feather name={icon} size={17} color={tileFg} />
-      </View>
-      <View style={[styles.rowBody, !isLast && styles.rowDivider]}>
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.rowTitle, danger && { color: tileFg }]} numberOfLines={1}>
-            {title}
-          </Text>
-          {subtitle ? <Text style={styles.rowSubtitle} numberOfLines={1}>{subtitle}</Text> : null}
-        </View>
-        {value ? <Text style={styles.rowValue} numberOfLines={1}>{value}</Text> : null}
-        {onPress && !danger ? (
-          <Feather name="chevron-right" size={16} color={isDark ? '#5E7A6C' : '#9DB2A7'} />
-        ) : null}
-      </View>
-    </TouchableOpacity>
-  );
-};
-
 /* ------------------------------------------------------------------ */
 /* Screen                                                              */
 /* ------------------------------------------------------------------ */
@@ -140,16 +93,52 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
 
   const dobDate = parseDob(user?.dob);
   const age = ageFrom(dobDate);
-  const dobLabel = dobDate
-    ? dobDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
-    : 'Add';
   const income = user?.currentIncome ? Number(user.currentIncome) : null;
   const sources = user?.incomeSourcesCount || (income ? 1 : 0);
   const memberSince = user?.createdAt
     ? new Date(user.createdAt).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })
     : null;
   const appVersion = Constants.expoConfig?.version;
-  const isAdmin = !!user?.role && ['admin', 'superadmin'].includes(user.role);
+
+  // A glance, not a form: what you do and your age, shown once inside the card.
+  const identity = [user?.occupation ? occupationLabel(user.occupation) : null, age !== null ? `${age} yrs` : null].filter(
+    (t): t is string => !!t
+  );
+
+  /* ---------------- Pay facts ---------------- */
+
+  const { cycle } = useMoneyCycle();
+  const payLabel =
+    cycle.mode === 'salary'
+      ? (cycle.payday ?? 1) >= 31
+        ? 'Month end'
+        : `${ordinal(cycle.payday ?? 1)}`
+      : cycle.mode === 'weekly'
+        ? 'Weekly'
+        : cycle.mode === 'fortnightly'
+          ? 'Every 2 wks'
+          : cycle.mode === 'rolling'
+            ? 'Not fixed'
+            : 'Not set';
+  const paid = cycle.mode === 'salary' || cycle.mode === 'weekly' || cycle.mode === 'fortnightly';
+
+  // What's still missing, for the "Finish your profile" nudge (nothing shows once it's complete).
+  const missing = [
+    !income ? 'monthly income' : null,
+    !user?.occupation ? 'occupation' : null,
+    cycle.mode === 'calendar' && income && user?.occupation ? 'salary day' : null,
+    !dobDate ? 'date of birth' : null,
+    !user?.gender ? 'gender' : null,
+  ].filter((t): t is string => !!t);
+  const nextPayLabel = !paid
+    ? '–'
+    : cycle.lateDays > 0
+      ? `${cycle.lateDays}d late`
+      : cycle.daysLeft === 0
+        ? 'Due'
+        : cycle.daysLeft === 1
+          ? 'Tomorrow'
+          : `In ${cycle.daysLeft} days`;
 
   /* ---------------- Avatar actions ---------------- */
 
@@ -207,21 +196,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
     }
   };
 
-  const handleLogoutConfirm = () => {
-    showGlobalConfirm({
-      title: 'Log out of Regent Money?',
-      message: 'Your transactions stay saved on this phone. Sign in again any time to pick up where you left off.',
-      confirmText: 'Log out',
-      cancelText: 'Cancel',
-      isDestructive: true,
-      icon: 'log-out',
-      onConfirm: async () => {
-        await authService.logOut();
-      },
-    });
-  };
-
-  const rowProps = { styles, isDark, colors };
 
   return (
     <View style={styles.container}>
@@ -289,83 +263,84 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ AppTopBarComponent
               ]}
             />
             <View style={styles.moneyTop}>
-              <Text style={styles.moneyLabel}>Monthly income</Text>
+              <Text style={styles.moneyLabel}>Your money profile</Text>
+              {/* The one way into Edit profile from this screen. */}
               <TouchableOpacity
                 onPress={() => navigation.navigate('EditProfile')}
-                style={styles.moneyEdit}
-                activeOpacity={0.7}
-                accessibilityLabel="Edit income and work details"
+                style={styles.editPill}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Edit profile"
               >
-                <Feather name="edit-2" size={15} color="#FFFFFF" />
+                <Feather name="edit-2" size={13} color={FOREST} />
+                <Text style={styles.editPillText}>Edit</Text>
               </TouchableOpacity>
             </View>
             {income ? (
-              <Text style={styles.moneyValue}>₹{income.toLocaleString('en-IN')}</Text>
+              <View style={styles.incomeRow}>
+                <Text style={styles.moneyValue}>₹{income.toLocaleString('en-IN')}</Text>
+                <Text style={styles.perMonth}>a month</Text>
+              </View>
             ) : (
-              <TouchableOpacity onPress={() => navigation.navigate('EditProfile')} activeOpacity={0.7}>
-                <Text style={[styles.moneyValue, { fontSize: 22, color: LIME }]}>Add your income</Text>
-              </TouchableOpacity>
+              <Text style={[styles.moneyValue, { fontSize: 22, color: LIME }]}>Income not added</Text>
             )}
+            {identity.length > 0 ? (
+              <View style={styles.identityRow}>
+                {identity.map((t) => (
+                  <View key={t} style={styles.identityChip}>
+                    <Text style={styles.identityText} numberOfLines={1}>
+                      {t}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
             <View style={styles.statGrid}>
               <View style={styles.stat}>
                 <Text style={styles.statLabel}>Sources</Text>
                 <Text style={styles.statValue}>{sources || '–'}</Text>
               </View>
               <View style={styles.stat}>
-                <Text style={styles.statLabel}>Work</Text>
+                <Text style={styles.statLabel}>Paid</Text>
                 <Text style={styles.statValue} numberOfLines={1}>
-                  {user?.occupation ? titleCase(user.occupation) : '–'}
+                  {payLabel}
                 </Text>
               </View>
               <View style={styles.stat}>
-                <Text style={styles.statLabel}>Age</Text>
-                <Text style={styles.statValue}>{age ?? '–'}</Text>
+                <Text style={styles.statLabel}>Next pay</Text>
+                <Text style={styles.statValue} numberOfLines={1}>
+                  {nextPayLabel}
+                </Text>
               </View>
             </View>
           </View>
         </Animated.View>
 
-        {/* Personal details */}
-        <Animated.View entering={FadeInDown.delay(160).duration(400)}>
-          <View style={styles.sectionHead}>
-            <Text style={styles.sectionTitle}>Personal details</Text>
-            <TouchableOpacity onPress={() => navigation.navigate('EditProfile')} hitSlop={10}>
-              <Text style={styles.sectionLink}>Edit</Text>
+        {/* Only when something is missing: what to add, one tap to Edit profile. */}
+        {missing.length > 0 ? (
+          <Animated.View entering={FadeInDown.delay(160).duration(400)}>
+            <TouchableOpacity
+              onPress={() => navigation.navigate('EditProfile', missing.includes('salary day') ? { focus: 'salaryDay' } : undefined)}
+              activeOpacity={0.8}
+              style={styles.nudge}
+              accessibilityRole="button"
+            >
+              <View style={styles.nudgeIcon}>
+                <Feather name="plus" size={16} color={isDark ? LIME : FOREST} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.nudgeTitle}>Finish your profile</Text>
+                <Text style={styles.nudgeText} numberOfLines={2}>
+                  Add your {missing.join(', ')} for budgets that fit you.
+                </Text>
+              </View>
+              <Feather name="chevron-right" size={16} color={isDark ? '#5E7A6C' : '#9DB2A7'} />
             </TouchableOpacity>
-          </View>
-          <View style={styles.group}>
-            <Row {...rowProps} icon="calendar" title="Date of birth" value={dobLabel} onPress={() => navigation.navigate('EditProfile')} />
-            <Row {...rowProps} icon="user" title="Gender" value={user?.gender ? titleCase(user.gender) : 'Add'} onPress={() => navigation.navigate('EditProfile')} />
-            <Row
-              {...rowProps}
-              icon="briefcase"
-              title="Occupation"
-              value={user?.occupation ? titleCase(user.occupation) : 'Add'}
-              onPress={() => navigation.navigate('EditProfile')}
-              isLast
-            />
-          </View>
-        </Animated.View>
+          </Animated.View>
+        ) : null}
 
-        {/* App */}
-        <Animated.View entering={FadeInDown.delay(230).duration(400)}>
-          <Text style={[styles.sectionTitle, styles.sectionTitleSolo]}>App</Text>
-          <View style={styles.group}>
-            {isAdmin && (
-              <Row {...rowProps} icon="shield" title="Admin portal" subtitle="Users, moderation and deletions" onPress={() => navigation.navigate('AdminDashboard')} />
-            )}
-            <Row {...rowProps} icon="settings" title="Settings" subtitle="Appearance, app lock, notifications" onPress={() => navigation.navigate('AppSettings')} />
-            <Row {...rowProps} icon="lock" title="Privacy center" onPress={() => navigation.navigate('PrivacyCenter')} />
-            <Row {...rowProps} icon="zap" title="Suggest a feature" onPress={() => navigation.navigate('SuggestFeature')} />
-            <Row {...rowProps} icon="alert-circle" title="Report a problem" onPress={() => navigation.navigate('ReportBug')} isLast />
-          </View>
-
-          <View style={[styles.group, { marginTop: 16 }]}>
-            <Row {...rowProps} icon="log-out" title="Log out" onPress={handleLogoutConfirm} danger isLast />
-          </View>
-
-          {appVersion ? <Text style={styles.version}>Regent Money {appVersion}</Text> : null}
-        </Animated.View>
+        {/* Settings, privacy, help and log out are in the sidebar. */}
+        <Text style={styles.studio}>RAO DEV STUDIOS</Text>
       </ScrollView>
 
       {/* Change photo sheet */}
@@ -542,6 +517,7 @@ const getStyles = (colors: any, isDark: boolean, display?: string) => {
     stat: { flex: 1, backgroundColor: FOREST_RAISED, borderRadius: 16, paddingHorizontal: 12, paddingVertical: 10 },
     statLabel: { fontSize: 11, color: MIST },
     statValue: { fontSize: 16, fontWeight: '700', color: '#FFFFFF', marginTop: 2 },
+editPill: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: LIME, borderRadius: 999, height: 34, paddingHorizontal: 14 },    editPillText: { fontSize: 13, fontWeight: '700', color: FOREST },    incomeRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8 },    perMonth: { fontSize: 14, color: MIST, fontWeight: '600' },    identityRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 },    identityChip: { borderWidth: 1, borderColor: 'rgba(181, 206, 193, 0.4)', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4, maxWidth: '70%' },    identityText: { fontSize: 12.5, color: '#E4EFE9', fontWeight: '600' },    nudge: { flexDirection: 'row', alignItems: 'center', gap: 12, marginHorizontal: 16, marginTop: 14, backgroundColor: colors.card, borderWidth: 1, borderColor: line, borderStyle: 'dashed', borderRadius: 20, padding: 14 },    nudgeIcon: { width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: isDark ? 'rgba(184, 243, 107, 0.14)' : '#E3F2E8' },    nudgeTitle: { fontSize: 14.5, fontWeight: '700', color: colors.text },    nudgeText: { fontSize: 12.5, color: colors.textSecondary, marginTop: 2, lineHeight: 17 },
 
     // Sections
     sectionHead: {
@@ -581,6 +557,8 @@ const getStyles = (colors: any, isDark: boolean, display?: string) => {
     rowSubtitle: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
     rowValue: { fontSize: 14, color: colors.textSecondary, maxWidth: 160 },
     version: { textAlign: 'center', fontSize: 12, color: colors.textSecondary, marginTop: 14 },
+    // Quiet sign-off: light weight, wide tracking, soft colour.
+    studio: { textAlign: 'center', fontSize: 10.5, fontWeight: '300', letterSpacing: 4, color: colors.textSecondary, opacity: 0.7, marginTop: 18 },
 
     // Photo sheet
     backdrop: { flex: 1, backgroundColor: 'rgba(7, 17, 13, 0.55)', justifyContent: 'flex-end' },

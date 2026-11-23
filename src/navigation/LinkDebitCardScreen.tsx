@@ -107,6 +107,24 @@ export const LinkDebitCardScreen: React.FC<LinkDebitCardScreenProps> = (props) =
   const [saved, setSaved] = useState(false);
   const inputRef = useRef<TextInput>(null);
 
+  // Open the keyboard. On Android, focus() on a field that's already focused does nothing, and
+  // a focus made while the screen is still opening gets the caret but no keyboard. So blur
+  // first, then focus again.
+  const openKeyboard = () => {
+    const input = inputRef.current;
+    if (!input) return;
+    if (input.isFocused()) input.blur();
+    setTimeout(() => inputRef.current?.focus(), 60);
+  };
+
+  // Focus once the screen has finished opening (autoFocus fired too early inside the bank sheet)
+  useEffect(() => {
+    if (params.suggestedSuffix) return;
+    const t = setTimeout(openKeyboard, 350);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const goBack = () => {
     if (props.onBack) return props.onBack();
     navigation?.goBack?.();
@@ -185,7 +203,7 @@ export const LinkDebitCardScreen: React.FC<LinkDebitCardScreenProps> = (props) =
     if (saving || saved) return;
     if (!complete) {
       setErrorText('Enter all 4 digits.');
-      inputRef.current?.focus();
+      openKeyboard();
       return;
     }
     if (unchanged) return goBack();
@@ -363,7 +381,7 @@ export const LinkDebitCardScreen: React.FC<LinkDebitCardScreenProps> = (props) =
           {/* Input */}
           <View style={s.inputWrap}>
             <Text style={[s.label, { color: muted }]}>Last 4 digits</Text>
-            <Pressable onPress={() => inputRef.current?.focus()} style={s.slots} accessibilityRole="button" accessibilityLabel="Enter last 4 digits">
+            <Pressable onPress={openKeyboard} style={s.slots} accessibilityRole="button" accessibilityLabel="Enter last 4 digits">
               {[0, 1, 2, 3].map((i) => {
                 const filled = !!digits[i];
                 const current = focused && i === Math.min(digits.length, 3) && !(i === 3 && complete);
@@ -386,7 +404,6 @@ export const LinkDebitCardScreen: React.FC<LinkDebitCardScreenProps> = (props) =
               onBlur={() => setFocused(false)}
               keyboardType="number-pad"
               maxLength={4}
-              autoFocus={!params.suggestedSuffix}
               caretHidden
               style={s.hiddenInput}
               accessibilityLabel="Last 4 digits of your debit card"

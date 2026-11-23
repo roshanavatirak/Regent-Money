@@ -5,7 +5,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TextInput, Pressable, ScrollView, ActivityIndicator, StyleSheet, Platform, BackHandler } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
-import Animated, { FadeIn, FadeInDown, ZoomIn } from 'react-native-reanimated';
+import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
+import { SuccessCheck } from '../components/SuccessCheck';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -334,11 +335,15 @@ export const EditBankScreen: React.FC<EditBankScreenProps> = (props) => {
       </KeyboardAvoidingView>
 
       {saved && (
-        <Animated.View entering={FadeIn.duration(150)} style={[StyleSheet.absoluteFill, s.savedWrap, { backgroundColor: pageBg }]}>
-          <Animated.View entering={ZoomIn.springify().damping(12)} style={[s.savedCircle, { backgroundColor: FOREST }]}>
-            <Feather name="check" size={40} color={LIME} />
-          </Animated.View>
-          <Text style={[s.savedText, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}>Saved</Text>
+        <Animated.View entering={FadeIn.duration(180)} style={[StyleSheet.absoluteFill, s.savedWrap, { backgroundColor: pageBg }]}>
+          {/* Same calm tick as saving a transaction: the check draws itself, no bounce */}
+          <SuccessCheck size={88} circleColor={FOREST} checkColor={LIME} />
+          <Animated.Text
+            entering={FadeInDown.delay(380).duration(320)}
+            style={[s.savedText, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}
+          >
+            Saved
+          </Animated.Text>
         </Animated.View>
       )}
     </View>

@@ -3,7 +3,7 @@
 // Bank colours and code lookup, shared by the Banks tab, account details
 // and the link-account sheet.
 
-import bankNamesJson from '../navigation/banknames.json';
+import { UNIQUE_BANKS, codeForBankName } from './bankList';
 
 /** Deep brand tones that keep white text readable. */
 const BRAND_COLORS: [RegExp, string][] = [
@@ -22,6 +22,8 @@ const BRAND_COLORS: [RegExp, string][] = [
   [/bank of india/i, '#B34A0C'],
   [/paytm/i, '#00377B'],
   [/jio/i, '#0A2885'],
+  [/airtel/i, '#D32026'],
+  [/\bslice\b|north east small finance/i, '#8B0CBE'],
 ];
 
 export const BRAND_FALLBACK = '#0B3D2C';
@@ -29,17 +31,11 @@ export const BRAND_FALLBACK = '#0B3D2C';
 export const bankBrandColor = (name?: string) =>
   BRAND_COLORS.find(([re]) => re.test(name || ''))?.[1] || BRAND_FALLBACK;
 
-const NAME_TO_CODE = new Map<string, string>(
-  Object.entries(bankNamesJson as Record<string, string>).map(([code, name]) => [name.toLowerCase(), code])
-);
+/** Bank code for a saved bank name; any spelling or duplicate listing of the bank matches. */
+export const getBankCode = (bankName?: string) => codeForBankName(bankName);
 
-export const getBankCode = (bankName?: string) => NAME_TO_CODE.get((bankName || '').toLowerCase()) || '';
-
-export const ALL_BANKS_SORTED: { code: string; name: string }[] = Object.entries(
-  bankNamesJson as Record<string, string>
-)
-  .map(([code, name]) => ({ code, name }))
-  .sort((a, b) => a.name.localeCompare(b.name));
+/** Add bank list: one row per bank (duplicate IFSC codes of the same bank merged), A–Z. */
+export const ALL_BANKS_SORTED: { code: string; name: string; formerly?: string; restricted?: string }[] = UNIQUE_BANKS;
 
 export const POPULAR_BANKS = [
   { code: 'SBIN', name: 'State Bank of India', short: 'SBI' },
@@ -57,7 +53,7 @@ export const POPULAR_BANKS = [
 ];
 
 export const KNOWN_SVG_CODES = new Set([
-  'BARB', 'BKID', 'CNRB', 'HDFC', 'ICIC', 'IDFB', 'IDIB', 'IPOS', 'JIOP', 'KKBK', 'MAHB', 'PUNB', 'SBIN', 'UBIN', 'UTIB', 'YESB',
+  'AIRP', 'BARB', 'BKID', 'CNRB', 'HDFC', 'ICIC', 'IDFB', 'IDIB', 'IPOS', 'JIOP', 'KKBK', 'MAHB', 'NESF', 'PUNB', 'PYTM', 'SBIN', 'UBIN', 'UTIB', 'YESB',
 ]);
 
 export const resolveBankCode = (bankName?: string, senderId?: string, explicitCode?: string): string => {
@@ -87,6 +83,9 @@ export const resolveBankCode = (bankName?: string, senderId?: string, explicitCo
   if (cleanName.includes('maharashtra')) return 'MAHB';
   if (cleanName.includes('yes bank') || cleanName.includes('yesb')) return 'YESB';
   if (cleanName.includes('jio')) return 'JIOP';
+  if (cleanName.includes('paytm')) return 'PYTM';
+  if (cleanName.includes('airtel')) return 'AIRP';
+  if (/\bslice\b/.test(cleanName) || cleanName.includes('north east small finance')) return 'NESF';
 
   return explicitCode || '';
 };

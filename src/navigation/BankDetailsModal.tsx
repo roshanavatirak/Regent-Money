@@ -17,7 +17,6 @@ import {
   Switch,
   Platform,
   PermissionsAndroid,
-  Linking,
   NativeModules,
 } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
@@ -45,6 +44,7 @@ import { smsCatchupService } from '../services/smsCatchupService';
 import { smsPermissionService } from '../services/smsPermissionService';
 import { uploadFile, UploadError, isPasswordRequired } from '../services/uploadFile';
 import { statementVaultService } from '../services/statementVaultService';
+import { counterpartyName } from '../services/counterpartyService';
 
 const BACKEND_URL = getBackendUrl();
 const FOREST = '#0B3D2C';
@@ -325,10 +325,9 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
           setSmsConsent(false);
           showGlobalConfirm({
             title: 'SMS access needed',
-            message: 'Allow SMS access in Settings to turn on auto-tracking.',
-            cancelText: 'Not now',
-            confirmText: 'Open Settings',
-            onConfirm: () => Linking.openSettings(),
+            message: 'Auto-tracking stays off until you allow SMS access. Turn it on again whenever you like.',
+            confirmText: 'OK',
+            onConfirm: () => {},
           });
           return;
         }
@@ -380,7 +379,7 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
     try {
       const granted = await smsPermissionService.requestSmsPermissions();
       if (!granted) {
-        setErrorSheet({ title: 'SMS access needed', message: 'Allow SMS access in Settings so Regent can read bank alerts.' });
+        setErrorSheet({ title: 'SMS access needed', message: 'Allow SMS access when asked so Regent can read bank alerts.' });
         return;
       }
       const Sms = NativeModules.Sms;
@@ -757,9 +756,11 @@ export const BankDetailsModal = ({ visible, onClose, bank }: BankDetailsModalPro
                     <View style={[s.rowBody, !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line }]}>
                       <View style={{ flex: 1, minWidth: 0 }}>
                         <Text style={[s.rowName, { color: ink }]} numberOfLines={1}>
-                          {niceName(item.merchant) || (isCredit ? 'Money received' : 'Payment')}
+                          {counterpartyName(item) || niceName(item.merchant) || (isCredit ? 'Money received' : 'Payment')}
                         </Text>
-                        <Text style={[s.rowSub, { color: muted }]}>{isNaN(ts) ? '' : format(new Date(ts), 'd MMM')}</Text>
+                        <Text style={[s.rowSub, { color: muted }]}>{isNaN(ts)
+                            ? ''
+                            : format(new Date(ts), new Date(ts).getFullYear() === new Date().getFullYear() ? 'd MMM, HH:mm' : 'd MMM yyyy, HH:mm')}</Text>
                       </View>
                       <View style={{ alignItems: 'flex-end' }}>
                         <Text style={[s.rowAmt, { color: isCredit ? (isDark ? LIME : '#0B6B3A') : ink }]}>

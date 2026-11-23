@@ -17,6 +17,7 @@ import {
   usePrivacyModalStore,
   useTermsModalStore,
 } from '../store';
+import { smsPermissionService } from '../services/smsPermissionService';
 
 const FOREST = '#0B3D2C';
 const LIME = '#B8F36B';
@@ -100,8 +101,20 @@ export const PrivacyCenterScreen: React.FC = () => {
     });
   };
 
-  const openSmsSettings = () => {
-    Linking.openSettings().catch(() => {});
+  const [smsOn, setSmsOn] = React.useState<boolean | null>(null);
+  React.useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    smsPermissionService.isPermissionGranted().then(setSmsOn).catch(() => setSmsOn(false));
+  }, []);
+
+  // Off: ask with the system dialog, in the app. On: Android lets an app turn a permission
+  // off only from the phone's settings, so that is the one case that goes there.
+  const onSmsRow = async () => {
+    if (smsOn) {
+      Linking.openSettings().catch(() => {});
+      return;
+    }
+    setSmsOn(await smsPermissionService.requestSmsPermissions());
   };
 
   const Row = ({
@@ -195,8 +208,13 @@ export const PrivacyCenterScreen: React.FC = () => {
                 icon="smartphone"
                 t="neutral"
                 title="SMS access"
-                detail="Turn reading bank messages on or off in phone settings."
-                onPress={openSmsSettings}
+                detail={
+                  smsOn
+                    ? 'On. Reading bank messages can be turned off in phone settings.'
+                    : 'Off. Tap to let Regent read bank messages.'
+                }
+                trailing={smsOn === null ? undefined : smsOn ? 'On' : 'Off'}
+                onPress={onSmsRow}
                 last
               />
             ) : null}

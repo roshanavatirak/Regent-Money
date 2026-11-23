@@ -21,6 +21,7 @@ import { EmailBroadcastService } from '../mail/email-broadcast.service';
 import { MailService } from '../mail/mail.service';
 import { WelcomeEmailService } from '../mail/welcome-email.service';
 import { EmailAccountsService, PRIMARY_RESERVE } from '../mail/email-accounts.service';
+import { validateContactEmails } from '../mail/contact-emails';
 import { EmailDraftDto } from './dto/email-draft.dto';
 import { CreateEmailBroadcastDto } from './dto/create-email-broadcast.dto';
 
@@ -47,6 +48,7 @@ export const CASCADE_DELETE_TABLES = [
   { schema: 'wealth', table: 'savings_goals', column: 'user_id' },
   { schema: 'wealth', table: 'scenario_simulations', column: 'user_id' },
   { schema: 'core', table: 'chat_threads', column: 'user_id' },
+  { schema: 'core', table: 'peer_ledgers', column: 'user_id' },
   { schema: 'core', table: 'refresh_tokens', column: 'user_id' },
   { schema: 'core', table: 'feedback', column: 'user_id' },
   // Install attribution: the user's own row, their invite link, and link opens they used.
@@ -608,6 +610,8 @@ export class AdminService {
         // Both accounts must exist (and differ) for one to cover the other.
         available: this.emailAccounts.canFallBack(),
         signInReserve: PRIMARY_RESERVE,
+        // Which sender each kind of email tries first, next and last.
+        chains: this.emailAccounts.describeChains(),
       },
     };
   }
@@ -628,6 +632,40 @@ export class AdminService {
       throw new BadRequestException('Your admin account has no email address.');
     }
     return this.emailBroadcastService.sendDraftTest(admin.email, admin.name || 'there', dto);
+  }
+
+  /** Public contact addresses (support, contact, privacy, grievance) for the admin console. */
+  getContactEmails() {
+    return this.emailAccounts.getContactEmails();
+  }
+
+  /** Changes the public contact addresses. The app and emails pick them up within a few minutes. */
+  async setContactEmails(adminId: string, adminRole: string, input: unknown) {
+    if (adminRole !== 'admin' && adminRole !== 'superadmin') {
+      throw new ForbiddenException('Only administrators can change contact addresses.');
+    }
+    const checked = validateContactEmails(input);
+    if (!checked.ok) throw new BadRequestException(checked.errors.join(' '));
+    const before = await this.emailAccounts.getContactEmails();
+    const value = await this.emailAccounts.setContactEmails(checked.value, adminId);
+    try {
+      await this.dataSource.query(
+        `INSERT INTO core.admin_audit_logs (admin_id, target_user_id, target_email_hmac, action, reason, metadata, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          adminId,
+          'system:email',
+          null,
+          'ADMIN_CONTACT_EMAILS_UPDATED',
+          'Contact addresses changed',
+          JSON.stringify({ before, after: value }),
+          Date.now(),
+        ],
+      );
+    } catch (auditErr: any) {
+      this.logger.warn(`Could not log contact address change: ${auditErr.message}`);
+    }
+    return value;
   }
 
   async setEmailFallback(adminId: string, adminRole: string, enabled: boolean) {

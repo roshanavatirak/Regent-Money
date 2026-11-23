@@ -80,9 +80,11 @@ test('lists every change for the publish confirmation', () => {
     { ...DEFAULT_CARDS[1], title: 'Over budget again?' },
     { ...DEFAULT_CARDS[0], enabled: false },
     ...DEFAULT_CARDS.slice(2, 5),
-    { ...TEMPLATES[7].card, id: 'bills' },
+    { ...TEMPLATES.find((t) => t.key === 'bills')!.card, id: 'bills' },
   ];
-  const kinds = diffCards(DEFAULT_CARDS, draft).map((c) => `${c.kind}:${c.id ?? ''}`);
+  // The six original cards; the voice card added later isn't part of this scenario.
+  const base = DEFAULT_CARDS.filter((c) => c.id !== 'voice');
+  const kinds = diffCards(base, draft).map((c) => `${c.kind}:${c.id ?? ''}`);
   assert.deepStrictEqual(kinds, ['Edited:overspend', 'Paused:bank', 'Added:bills', 'Removed:regent', 'Reordered:']);
   assert.deepStrictEqual(diffCards(DEFAULT_CARDS, DEFAULT_CARDS), []);
 });

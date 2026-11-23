@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
+import { CONTACT_EMAILS_KEY, ContactEmails, DEFAULT_CONTACT_EMAILS, readContactEmails } from './contact-emails';
 
 /**
  * Three Brevo sender accounts, each with its own free daily limit (300):
@@ -66,6 +67,7 @@ export class EmailAccountsService implements OnModuleInit {
   private readonly logger = new Logger(EmailAccountsService.name);
   private fallbackCache: { value: boolean; at: number } | null = null;
   private linksCache: { value: { termsUrl: string | null; privacyUrl: string | null }; at: number } | null = null;
+  private contactsCache: { value: ContactEmails; at: number } | null = null;
 
   constructor(
     private readonly configService: ConfigService,
@@ -90,6 +92,12 @@ export class EmailAccountsService implements OnModuleInit {
           [key, JSON.stringify(url), Date.now()],
         );
       }
+      // Same for the contact addresses: seeded once, then edited from the admin console.
+      await this.dataSource.query(
+        `INSERT INTO core.email_settings (key, value, updated_at, updated_by)
+         VALUES ($1, $2::jsonb, $3, 'system') ON CONFLICT (key) DO NOTHING;`,
+        [CONTACT_EMAILS_KEY, JSON.stringify(DEFAULT_CONTACT_EMAILS), Date.now()],
+      );
     } catch (err: any) {
       this.logger.warn(`Could not verify email_settings table: ${err.message}`);
     }
@@ -160,10 +168,47 @@ export class EmailAccountsService implements OnModuleInit {
     return !!enabled;
   }
 
+  /* ---------------- contact addresses ---------------- */
+
+  /** Public contact addresses from core.email_settings; defaults when the row is missing or broken. */
+  async getContactEmails(): Promise<ContactEmails> {
+    if (this.contactsCache && Date.now() - this.contactsCache.at < CACHE_MS * 2) return this.contactsCache.value;
+    let stored: unknown = null;
+    try {
+      const rows = await this.dataSource.query(`SELECT value FROM core.email_settings WHERE key = $1;`, [CONTACT_EMAILS_KEY]);
+      stored = Array.isArray(rows) && rows[0] ? rows[0].value : null;
+    } catch {
+      // table missing on a fresh boot: use the defaults
+    }
+    const value = readContactEmails(stored);
+    this.contactsCache = { value, at: Date.now() };
+    return value;
+  }
+
+  /** Saves already-validated contact addresses (see validateContactEmails). */
+  async setContactEmails(value: ContactEmails, adminId: string): Promise<ContactEmails> {
+    await this.dataSource.query(
+      `INSERT INTO core.email_settings (key, value, updated_at, updated_by)
+       VALUES ($1, $2::jsonb, $3, $4)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by;`,
+      [CONTACT_EMAILS_KEY, JSON.stringify(value), Date.now(), adminId],
+    );
+    this.contactsCache = { value, at: Date.now() };
+    return value;
+  }
+
   /* ---------------- legal links (email footers) ---------------- */
 
-  /** Privacy policy and Terms links shown in every email footer, read from core.email_settings. */
-  async getLegalLinks(): Promise<{ termsUrl: string | null; privacyUrl: string | null }> {
+  /**
+   * Footer details for every email, read from core.email_settings: the Privacy policy and Terms
+   * links, and the support address for the "Questions?" line.
+   */
+  async getLegalLinks(): Promise<{ termsUrl: string | null; privacyUrl: string | null; supportEmail: string }> {
+    const { support } = await this.getContactEmails();
+    return { ...(await this.getLegalUrls()), supportEmail: support };
+  }
+
+  private async getLegalUrls(): Promise<{ termsUrl: string | null; privacyUrl: string | null }> {
     if (this.linksCache && Date.now() - this.linksCache.at < CACHE_MS * 2) return this.linksCache.value;
     const value = { termsUrl: DEFAULT_LINKS[TERMS_KEY] as string | null, privacyUrl: DEFAULT_LINKS[PRIVACY_KEY] as string | null };
     try {
@@ -268,6 +313,24 @@ export class EmailAccountsService implements OnModuleInit {
     return steps;
   }
 
+  /**
+   * The full fallback order of every purpose, for the admin Email page. Unlike getChain this lists
+   * every step, with or without room today. `usable` is false for an account that is not set up or
+   * that shares its API key with an earlier step. `reserve` is what a borrowed account keeps back.
+   */
+  describeChains(): Record<EmailPurpose, { account: EmailAccount; senderEmail: string; usable: boolean; reserve: number }[]> {
+    const describe = (purpose: EmailPurpose) => {
+      const usable = this.distinctAccounts(FALLBACK_CHAIN[purpose]);
+      return FALLBACK_CHAIN[purpose].map((account) => ({
+        account,
+        senderEmail: this.getAccountConfig(account).senderEmail,
+        usable: usable.includes(account),
+        reserve: account === 'primary' && OWN_ACCOUNT[purpose] !== 'primary' ? PRIMARY_RESERVE : 0,
+      }));
+    };
+    return { auth: describe('auth'), broadcast: describe('broadcast'), welcome: describe('welcome') };
+  }
+
   /** How many emails broadcasts may still send today: own account, plus what they may borrow. */
   async getBroadcastCapacity(): Promise<{ own: number; borrowable: number }> {
     const chain = await this.getChain('broadcast');
@@ -291,6 +354,8 @@ export class EmailAccountsService implements OnModuleInit {
     };
     if (options.textContent) payload.textContent = options.textContent;
     if (options.headers) payload.headers = options.headers;
+    // Replies reach a real inbox instead of the no-reply sender.
+    payload.replyTo = { email: (await this.getContactEmails()).support, name: 'Regent Money Support' };
 
     try {
       const res = await fetch('https://api.brevo.com/v3/smtp/email', {

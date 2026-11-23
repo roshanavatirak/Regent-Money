@@ -5,12 +5,15 @@ import * as path from 'path';
 import type { Response } from 'express';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
+import { AllowTermsPending } from './allow-terms-pending.decorator';
 
 import { TurnstileService } from './turnstile.service';
 import { TokenService } from './token.service';
 import { JwtService } from '@nestjs/jwt';
 import { clientIpOf } from './throttler-behind-proxy.guard';
 import { EmailBroadcastService } from '../mail/email-broadcast.service';
+import { renderVerifyPage, VerifyPage } from './verify-pages';
+import { EmailAccountsService } from '../mail/email-accounts.service';
 
 @Controller('auth')
 export class AuthController {
@@ -20,6 +23,7 @@ export class AuthController {
     private readonly tokenService: TokenService,
     private readonly jwtService: JwtService,
     private readonly emailBroadcastService: EmailBroadcastService,
+    private readonly emailAccounts: EmailAccountsService,
   ) { }
 
   @Throttle({ default: { limit: 10, ttl: 60000 } })
@@ -53,7 +57,12 @@ export class AuthController {
     const supportsRefresh = String(req?.headers?.['x-supports-refresh'] || '') === '1';
     if (!supportsRefresh || !result?.accessToken || !result?.profile?.id) return result;
     const pair = await this.tokenService.issuePair(
-      { id: result.profile.id, email: result.profile.email, role: result.profile.role },
+      {
+        id: result.profile.id,
+        email: result.profile.email,
+        role: result.profile.role,
+        termsPending: result.profile.termsAccepted !== true,
+      },
       { remember, deviceName: (req?.headers?.['x-device-name'] as string) || null },
     );
     return { ...result, ...pair };
@@ -73,14 +82,16 @@ export class AuthController {
    */
   @Throttle({ default: { limit: 10, ttl: 60000 } })
   @UseGuards(JwtAuthGuard)
+  @AllowTermsPending()
   @Post('upgrade')
   @HttpCode(HttpStatus.OK)
   async upgrade(@Req() req: any, @Body() body: { rememberMe?: boolean }) {
     if (req.user?.tokenType !== 'legacy') {
       throw new BadRequestException('This session already uses refresh tokens.');
     }
+    const profile = await this.authService.getProfile(req.user.id);
     return this.tokenService.issuePair(
-      { id: req.user.id, email: req.user.email, role: req.user.role },
+      { id: req.user.id, email: req.user.email, role: req.user.role, termsPending: profile?.termsAccepted !== true },
       { remember: body?.rememberMe !== false, deviceName: (req.headers?.['x-device-name'] as string) || null },
     );
   }
@@ -329,14 +340,26 @@ export class AuthController {
     return this.authService.updateSecuritySettings(req.user.id, body);
   }
 
+  /**
+   * The person ticked "I agree" on the Terms screen. The app must send { agreed: true }:
+   * older app builds called this silently after a Google sign-in, and that no longer counts.
+   * Afterwards the app refreshes its session, which drops the "terms pending" mark.
+   */
   @UseGuards(JwtAuthGuard)
+  @AllowTermsPending()
   @Patch('accept-terms')
   @HttpCode(HttpStatus.OK)
-  async acceptTerms(@Req() req: any) {
+  async acceptTerms(@Req() req: any, @Body() body: { agreed?: boolean }) {
+    if (body?.agreed !== true) {
+      const profile = await this.authService.getProfile(req.user.id);
+      if (profile?.termsAccepted) return { success: true, termsAccepted: true, termsAcceptedAt: profile.termsAcceptedAt };
+      throw new BadRequestException('Read the Terms of Service and tick “I agree” to accept them.');
+    }
     return this.authService.acceptTerms(req.user.id);
   }
 
   @UseGuards(JwtAuthGuard)
+  @AllowTermsPending()
   @Get('profile')
   async getProfile(@Req() req: any) {
     return this.authService.getProfile(req.user.id);
@@ -356,6 +379,9 @@ export class AuthController {
       occupation?: string;
       currentIncome?: number;
       incomeSourcesCount?: number;
+      salaryDay?: number | null;
+      paySchedule?: unknown;
+      moneyCycleData?: unknown;
     },
   ) {
     return this.authService.updateProfile(req.user.id, body);
@@ -425,363 +451,61 @@ export class AuthController {
     return this.authService.requestAccountDeletion(req.user.id, body);
   }
 
+  /** Where a verification link lands: confirms the email and shows the result page. */
   @Get('verify')
   async verify(@Query('token') token: string, @Res() res: Response) {
+    let page: VerifyPage;
     try {
-      await this.authService.verifyEmail(token);
-
-      // Return a premium, beautiful glassmorphism styled success page
-      res.setHeader('Content-Type', 'text/html');
-      res.send(`
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Account Verified - Regent Money</title>
-          <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
-          <style>
-            :root {
-              --bg: #12141c;
-              --card-bg: rgba(26, 29, 46, 0.45);
-              --primary: #2dba4e;
-              --primary-glow: rgba(45, 186, 78, 0.15);
-              --text: #ffffff;
-              --text-muted: #8c92a6;
-              --border: rgba(255, 255, 255, 0.08);
-            }
-            * {
-              box-sizing: border-box;
-              margin: 0;
-              padding: 0;
-            }
-            body {
-              background-color: var(--bg);
-              color: var(--text);
-              font-family: 'Outfit', sans-serif;
-              display: flex;
-              justify-content: center;
-              align-items: center;
-              min-height: 100vh;
-              overflow: hidden;
-            }
-            /* Ambient glowing backgrounds */
-            .glow-bg {
-              position: absolute;
-              width: 400px;
-              height: 400px;
-              border-radius: 50%;
-              background: radial-gradient(circle, var(--primary-glow) 0%, rgba(18, 20, 28, 0) 70%);
-              z-index: 1;
-              filter: blur(40px);
-            }
-            .glow-1 { top: -100px; left: -100px; }
-            .glow-2 { bottom: -100px; right: -100px; }
-
-            .card {
-              position: relative;
-              background: var(--card-bg);
-              backdrop-filter: blur(20px);
-              border: 1px solid var(--border);
-              border-radius: 24px;
-              padding: 48px 32px;
-              width: 100%;
-              max-width: 440px;
-              text-align: center;
-              box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
-              z-index: 10;
-              animation: fadeInUp 0.8s cubic-bezier(0.16, 1, 0.3, 1);
-            }
-
-            .checkmark-container {
-              width: 80px;
-              height: 80px;
-              border-radius: 50%;
-              background: rgba(45, 186, 78, 0.1);
-              border: 1px solid rgba(45, 186, 78, 0.2);
-              display: flex;
-              justify-content: center;
-              align-items: center;
-              margin: 0 auto 28px;
-              box-shadow: 0 0 30px rgba(45, 186, 78, 0.15);
-              animation: scaleIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 0.3s both;
-            }
-
-            .checkmark {
-              width: 36px;
-              height: 36px;
-              stroke: var(--primary);
-              stroke-width: 3.5;
-              stroke-linecap: round;
-              stroke-linejoin: round;
-              fill: none;
-              stroke-dasharray: 50;
-              stroke-dashoffset: 50;
-              animation: drawCheck 0.6s cubic-bezier(0.4, 0, 0.2, 1) 0.8s both;
-            }
-
-            h1 {
-              font-weight: 800;
-              font-size: 28px;
-              letter-spacing: -0.5px;
-              margin-bottom: 12px;
-              background: linear-gradient(135deg, #ffffff 0%, #a5b0c9 100%);
-              -webkit-background-clip: text;
-              -webkit-text-fill-color: transparent;
-            }
-
-            p {
-              font-size: 15px;
-              line-height: 1.6;
-              color: var(--text-muted);
-              margin-bottom: 36px;
-              padding: 0 10px;
-            }
-
-            .btn {
-              display: inline-block;
-              width: 100%;
-              background: linear-gradient(135deg, #2dba4e 0%, #1e8535 100%);
-              color: #ffffff;
-              text-decoration: none;
-              font-weight: 600;
-              font-size: 15px;
-              padding: 16px 28px;
-              border-radius: 14px;
-              border: none;
-              box-shadow: 0 8px 20px rgba(45, 186, 78, 0.25);
-              transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-              cursor: pointer;
-            }
-
-            .btn:hover {
-              transform: translateY(-2px);
-              box-shadow: 0 12px 28px rgba(45, 186, 78, 0.4);
-            }
-
-            .btn:active {
-              transform: translateY(1px);
-            }
-
-            @keyframes fadeInUp {
-              from {
-                opacity: 0;
-                transform: translateY(30px);
-              }
-              to {
-                opacity: 1;
-                transform: translateY(0);
-              }
-            }
-
-            @keyframes scaleIn {
-              from {
-                transform: scale(0);
-              }
-              to {
-                transform: scale(1);
-              }
-            }
-
-            @keyframes drawCheck {
-              to {
-                stroke-dashoffset: 0;
-              }
-            }
-          </style>
-        </head>
-        <body>
-          <div class="glow-bg glow-1"></div>
-          <div class="glow-bg glow-2"></div>
-          <div class="card">
-            <div class="checkmark-container">
-              <svg class="checkmark" viewBox="0 0 24 24">
-                <path d="M20 6L9 17L4 12" />
-              </svg>
-            </div>
-            <h1>Account Verified!</h1>
-            <p>Thank you for verifying your email address. Your Regent Money account is now fully active. You can return to the mobile application to start managing your wealth.</p>
-            <a href="intent://login#Intent;scheme=regentmoney;package=com.regentmoney;end" class="btn" id="openAppBtn" onclick="return launchApp(event)">Open Regent Money App</a>
-          </div>
-          <script>
-            function launchApp(e) {
-              if (e && e.preventDefault) e.preventDefault();
-              var isAndroid = /Android/i.test(navigator.userAgent);
-              var isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
-              var directUrl = "regentmoney://login";
-              var intentUrl = "intent://login#Intent;scheme=regentmoney;package=com.regentmoney;end";
-
-              if (isAndroid) {
-                var isChrome = /Chrome|CriOS/i.test(navigator.userAgent) && !/SamsungBrowser|Firefox|EdgA/i.test(navigator.userAgent);
-                if (isChrome) {
-                  window.location.href = intentUrl;
-                } else {
-                  window.location.href = directUrl;
-                  setTimeout(function() {
-                    window.location.href = intentUrl;
-                  }, 600);
-                }
-              } else if (isIOS) {
-                window.location.href = directUrl;
-              } else {
-                window.location.href = directUrl;
-              }
-              return false;
-            }
-
-            window.addEventListener("load", function() {
-              setTimeout(function() {
-                launchApp();
-              }, 400);
-            });
-          </script>
-        </body>
-        </html>
-      `);
-    } catch (e: any) {
-      // Send beautiful error page
-      res.setHeader('Content-Type', 'text/html');
-      res.send(`
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Verification Failed - Regent Money</title>
-          <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
-          <style>
-            :root {
-              --bg: #12141c;
-              --card-bg: rgba(26, 29, 46, 0.45);
-              --danger: #cf222e;
-              --danger-glow: rgba(207, 34, 46, 0.15);
-              --text: #ffffff;
-              --text-muted: #8c92a6;
-              --border: rgba(255, 255, 255, 0.08);
-            }
-            * {
-              box-sizing: border-box;
-              margin: 0;
-              padding: 0;
-            }
-            body {
-              background-color: var(--bg);
-              color: var(--text);
-              font-family: 'Outfit', sans-serif;
-              display: flex;
-              justify-content: center;
-              align-items: center;
-              min-height: 100vh;
-              overflow: hidden;
-            }
-            .glow-bg {
-              position: absolute;
-              width: 400px;
-              height: 400px;
-              border-radius: 50%;
-              background: radial-gradient(circle, var(--danger-glow) 0%, rgba(18, 20, 28, 0) 70%);
-              z-index: 1;
-              filter: blur(40px);
-            }
-            .glow-1 { top: -100px; left: -100px; }
-            .glow-2 { bottom: -100px; right: -100px; }
-
-            .card {
-              position: relative;
-              background: var(--card-bg);
-              backdrop-filter: blur(20px);
-              border: 1px solid var(--border);
-              border-radius: 24px;
-              padding: 48px 32px;
-              width: 100%;
-              max-width: 440px;
-              text-align: center;
-              box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
-              z-index: 10;
-              animation: fadeInUp 0.8s cubic-bezier(0.16, 1, 0.3, 1);
-            }
-
-            .icon-container {
-              width: 80px;
-              height: 80px;
-              border-radius: 50%;
-              background: rgba(207, 34, 46, 0.1);
-              border: 1px solid rgba(207, 34, 46, 0.2);
-              display: flex;
-              justify-content: center;
-              align-items: center;
-              margin: 0 auto 28px;
-              box-shadow: 0 0 30px rgba(207, 34, 46, 0.15);
-              animation: scaleIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 0.3s both;
-            }
-
-            .error-icon {
-              width: 36px;
-              height: 36px;
-              stroke: var(--danger);
-              stroke-width: 3.5;
-              stroke-linecap: round;
-              stroke-linejoin: round;
-              fill: none;
-            }
-
-            h1 {
-              font-weight: 800;
-              font-size: 28px;
-              letter-spacing: -0.5px;
-              margin-bottom: 12px;
-              background: linear-gradient(135deg, #ffffff 0%, #f7a0a0 100%);
-              -webkit-background-clip: text;
-              -webkit-text-fill-color: transparent;
-            }
-
-            p {
-              font-size: 15px;
-              line-height: 1.6;
-              color: var(--text-muted);
-              margin-bottom: 36px;
-              padding: 0 10px;
-            }
-
-            .btn {
-              display: inline-block;
-              width: 100%;
-              background: rgba(255, 255, 255, 0.08);
-              color: #ffffff;
-              text-decoration: none;
-              font-weight: 600;
-              font-size: 15px;
-              padding: 16px 28px;
-              border-radius: 14px;
-              border: 1px solid var(--border);
-              transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-              cursor: pointer;
-            }
-
-            .btn:hover {
-              background: rgba(255, 255, 255, 0.12);
-              transform: translateY(-2px);
-            }
-          </style>
-        </head>
-        <body>
-          <div class="glow-bg glow-1"></div>
-          <div class="glow-bg glow-2"></div>
-          <div class="card">
-            <div class="icon-container">
-              <svg class="error-icon" viewBox="0 0 24 24">
-                <line x1="18" y1="6" x2="6" y2="18"></line>
-                <line x1="6" y1="6" x2="18" y2="18"></line>
-              </svg>
-            </div>
-            <h1>Verification Failed</h1>
-            <p>${e.message || 'The verification link is invalid or has expired. Please contact support or sign up again.'}</p>
-            <a href="intent://signup#Intent;scheme=regentmoney;package=com.regentmoney;end" class="btn" id="goBackBtn">Open Regent Money App</a>
-          </div>
-        </body>
-        </html>
-      `);
+      const outcome = await this.authService.verifyEmail(token);
+      page =
+        outcome.status === 'verified'
+          ? { kind: 'verified', name: outcome.name, email: outcome.email }
+          : outcome.status === 'expired'
+            ? { kind: 'expired', token }
+            : { kind: 'invalid' };
+    } catch {
+      page = {
+        kind: 'notSent',
+        message:
+          'Something went wrong on our side. Please try the link again in a minute.',
+      };
     }
+    await this.sendVerifyPage(res, page);
+  }
+
+  /** "Email me a new link" on the expired-link page. */
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
+  @Post('verify/resend')
+  async resendFromVerifyPage(
+    @Body('token') token: string,
+    @Res() res: Response,
+  ) {
+    let page: VerifyPage;
+    try {
+      const result = await this.authService.resendVerificationByToken(token);
+      page = result.sent
+        ? { kind: 'resent' }
+        : { kind: 'notSent', message: result.message };
+    } catch {
+      page = {
+        kind: 'notSent',
+        message:
+          'We couldn’t send a new link just now. Please try again in a minute.',
+      };
+    }
+    await this.sendVerifyPage(res, page);
+  }
+
+  private async sendVerifyPage(res: Response, page: VerifyPage) {
+    const { support } = await this.emailAccounts.getContactEmails();
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    // The page can hold the link's token: keep it out of caches and referrers.
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('X-Robots-Tag', 'noindex');
+    res
+      .status(HttpStatus.OK)
+      .send(renderVerifyPage(page, { supportEmail: support }));
   }
 
   /** Regent Money logo shown at the top of every email. Public, cached for a day. */

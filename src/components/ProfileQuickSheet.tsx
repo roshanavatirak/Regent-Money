@@ -1,10 +1,12 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal, View, Text, Pressable, Image, StyleSheet, ActivityIndicator } from 'react-native';
-import Animated, { FadeIn, SlideInDown, Easing } from 'react-native-reanimated';
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme, useAuthStore } from '../store';
+import { create } from 'zustand';
 import { authService } from '../services/authService';
+import { navigationRef } from '../navigation/navigationRef';
 
 const FOREST = '#0B3D2C';
 const FOREST_RAISED = '#124B37';
@@ -20,7 +22,7 @@ interface ProfileQuickSheetProps {
 /**
  * Opened by long-pressing the Profile tab: a forest profile card on top,
  * Log out below it. Log out acts immediately, with no confirmation step.
- * Floats above the bottom edge so it never collides with the tab bar.
+ * A bottom sheet: full width, attached to the bottom edge, covering the tab bar while open.
  */
 export const ProfileQuickSheet: React.FC<ProfileQuickSheetProps> = ({ visible, onClose, onOpenProfile }) => {
   const { isDark } = useTheme();
@@ -35,6 +37,19 @@ export const ProfileQuickSheet: React.FC<ProfileQuickSheetProps> = ({ visible, o
   const redTint = isDark ? 'rgba(248, 113, 113, 0.14)' : '#FCE8E6';
 
   const initial = (user?.name || user?.email || 'R').charAt(0).toUpperCase();
+
+  // Slide and fade driven by a shared value. Reanimated's layout "entering" animations measure
+  // the view's position, and inside an Android Modal that measurement is off: the sheet came to
+  // rest above the tab bar instead of on the bottom edge.
+  const progress = useSharedValue(0);
+  useEffect(() => {
+    if (visible) {
+      progress.value = 0;
+      progress.value = withTiming(1, { duration: 280, easing: Easing.out(Easing.cubic) });
+    }
+  }, [visible, progress]);
+  const backdropStyle = useAnimatedStyle(() => ({ opacity: progress.value }));
+  const sheetStyle = useAnimatedStyle(() => ({ transform: [{ translateY: (1 - progress.value) * 420 }] }));
 
   const handleLogout = async () => {
     if (loggingOut) return;
@@ -56,15 +71,18 @@ export const ProfileQuickSheet: React.FC<ProfileQuickSheetProps> = ({ visible, o
       navigationBarTranslucent
       onRequestClose={onClose}
     >
-      <Animated.View entering={FadeIn.duration(200)} style={[StyleSheet.absoluteFill, styles.backdrop]}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close" />
-      </Animated.View>
+      <View style={styles.overlay}>
+        <Animated.View style={[StyleSheet.absoluteFill, styles.backdrop, backdropStyle]}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close" />
+        </Animated.View>
 
-      <View style={[styles.anchor, { paddingBottom: Math.max(insets.bottom, 12) + 10 }]} pointerEvents="box-none">
         <Animated.View
-          entering={SlideInDown.duration(280).easing(Easing.out(Easing.cubic))}
           accessibilityViewIsModal
-          style={[styles.sheet, { backgroundColor: sheetBg, borderColor: border }]}
+          style={[
+            styles.sheet,
+            { backgroundColor: sheetBg, borderColor: border, paddingBottom: Math.max(insets.bottom, 12) + 10 },
+            sheetStyle,
+          ]}
         >
           <View style={[styles.handle, { backgroundColor: isDark ? 'rgba(234, 242, 238, 0.18)' : '#D5DFDA' }]} />
 
@@ -130,11 +148,17 @@ export const ProfileQuickSheet: React.FC<ProfileQuickSheetProps> = ({ visible, o
 
 const styles = StyleSheet.create({
   backdrop: { backgroundColor: 'rgba(7, 17, 13, 0.5)' },
-  anchor: { flex: 1, justifyContent: 'flex-end', paddingHorizontal: 12 },
+  overlay: { flex: 1 },
   sheet: {
-    borderRadius: 30,
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
     borderWidth: 1,
-    padding: 10,
+    borderBottomWidth: 0,
+    padding: 12,
     paddingTop: 10,
     shadowColor: '#07110D',
     shadowOffset: { width: 0, height: 12 },
@@ -204,5 +228,29 @@ const styles = StyleSheet.create({
 
   pressed: { opacity: 0.88, transform: [{ scale: 0.985 }] },
 });
+
+/** Open/closed state, so the tab bar can open a sheet that is mounted at the app root. */
+export const useProfileQuickSheetStore = create<{ open: boolean; setOpen: (open: boolean) => void }>((set) => ({
+  open: false,
+  setOpen: (open) => set({ open }),
+}));
+
+/**
+ * The sheet, mounted once at the app root. A Modal mounted inside the floating tab bar is laid out
+ * against the bar's own box on Android and ends above the bottom of the screen.
+ */
+export const ProfileQuickSheetHost: React.FC = () => {
+  const open = useProfileQuickSheetStore((s) => s.open);
+  const setOpen = useProfileQuickSheetStore((s) => s.setOpen);
+  return (
+    <ProfileQuickSheet
+      visible={open}
+      onClose={() => setOpen(false)}
+      onOpenProfile={() => {
+        if (navigationRef.isReady()) (navigationRef.navigate as any)('Main', { screen: 'Settings' });
+      }}
+    />
+  );
+};
 
 export default ProfileQuickSheet;

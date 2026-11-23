@@ -48,6 +48,18 @@ export const notificationService = {
     mmkvStorage.setBoolean(PROMPTED_KEY, val);
   },
 
+  async requestPermission(): Promise<boolean> {
+    return false;
+  },
+
+  async isAskDue(): Promise<boolean> {
+    return false;
+  },
+
+  async requestPermissionIfDue(): Promise<boolean> {
+    return false;
+  },
+
   async registerForPushNotifications(): Promise<string | null> {
     return null;
   },

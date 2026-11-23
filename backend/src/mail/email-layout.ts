@@ -144,6 +144,8 @@ export interface EmailFrameOptions {
   unsubscribeUrl?: string | null;
   termsUrl?: string | null;
   privacyUrl?: string | null;
+  /** Shown as "Questions? Write to …" in the footer. */
+  supportEmail?: string | null;
 }
 
 export function renderEmail(o: EmailFrameOptions): string {
@@ -160,6 +162,10 @@ export function renderEmail(o: EmailFrameOptions): string {
   ]
     .filter(Boolean)
     .join('&nbsp;&nbsp;·&nbsp;&nbsp;');
+  const support =
+    o.supportEmail && /^[^\s@<>"]+@[^\s@<>"]+$/.test(o.supportEmail)
+      ? `<p style="margin:0 0 6px;">Questions? Write to <a href="mailto:${escapeHtml(o.supportEmail)}" style="color:${c.muted};">${escapeHtml(o.supportEmail)}</a></p>`
+      : '';
   const year = new Date().getFullYear();
   const copyright = `© ${year} Regent Money`;
 
@@ -193,6 +199,7 @@ ${o.bodyHtml}
 
 <tr><td style="padding:20px 4px 0;font-family:${FONT};font-size:12px;line-height:18px;color:${c.muted};">
 <p style="margin:0 0 6px;">${escapeHtml(o.footerReason)}${unsub}</p>
+${support}
 ${legalLinks ? `<p style="margin:0 0 6px;">${legalLinks}</p>` : ''}
 <p style="margin:0;">${copyright}</p>
 </td></tr>

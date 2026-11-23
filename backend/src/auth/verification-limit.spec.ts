@@ -1,4 +1,38 @@
-import { refusal, utcDay, DAILY_MAX, RESEND_GAP_MS, CLAIM_SEND_SQL } from './verification-limit';
+import {
+  refusal,
+  utcDay,
+  DAILY_MAX,
+  RESEND_GAP_MS,
+  CLAIM_SEND_SQL,
+  VERIFY_LINK_TTL_MS,
+  verificationLinkExpired,
+} from './verification-limit';
+
+describe('verification link expiry', () => {
+  const now = Date.UTC(2026, 10, 22, 12, 0, 0);
+
+  it('lasts 15 minutes', () => {
+    expect(VERIFY_LINK_TTL_MS).toBe(15 * 60_000);
+  });
+
+  it('works right after the email and up to the 15-minute mark', () => {
+    expect(verificationLinkExpired(now - 60_000, now)).toBe(false);
+    expect(verificationLinkExpired(now - VERIFY_LINK_TTL_MS, now)).toBe(false);
+  });
+
+  it('expires after 15 minutes', () => {
+    expect(verificationLinkExpired(now - VERIFY_LINK_TTL_MS - 1, now)).toBe(true);
+    expect(verificationLinkExpired(now - 16 * 60_000, now)).toBe(true);
+    expect(verificationLinkExpired(now - 3 * 24 * 3600_000, now)).toBe(true);
+  });
+
+  it('treats an unknown issue time as expired', () => {
+    expect(verificationLinkExpired(null, now)).toBe(true);
+    expect(verificationLinkExpired(undefined, now)).toBe(true);
+    expect(verificationLinkExpired(0, now)).toBe(true);
+    expect(verificationLinkExpired(Number.NaN, now)).toBe(true);
+  });
+});
 
 describe('verification email limits', () => {
   const now = Date.UTC(2026, 10, 12, 10, 0, 0);

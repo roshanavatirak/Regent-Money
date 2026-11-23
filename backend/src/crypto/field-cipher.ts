@@ -17,6 +17,7 @@ export const AAD_TABLE = {
   transactions: 'transactions',
   incomeRecords: 'income_records',
   chatThreads: 'chat_threads',
+  peerLedgers: 'peer_ledgers',
 } as const;
 
 /**
@@ -30,6 +31,7 @@ export const AAD_COLUMN = {
   source: 'source',
   chatTitle: 'title',
   chatMessages: 'messages',
+  peerLedger: 'ledger',
 } as const;
 
 export type RandomSource = (size: number) => Buffer;

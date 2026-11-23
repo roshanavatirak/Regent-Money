@@ -3,7 +3,6 @@ import {
   View,
   Text,
   StyleSheet,
-  Modal,
   Pressable,
   Animated,
   PanResponder,
@@ -11,6 +10,8 @@ import {
   Platform,
   useWindowDimensions,
   ScrollView,
+  BackHandler,
+  Linking,
 } from 'react-native';
 import Reanimated, { FadeIn } from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
@@ -23,11 +24,14 @@ import {
   useAppUpdateStore,
   useTermsModalStore,
   showGlobalConfirm,
+  showGlobalAlert,
 } from '../store';
 import { getAppCurrentVersion } from '../services/updateService';
 import { authService } from '../services/authService';
 import { navigationRef } from '../navigation/navigationRef';
 import { BrandWordmark } from './BrandWordmark';
+import { useContactInfo } from '../services/contactInfo';
+import { mailtoUrl } from '../constants/contactInfo';
 
 const FOREST = '#0B3D2C';
 const FOREST_RAISED = '#124B37';
@@ -55,6 +59,7 @@ export const AppSidebarDrawer: React.FC = () => {
   const updateInfo = useAppUpdateStore((s) => s.updateInfo);
   const openUpdateModal = useAppUpdateStore((s) => s.openUpdateModal);
   const openTermsModal = useTermsModalStore((s) => s.openTermsModal);
+  const supportEmail = useContactInfo((s) => s.support);
 
   const currentVersion = getAppCurrentVersion();
   const isAdmin = !!user?.role && ['admin', 'superadmin'].includes(user.role);
@@ -75,7 +80,7 @@ export const AppSidebarDrawer: React.FC = () => {
       slide.setValue(0);
       fade.setValue(1);
       if (mounted) {
-        // Already on screen (Modal onShow won't fire again), so run the callback now.
+        // Already on screen, so run the callback now.
         useSidebarStore.getState().takeOnShown()?.();
       } else {
         setMounted(true);
@@ -115,6 +120,24 @@ export const AppSidebarDrawer: React.FC = () => {
       });
     }
   }, [isOpen, drawerWidth]);
+
+  // Once the drawer is on screen, run the pending "shown" callback (it removes the screen underneath
+  // when returning to the drawer). A Modal's onShow did this; the overlay is visible on its next frame.
+  useEffect(() => {
+    if (!mounted || !isOpen) return;
+    const frame = requestAnimationFrame(() => useSidebarStore.getState().takeOnShown()?.());
+    return () => cancelAnimationFrame(frame);
+  }, [mounted, isOpen]);
+
+  // Android back button closes the drawer instead of leaving the screen behind it.
+  useEffect(() => {
+    if (!isOpen) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      closeSidebar();
+      return true;
+    });
+    return () => sub.remove();
+  }, [isOpen, closeSidebar]);
 
   // Clamped translateX so it strictly stays <= 0 and never pulls away from the left edge
   const translateX = useMemo(
@@ -175,6 +198,20 @@ export const AppSidebarDrawer: React.FC = () => {
     (navigationRef.navigate as any)(name, name === 'Main' ? params : { ...(params || {}), fromSidebar: true });
   };
 
+  // Opens the phone's email app with the support address, a subject and the app version filled in.
+  const contactSupport = () => {
+    closeSidebar();
+    const body = `
+
+
+---
+App version: ${currentVersion}${user?.email ? `
+Account: ${user.email}` : ''}`;
+    Linking.openURL(mailtoUrl(supportEmail, 'Regent Money support', body)).catch(() => {
+      showGlobalAlert('Contact support', `Write to us at ${supportEmail}`);
+    });
+  };
+
   const handleLogout = () => {
     showGlobalConfirm({
       title: 'Log out of Regent Money?',
@@ -199,6 +236,7 @@ export const AppSidebarDrawer: React.FC = () => {
             { key: 'dash', label: 'Console', icon: 'grid', onPress: () => nav('AdminDashboard') },
             { key: 'email_config', label: 'Email', icon: 'mail', onPress: () => nav('AdminEmailConfig') },
             { key: 'home_cards', label: 'Home cards', icon: 'layout', onPress: () => nav('AdminHomeCards') },
+            { key: 'feedback', label: 'Feedback', icon: 'message-square', onPress: () => nav('AdminFeedback') },
             // Users, Audit logs and Admin settings are tabs inside the admin tab navigator ("Main"),
             // so they must be reached through it: React Navigation 7 won't find a nested tab by name.
             { key: 'users', label: 'Users', icon: 'users', onPress: () => nav('Main', { screen: 'AdminUsers' }) },
@@ -223,7 +261,8 @@ export const AppSidebarDrawer: React.FC = () => {
         },
       ];
 
-  groups.push(
+  // Account, referral and help items are for app users; admins only get the Admin group.
+  if (!isAdmin) groups.push(
     {
       title: 'Account',
       items: [
@@ -241,6 +280,7 @@ export const AppSidebarDrawer: React.FC = () => {
       items: [
         { key: 'suggest', label: 'Suggest a feature', icon: 'zap', onPress: () => nav('SuggestFeature') },
         { key: 'bug', label: 'Report a problem', icon: 'alert-circle', onPress: () => nav('ReportBug') },
+        { key: 'support', label: 'Contact support', icon: 'mail', onPress: contactSupport },
       ],
     }
   );
@@ -257,133 +297,126 @@ export const AppSidebarDrawer: React.FC = () => {
   let itemIndex = 0;
 
   return (
-    <Modal
-      visible
-      transparent
-      animationType="none"
-      statusBarTranslucent
-      navigationBarTranslucent
-      onRequestClose={closeSidebar}
-      onShow={() => useSidebarStore.getState().takeOnShown()?.()}
-    >
-      <View style={styles.overlay}>
-        {/* Tap anywhere outside to close */}
-        <Animated.View style={[StyleSheet.absoluteFill, styles.backdrop, { opacity: fade }]}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={closeSidebar} accessibilityLabel="Close menu" />
-        </Animated.View>
+    // A plain overlay over the whole app, not a Modal. On Android a Modal opens its own window, whose
+    // first frames are laid out before it goes edge-to-edge: the drawer briefly stopped short of the
+    // bottom of the screen and then jumped down.
+    <View style={styles.overlay}>
+      {/* Tap anywhere outside to close */}
+      <Animated.View style={[StyleSheet.absoluteFill, styles.backdrop, { opacity: fade }]}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={closeSidebar} accessibilityLabel="Close menu" />
+      </Animated.View>
 
-        <Animated.View
-          {...pan.panHandlers}
-          accessibilityViewIsModal
-          style={[
-            styles.drawer,
-            { width: drawerWidth, backgroundColor: sheetBg, transform: [{ translateX }] },
-          ]}
-        >
-          {/* Brand + profile */}
-          <View style={[styles.header, { paddingTop: Math.max(insets.top, 14) + 8 }]}>
-            <View style={[styles.ring, { width: 160, height: 160, borderRadius: 80, right: -70, top: -70 }]} />
-            <View
-              style={[styles.ring, { width: 90, height: 90, borderRadius: 45, right: -30, top: -30, borderColor: 'rgba(184, 243, 107, 0.24)' }]}
-            />
+      <Animated.View
+        {...pan.panHandlers}
+        accessibilityViewIsModal
+        style={[
+          styles.drawer,
+          { width: drawerWidth, backgroundColor: sheetBg, transform: [{ translateX }] },
+        ]}
+      >
+        {/* Brand + profile */}
+        <View style={[styles.header, { paddingTop: Math.max(insets.top, 14) + 8 }]}>
+          <View style={[styles.ring, { width: 160, height: 160, borderRadius: 80, right: -70, top: -70 }]} />
+          <View
+            style={[styles.ring, { width: 90, height: 90, borderRadius: 45, right: -30, top: -30, borderColor: 'rgba(184, 243, 107, 0.24)' }]}
+          />
 
-            <View style={styles.brandRow}>
-              <View style={styles.logoTile}>
-                <Image source={require('../../assets/insideicon.png')} style={styles.logoImg} resizeMode="cover" />
-              </View>
-              <BrandWordmark size={18} onDark />
+          <View style={styles.brandRow}>
+            <View style={styles.logoTile}>
+              <Image source={require('../../assets/insideicon.png')} style={styles.logoImg} resizeMode="cover" />
             </View>
-
-            <Pressable
-              onPress={() => nav('Main', { screen: 'Settings' })}
-              style={({ pressed }) => [styles.profileCard, pressed && { opacity: 0.85 }]}
-              accessibilityRole="button"
-              accessibilityLabel="View profile"
-            >
-              <View style={styles.avatarRing}>
-                {user?.avatarUrl ? (
-                  <Image source={{ uri: user.avatarUrl }} style={styles.avatarImg} />
-                ) : (
-                  <View style={styles.avatarFallback}>
-                    <Text style={styles.avatarInitial}>{(user?.name || user?.email || 'R').charAt(0).toUpperCase()}</Text>
-                  </View>
-                )}
-              </View>
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={styles.profileName} numberOfLines={1}>
-                  {user?.name || 'Your profile'}
-                </Text>
-                <Text style={styles.profileSub} numberOfLines={1}>
-                  View profile
-                </Text>
-              </View>
-              <Feather name="chevron-right" size={14} color={MIST} />
-            </Pressable>
+            <BrandWordmark size={18} onDark />
           </View>
 
-          {/* Menu */}
-          <ScrollView
-            style={{ flex: 1 }}
-            contentContainerStyle={{ paddingHorizontal: 6, paddingTop: 4, paddingBottom: 10 }}
-            showsVerticalScrollIndicator={false}
+          <Pressable
+            onPress={() => nav('Main', { screen: isAdmin ? 'AdminSettings' : 'Settings' })}
+            style={({ pressed }) => [styles.profileCard, pressed && { opacity: 0.85 }]}
+            accessibilityRole="button"
+            accessibilityLabel="View profile"
           >
-            {groups.map((g) => (
-              <View key={g.title} style={{ marginTop: 10 }}>
-                <Text style={[styles.groupTitle, { color: faint }]}>{g.title}</Text>
-                {g.items.map((item) => {
-                  const delay = 40 + itemIndex++ * 20;
-                  return (
-                    <Reanimated.View key={item.key} entering={FadeIn.delay(Math.min(delay, 120)).duration(150)}>
-                      <Pressable
-                        onPress={item.onPress}
-                        style={({ pressed }) => [
-                          styles.item,
-                          pressed && { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#F1F5F2' },
-                        ]}
-                        accessibilityRole="button"
-                      >
-                        <Feather name={item.icon} size={16} color={iconColor} />
-                        <Text style={[styles.itemLabel, { color: ink }]} numberOfLines={1}>
-                          {item.label}
-                        </Text>
-                      </Pressable>
-                    </Reanimated.View>
-                  );
-                })}
-              </View>
-            ))}
-          </ScrollView>
+            <View style={styles.avatarRing}>
+              {user?.avatarUrl ? (
+                <Image source={{ uri: user.avatarUrl }} style={styles.avatarImg} />
+              ) : (
+                <View style={styles.avatarFallback}>
+                  <Text style={styles.avatarInitial}>{(user?.name || user?.email || 'R').charAt(0).toUpperCase()}</Text>
+                </View>
+              )}
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={styles.profileName} numberOfLines={1}>
+                {user?.name || 'Your profile'}
+              </Text>
+              <Text style={styles.profileSub} numberOfLines={1}>
+                View profile
+              </Text>
+            </View>
+            <Feather name="chevron-right" size={14} color={MIST} />
+          </Pressable>
+        </View>
 
-          {/* Footer */}
-          <View style={[styles.footer, { borderTopColor: line, paddingBottom: Math.max(insets.bottom, 8) + 6 }]}>
-            {updateInfo?.isUpdateAvailable && (
-              <Pressable
-                onPress={() => go(openUpdateModal, 120)}
-                style={({ pressed }) => [styles.updateBtn, pressed && { opacity: 0.9 }]}
-                accessibilityRole="button"
-              >
-                <Feather name="download" size={14} color={FOREST} />
-                <Text style={styles.updateText} numberOfLines={1}>
-                  Update to {updateInfo.latestVersion}
-                </Text>
-                <Feather name="arrow-right" size={13} color={FOREST} />
-              </Pressable>
-            )}
+        {/* Menu */}
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ paddingHorizontal: 6, paddingTop: 4, paddingBottom: 10 }}
+          showsVerticalScrollIndicator={false}
+        >
+          {groups.map((g) => (
+            <View key={g.title} style={{ marginTop: 10 }}>
+              <Text style={[styles.groupTitle, { color: faint }]}>{g.title}</Text>
+              {g.items.map((item) => {
+                const delay = 40 + itemIndex++ * 20;
+                return (
+                  <Reanimated.View key={item.key} entering={FadeIn.delay(Math.min(delay, 120)).duration(150)}>
+                    <Pressable
+                      onPress={item.onPress}
+                      style={({ pressed }) => [
+                        styles.item,
+                        pressed && { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#F1F5F2' },
+                      ]}
+                      accessibilityRole="button"
+                    >
+                      <Feather name={item.icon} size={16} color={iconColor} />
+                      <Text style={[styles.itemLabel, { color: ink }]} numberOfLines={1}>
+                        {item.label}
+                      </Text>
+                    </Pressable>
+                  </Reanimated.View>
+                );
+              })}
+            </View>
+          ))}
+        </ScrollView>
 
-            <Pressable onPress={handleLogout} style={styles.logout} accessibilityRole="button">
-              <Feather name="log-out" size={16} color={red} />
-              <Text style={[styles.logoutText, { color: red }]}>Log out</Text>
+        {/* Footer */}
+        <View style={[styles.footer, { borderTopColor: line, paddingBottom: Math.max(insets.bottom, 8) + 6 }]}>
+          {updateInfo?.isUpdateAvailable && (
+            <Pressable
+              onPress={() => go(openUpdateModal, 120)}
+              style={({ pressed }) => [styles.updateBtn, pressed && { opacity: 0.9 }]}
+              accessibilityRole="button"
+            >
+              <Feather name="download" size={14} color={FOREST} />
+              <Text style={styles.updateText} numberOfLines={1}>
+                Update to {updateInfo.latestVersion}
+              </Text>
+              <Feather name="arrow-right" size={13} color={FOREST} />
             </Pressable>
-            <Text style={[styles.version, { color: faint }]}>Version {currentVersion}</Text>
-          </View>
-        </Animated.View>
-      </View>
-    </Modal>
+          )}
+
+          <Pressable onPress={handleLogout} style={styles.logout} accessibilityRole="button">
+            <Feather name="log-out" size={16} color={red} />
+            <Text style={[styles.logoutText, { color: red }]}>Log out</Text>
+          </Pressable>
+          <Text style={[styles.version, { color: faint }]}>Version {currentVersion}</Text>
+        </View>
+      </Animated.View>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
-  overlay: { flex: 1, position: 'relative' },
+  overlay: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 1000, elevation: 1000 },
   backdrop: { backgroundColor: 'rgba(7, 17, 13, 0.5)' },
   drawer: {
     position: 'absolute',

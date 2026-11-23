@@ -1,5 +1,5 @@
 import { Platform, NativeModules } from 'react-native';
-import { saveSession, syncNativeAuthCredentials, setSessionEndedHandler } from './sessionRefresh';
+import { saveSession, syncNativeAuthCredentials, setSessionEndedHandler, refreshSession } from './sessionRefresh';
 import { isRunningInExpoGo } from 'expo';
 import { mmkvStorage } from '../db/mmkv';
 import {
@@ -131,6 +131,11 @@ export const authService = {
    */
   clearLastGoogleUser(): void {
     mmkvStorage.delete(LAST_GOOGLE_USER_KEY);
+    // Also forget the phone's Google choice, so the next Google sign-in shows the account list.
+    try {
+      const { GoogleSignin } = require('@react-native-google-signin/google-signin');
+      GoogleSignin?.signOut?.().catch?.(() => {});
+    } catch {}
   },
 
   /**
@@ -273,6 +278,10 @@ export const authService = {
       err.remainingMinutes = errData.remainingMinutes;
       err.remainingAttempts = errData.attemptsLeft;
       err.tier = errData.tier;
+      // Right password, email not confirmed yet: the screen offers "Send a new link".
+      err.code = errData.code;
+      err.email = errData.email;
+      err.linkExpired = errData.linkExpired;
       applyRateLimit(err, response, errData);
       throw err;
     }
@@ -304,7 +313,7 @@ export const authService = {
    * Resends verification email with a fresh secure token.
    * `retryAfterSeconds`: how long the server will refuse another resend (60 s between emails, 5 a day).
    */
-  async resendVerificationEmail(email: string): Promise<{ message: string; retryAfterSeconds?: number }> {
+  async resendVerificationEmail(email: string): Promise<{ message: string; retryAfterSeconds?: number; sent?: boolean }> {
     const response = await fetch(`${BACKEND_URL}/auth/resend-verification`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -374,14 +383,30 @@ export const authService = {
 
       await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
 
-      // If switching account or forceAccountPicker is requested, sign out of Google Play Services session first
+      // "Use another account": forget the phone's Google choice so the account list shows.
       if (forceAccountPicker) {
         try {
           await GoogleSignin.signOut();
         } catch (_) {}
       }
 
-      const signInResult = await GoogleSignin.signIn();
+      // "Continue as <name>": sign in with the same Google account without showing the account
+      // list. Only if it's the account the button shows; otherwise, or if Google has nothing saved,
+      // fall back to the normal sign-in with the list.
+      let signInResult: any = null;
+      if (!forceAccountPicker && typeof GoogleSignin.signInSilently === 'function') {
+        try {
+          const shown = (this.getLastGoogleUser()?.email || '').toLowerCase();
+          const silent = await GoogleSignin.signInSilently();
+          const silentEmail = (silent?.data?.user?.email || '').toLowerCase();
+          if (silent?.type === 'success' && silent?.data?.idToken && shown && silentEmail === shown) {
+            signInResult = silent;
+          }
+        } catch (_) {
+          // nothing saved on this phone, or Google couldn't do it quietly: show the list
+        }
+      }
+      if (!signInResult) signInResult = await GoogleSignin.signIn();
       const idToken = signInResult?.data?.idToken || signInResult?.idToken;
 
       if (!idToken) {
@@ -424,10 +449,8 @@ export const authService = {
       await loadAccountData(profile);
       useAuthStore.getState().setUser(profile);
 
-      // Auto-accept terms if not yet accepted (user agreed via Google button notice)
-      if (!profile.termsAccepted) {
-        this.acceptTerms().catch(() => {});
-      }
+      // A new Google account accepts the Terms on the Terms screen, which shows by itself while
+      // profile.termsAccepted is false. Until then the server refuses the account's requests.
 
       if (data.accountRestored) {
         showGlobalAlert(
@@ -531,6 +554,9 @@ export const authService = {
     occupation?: string;
     currentIncome?: number;
     incomeSourcesCount?: number;
+    salaryDay?: number | null;
+    paySchedule?: UserProfile['paySchedule'];
+    moneyCycleData?: UserProfile['moneyCycleData'];
   }): Promise<UserProfile | null> {
     const token = this.getAccessToken();
     // Update local state immediately for snappy response
@@ -597,40 +623,33 @@ export const authService = {
    * Accept Terms & Conditions and persist status locally and in database
    */
   async acceptTerms(): Promise<boolean> {
-    const now = Date.now();
-    // 1. Immediately update Zustand store for instant, reactive UI dismissal
-    useAuthStore.getState().updateUser({
-      termsAccepted: true,
-      termsAcceptedAt: now,
+    // 1. Record it on the server first: the account stays locked on every device until the
+    //    server has it. Throws (and the Terms screen shows an error) if it can't be saved.
+    const token = this.getAccessToken();
+    if (!token) throw new Error('Not signed in.');
+    const res = await fetch(`${BACKEND_URL}/auth/accept-terms`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ agreed: true }),
     });
+    if (!res.ok) {
+      console.warn('[AuthService] Backend accept-terms responded with status:', res.status);
+      throw new Error('Couldn’t save your agreement.');
+    }
+    const data = await res.json().catch(() => ({}));
+    const acceptedAt = Number(data?.termsAcceptedAt) || Date.now();
 
-    // 2. Persist to MMKV cached profile so it never pops up again across restarts
+    // 2. New tokens without the "terms pending" mark, so the app's requests are allowed again
+    if (tokenStore.getRefreshToken()) await refreshSession().catch(() => undefined);
+
+    // 3. Then close the Terms screen and remember it locally
+    useAuthStore.getState().updateUser({ termsAccepted: true, termsAcceptedAt: acceptedAt });
     const currentProfile = mmkvStorage.getObject<UserProfile>(USER_PROFILE_KEY);
     if (currentProfile) {
-      mmkvStorage.setObject(USER_PROFILE_KEY, {
-        ...currentProfile,
-        termsAccepted: true,
-        termsAcceptedAt: now,
-      });
-    }
-
-    // 3. Persist to backend database via PATCH /auth/accept-terms
-    const token = this.getAccessToken();
-    if (!token) return true;
-
-    try {
-      const res = await fetch(`${BACKEND_URL}/auth/accept-terms`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      if (!res.ok) {
-        console.warn('[AuthService] Backend accept-terms responded with status:', res.status);
-      }
-    } catch (err) {
-      console.warn('[AuthService] Failed to sync accept-terms with backend:', err);
+      mmkvStorage.setObject(USER_PROFILE_KEY, { ...currentProfile, termsAccepted: true, termsAcceptedAt: acceptedAt });
     }
     return true;
   },
@@ -681,10 +700,9 @@ export const authService = {
           : typeof GoogleSignin.isSignedIn === 'function'
             ? await GoogleSignin.isSignedIn()
             : false;
-        if (hasSignedIn && typeof GoogleSignin.signOut === 'function') {
-          await GoogleSignin.signOut();
-          console.log('[Auth] Signed out from Google Native.');
-        }
+        // Keep the phone's Google choice (we don't call GoogleSignin.signOut here), so "Continue
+        // as <name>" on the sign-in screen works in one tap. "Use another account" clears it.
+        if (hasSignedIn) console.log('[Auth] Left the Google account selected for one-tap sign-in.');
       }
     } catch (e: any) {
       console.log('[Auth] Google Native signout failed or not initialized:', e.message);
@@ -715,6 +733,8 @@ export const authService = {
         'cache_peer_contacts',
         'cache_peer_entries',
         'cache_peer_pending_settlements',
+        'cache_peer_tombstones',
+        'peer_ledger_version',
         'security_last_bg_time',
       ];
       for (const k of financialKeys) {

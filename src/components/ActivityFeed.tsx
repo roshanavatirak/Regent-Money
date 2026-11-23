@@ -14,6 +14,7 @@ import { BankIcon } from './BankIcon';
 import { CategoryIcon } from './CategoryIcon';
 import { getCategory } from '../constants/categories';
 import { ActivityBank, ActivityFilter, ActivityItem, isSameFilter } from '../hooks/useActivityFeed';
+import { counterpartyName } from '../services/counterpartyService';
 
 /* Shared pieces for the Home "Recent" card and the All Transactions screen. */
 
@@ -181,8 +182,10 @@ export const ActivityRow = ({
 }) => {
   const { colors, isDark } = useTheme();
   const isCredit = tx.type === 'credit';
-  const catKey = isCredit ? 'money_received' : tx.category || 'miscellaneous';
-  const label = isCredit ? 'Money received' : getCategory(catKey).label;
+  // The saved category is the only source, money in or out, so this row always matches the
+  // detail screen (getCategory falls back to Misc when there is none).
+  const catKey = tx.category || 'miscellaneous';
+  const label = getCategory(catKey).label;
 
   const row = (
     <View
@@ -197,7 +200,7 @@ export const ActivityRow = ({
           style={[rowStyles.name, { color: colors.text, fontFamily: font?.bodySemi, fontWeight: font?.bodySemi ? undefined : '600' }]}
           numberOfLines={1}
         >
-          {tx.merchant || (isCredit ? 'Money received' : 'Unknown merchant')}
+          {counterpartyName(tx) || tx.merchant || (isCredit ? 'Money received' : 'Unknown merchant')}
         </Text>
         <Text style={[rowStyles.meta, { color: colors.textSecondary, fontFamily: font?.body }]} numberOfLines={1}>
           {meta ?? `${label}, ${relativeDay(Number(tx.timestamp))}`}

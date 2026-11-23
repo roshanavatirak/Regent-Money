@@ -3,7 +3,14 @@ package com.regentmoney
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
+import android.graphics.Rect
+import android.graphics.RectF
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -36,6 +43,7 @@ class SmsDirectSyncWorker(context: Context, workerParams: WorkerParameters) : Wo
         const val KEY_IS_SALARY = "is_salary"
         const val KEY_AVAILABLE_BALANCE = "available_balance"
         const val KEY_REFERENCE_ID = "reference_id"
+        const val KEY_COUNTERPARTY_KEY = "counterparty_key"
 
         private val httpClient: OkHttpClient by lazy {
             OkHttpClient.Builder()
@@ -69,6 +77,7 @@ class SmsDirectSyncWorker(context: Context, workerParams: WorkerParameters) : Wo
                 .putBoolean(KEY_IS_SALARY, parsed.isSalary)
                 .apply { parsed.availableBalance?.let { putDouble(KEY_AVAILABLE_BALANCE, it) } }
                 .putString(KEY_REFERENCE_ID, parsed.referenceId)
+                .putString(KEY_COUNTERPARTY_KEY, parsed.counterpartyKey)
                 .build()
 
             val constraints = Constraints.Builder()
@@ -151,6 +160,8 @@ class SmsDirectSyncWorker(context: Context, workerParams: WorkerParameters) : Wo
                     put("availableBalance", inputData.getDouble(KEY_AVAILABLE_BALANCE, 0.0))
                 }
                 inputData.getString(KEY_REFERENCE_ID)?.let { put("referenceId", it) }
+                // Who paid / was paid ("vpa:rohit.c@okaxis"); stored encrypted, like the merchant
+                inputData.getString(KEY_COUNTERPARTY_KEY)?.let { put("counterpartyKey", it) }
             }
             val jsonPayload = JSONObject().apply {
                 put("sender", sender)
@@ -161,20 +172,27 @@ class SmsDirectSyncWorker(context: Context, workerParams: WorkerParameters) : Wo
             }
 
             val mediaType = "application/json; charset=utf-8".toMediaType()
-            val requestBody = jsonPayload.toString().toRequestBody(mediaType)
-
-            val request = Request.Builder()
-                .url("$backendUrl/sync/direct-sms")
-                .addHeader("Authorization", "Bearer $token")
-                .addHeader("Content-Type", "application/json")
-                .post(requestBody)
-                .build()
+            fun send(): okhttp3.Response {
+                val request = Request.Builder()
+                    .url("$backendUrl/sync/direct-sms")
+                    .addHeader("Authorization", "Bearer $token")
+                    .addHeader("Content-Type", "application/json")
+                    .post(jsonPayload.toString().toRequestBody(mediaType))
+                    .build()
+                return httpClient.newCall(request).execute()
+            }
 
             val startTime = System.currentTimeMillis()
-            val response = httpClient.newCall(request).execute()
+            var response = send()
+            var responseBodyStr = response.body?.string() ?: ""
+            // A server older than counterparty keys rejects the unknown field: send again without it,
+            // so the transaction is never lost to a deploy-order mismatch
+            if (response.code == 400 && parsedJson.has("counterpartyKey")) {
+                parsedJson.remove("counterpartyKey")
+                response = send()
+                responseBodyStr = response.body?.string() ?: ""
+            }
             val duration = System.currentTimeMillis() - startTime
-
-            val responseBodyStr = response.body?.string() ?: ""
             Log.d(TAG, "Server responded with HTTP ${response.code} in ${duration}ms")
 
             if (response.isSuccessful) {
@@ -254,6 +272,7 @@ class SmsDirectSyncWorker(context: Context, workerParams: WorkerParameters) : Wo
 
             val largeIcon = try {
                 BitmapFactory.decodeResource(context.resources, R.drawable.ic_notification_large)
+                    ?.let { roundCorners(it) }
             } catch (e: Exception) {
                 null
             }
@@ -277,5 +296,24 @@ class SmsDirectSyncWorker(context: Context, workerParams: WorkerParameters) : Wo
         } catch (e: Exception) {
             Log.w(TAG, "Could not post transaction alert notification:", e)
         }
+    }
+
+    /**
+     * Clips the notification large icon to a rounded square (like Zomato / OLX / Rapido),
+     * instead of Android showing the raw square bitmap.
+     */
+    private fun roundCorners(src: Bitmap, radiusFraction: Float = 0.24f): Bitmap {
+        val size = minOf(src.width, src.height)
+        val left = (src.width - size) / 2
+        val top = (src.height - size) / 2
+        val out = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        val rect = RectF(0f, 0f, size.toFloat(), size.toFloat())
+        val radius = size * radiusFraction
+        canvas.drawRoundRect(rect, radius, radius, paint)
+        paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
+        canvas.drawBitmap(src, Rect(left, top, left + size, top + size), rect, paint)
+        return out
     }
 }

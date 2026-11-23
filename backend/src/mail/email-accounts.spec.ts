@@ -106,7 +106,11 @@ describe('EmailAccountsService fallback', () => {
       { key: 'legal_terms_url', value: 'https://raodevstudios.in/terms' },
       { key: 'legal_privacy_url', value: 'javascript:alert(1)' },
     ]);
-    expect(await svc.getLegalLinks()).toEqual({ termsUrl: 'https://raodevstudios.in/terms', privacyUrl: null });
+    expect(await svc.getLegalLinks()).toEqual({
+      termsUrl: 'https://raodevstudios.in/terms',
+      privacyUrl: null,
+      supportEmail: 'support@raodevstudios.in',
+    });
   });
 
   it('falls back to the RAO Dev Studios links when the table is missing', async () => {
@@ -117,6 +121,7 @@ describe('EmailAccountsService fallback', () => {
     expect(await svc.getLegalLinks()).toEqual({
       termsUrl: 'https://raodevstudios.in/terms',
       privacyUrl: 'https://raodevstudios.in/privacy',
+      supportEmail: 'support@raodevstudios.in',
     });
   });
 
@@ -179,5 +184,16 @@ describe('EmailAccountsService fallback', () => {
   it('does not treat a missing broadcast account as a second account', async () => {
     const svc = build({ broadcastKey: null });
     expect(svc.canFallBack()).toBe(false);
+  });
+  it('describes every fallback order for the admin page, with the sign-in reserve on borrowed steps', () => {
+    const chains = build({ welcomeKey: null }).describeChains();
+    expect(chains.auth.map((s) => [s.account, s.usable, s.reserve])).toEqual([
+      ['primary', true, 0],
+      ['broadcast', true, 0],
+      ['welcome', false, 0],
+    ]);
+    expect(chains.broadcast.map((s) => s.account)).toEqual(['broadcast', 'welcome', 'primary']);
+    expect(chains.welcome.map((s) => s.account)).toEqual(['welcome', 'broadcast', 'primary']);
+    expect(chains.welcome[2]).toEqual({ account: 'primary', senderEmail: 'auth@example.com', usable: true, reserve: PRIMARY_RESERVE });
   });
 });

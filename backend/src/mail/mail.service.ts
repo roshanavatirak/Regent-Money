@@ -184,12 +184,13 @@ export class MailService implements OnModuleInit {
         paragraph(`Hi ${escapeHtml(first)},`) +
         paragraph(`Confirm <strong style="font-weight:600;color:#0E1F17;">${escapeHtml(email)}</strong> to finish setting up your Regent Money account.`) +
         button('Confirm email', verificationLink) +
+        paragraph('This link works for 15 minutes.', { size: 13, color: '#5B6B63' }) +
         fallbackLink(verificationLink) +
         paragraph("Didn't create an account? You can ignore this email.", { size: 13, color: '#5B6B63' }),
       footerReason: "You're receiving this because someone signed up for Regent Money with this address.",
       ...(await this.accounts.getLegalLinks()),
     });
-    const textContent = `Hi ${first},\n\nConfirm your email to finish setting up Regent Money:\n${verificationLink}\n\nDidn't create an account? You can ignore this email.`;
+    const textContent = `Hi ${first},\n\nConfirm your email to finish setting up Regent Money:\n${verificationLink}\n\nThis link works for 15 minutes.\n\nDidn't create an account? You can ignore this email.`;
 
     // 1. Brevo (primary account, or the broadcast account if primary is out of emails and fallback is on)
     const brevoRes = await this.accounts.sendAuthEmail({

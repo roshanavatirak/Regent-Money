@@ -3,7 +3,7 @@
 // Budgets: monthly plan, event budgets and history.
 // Logic and data are unchanged from the previous version; the UI is new.
 
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -16,6 +16,7 @@ import {
   Platform,
   ActivityIndicator,
   Switch,
+  BackHandler,
 } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import Animated, { FadeIn, FadeInDown, useSharedValue, useAnimatedStyle, withTiming, Easing } from 'react-native-reanimated';
@@ -34,15 +35,36 @@ import {
   getBudgetStatus,
   isExcludedFromBudget,
 } from '../services/budgetService';
+import { getCurrentCycle } from '../services/moneyCycleService';
 import { getBackendUrl } from '../config/api';
 import { authService } from '../services/authService';
 import { CategoryIcon } from '../components/CategoryIcon';
+import { counterpartyName } from '../services/counterpartyService';
 
 const FOREST = '#0B3D2C';
 const LIME = '#B8F36B';
 
 const inr = (n: number) => `₹${Math.abs(Math.round(n * 100) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 const ts = (v: any) => (typeof v === 'number' ? v : new Date(v || 0).getTime());
+
+/**
+ * Display name for a monthly budget. Uses the saved period, not the start date: in salary
+ * mode the "November 2026" budget starts on the October payday, so the start date's month
+ * would show "October" twice.
+ */
+const budgetMonthLabel = (b: { period?: string; startDate?: number | string }, withYear = false) => {
+  const p = (b.period || '').trim();
+  const month = p.match(/^([a-z]+) (\d{4})$/i);
+  if (month) {
+    const sameYear = Number(month[2]) === new Date().getFullYear();
+    return sameYear && !withYear ? month[1] : `${month[1]} ${month[2]}`;
+  }
+  const week = p.match(/^week of (\d{1,2} [a-z]{3})( \d{4})?/i);
+  if (week) return withYear && week[2] ? `${week[1]}${week[2]}` : week[1];
+  const payout = p.match(/^payout (.+?)( \d{4})?$/i);
+  if (payout) return withYear && payout[2] ? `${payout[1]}${payout[2]}` : payout[1];
+  return format(new Date(b.startDate || Date.now()), withYear ? 'MMMM yyyy' : 'MMMM');
+};
 
 type Tab = 'monthly' | 'events' | 'history';
 
@@ -126,6 +148,39 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
   const [savingEdit, setSavingEdit] = useState(false);
   const [menuError, setMenuError] = useState('');
   const [excludedOpen, setExcludedOpen] = useState(false);
+  const [monthPickerOpen, setMonthPickerOpen] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
+
+  const scrollY = useRef(0);
+  /** Set while a month opened from History is showing, so Back returns to History. */
+  const [returnTo, setReturnTo] = useState<null | { scrollY: number; prevSelectedId: string | null }>(null);
+
+  /** Open a monthly budget from History in the full Monthly view. */
+  const openMonth = (id: string) => {
+    setReturnTo({ scrollY: scrollY.current, prevSelectedId: selectedMonthlyBudgetId });
+    setSelectedMonthlyBudgetId(id);
+    setActiveTab('monthly');
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
+  };
+
+  const backToHistory = useCallback(() => {
+    if (!returnTo) return false;
+    const { scrollY: y, prevSelectedId } = returnTo;
+    setReturnTo(null);
+    setSelectedMonthlyBudgetId(prevSelectedId);
+    setActiveTab('history');
+    requestAnimationFrame(() => scrollRef.current?.scrollTo({ y, animated: false }));
+    return true;
+  }, [returnTo]);
+
+  // Android back button: go back to History instead of leaving Budgets.
+  useFocusEffect(
+    useCallback(() => {
+      if (!returnTo) return undefined;
+      const sub = BackHandler.addEventListener('hardwareBackPress', backToHistory);
+      return () => sub.remove();
+    }, [returnTo, backToHistory])
+  );
 
   const toggle = (id: string) => setExpanded((p) => ({ ...p, [id]: !p[id] }));
 
@@ -196,7 +251,11 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
   useFocusEffect(
     useCallback(() => {
       syncIfStale();
-      budgetService.cleanupDuplicateBudgets().catch(() => { });
+      budgetService
+        .cleanupDuplicateBudgets()
+        .catch(() => { })
+        .then(() => budgetService.renewSalaryCycleBudgets(getCurrentCycle()))
+        .catch(() => { });
       if (route.params?.openTab) setActiveTab(route.params.openTab);
       if (route.params?.selectedBudgetId) setSelectedMonthlyBudgetId(route.params.selectedBudgetId);
     }, [syncIfStale, route.params?.openTab, route.params?.selectedBudgetId])
@@ -211,7 +270,7 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
   const allMonthlyOverallBudgets = useMemo(() => {
     const overall = budgets
       .filter((b) => b.isOverall && (!b.periodType || b.periodType === 'monthly'))
-      .sort((a, b) => (Number(a.startDate) || 0) - (Number(b.startDate) || 0));
+      .sort((a, b) => (ts(a.startDate) || 0) - (ts(b.startDate) || 0));
     const seen = new Set<string>();
     return overall.filter((b) => {
       const key = (b.period || (b.startDate ? format(new Date(b.startDate), 'MMMM yyyy') : b.id)).toLowerCase().trim();
@@ -343,6 +402,25 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
 
   const toggleDone = (b: BudgetCategory) => markBudgetDone(b.id, !b.isDone);
 
+  const periodOver = (b: BudgetCategory) => !!b.endDate && Date.now() > ts(b.endDate);
+
+  /** "1 Oct – 30 Oct · Ended", "1 Nov – 30 Nov · 9d left", "Starts 1 Dec", "Ended early". */
+  const historySubtitle = (b: BudgetCategory, st: string) => {
+    const start = b.startDate ? format(new Date(ts(b.startDate)), 'd MMM') : '';
+    const end = b.endDate ? format(new Date(ts(b.endDate)), 'd MMM') : '';
+    const range = start && end ? `${start} – ${end}` : start;
+    let state: string;
+    if (b.isDone && !periodOver(b)) state = 'Ended early';
+    else if (st === 'done') state = 'Ended';
+    else if (st === 'paused') state = 'Paused';
+    else if (st === 'not_started') return start ? `Starts ${start}` : 'Upcoming';
+    else {
+      const left = b.endDate ? Math.max(0, Math.ceil((ts(b.endDate) - Date.now()) / 86400000)) : null;
+      state = left !== null ? `${left}d left` : 'Running';
+    }
+    return range ? `${range} · ${state}` : state;
+  };
+
   const affordImpact = useMemo(() => {
     const amt = parseFloat(affordAmountStr.replace(/[^0-9.]/g, '')) || 0;
     if (amt <= 0) return null;
@@ -386,7 +464,7 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
   const TxLine = ({ tx, last }: { tx: any; last: boolean }) => (
     <View key={tx.id} style={[s.txLine, !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line }]}>
       <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={[s.txName, { color: ink }]} numberOfLines={1}>{tx.merchant || 'Payment'}</Text>
+        <Text style={[s.txName, { color: ink }]} numberOfLines={1}>{counterpartyName(tx) || tx.merchant || 'Payment'}</Text>
         <Text style={[s.txDate, { color: muted }]}>{format(new Date(Number(tx.timestamp || tx.date)), 'd MMM')}</Text>
       </View>
       <Text style={[s.txAmt, { color: ink }]}>−{inr(Math.abs(parseFloat(tx.amount || 0)))}</Text>
@@ -469,48 +547,46 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
     const h = hierarchy;
     const over = h.totalSpent > h.totalLimit;
     const upcoming = Date.now() < ts(monthlyOverallBudget.startDate);
+    const ended = !!monthlyOverallBudget.endDate && Date.now() > ts(monthlyOverallBudget.endDate);
     const daysToStart = Math.ceil((ts(monthlyOverallBudget.startDate) - Date.now()) / 86400000);
-    const monthName = format(new Date(monthlyOverallBudget.startDate || Date.now()), 'MMMM');
+    const monthName = budgetMonthLabel(monthlyOverallBudget);
     const unplannedOver = h.unallocatedSpent > h.unallocatedBuffer;
 
     return (
       <>
-        {/* Month chips */}
-        {allMonthlyOverallBudgets.length > 1 && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.monthRow}>
-            {allMonthlyOverallBudgets.map((b) => {
-              const on = b.id === monthlyOverallBudget.id;
-              const st = getBudgetStatus(b).status;
-              return (
-                <Pressable
-                  key={b.id}
-                  onPress={() => setSelectedMonthlyBudgetId(b.id)}
-                  style={[s.monthChip, on ? { backgroundColor: accent } : { backgroundColor: surface, borderColor: field, borderWidth: 1 }]}
-                  accessibilityRole="tab"
-                  accessibilityState={{ selected: on }}
-                >
-                  {st === 'in_progress' && <View style={[s.liveDot, { backgroundColor: on ? (isDark ? FOREST : LIME) : green }]} />}
-                  <Text style={[s.monthText, { color: on ? (isDark ? FOREST : '#FFFFFF') : ink }, on && { fontWeight: '700' }]}>
-                    {format(new Date(b.startDate || Date.now()), 'MMMM')}
-                  </Text>
-                  {st === 'not_started' && !on && <Text style={[s.monthHint, { color: muted }]}>soon</Text>}
-                </Pressable>
-              );
-            })}
-          </ScrollView>
+        {returnTo && (
+          <Pressable onPress={backToHistory} hitSlop={8} style={s.backLink} accessibilityRole="button" accessibilityLabel="Back to History">
+            <Feather name="chevron-left" size={16} color={isDark ? LIME : '#0B6B3A'} />
+            <Text style={[s.backLinkText, { color: isDark ? LIME : '#0B6B3A' }]}>Back to History</Text>
+          </Pressable>
         )}
-
         {/* Compact Hero Card */}
         <Animated.View entering={FadeInDown.duration(380)} style={s.hero}>
           <View pointerEvents="none" style={s.heroRing} />
           <View style={s.heroTop}>
-            <Text style={s.heroMeta}>
-              {upcoming
-                ? `${monthName} · in ${daysToStart}d`
-                : `${monthName} · ${h.daysRemaining}d left`}
+            {allMonthlyOverallBudgets.length > 1 ? (
+              <Pressable
+                onPress={() => setMonthPickerOpen(true)}
+                hitSlop={8}
+                style={({ pressed }) => [s.monthPick, pressed && { opacity: 0.8 }]}
+                accessibilityRole="button"
+                accessibilityLabel={`${monthName} budget. Change month`}
+              >
+                <Text style={s.monthPickText}>{monthName}</Text>
+                <Feather name="chevron-down" size={13} color="#FFFFFF" />
+              </Pressable>
+            ) : (
+              <Text style={s.heroMeta}>{monthName}</Text>
+            )}
+            <Text style={[s.heroMeta, { flex: 1, marginLeft: 8 }]} numberOfLines={1}>
+              {ended
+                ? `${format(new Date(ts(monthlyOverallBudget.startDate)), 'd MMM')} – ${format(new Date(ts(monthlyOverallBudget.endDate)), 'd MMM')} · Ended`
+                : upcoming
+                  ? `in ${daysToStart}d`
+                  : `${h.daysRemaining}d left`}
             </Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Pressable
+              {!ended && <Pressable
                 onPress={() => setAffordOpen(true)}
                 style={({ pressed }) => [s.affordBtn, pressed && { opacity: 0.85, transform: [{ scale: 0.96 }] }]}
                 accessibilityRole="button"
@@ -518,7 +594,7 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
               >
                 <Feather name="zap" size={11} color={FOREST} />
                 <Text style={s.affordText}>Afford?</Text>
-              </Pressable>
+              </Pressable>}
               <Pressable
                 onPress={() => setMenuBudget(monthlyOverallBudget)}
                 style={s.heroDots}
@@ -530,7 +606,7 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
             </View>
           </View>
           <Text style={[s.heroAmount, heading, { color: over ? '#FFB4A2' : '#FFFFFF' }]} numberOfLines={1} adjustsFontSizeToFit>
-            {over ? `${inr(h.totalSpent - h.totalLimit)} over` : `${inr(h.totalRemaining)} left`}
+            {over ? `${inr(h.totalSpent - h.totalLimit)} over` : `${inr(h.totalRemaining)} ${ended ? 'saved' : 'left'}`}
           </Text>
           <Text style={s.heroSub}>Spent {inr(h.totalSpent)} of {inr(h.totalLimit)}</Text>
           <View style={{ marginTop: 8 }}>
@@ -551,8 +627,8 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
               <Text style={s.statValue}>{inr(h.unallocatedRemaining)}</Text>
             </View>
             <View style={{ flex: 1, alignItems: 'flex-end' }}>
-              <Text style={s.statLabel}>Safe a day</Text>
-              <Text style={s.statValue}>{inr(h.dailySafeSpend)}</Text>
+              <Text style={s.statLabel}>{ended ? 'Unplanned spent' : 'Safe a day'}</Text>
+              <Text style={s.statValue}>{inr(ended ? h.unallocatedSpent : h.dailySafeSpend)}</Text>
             </View>
           </View>
         </Animated.View>
@@ -722,13 +798,20 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
             const over = st.overspent > 0;
             return (
               <Animated.View key={b.id} entering={FadeInDown.delay(i * 50).duration(360)} style={[s.eventCard, { backgroundColor: surface, borderColor: line }]}>
+                <Pressable
+                  disabled={!b.isOverall}
+                  onPress={() => openMonth(b.id)}
+                  style={({ pressed }) => pressed && { opacity: 0.7 }}
+                  accessibilityRole={b.isOverall ? 'button' : undefined}
+                  accessibilityLabel={b.isOverall ? `Open ${budgetMonthLabel(b, true)} budget` : undefined}
+                >
                 <View style={s.histTop}>
                   <View style={{ flex: 1, minWidth: 0 }}>
                     <Text style={[s.catName, { color: ink }]} numberOfLines={1}>
                       {b.name || (b.isOverall ? b.period || 'Monthly budget' : 'Event')}
                     </Text>
-                    <Text style={[s.catSub, { color: muted }]}>
-                      {b.isOverall ? 'Monthly' : 'Event'}, {status.label.toLowerCase()}
+                    <Text style={[s.catSub, { color: muted }]} numberOfLines={1}>
+                      {historySubtitle(b, status.status)}
                     </Text>
                   </View>
                   <Pressable onPress={() => setMenuBudget(b)} hitSlop={12} style={s.dots} accessibilityLabel="Options">
@@ -750,6 +833,13 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
                   </View>
                 </View>
                 <Bar pct={st.limit > 0 ? (st.spent / st.limit) * 100 : 0} color={over ? redBar : green} track={track} />
+                {b.isOverall && (
+                  <View style={s.histOpen}>
+                    <Text style={[s.histOpenText, { color: isDark ? LIME : '#0B6B3A' }]}>See categories and payments</Text>
+                    <Feather name="chevron-right" size={14} color={isDark ? LIME : '#0B6B3A'} />
+                  </View>
+                )}
+                </Pressable>
                 <View style={s.histActions}>
                   <Pressable
                     onPress={() => navigation.navigate('CreateBudget', { cloneFromBudgetId: b.id, initialType: b.isOverall ? 'monthly' : 'custom_event' })}
@@ -758,9 +848,12 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
                     <Feather name="copy" size={14} color={accentFg} />
                     <Text style={[s.histPrimaryText, { color: accentFg }]}>{b.isOverall ? 'Use for next month' : 'Use again'}</Text>
                   </Pressable>
-                  <Pressable onPress={() => toggleDone(b)} style={[s.histSecondary, { borderColor: field }]}>
-                    <Text style={[s.histSecondaryText, { color: ink }]}>{b.isDone ? 'Reopen' : 'Mark done'}</Text>
-                  </Pressable>
+                  {/* A budget whose dates are over has already ended, so there is nothing to close. */}
+                  {(b.isDone ? !periodOver(b) : status.status === 'in_progress') && (
+                    <Pressable onPress={() => toggleDone(b)} style={[s.histSecondary, { borderColor: field }]}>
+                      <Text style={[s.histSecondaryText, { color: ink }]}>{b.isDone ? 'Reopen' : 'End early'}</Text>
+                    </Pressable>
+                  )}
                 </View>
               </Animated.View>
             );
@@ -779,6 +872,7 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
   return (
     <View style={{ flex: 1, backgroundColor: pageBg }}>
       <ScrollView
+        ref={scrollRef}
         style={{ flex: 1 }}
         contentContainerStyle={{
           paddingHorizontal: 16,
@@ -786,6 +880,10 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
           paddingBottom: insets.bottom + 100,
         }}
         showsVerticalScrollIndicator={false}
+        onScroll={(e) => {
+          scrollY.current = e.nativeEvent.contentOffset.y;
+        }}
+        scrollEventThrottle={64}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={green} colors={[green]} />}
       >
         <View style={s.titleRow}>
@@ -801,7 +899,10 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
             return (
               <Pressable
                 key={t}
-                onPress={() => setActiveTab(t)}
+                onPress={() => {
+                  setReturnTo(null);
+                  setActiveTab(t);
+                }}
                 style={[s.segBtn, on && { backgroundColor: isDark ? '#1E3329' : '#FFFFFF' }, on && !isDark && s.segShadow]}
                 accessibilityRole="tab"
                 accessibilityState={{ selected: on }}
@@ -816,6 +917,45 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
 
         {activeTab === 'monthly' ? renderMonthly() : activeTab === 'events' ? renderEvents() : renderHistory()}
       </ScrollView>
+
+      {/* Month picker */}
+      <Sheet visible={monthPickerOpen} onClose={() => setMonthPickerOpen(false)} bg={surface} dark={isDark}>
+        <Text style={[s.sheetTitle, { color: ink }, heading]}>Choose month</Text>
+        <ScrollView style={{ maxHeight: 420, marginTop: 8 }} showsVerticalScrollIndicator={false}>
+          {[...allMonthlyOverallBudgets].reverse().map((b, i, arr) => {
+            const on = b.id === monthlyOverallBudget?.id;
+            const st = getBudgetStatus(b).status;
+            const tag = st === 'in_progress' ? 'Now' : st === 'not_started' ? 'Soon' : 'Ended';
+            const range = b.startDate && b.endDate ? `${format(new Date(ts(b.startDate)), 'd MMM')} – ${format(new Date(ts(b.endDate)), 'd MMM')}` : '';
+            return (
+              <Pressable
+                key={b.id}
+                onPress={() => {
+                  setSelectedMonthlyBudgetId(b.id);
+                  setMonthPickerOpen(false);
+                }}
+                style={({ pressed }) => [
+                  s.monthOption,
+                  i < arr.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line },
+                  pressed && { opacity: 0.7 },
+                ]}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: on }}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={[s.monthOptionTitle, { color: ink }, on && { fontWeight: '700' }]}>{budgetMonthLabel(b, true)}</Text>
+                  {!!range && <Text style={[s.monthOptionSub, { color: muted }]}>{range}</Text>}
+                </View>
+                <View style={[s.monthTag, { backgroundColor: st === 'in_progress' ? (isDark ? 'rgba(184,243,107,0.16)' : '#E3F2E8') : track }]}>
+                  {st === 'in_progress' && <View style={[s.liveDot, { backgroundColor: green }]} />}
+                  <Text style={[s.monthTagText, { color: st === 'in_progress' ? green : muted }]}>{tag}</Text>
+                </View>
+                <View style={{ width: 18, marginLeft: 10 }}>{on && <Feather name="check" size={18} color={accent} />}</View>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      </Sheet>
 
       {/* Can I afford it? */}
       <Sheet visible={affordOpen} onClose={() => setAffordOpen(false)} bg={surface} dark={isDark}>
@@ -913,16 +1053,24 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
                 </Pressable>
               )}
 
-              <Pressable
-                onPress={() => {
-                  toggleDone(menuBudget);
-                  setMenuBudget({ ...menuBudget, isDone: !menuBudget.isDone });
-                }}
-                style={[s.menuRow, { borderBottomColor: line }]}
-              >
-                <Feather name={menuBudget.isDone ? 'rotate-ccw' : 'check-circle'} size={18} color={ink} />
-                <Text style={[s.menuLabel, { color: ink, flex: 1 }]}>{menuBudget.isDone ? 'Reopen' : 'Mark as done'}</Text>
-              </Pressable>
+              {/* Same rule as the History card: nothing to end once the dates are over. */}
+              {(menuBudget.isDone ? !periodOver(menuBudget) : getBudgetStatus(menuBudget).status === 'in_progress') && (
+                <Pressable
+                  onPress={() => {
+                    toggleDone(menuBudget);
+                    setMenuBudget({ ...menuBudget, isDone: !menuBudget.isDone });
+                  }}
+                  style={[s.menuRow, { borderBottomColor: line }]}
+                >
+                  <Feather name={menuBudget.isDone ? 'rotate-ccw' : 'stop-circle'} size={18} color={ink} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[s.menuLabel, { color: ink }]}>{menuBudget.isDone ? 'Reopen' : 'End early'}</Text>
+                    <Text style={[s.catSub, { color: muted }]}>
+                      {menuBudget.isDone ? 'Start tracking this budget again.' : 'Stop this budget before its end date.'}
+                    </Text>
+                  </View>
+                </Pressable>
+              )}
 
               <Pressable
                 onPress={() => {
@@ -967,7 +1115,7 @@ export const BudgetScreen: React.FC<BudgetScreenProps> = ({ AppTopBarComponent }
               <View key={tx.id} style={[s.txLine, i < excludedTransactionsList.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line }]}>
                 <CategoryIcon category={tx.category} variant="soft" size={36} />
                 <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={[s.txName, { color: ink }]} numberOfLines={1}>{tx.merchant || 'Payment'}</Text>
+                  <Text style={[s.txName, { color: ink }]} numberOfLines={1}>{counterpartyName(tx) || tx.merchant || 'Payment'}</Text>
                   <Text style={[s.txDate, { color: muted }]}>{format(new Date(Number(tx.timestamp || tx.date)), 'd MMM')}</Text>
                 </View>
                 <Text style={[s.txAmt, { color: ink }]}>{inr(Math.abs(parseFloat(tx.amount || 0)))}</Text>
@@ -1005,11 +1153,14 @@ const s = StyleSheet.create({
   segShadow: { shadowColor: '#0B1F17', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.12, shadowRadius: 3, elevation: 1 },
   segText: { fontSize: 13, fontWeight: '600' },
 
-  monthRow: { gap: 6, paddingTop: 8 },
-  monthChip: { flexDirection: 'row', alignItems: 'center', gap: 5, height: 30, paddingHorizontal: 12, borderRadius: 15 },
+  monthPick: { flexDirection: 'row', alignItems: 'center', gap: 4, height: 26, paddingHorizontal: 10, borderRadius: 13, backgroundColor: 'rgba(255,255,255,0.12)' },
+  monthPickText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
+  monthOption: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14 },
+  monthOptionTitle: { fontSize: 15, fontWeight: '600' },
+  monthOptionSub: { fontSize: 12, marginTop: 2 },
+  monthTag: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 9, height: 22, borderRadius: 11 },
+  monthTagText: { fontSize: 11, fontWeight: '700' },
   liveDot: { width: 6, height: 6, borderRadius: 3 },
-  monthText: { fontSize: 12, fontWeight: '600' },
-  monthHint: { fontSize: 11 },
 
   hero: { marginTop: 10, borderRadius: 20, backgroundColor: FOREST, paddingHorizontal: 16, paddingVertical: 14, overflow: 'hidden' },
   heroRing: { position: 'absolute', width: 180, height: 180, borderRadius: 90, borderWidth: 1, borderColor: 'rgba(184,243,107,0.14)', right: -60, top: -80 },
@@ -1074,6 +1225,10 @@ const s = StyleSheet.create({
   histStats: { flexDirection: 'row', paddingVertical: 14 },
   histLabel: { fontSize: 12 },
   histValue: { fontSize: 15, fontWeight: '700', marginTop: 2, fontVariant: ['tabular-nums'] },
+  backLink: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 2, paddingTop: 12 },
+  backLinkText: { fontSize: 13, fontWeight: '600' },
+  histOpen: { flexDirection: 'row', alignItems: 'center', gap: 2, marginTop: 10 },
+  histOpenText: { fontSize: 13, fontWeight: '600' },
   histActions: { flexDirection: 'row', gap: 8, marginTop: 14 },
   histPrimary: { flex: 1, flexDirection: 'row', gap: 6, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center' },
   histPrimaryText: { fontSize: 13, fontWeight: '700' },

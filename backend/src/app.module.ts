@@ -32,6 +32,7 @@ import { Feedback } from './feedback/entities/feedback.entity';
 import { UserKey } from './crypto/entities/user-key.entity';
 import { CryptoModule } from './crypto/crypto.module';
 import { ChatHistoryModule } from './chat-history/chat-history.module';
+import { PeerLedgerModule } from './peer-ledger/peer-ledger.module';
 import { ChatThread } from './chat-history/entities/chat-thread.entity';
 import { RefreshToken } from './auth/entities/refresh-token.entity';
 import { Broadcast } from './notifications/entities/broadcast.entity';
@@ -159,6 +160,7 @@ const resolveHostToIPv4 = async (host: string): Promise<string> => {
     FeedbackModule,
     CryptoModule,
     ChatHistoryModule,
+    PeerLedgerModule,
     HomeCardsModule,
     AttributionModule,
     ScheduleModule.forRoot(),

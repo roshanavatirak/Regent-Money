@@ -14,6 +14,15 @@ import {
 import { BudgetCategory, BudgetPeriodType, BudgetCustomCategory, useBudgetStore } from '../store';
 import { authService } from './authService';
 import { BACKEND_URL } from '../config/api';
+import { salaryCycleRange } from '../utils/payday';
+import type { MoneyCycle } from '../utils/moneyCycle';
+import { planSalaryCycleRenewal } from '../utils/cycleBudgets';
+import { billAwarePacing } from '../utils/billPacing';
+import { attributedTime, billsDueBetween, detectRecurringBills, type BillDue, type RecurringBill } from '../utils/recurringBills';
+import { getCurrentCycle } from './moneyCycleService';
+
+/** One renewal at a time: Home and Budgets can both ask on the same render. */
+let renewingCycleBudgets = false;
 
 /**
  * Top 30 Comprehensive Everyday Indian Spending Categories + Overall
@@ -307,18 +316,8 @@ export function getBudgetPeriodRange(
     }
 
     case 'salary_cycle': {
-      // Anchored to salary credit day
-      const currentDay = now.getDate();
-      let cycleStartMonth = now.getMonth();
-      let cycleStartYear = now.getFullYear();
-
-      if (currentDay < salaryDay) {
-        cycleStartMonth -= 1;
-      }
-
-      const cycleStartDate = new Date(cycleStartYear, cycleStartMonth, salaryDay);
-      const nextMonthDate = addMonths(cycleStartDate, 1);
-      const cycleEndDate = new Date(nextMonthDate.getFullYear(), nextMonthDate.getMonth(), salaryDay - 1);
+      // Anchored to salary credit day; 29–31 clamp to the last day of shorter months.
+      const { start: cycleStartDate, end: cycleEndDate } = salaryCycleRange(now, salaryDay);
 
       const start = getISTStartOfDay(cycleStartDate);
       const end = getISTEndOfDay(cycleEndDate);
@@ -436,6 +435,30 @@ export function isCategoryMatching(
   return false;
 }
 
+// Bill detection scans every debit, so it runs once per transactions list.
+const billCache = new WeakMap<any[], RecurringBill[]>();
+
+/** Fixed monthly bills found in the user's spending (card bills and self transfers left out). */
+export function recurringBillsFrom(transactions: any[]): RecurringBill[] {
+  if (!Array.isArray(transactions)) return [];
+  const cached = billCache.get(transactions);
+  if (cached) return cached;
+  const bills = detectRecurringBills(transactions.filter((tx) => tx && !isExcludedFromBudget(tx)));
+  billCache.set(transactions, bills);
+  return bills;
+}
+
+/** Bills due within a budget's dates (only its category's bills for a category budget). */
+export function billsForBudget(budget: BudgetCategory, transactions: any[]): BillDue[] {
+  const bills = recurringBillsFrom(transactions).filter((b) =>
+    isCategoryMatching(b.category, budget.category, !!budget.isOverall)
+  );
+  if (bills.length === 0) return [];
+  const start = budget.startDate || getISTStartOfDay(startOfMonth(new Date()));
+  const end = budget.endDate || getISTEndOfDay(endOfMonth(new Date()));
+  return billsDueBetween(bills, transactions, start, end);
+}
+
 /**
  * Calculate Spend for a Budget within its active date window
  * Strictly tracks DEBIT spending only. No credits or refunds mixed in.
@@ -490,6 +513,7 @@ export function calculateBudgetNetSpend(
   let grossSpend = 0;
   let transactionCount = 0;
   const matchingTransactions: any[] = [];
+  const cycleBills = getCurrentCycle().mode === 'salary' ? recurringBillsFrom(transactions) : [];
 
   // Only track debits if active (not future upcoming, or manually activated early)
   if (!isUpcoming) {
@@ -504,8 +528,10 @@ export function calculateBudgetNetSpend(
       const isDebit = !isCredit && (tx.type ? tx.type === 'debit' : true);
       if (!isDebit) continue;
 
-      const txTime = typeof tx.timestamp === 'number' ? tx.timestamp : new Date(tx.timestamp || tx.date).getTime();
-      if (isNaN(txTime)) continue;
+      const rawTime = typeof tx.timestamp === 'number' ? tx.timestamp : new Date(tx.timestamp || tx.date).getTime();
+      if (isNaN(rawTime)) continue;
+      // Salary mode: a bill paid a few days early (rent for next cycle) counts in the cycle it's for.
+      const txTime = cycleBills.length > 0 ? attributedTime({ ...tx, timestamp: rawTime }, cycleBills) : rawTime;
 
       // Only count transactions within the active window
       if (txTime < effectiveStart || txTime > endDate) continue;
@@ -565,6 +591,8 @@ export function calculateBudgetHierarchy(
   unallocatedRemaining: number;
   dailySafeSpend: number;
   daysRemaining: number;
+  /** Bills due later this period that no category budget covers; kept out of dailySafeSpend. */
+  upcomingUnplannedBills: number;
   unallocatedTransactions: any[];
   unallocatedBreakdown: UnallocatedCategoryGroup[];
 } {
@@ -634,8 +662,17 @@ export function calculateBudgetHierarchy(
   const endDate = overallBudget?.endDate || getISTEndOfDay(endOfMonth(new Date()));
   const daysRemaining = Math.max(1, Math.ceil((endDate - now) / (1000 * 60 * 60 * 24)));
 
+  // Bills still to come this period that no category budget covers (rent, EMI, …) are set
+  // aside before working out the daily amount, so it isn't spent twice.
+  const upcomingUnplannedBills = overallBudget
+    ? billsForBudget(overallBudget, allTransactions)
+        .filter((d) => !d.paid && d.dueAt >= getISTStartOfDay(new Date(now)))
+        .filter((d) => !subBudgets.some((b) => isCategoryMatching(d.bill.category, b.category, false)))
+        .reduce((s, d) => s + d.bill.amount, 0)
+    : 0;
+
   // Daily safe spend is calculated strictly from the unallocated free cash buffer!
-  const dailySafeSpend = Math.round(unallocatedRemaining / daysRemaining);
+  const dailySafeSpend = Math.round(Math.max(0, unallocatedRemaining - upcomingUnplannedBills) / daysRemaining);
 
   return {
     totalLimit,
@@ -647,6 +684,7 @@ export function calculateBudgetHierarchy(
     unallocatedRemaining,
     dailySafeSpend,
     daysRemaining,
+    upcomingUnplannedBills,
     unallocatedTransactions,
     unallocatedBreakdown,
   };
@@ -685,7 +723,9 @@ export function getCategoryMeta(
  */
 export function calculateBudgetPacing(
   budget: BudgetCategory,
-  netSpend: number
+  netSpend: number,
+  /** Fixed bills due in this budget's dates. When given, pacing expects them instead of spreading evenly. */
+  bills?: BillDue[]
 ): {
   limitAmount: number;
   remainingAmount: number;
@@ -713,9 +753,17 @@ export function calculateBudgetPacing(
   const remainingAmount = Math.max(0, limitAmount - netSpend);
   const percentageUsed = Math.min(999, Math.round((netSpend / limitAmount) * 100));
 
-  const dailySafeSpend = daysRemaining > 0 ? Math.round(remainingAmount / daysRemaining) : 0;
-  const currentDailyBurn = Math.round(netSpend / daysElapsed);
-  const projectedSpend = Math.round(currentDailyBurn * totalDays);
+  // With known bills, rent/EMI early in the period is expected, not "over pace".
+  const billPace = bills && bills.length > 0 ? billAwarePacing(limitAmount, netSpend, startDate, endDate, now, bills) : null;
+
+  const dailySafeSpend = billPace
+    ? billPace.dailySafeSpend
+    : daysRemaining > 0 ? Math.round(remainingAmount / daysRemaining) : 0;
+  const currentDailyBurn = billPace ? billPace.everydayPerDay : Math.round(netSpend / daysElapsed);
+  const projectedSpend = billPace ? billPace.projectedSpend : Math.round(currentDailyBurn * totalDays);
+  // Room left once the bills still to come are set aside (what everyday spending can use).
+  const everydayRoom = billPace ? Math.max(0, remainingAmount - billPace.billsUnpaid) : remainingAmount;
+  const highUse = billPace ? percentageUsed >= 80 && netSpend > billPace.expectedByToday : percentageUsed >= 80;
 
   let paceStatus: 'safe' | 'caution' | 'overbudget' = 'safe';
   let paceMessage = `Safe to spend ₹${dailySafeSpend.toLocaleString('en-IN')}/day (${daysRemaining}d left)`;
@@ -726,12 +774,12 @@ export function calculateBudgetPacing(
     paceStatus = 'overbudget';
     const overAmount = netSpend - limitAmount;
     paceMessage = `Exceeded limit by ₹${overAmount.toLocaleString('en-IN')}`;
-  } else if (percentageUsed >= 80 || projectedSpend > limitAmount) {
+  } else if (highUse || projectedSpend > limitAmount) {
     paceStatus = 'caution';
     suggestedDailyCut = Math.max(0, currentDailyBurn - dailySafeSpend);
 
     if (currentDailyBurn > 0) {
-      const daysToBreach = Math.floor(remainingAmount / currentDailyBurn);
+      const daysToBreach = Math.floor(everydayRoom / currentDailyBurn);
       const breachDateMs = now + daysToBreach * 24 * 60 * 60 * 1000;
       projectedOverrunDate = format(new Date(breachDateMs), 'dd MMM');
       paceMessage = `At this pace you'll cross on ${projectedOverrunDate}. Cut ₹${suggestedDailyCut.toLocaleString('en-IN')}/day to stay safe.`;
@@ -1192,6 +1240,52 @@ export const budgetService = {
   },
 
   /**
+   * Salary mode: keep monthly budgets on salary cycles and carry the budget into each new
+   * cycle when salary lands (see utils/cycleBudgets). Does nothing in calendar mode.
+   */
+  async renewSalaryCycleBudgets(cycle: MoneyCycle): Promise<void> {
+    if (cycle.mode === 'calendar' || cycle.mode === 'rolling' || renewingCycleBudgets) return;
+    renewingCycleBudgets = true;
+    try {
+      const plan = planSalaryCycleRenewal(useBudgetStore.getState().budgets || [], cycle);
+      for (const u of plan.updates) {
+        await this.updateBudget(u.id, { startDate: u.startDate, endDate: u.endDate });
+      }
+      if (plan.create) {
+        const { source, children } = plan.create;
+        const created = await this.createBudget({
+          name: plan.create.name,
+          category: 'all',
+          limitAmount: Number(source.limitAmount) || 0,
+          period: plan.create.period,
+          periodType: 'monthly',
+          startDate: plan.create.startDate,
+          endDate: plan.create.endDate,
+          isOverall: true,
+        });
+        if (created?.id && children.length > 0) {
+          await this.createBudgetsBatch(
+            children.map((c) => ({
+              name: c.name,
+              category: c.category,
+              limitAmount: Number(c.limitAmount) || 0,
+              period: plan.create!.period,
+              periodType: 'monthly' as const,
+              startDate: plan.create!.startDate,
+              endDate: plan.create!.endDate,
+              isOverall: false,
+              parentBudgetId: created.id,
+              customCategoryDef: c.customCategoryDef,
+            }))
+          );
+        }
+      }
+    } finally {
+      renewingCycleBudgets = false;
+    }
+  },
+
+  /**
    * Transfer allocation between two budget envelopes
    */
   async transferEnvelope(sourceBudgetId: string, targetBudgetId: string, amount: number): Promise<void> {
@@ -1244,45 +1338,46 @@ export function checkAndDispatchBudgetAlert(
       const notifStore = useNotificationStore.getState();
       const existingNotifs = notifStore.notifications || [];
 
-      // Check if a salary notification already exists for this transaction or similar amount
+      // Skip only if this same credit was already nudged. A fixed salary has the same amount every
+      // month, so a match must also be close in time, or later months would never get the nudge.
+      const txTime = Number(parsedTx.timestamp) || Date.now();
+      const SAME_CREDIT_WINDOW_MS = 15 * 24 * 60 * 60 * 1000;
       const alreadyNotified = existingNotifs.some((n: any) => {
-        if (
-          n.payload?.isSalaryCycleNudge &&
-          Math.abs(Number(n.payload?.amount || 0) - parsedTx.amount) < 1
-        ) {
-          return true;
-        }
-        if (
-          n.title &&
-          n.title.includes('Salary Credit Detected') &&
-          (n.body?.includes(parsedTx.merchant) ||
-            Math.abs(Number(n.payload?.amount || 0) - parsedTx.amount) < 1)
-        ) {
-          return true;
-        }
-        return false;
+        const isSalaryNotif =
+          n.payload?.isSalaryCycleNudge || (n.title && n.title.includes('Salary Credit Detected'));
+        if (!isSalaryNotif) return false;
+        const notifTime = Number(n.createdAt) || 0;
+        if (Math.abs(notifTime - txTime) > SAME_CREDIT_WINDOW_MS) return false;
+        return (
+          Math.abs(Number(n.payload?.amount || 0) - parsedTx.amount) < 1 ||
+          (!!parsedTx.merchant && !!n.body?.includes(parsedTx.merchant))
+        );
       });
 
       if (alreadyNotified) {
         return;
       }
 
+      // The id and text carry the credit date: the store drops notifications whose id or
+      // title+body it has seen before, which would otherwise hide every later payday.
       const notifId =
         'notif_salary_' +
         (parsedTx.merchant || 'merchant').replace(/[^a-zA-Z0-9]/g, '_') +
         '_' +
-        Math.round(parsedTx.amount);
+        Math.round(parsedTx.amount) +
+        '_' +
+        format(txTime, 'yyyyMMdd');
 
       notifStore.addNotification({
         id: notifId,
         userId: 'local',
         agentId: 'agent_budget',
         title: '💼 Salary Credit Detected!',
-        body: `₹${Number(parsedTx.amount || 0).toLocaleString('en-IN')} credited from ${parsedTx.merchant}. Would you like to start your new budget cycle today?`,
+        body: `₹${Number(parsedTx.amount || 0).toLocaleString('en-IN')} credited from ${parsedTx.merchant} on ${format(txTime, 'd MMM')}. Would you like to start your new budget cycle today?`,
         type: 'recommendation',
         readStatus: false,
         payload: { isSalaryCycleNudge: true, amount: parsedTx.amount },
-        createdAt: parsedTx.timestamp || Date.now(),
+        createdAt: txTime,
       });
     }
     return;
@@ -1336,7 +1431,7 @@ export function checkAndDispatchBudgetAlert(
         (n: any) => n.type === 'budget_alert' && n.payload?.budgetId === budget.id
       );
       if (!alreadyHasWarning) {
-        const pacing = calculateBudgetPacing(budget, newNetSpend);
+        const pacing = calculateBudgetPacing(budget, newNetSpend, billsForBudget(budget, allTransactions));
         const notifId = `notif_warning_${budget.id}_${budget.period || 'current'}`;
         notifStore.addNotification({
           id: notifId,
@@ -1406,9 +1501,10 @@ export function simulateAffordability(
   }
 
   const netData = calculateBudgetNetSpend(matched, allTransactions);
-  const currentPacing = calculateBudgetPacing(matched, netData.netSpend);
+  const matchedBills = billsForBudget(matched, allTransactions);
+  const currentPacing = calculateBudgetPacing(matched, netData.netSpend, matchedBills);
   const newNetSpend = netData.netSpend + purchaseAmount;
-  const newPacing = calculateBudgetPacing(matched, newNetSpend);
+  const newPacing = calculateBudgetPacing(matched, newNetSpend, matchedBills);
 
   let verdict: 'safe' | 'caution' | 'breach' = 'safe';
   let verdictMessage = '';
@@ -1475,7 +1571,7 @@ export function generateRegentBrief(
 
   for (const budget of budgets) {
     const net = calculateBudgetNetSpend(budget, transactions);
-    const pacing = calculateBudgetPacing(budget, net.netSpend);
+    const pacing = calculateBudgetPacing(budget, net.netSpend, billsForBudget(budget, transactions));
 
     if (pacing.paceStatus === 'safe') {
       onTrackCount++;

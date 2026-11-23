@@ -5,6 +5,9 @@
 
 import { create } from 'zustand';
 import { mmkvStorage } from '../db/mmkv';
+import { shouldRemoveTxnEntry } from '../utils/peerReconcile';
+import { mergeContactKeys, buildCounterpartyIndex, resolveCounterparty } from '../services/counterpartyResolver';
+import type { PeerLedgerDoc, Tombstone } from '../utils/peerLedgerMerge';
 import {
   Contact,
   PeerEntry,
@@ -50,8 +53,19 @@ export interface PeerState {
     tag: string,
     amountRupees: number,
     dateString: DateString,
-    merchantOrPayee?: string
+    merchantOrPayee?: string,
+    /**
+     * keepContact: background reconcile, don't move the entry to another person.
+     * dueDate: when the money is expected back ('YYYY-MM-DD'); null clears it; omitted leaves it.
+     * contactId: the person this payment is already known to be with (linked or recognised by
+     * UPI ID). Used instead of matching the printed name, so a new spelling at the bank doesn't
+     * create a second person.
+     */
+    opts?: { keepContact?: boolean; dueDate?: DateString | null; contactId?: string }
   ) => PeerEntry | null;
+
+  /** Mark a loan as not expected back (or expected again): stays listed, not counted as owed. */
+  setNotExpectedBack: (entryId: string, notExpected: boolean) => void;
 
   // Stored manual allocation actions
   addStoredAllocation: (allocation: Omit<StoredAllocation, 'id' | 'createdAt'>) => void;
@@ -60,6 +74,14 @@ export interface PeerState {
   // Pending settlements (UPI intents)
   addPendingSettlement: (settlement: Omit<PendingSettlement, 'id' | 'createdAt'>) => void;
   matchPendingSettlement: (id: string) => void;
+
+  /** Deleted contacts and allocations, so the delete also reaches the server and other phones. */
+  tombstones: Tombstone[];
+  addTombstone: (kind: Tombstone['kind'], id: string) => void;
+  /** The syncable ledger (pending UPI settlements stay on this phone). */
+  getLedgerDoc: () => PeerLedgerDoc;
+  /** Replace the ledger with a merged copy from the server. */
+  applyLedgerDoc: (doc: PeerLedgerDoc) => void;
 
   // Rehydration & transaction reconciliation
   rehydrate: () => void;
@@ -120,6 +142,7 @@ export const usePeerStore = create<PeerState>((set, get) => ({
   entries: loadCached<PeerEntry[]>('cache_peer_entries', []),
   storedAllocations: loadCached<StoredAllocation[]>('cache_peer_allocations', []),
   pendingSettlements: loadCached<PendingSettlement[]>('cache_peer_pending_settlements', []),
+  tombstones: loadCached<Tombstone[]>('cache_peer_tombstones', []),
 
   addContact: (contactData) => {
     const now = Date.now();
@@ -147,13 +170,14 @@ export const usePeerStore = create<PeerState>((set, get) => ({
   deleteContact: (id) => {
     const now = Date.now();
     const updatedContacts = get().contacts.filter((c) => c.id !== id);
-    // Soft delete all entries linked to this contact
+    // Soft delete all entries linked to this contact (updatedAt so the delete wins a sync)
     const updatedEntries = get().entries.map((e) =>
-      e.contactId === id ? { ...e, deletedAt: now } : e
+      e.contactId === id ? { ...e, deletedAt: now, updatedAt: now } : e
     );
     mmkvStorage.setObject('cache_peer_contacts', updatedContacts);
     mmkvStorage.setObject('cache_peer_entries', updatedEntries);
     set({ contacts: updatedContacts, entries: updatedEntries });
+    get().addTombstone('contact', id);
   },
 
   findOrCreateContact: (nameOrVpa: string) => {
@@ -198,13 +222,16 @@ export const usePeerStore = create<PeerState>((set, get) => ({
 
     const mergedAliases = Array.from(new Set([...target.aliases, ...source.aliases, source.displayName]));
     const mergedUpis = Array.from(new Set([...target.upiIds, ...source.upiIds]));
+    // Every way the bank showed either of them now points at the one that stays. Transactions
+    // linked to the removed contact fall back to these keys, so they follow it without a rewrite.
+    const mergedKeys = mergeContactKeys(target, source);
 
     const now = Date.now();
     const updatedContacts = get().contacts
       .filter((c) => c.id !== sourceContactId)
       .map((c) =>
         c.id === targetContactId
-          ? { ...c, aliases: mergedAliases, upiIds: mergedUpis, updatedAt: now }
+          ? { ...c, aliases: mergedAliases, upiIds: mergedUpis, keys: mergedKeys, updatedAt: now }
           : c
       );
 
@@ -216,6 +243,7 @@ export const usePeerStore = create<PeerState>((set, get) => ({
     mmkvStorage.setObject('cache_peer_contacts', updatedContacts);
     mmkvStorage.setObject('cache_peer_entries', updatedEntries);
     set({ contacts: updatedContacts, entries: updatedEntries });
+    get().addTombstone('contact', sourceContactId);
   },
 
   addPeerEntry: (entryData) => {
@@ -244,7 +272,7 @@ export const usePeerStore = create<PeerState>((set, get) => ({
   softDeletePeerEntry: (id) => {
     const now = Date.now();
     const updated = get().entries.map((e) =>
-      e.id === id ? { ...e, deletedAt: now } : e
+      e.id === id ? { ...e, deletedAt: now, updatedAt: now } : e
     );
     mmkvStorage.setObject('cache_peer_entries', updated);
     set({ entries: updated });
@@ -258,39 +286,53 @@ export const usePeerStore = create<PeerState>((set, get) => ({
     set({ entries: updated });
   },
 
-  syncWithTransactionTag: (txnId, tag, amountRupees, dateString, merchantOrPayee) => {
+  syncWithTransactionTag: (txnId, tag, amountRupees, dateString, merchantOrPayee, opts) => {
     const kind = tagToKind(tag);
-    const existingEntry = get().entries.find(
-      (e) => !e.deletedAt && e.source.type === 'txn' && e.source.txnId === txnId
-    );
+    const linked = get().entries.filter((e) => e.source.type === 'txn' && e.source.txnId === txnId);
+    const activeEntry = linked.find((e) => !e.deletedAt);
+    // An entry an earlier sync removed by mistake: bring it back rather than add a duplicate,
+    // so the person, note and "not expected back" mark it had are kept.
+    const removedEntry = activeEntry ? undefined : [...linked].sort((a, b) => b.updatedAt - a.updatedAt)[0];
 
     // If tag is not a peer tag, soft-delete any existing linked entry
     if (!kind) {
-      if (existingEntry) {
-        get().softDeletePeerEntry(existingEntry.id);
+      if (activeEntry) {
+        get().softDeletePeerEntry(activeEntry.id);
       }
       return null;
     }
 
-    const contact = get().findOrCreateContact(merchantOrPayee || 'Friend');
     const amountPaise = toPaise(Math.abs(amountRupees || 0));
+    const existingEntry = activeEntry ?? removedEntry;
+    const knownContactId =
+      opts?.contactId && get().contacts.some((c) => c.id === opts.contactId) ? opts.contactId : undefined;
 
     if (existingEntry) {
+      // Background reconciles keep the person the user chose (after a rename or merge);
+      // only an edit the user makes to the transaction moves it to another person.
+      const contactId = opts?.keepContact
+        ? existingEntry.contactId
+        : knownContactId ?? get().findOrCreateContact(merchantOrPayee || 'Friend').id;
+      const due = opts?.dueDate === undefined ? {} : { dueDate: opts.dueDate || undefined };
       get().updatePeerEntry(existingEntry.id, {
         kind,
         amount: amountPaise,
         date: dateString,
-        contactId: contact.id,
+        contactId,
+        deletedAt: undefined,
+        ...due,
       });
-      return { ...existingEntry, kind, amount: amountPaise, date: dateString, contactId: contact.id };
+      return { ...existingEntry, kind, amount: amountPaise, date: dateString, contactId, deletedAt: undefined, ...due };
     }
 
+    const contactId = knownContactId ?? get().findOrCreateContact(merchantOrPayee || 'Friend').id;
     return get().addPeerEntry({
-      contactId: contact.id,
+      contactId,
       kind,
       amount: amountPaise,
       date: dateString,
       source: { type: 'txn', txnId },
+      ...(opts?.dueDate ? { dueDate: opts.dueDate } : {}),
     });
   },
 
@@ -310,6 +352,30 @@ export const usePeerStore = create<PeerState>((set, get) => ({
     const updated = get().storedAllocations.filter((a) => a.id !== id);
     mmkvStorage.setObject('cache_peer_allocations', updated);
     set({ storedAllocations: updated });
+    get().addTombstone('allocation', id);
+  },
+
+  addTombstone: (kind, id) => {
+    const tombstones = [...get().tombstones.filter((t) => !(t.kind === kind && t.id === id)), { kind, id, at: Date.now() }];
+    mmkvStorage.setObject('cache_peer_tombstones', tombstones);
+    set({ tombstones });
+  },
+
+  getLedgerDoc: () => {
+    const { contacts, entries, storedAllocations, tombstones } = get();
+    return { contacts, entries, storedAllocations, tombstones } as PeerLedgerDoc;
+  },
+
+  applyLedgerDoc: (doc) => {
+    const contacts = (doc.contacts || []) as Contact[];
+    const entries = (doc.entries || []) as PeerEntry[];
+    const storedAllocations = (doc.storedAllocations || []) as StoredAllocation[];
+    const tombstones = doc.tombstones || [];
+    mmkvStorage.setObject('cache_peer_contacts', contacts);
+    mmkvStorage.setObject('cache_peer_entries', entries);
+    mmkvStorage.setObject('cache_peer_allocations', storedAllocations);
+    mmkvStorage.setObject('cache_peer_tombstones', tombstones);
+    set({ contacts, entries, storedAllocations, tombstones });
   },
 
   addPendingSettlement: (settlementData) => {
@@ -338,29 +404,53 @@ export const usePeerStore = create<PeerState>((set, get) => ({
       entries: loadCached<PeerEntry[]>('cache_peer_entries', []),
       storedAllocations: loadCached<StoredAllocation[]>('cache_peer_allocations', []),
       pendingSettlements: loadCached<PendingSettlement[]>('cache_peer_pending_settlements', []),
+      tombstones: loadCached<Tombstone[]>('cache_peer_tombstones', []),
     });
   },
 
-  reconcileWithTransactions: (txs) => {
-    if (!Array.isArray(txs) || txs.length === 0) return;
+  setNotExpectedBack: (entryId, notExpected) => {
+    get().updatePeerEntry(entryId, { notExpectedBack: notExpected ? true : undefined });
+  },
+
+  reconcileWithTransactions: (debits) => {
+    // Repayments a friend sends you are credits, kept in the income store, not the
+    // transaction store: include them, or a "Friend repaid" tag looks deleted and the
+    // loan it settled comes back.
+    let credits: any[] = [];
+    try {
+      credits = require('./index').useIncomeStore.getState().incomeRecords || [];
+    } catch {
+      credits = [];
+    }
+    const txs = [...(Array.isArray(debits) ? debits : []), ...credits];
+    if (txs.length === 0) return;
     const txMap = new Map<string, any>();
+    let oldestLoaded = Infinity;
     for (const t of txs) {
       if (t && t.id) txMap.set(t.id, t);
+      const ts = Number(t?.timestamp);
+      if (ts > 0 && ts < oldestLoaded) oldestLoaded = ts;
     }
 
-    // 1. Soft-delete any existing txn-based peer entries whose transaction no longer exists or was uncategorized
+    // 1. Remove a txn-linked entry only when we can tell its transaction was really
+    //    untagged or deleted: it's in the list without a peer tag, or it's missing although
+    //    the list reaches back to its date. Missing from a partial list is not "deleted".
     const currentEntries = get().entries;
     for (const e of currentEntries) {
       if (!e.deletedAt && e.source?.type === 'txn' && e.source?.txnId) {
         const matchingTx = txMap.get(e.source.txnId);
-        if (!matchingTx || !tagToKind(matchingTx.category)) {
+        if (shouldRemoveTxnEntry(e.date, matchingTx, oldestLoaded, (c) => !!tagToKind(String(c || '')))) {
           get().softDeletePeerEntry(e.id);
         }
       }
     }
 
-    // 2. Upsert/reconcile all transactions that are peer-related
+    // 2. Upsert/reconcile all transactions that are peer-related. A new entry goes to the
+    //    person the payment is recognised as (UPI ID, account, a confirmed name), not to
+    //    whoever matches the printed name, so a new spelling doesn't create a second person.
+    const index = buildCounterpartyIndex(get().contacts);
     for (const t of txs) {
+      if (t?.isDeleted) continue;
       if (!t || !t.id) continue;
       const cat = String(t.category || '').toLowerCase().trim();
       const kind = tagToKind(cat);
@@ -377,7 +467,11 @@ export const usePeerStore = create<PeerState>((set, get) => ({
         const isPlaceholder = ['peer_lent', 'peer_borrowed', 'peer_lend', 'peer_borrow_repaid', 'peer_lent_repaid', 'lent to friend', 'borrowed', 'misc', 'uncategorized'].includes(rawMerchant.toLowerCase());
         const merchant = !isPlaceholder && rawMerchant ? rawMerchant : (t.note?.trim() || 'Friend');
 
-        get().syncWithTransactionTag(t.id, cat, Number(t.amount || 0), dateStr, merchant);
+        const known = resolveCounterparty(t, index);
+        get().syncWithTransactionTag(t.id, cat, Number(t.amount || 0), dateStr, merchant, {
+          keepContact: true,
+          ...(known ? { contactId: known.contactId } : {}),
+        });
       }
     }
   },

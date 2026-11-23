@@ -49,6 +49,13 @@ export class ParsedSmsDto {
   @IsOptional()
   @IsBoolean()
   isDebitCard?: boolean;
+
+  /** Who it was with: "vpa:rohit.c@okaxis" or "acct:4821". Stored encrypted. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  // Checked (and dropped if malformed) in SyncService, so an odd value never loses the transaction
+  counterpartyKey?: string;
 }
 
 export class DirectSmsDto {

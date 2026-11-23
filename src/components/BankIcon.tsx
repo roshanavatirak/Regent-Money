@@ -5,6 +5,7 @@ import { Canvas, ImageSVG, useSVG, Group } from '@shopify/react-native-skia';
 import { resolveBankCode } from '../constants/bankBrand';
 
 export const LOCAL_SVG_MAP: { [key: string]: any } = {
+  'AIRP': require('../../assets/Banks logo/airp.svg'),
   'BARB': require('../../assets/Banks logo/bob.svg'),
   'BKID': require('../../assets/Banks logo/boi.svg'),
   'CNRB': require('../../assets/Banks logo/cnrb.svg'),
@@ -16,7 +17,9 @@ export const LOCAL_SVG_MAP: { [key: string]: any } = {
   'JIOP': require('../../assets/Banks logo/jiop.svg'),
   'KKBK': require('../../assets/Banks logo/kkbk.svg'),
   'MAHB': require('../../assets/Banks logo/mahb.svg'),
+  'NESF': require('../../assets/Banks logo/slice.svg'),
   'PUNB': require('../../assets/Banks logo/punb.svg'),
+  'PYTM': require('../../assets/Banks logo/pytm.svg'),
   'SBIN': require('../../assets/Banks logo/sbi.svg'),
   'UBIN': require('../../assets/Banks logo/ubin.svg'),
   'UTIB': require('../../assets/Banks logo/axis.svg'),

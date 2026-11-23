@@ -19,7 +19,8 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
-import Animated, { FadeIn, FadeInDown, FadeInRight, ZoomIn } from 'react-native-reanimated';
+import Animated, { FadeIn, FadeInDown, FadeInRight } from 'react-native-reanimated';
+import { SuccessCheck } from '../components/SuccessCheck';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Font from 'expo-font';
@@ -117,7 +118,9 @@ export const AddBankModal: React.FC<AddBankModalProps> = ({ visible, onClose, on
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return ALL_BANKS_SORTED;
-    return ALL_BANKS_SORTED.filter((b) => b.name.toLowerCase().includes(q) || b.code.toLowerCase().includes(q));
+    return ALL_BANKS_SORTED.filter(
+      (b) => b.name.toLowerCase().includes(q) || b.code.toLowerCase().includes(q) || !!b.formerly?.toLowerCase().includes(q)
+    );
   }, [query]);
 
   const onBalanceChange = (t: string) => {
@@ -173,6 +176,7 @@ export const AddBankModal: React.FC<AddBankModalProps> = ({ visible, onClose, on
 
   const ink = colors.text;
   const muted = colors.textSecondary;
+  const red = isDark ? '#FF9B85' : '#B42318';
   const pageBg = isDark ? colors.background : '#F3F6F4';
   const surface = colors.card;
   const line = isDark ? colors.border : '#E1E9E4';
@@ -252,9 +256,13 @@ export const AddBankModal: React.FC<AddBankModalProps> = ({ visible, onClose, on
         renderItem={({ item, index }) => {
           const first = index === 0;
           const last = index === filtered.length - 1;
+          const blocked = !!item.restricted;
           return (
             <Pressable
-              onPress={() => pickBank(item)}
+              onPress={() => !blocked && pickBank(item)}
+              disabled={blocked}
+              accessibilityState={{ disabled: blocked }}
+              accessibilityHint={item.restricted}
               style={({ pressed }) => [
                 s.bankRow,
                 {
@@ -267,17 +275,25 @@ export const AddBankModal: React.FC<AddBankModalProps> = ({ visible, onClose, on
                   borderBottomLeftRadius: last ? 20 : 0,
                   borderBottomRightRadius: last ? 20 : 0,
                 },
-                pressed && { opacity: 0.7 },
+                pressed && !blocked && { opacity: 0.7 },
               ]}
               accessibilityRole="button"
             >
-              <BankIcon code={item.code} name={item.name} size={38} />
+              <View style={blocked && { opacity: 0.45 }}>
+                <BankIcon code={item.code} name={item.name} size={38} />
+              </View>
               <View style={[s.bankRowBody, !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line }]}>
                 <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={[s.bankName, { color: ink }]} numberOfLines={1}>{item.name}</Text>
-                  <Text style={[s.bankCode, { color: muted }]}>{item.code}</Text>
+                  <Text style={[s.bankName, { color: blocked ? muted : ink }]} numberOfLines={1}>{item.name}</Text>
+                  <Text style={[s.bankCode, { color: blocked ? red : muted }]} numberOfLines={1}>
+                    {item.restricted
+                      ? `${item.code} · ${item.restricted}`
+                      : item.formerly
+                        ? `${item.code} · formerly ${item.formerly}`
+                        : item.code}
+                  </Text>
                 </View>
-                <Feather name="chevron-right" size={16} color={muted} />
+                <Feather name={blocked ? 'lock' : 'chevron-right'} size={16} color={muted} />
               </View>
             </Pressable>
           );
@@ -462,19 +478,15 @@ export const AddBankModal: React.FC<AddBankModalProps> = ({ visible, onClose, on
           </KeyboardAvoidingView>
 
           {done && bank && (
-            <Animated.View entering={FadeIn.duration(150)} style={[StyleSheet.absoluteFill, s.doneWrap, { backgroundColor: pageBg }]}>
-              <Animated.View entering={ZoomIn.springify().damping(12)}>
-                <View style={[s.doneLogo, { borderColor: accent }]}>
-                  <BankIcon code={bank.code} name={bank.name} size={72} />
-                </View>
-                <View style={[s.doneCheck, { backgroundColor: accent, borderColor: pageBg }]}>
-                  <Feather name="check" size={16} color={accentInk} />
-                </View>
+            <Animated.View entering={FadeIn.duration(180)} style={[StyleSheet.absoluteFill, s.doneWrap, { backgroundColor: pageBg }]}>
+              {/* Same calm tick as saving a transaction: the check draws itself, no bounce */}
+              <SuccessCheck size={88} circleColor={FOREST} checkColor={LIME} />
+              <Animated.View entering={FadeInDown.delay(380).duration(320)} style={{ alignItems: 'center' }}>
+                <Text style={[s.doneTitle, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}>
+                  Account linked
+                </Text>
+                <Text style={[s.doneSub, { color: muted }]}>{displayName} •• {suffix}</Text>
               </Animated.View>
-              <Text style={[s.doneTitle, { color: ink, fontFamily: display, fontWeight: display ? undefined : '800' }]}>
-                Account linked
-              </Text>
-              <Text style={[s.doneSub, { color: muted }]}>{displayName} •• {suffix}</Text>
             </Animated.View>
           )}
         </View>

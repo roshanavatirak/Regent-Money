@@ -15,6 +15,7 @@ export const ART_KEYS = [
   'goal',
   'bills',
   'refer',
+  'voice',
 ] as const;
 export const THEME_KEYS = [
   'lime',
@@ -33,6 +34,7 @@ export const RULE_KEYS = [
   'overspent',
   'saved',
   'no_budget',
+  'no_voice',
 ] as const;
 export const ACTION_KEYS = [
   'add_bank',
@@ -45,6 +47,7 @@ export const ACTION_KEYS = [
   'open_calendar',
   'invite',
   'url',
+  'open_voice',
 ] as const;
 export const PLATFORM_KEYS = ['all', 'android', 'ios'] as const;
 

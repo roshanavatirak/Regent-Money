@@ -21,6 +21,8 @@ export interface ChatContext {
     currentIncome?: number | null;
     incomeSourcesCount?: number | null;
   };
+  /** Plain-language pay cycle (see utils/cycleLabels cycleSummaryForAI). */
+  payCycle?: string;
   totalBalance?: number;
   accounts?: Array<{
     bankName: string;

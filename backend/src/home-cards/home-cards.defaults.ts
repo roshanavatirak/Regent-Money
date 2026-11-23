@@ -77,4 +77,16 @@ export const DEFAULT_CARDS: HomeCard[] = [
     platform: 'all',
     enabled: true,
   },
+  {
+    id: 'voice',
+    template: 'voice',
+    title: "Just say it. We'll add it.",
+    cta: 'Try voice entry',
+    art: 'voice',
+    theme: 'lime',
+    action: 'open_voice',
+    rule: 'no_voice',
+    platform: 'all',
+    enabled: true,
+  },
 ];

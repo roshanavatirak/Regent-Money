@@ -9,7 +9,24 @@ import { getDailyHumorMessage } from './humorousMessages';
 import { navigationRef } from '../navigation/navigationRef';
 
 const PROMPTED_KEY = 'notification_permission_prompted';
+const LAST_ASKED_KEY = 'notification_permission_last_asked_at';
+// Refused? Ask again on the first app open at least this long after the last ask
+const REASK_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+let askInFlight = false;
 const TOKEN_KEY = 'saved_expo_push_token';
+
+/**
+ * Android notification channels. Android never lets an app change a channel's sound once it
+ * exists, and the old 'daily_alerts' / 'default' channels were created silent (they passed
+ * `sound: 'default'`, a sound file that doesn't exist). New IDs give everyone channels with
+ * sound. The backend sends pushes to DAILY_ALERTS, so keep the two in step.
+ */
+export const NOTIFICATION_CHANNELS = {
+  DAILY_ALERTS: 'daily_alerts_v2',
+  GENERAL: 'general_v2',
+} as const;
+const LEGACY_CHANNEL_IDS = ['daily_alerts', 'default'];
+const LEGACY_CHANNELS_REMOVED_KEY = 'notification_legacy_channels_removed_v1';
 
 const getAuthToken = (): string | null => tokenStore.getAccessToken();
 
@@ -34,29 +51,39 @@ export const notificationService = {
     if (Platform.OS !== 'android') return;
 
     try {
-      await Notifications.setNotificationChannelAsync('daily_alerts', {
+      await Notifications.setNotificationChannelAsync(NOTIFICATION_CHANNELS.DAILY_ALERTS, {
         name: 'Daily Check-ins & Reminders',
         description: 'Morning and evening humorous wealth updates and check-ins',
         importance: Notifications.AndroidImportance.MAX,
         vibrationPattern: [0, 250, 250, 250],
         lightColor: '#10B981',
-        sound: 'default',
+        // No `sound` key: leaving it out gives the phone's default notification sound.
+        // `sound: 'default'` means "a sound file named default", which doesn't exist, so
+        // expo-notifications logged an error and created the channel with no sound.
         enableLights: true,
         enableVibrate: true,
         showBadge: true,
       });
 
-      await Notifications.setNotificationChannelAsync('default', {
+      await Notifications.setNotificationChannelAsync(NOTIFICATION_CHANNELS.GENERAL, {
         name: 'General Alerts',
         description: 'Standard system and account notifications',
         importance: Notifications.AndroidImportance.MAX,
         vibrationPattern: [0, 250, 250, 250],
         lightColor: '#10B981',
-        sound: 'default',
         enableLights: true,
         enableVibrate: true,
         showBadge: true,
       });
+
+      // Remove the old silent channels so phone settings don't list them twice. Only once:
+      // nothing in the app recreates them, and deleting is a no-op after that.
+      if (!mmkvStorage.getBoolean(LEGACY_CHANNELS_REMOVED_KEY)) {
+        for (const id of LEGACY_CHANNEL_IDS) {
+          await Notifications.deleteNotificationChannelAsync(id).catch(() => {});
+        }
+        mmkvStorage.setBoolean(LEGACY_CHANNELS_REMOVED_KEY, true);
+      }
     } catch (e: any) {
       console.warn('[NotificationService] Failed to configure Android channels:', e.message);
     }
@@ -64,7 +91,7 @@ export const notificationService = {
 
   /**
    * Global function to post or schedule any notification from the app with Regent Money branding.
-   * Ensures channelId, emerald accent color (#10B981), high priority, and logo styling are unified.
+   * Ensures channelId, forest badge color (#0B3D2C), high priority, and logo styling are unified.
    */
   async postNotification(params: {
     title: string;
@@ -78,13 +105,13 @@ export const notificationService = {
 
     try {
       await this.setupChannels();
-      const channel = params.channelId || 'daily_alerts';
+      const channel = params.channelId || NOTIFICATION_CHANNELS.DAILY_ALERTS;
 
       const content: Notifications.NotificationContentInput = {
         title: params.title,
         body: params.body,
         sound: 'default',
-        color: '#10B981',
+        color: '#0B3D2C',
         data: params.data || {},
         priority: 'high',
       };
@@ -167,6 +194,54 @@ export const notificationService = {
   },
 
   /**
+   * Is it time to show the notification dialog? Never asked, or refused and the last ask
+   * was 7 or more days ago. Never true once granted.
+   */
+  async isAskDue(): Promise<boolean> {
+    if (Platform.OS === 'web') return false;
+    if (await this.isPermissionGranted()) return false;
+    const lastAsked = mmkvStorage.getNumber(LAST_ASKED_KEY);
+    // No time saved: never asked, or asked by an older version that kept no date
+    if (!lastAsked) return true;
+    return Date.now() - lastAsked >= REASK_AFTER_MS;
+  },
+
+  /**
+   * Shows the dialog only if isAskDue(). Returns whether notifications are now allowed.
+   */
+  async requestPermissionIfDue(): Promise<boolean> {
+    if (!(await this.isAskDue())) return this.isPermissionGranted();
+    return this.requestPermission();
+  },
+
+  /**
+   * Shows the system "Allow notifications?" dialog inside the app. Needs no signed-in
+   * user: the push token is registered after sign-in. Returns whether it was granted.
+   */
+  async requestPermission(): Promise<boolean> {
+    if (Platform.OS === 'web') return false;
+    try {
+      const current = await Notifications.getPermissionsAsync();
+      if (current.status === 'granted') return true;
+      if (askInFlight) return false;
+      askInFlight = true;
+      // Saved before the dialog opens: the dialog briefly sends the app to the background,
+      // and coming back must not count as a new "app open" that asks a second time
+      mmkvStorage.setNumber(LAST_ASKED_KEY, Date.now());
+      // Android 13+ shows the dialog only once the app has a notification channel
+      await this.setupChannels();
+      const { status } = await Notifications.requestPermissionsAsync();
+      return status === 'granted';
+    } catch (e: any) {
+      console.warn('[NotificationService] Permission request failed:', e?.message);
+      return false;
+    } finally {
+      askInFlight = false;
+      this.setPrompted(true);
+    }
+  },
+
+  /**
    * Request permissions, configure channels, schedule native daily alerts, and register token.
    */
   async registerForPushNotifications(): Promise<string | null> {
@@ -181,17 +256,8 @@ export const notificationService = {
     }
 
     try {
-      const { status: existingStatus } = await Notifications.getPermissionsAsync();
-      let finalStatus = existingStatus;
-
-      if (existingStatus !== 'granted') {
-        const { status } = await Notifications.requestPermissionsAsync();
-        finalStatus = status;
-      }
-
-      this.setPrompted(true);
-
-      if (finalStatus !== 'granted') {
+      const granted = await this.requestPermission();
+      if (!granted) {
         console.warn('[NotificationService] Push notification permissions denied.');
         return null;
       }
@@ -472,6 +538,10 @@ export const notificationService = {
           (navigationRef.navigate as any)('Main', { screen: 'Home' });
         } else if (route.startsWith('calendar')) {
           (navigationRef.navigate as any)('FinancialCalendar');
+        } else if (route.startsWith('feedback/bug')) {
+          (navigationRef.navigate as any)('ReportBug');
+        } else if (route.startsWith('feedback/feature')) {
+          (navigationRef.navigate as any)('SuggestFeature');
         } else {
           (navigationRef.navigate as any)('Main', { screen: 'Home' });
         }

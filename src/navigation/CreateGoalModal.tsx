@@ -671,7 +671,7 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
                 <View style={[styles.strategyCard, { backgroundColor: cardBg, borderColor }]}>
                   <View style={styles.rowBetween}>
                     <Text style={[styles.strategyBadge, { backgroundColor: `${selectedCat.color}25`, color: selectedCat.color }]}>
-                      Recommended Asset Strategy
+                      Example Asset Strategy
                     </Text>
                     <Text style={[styles.strategyReturn, { color: textColor }]}>~{strategy.expectedReturn}% CAGR</Text>
                   </View>
@@ -680,6 +680,9 @@ export const CreateGoalModal: React.FC<CreateGoalModalProps> = ({
                     Vehicle: <Text style={{ color: textColor, fontWeight: '600' }}>{strategy.assetVehicle}</Text>
                   </Text>
                   <Text style={[styles.strategyDesc, { color: subTextColor }]}>{strategy.rationale}</Text>
+                  <Text style={[styles.strategyDisclaimer, { color: subTextColor }]}>
+                    Illustrative estimate, not investment advice. Returns are not guaranteed.
+                  </Text>
                 </View>
 
                 {/* Priority Selector */}
@@ -1042,6 +1045,12 @@ const styles = StyleSheet.create({
   strategyVehicle: {
     fontSize: 12,
     marginBottom: 4,
+  },
+  strategyDisclaimer: {
+    fontSize: 11,
+    lineHeight: 15,
+    marginTop: 8,
+    fontStyle: 'italic',
   },
   strategyDesc: {
     fontSize: 11,

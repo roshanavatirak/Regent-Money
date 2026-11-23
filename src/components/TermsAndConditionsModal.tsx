@@ -10,7 +10,8 @@ import { Feather } from '@expo/vector-icons';
 import { format } from 'date-fns';
 import { useTheme, useAuthStore, usePrivacyModalStore } from '../store';
 import { authService } from '../services/authService';
-import { TERMS } from '../constants/legalContent';
+import { buildTerms } from '../constants/legalContent';
+import { useContactInfo } from '../services/contactInfo';
 import { LegalDocumentView } from './LegalDocumentView';
 
 const FOREST = '#0B3D2C';
@@ -50,6 +51,9 @@ export const TermsAndConditionsModal: React.FC<TermsAndConditionsModalProps> = (
       setLoading(false);
     }
   };
+
+  const contactInfo = useContactInfo();
+  const TERMS = React.useMemo(() => buildTerms(contactInfo), [contactInfo]);
 
   const acceptedOn = user?.termsAcceptedAt ? format(new Date(Number(user.termsAcceptedAt)), 'd MMM yyyy') : null;
 

@@ -5,7 +5,8 @@
 import React from 'react';
 import { Text, StyleSheet, Pressable } from 'react-native';
 import { useTheme } from '../store';
-import { PRIVACY } from '../constants/legalContent';
+import { buildPrivacy } from '../constants/legalContent';
+import { useContactInfo } from '../services/contactInfo';
 import { LegalDocumentView } from './LegalDocumentView';
 
 const FOREST = '#0B3D2C';
@@ -18,10 +19,12 @@ interface PrivacyPolicyModalProps {
 
 export const PrivacyPolicyModal: React.FC<PrivacyPolicyModalProps> = ({ visible, onDismiss }) => {
   const { isDark } = useTheme();
+  const contactInfo = useContactInfo();
+  const doc = React.useMemo(() => buildPrivacy(contactInfo), [contactInfo]);
   return (
     <LegalDocumentView
       visible={visible}
-      doc={PRIVACY}
+      doc={doc}
       variant="sheet"
       icon="shield"
       onClose={onDismiss}

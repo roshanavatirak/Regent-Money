@@ -102,6 +102,17 @@ export function ArtGlyph({ kind, theme, size = 104 }: { kind: ArtKey; theme: Car
           <Path d={sparkle(86, 46, 7)} fill={W} stroke={fg} strokeWidth={2} />
         </G>
       )}
+      {kind === 'voice' && (
+        <G>
+          <Circle cx={46} cy={54} r={34} fill={ring2} stroke={fg} strokeWidth={2.5} />
+          <Rect x={36} y={28} width={20} height={34} rx={10} fill={fg} />
+          <Path d="M28 50 a18 18 0 0 0 36 0" fill="none" stroke={fg} strokeWidth={4} strokeLinecap="round" />
+          <Rect x={43.5} y={68} width={5} height={10} rx={2.5} fill={fg} />
+          <Path d="M84 34 q6 10 0 20" fill="none" stroke={fg} strokeWidth={3.5} strokeLinecap="round" />
+          <Path d="M92 28 q10 16 0 32" fill="none" stroke={fg} strokeWidth={3.5} strokeLinecap="round" />
+          <Path d={sparkle(84, 14, 6)} fill={W} stroke={fg} strokeWidth={2} />
+        </G>
+      )}
       {kind === 'goal' && (
         <G>
           <Circle cx={44} cy={56} r={30} fill={fg} />

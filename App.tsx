@@ -83,6 +83,14 @@ export default function App() {
       // Non-critical startup fallback
     }
 
+    // Contact addresses and legal links (edited in the admin console); the saved copy shows meanwhile
+    try {
+      const { refreshContactInfo } = require('./src/services/contactInfo');
+      refreshContactInfo();
+    } catch (e) {
+      // Non-critical startup fallback
+    }
+
     // Trigger financial record background sync on app launch
     try {
       const { syncService } = require('./src/services/syncService');

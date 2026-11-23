@@ -13,7 +13,8 @@ class NativeStoragePackage : ReactPackage {
             NativeStorageModule(reactContext),
             SmsModule(reactContext),
             AttributionModule(reactContext),
-            VoiceRecognizerModule(reactContext)
+            VoiceRecognizerModule(reactContext),
+            PhoneHintModule(reactContext)
         )
     }
 

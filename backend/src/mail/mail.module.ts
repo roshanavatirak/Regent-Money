@@ -8,6 +8,7 @@ import { EmailBroadcast } from './entities/email-broadcast.entity';
 import { EmailRecipient } from './entities/email-recipient.entity';
 import { EmailUnsubscribe } from './entities/email-unsubscribe.entity';
 import { User } from '../users/entities/user.entity';
+import { AppContactController } from './app-contact.controller';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { User } from '../users/entities/user.entity';
       User,
     ]),
   ],
+  controllers: [AppContactController],
   providers: [EmailAccountsService, MailService, EmailBroadcastService, WelcomeEmailService],
   exports: [EmailAccountsService, MailService, EmailBroadcastService, WelcomeEmailService],
 })

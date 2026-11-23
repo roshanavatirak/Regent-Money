@@ -22,6 +22,7 @@ import {
   searchCategories,
 } from '../constants/categories';
 import { CategoryIcon } from './CategoryIcon';
+import { DateTimePickerSheet } from './DateTimePickerSheet';
 import { tagLearningService } from '../services/tagLearningService';
 import { usePeerStore, useBudgetStore, budgetCustomCategoriesOf } from '../store';
 
@@ -29,7 +30,8 @@ interface TagPaymentModalProps {
   visible: boolean;
   onClose: () => void;
   selectedTag: string;
-  onSelectTag: (tag: string, updatePayeeRule?: boolean) => void;
+  /** `extra.dueDate`: when tagged Lent or Borrowed, the optional date it's expected back (YYYY-MM-DD) or null. */
+  onSelectTag: (tag: string, updatePayeeRule?: boolean, extra?: { dueDate: string | null }) => void;
   merchantName?: string;
   transactionType?: 'credit' | 'debit';
   isDark: boolean;
@@ -37,6 +39,21 @@ interface TagPaymentModalProps {
 }
 
 const FOREST = '#0B3D2C';
+
+/** Local YYYY-MM-DD (not toISOString, which shifts the day before 5:30 am in India). */
+const toDateString = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const dueLabel = (d: Date) => d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
+/** "in 14 days", "tomorrow", "today". */
+const dueIn = (d: Date) => {
+  const today = new Date();
+  const days = Math.round(
+    (new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() -
+      new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()) /
+      86_400_000
+  );
+  return days <= 0 ? 'today' : days === 1 ? 'tomorrow' : `in ${days} days`;
+};
 const LIME = '#B8F36B';
 
 export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
@@ -58,6 +75,9 @@ export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
   const [newTag, setNewTag] = useState('');
   const [errorText, setErrorText] = useState('');
   const [rememberForPayee, setRememberForPayee] = useState(false);
+  // Optional: when a new loan (Lent or Borrowed) is expected back.
+  const [dueDate, setDueDate] = useState<Date | null>(null);
+  const [duePickerOpen, setDuePickerOpen] = useState(false);
 
   // Categories made in Budgets. Tagging with one (its id, e.g. custom_haircut_…) is what makes
   // that budget count the payment.
@@ -91,6 +111,7 @@ export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
       setNewTag('');
       setErrorText('');
       setRememberForPayee(false);
+      setDueDate(null);
     }
   }, [visible, selectedTag]);
 
@@ -141,11 +162,14 @@ export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
     setErrorText('');
   };
 
+  const isNewLoanTag = current === 'peer_lent' || current === 'peer_borrowed';
+
   const handleConfirm = () => {
     if (current.startsWith('peer_') && merchantName) {
       usePeerStore.getState().findOrCreateContact(merchantName);
     }
-    onSelectTag(current, merchantName ? rememberForPayee : undefined);
+    const due = isNewLoanTag && dueDate ? toDateString(dueDate) : null;
+    onSelectTag(current, merchantName ? rememberForPayee : undefined, isNewLoanTag ? { dueDate: due } : undefined);
     onClose();
   };
 
@@ -293,6 +317,61 @@ export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
                       </>
                     )}
                   </View>
+
+                  {/* Lent or Borrowed: an optional expected-back date, right under the tag. */}
+                  {isNewLoanTag ? (
+                    <Pressable
+                      onPress={() => setDuePickerOpen(true)}
+                      style={({ pressed }) => [
+                        styles.dueField,
+                        dueDate
+                          ? { backgroundColor: cardBg, borderColor: isDark ? 'rgba(184,243,107,0.35)' : '#CFE3D6', borderStyle: 'solid' }
+                          : { backgroundColor: 'transparent', borderColor: isDark ? 'rgba(255,255,255,0.18)' : '#C9D4CE', borderStyle: 'dashed' },
+                        pressed && { transform: [{ scale: 0.99 }], opacity: 0.9 },
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel={dueDate ? `Expected back ${dueLabel(dueDate)}. Change` : 'Add expected back date'}
+                    >
+                      {/* Date badge: day over month when set, a calendar when not */}
+                      <View style={[styles.dueBadge, { backgroundColor: dueDate ? (isDark ? LIME : FOREST) : isDark ? 'rgba(184,243,107,0.12)' : '#E3F2E8' }]}>
+                        {dueDate ? (
+                          <>
+                            <Text style={[styles.dueBadgeDay, { color: isDark ? FOREST : LIME }]}>{dueDate.getDate()}</Text>
+                            <Text style={[styles.dueBadgeMonth, { color: isDark ? FOREST : '#D9E7DF' }]}>
+                              {dueDate.toLocaleDateString('en-IN', { month: 'short' }).toUpperCase()}
+                            </Text>
+                          </>
+                        ) : (
+                          <Feather name="calendar" size={18} color={isDark ? LIME : FOREST} />
+                        )}
+                      </View>
+
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={[styles.dueTitle, { color: dueDate ? muted : ink }]}>
+                          {current === 'peer_lent' ? 'Expected back' : 'You’ll pay it back'}
+                        </Text>
+                        <Text style={[styles.dueValue, { color: dueDate ? ink : muted }]} numberOfLines={1}>
+                          {dueDate ? `${dueLabel(dueDate)} · ${dueIn(dueDate)}` : 'Add a date (optional)'}
+                        </Text>
+                      </View>
+
+                      {dueDate ? (
+                        <Pressable
+                          onPress={() => setDueDate(null)}
+                          hitSlop={8}
+                          style={[styles.dueClear, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#EDF2EF' }]}
+                          accessibilityRole="button"
+                          accessibilityLabel="Remove date"
+                        >
+                          <Feather name="x" size={14} color={ink} />
+                        </Pressable>
+                      ) : (
+                        <View style={[styles.dueClear, { backgroundColor: isDark ? LIME : FOREST }]}>
+                          <Feather name="plus" size={14} color={isDark ? FOREST : LIME} />
+                        </View>
+                      )}
+                    </Pressable>
+                  ) : null}
                 </View>
 
                 <Text style={[styles.groupTitle, { color: muted }]}>Your tags</Text>
@@ -402,6 +481,19 @@ export const TagPaymentModal: React.FC<TagPaymentModalProps> = ({
           </View>
         </View>
       </KeyboardAvoidingView>
+      <DateTimePickerSheet
+        visible={duePickerOpen}
+        mode="date"
+        title="Expected back"
+        confirmLabel="Use this date"
+        value={dueDate ?? new Date(Date.now() + 14 * 86_400_000)}
+        minimumDate={new Date()}
+        onClose={() => setDuePickerOpen(false)}
+        onConfirm={(d) => {
+          setDueDate(d);
+          setDuePickerOpen(false);
+        }}
+      />
     </Modal>
   );
 };
@@ -562,6 +654,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     fontWeight: '600',
   },
+  // Inset from the sheet edges, lined up with the section titles and tag tiles.
+  dueField: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 68, borderWidth: 1.5, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 10, marginTop: 14, marginHorizontal: 20 },
+  dueBadge: { width: 46, height: 46, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  dueBadgeDay: { fontSize: 18, fontWeight: '800', lineHeight: 20 },
+  dueBadgeMonth: { fontSize: 10, fontWeight: '700', letterSpacing: 0.8, marginTop: 1 },
+  dueTitle: { fontSize: 12, fontWeight: '600' },
+  dueValue: { fontSize: 15, fontWeight: '700', marginTop: 2 },
+  dueClear: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   rememberCard: {
     flexDirection: 'row',
     alignItems: 'center',

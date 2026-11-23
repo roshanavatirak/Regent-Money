@@ -8,6 +8,7 @@ import { Broadcast } from './entities/broadcast.entity';
 import { SignalsService } from './signals.service';
 import { User } from '../users/entities/user.entity';
 import { getDailyHumorMessage, HumorousMessage } from './humorous-messages';
+import { PUSH_CHANNEL_ID } from './push-channel';
 import * as crypto from 'crypto';
 
 @Injectable()
@@ -638,7 +639,7 @@ export class NotificationsService implements OnModuleInit {
           sound: 'default',
           title: broadcast.title,
           body: broadcast.body,
-          channelId: 'daily_alerts',
+          channelId: PUSH_CHANNEL_ID,
           priority: 'high',
           data: broadcast.payload || {},
         }));
@@ -818,7 +819,7 @@ export class NotificationsService implements OnModuleInit {
         sound: 'default',
         title: m.title,
         body: m.body,
-        channelId: 'daily_alerts',
+        channelId: PUSH_CHANNEL_ID,
         priority: 'high',
         data: m.payload || {},
       }));

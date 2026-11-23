@@ -88,8 +88,8 @@ android {
     compileSdk rootProject.ext.compileSdkVersion
 
     namespace 'com.regentmoney'
-    def appVersionCode = Integer.parseInt(findProperty('versionCode') ?: '150')
-    def appVersionName = findProperty('versionName') ?: '1.0.65'
+    def appVersionCode = Integer.parseInt(findProperty('versionCode') ?: '152')
+    def appVersionName = findProperty('versionName') ?: '1.0.67'
 
     defaultConfig {
         applicationId 'com.regentmoney'
@@ -229,6 +229,8 @@ dependencies {
     // Invite and campaign tracking: which link led to this install, and proof the claim is genuine
     implementation("com.android.installreferrer:installreferrer:2.2")
     implementation("com.google.android.play:integrity:1.6.0")
+    // Phone Number Hint: the "Choose a phone number" sheet on the sign-up mobile step
+    implementation("com.google.android.gms:play-services-auth:21.4.0")
 
     testImplementation("junit:junit:4.13.2")
     // Real org.json for JVM unit tests (android.jar only ships stubs)
@@ -258,3 +260,6 @@ dependencies {
         implementation jscFlavor
     }
 }
+
+// Reads android/app/google-services.json so Firebase starts and push tokens work
+apply plugin: 'com.google.gms.google-services'

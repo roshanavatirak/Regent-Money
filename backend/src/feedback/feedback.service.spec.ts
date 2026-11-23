@@ -9,11 +9,13 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { FeedbackService } from './feedback.service';
 import { Feedback } from './entities/feedback.entity';
+import { NotificationsService } from '../notifications/notifications.service';
 
 describe('FeedbackService', () => {
   let service: FeedbackService;
   let mockFeedbackRepo: any;
   let mockConfigService: any;
+  let mockNotifications: any;
 
   beforeEach(async () => {
     mockFeedbackRepo = {
@@ -34,6 +36,8 @@ describe('FeedbackService', () => {
       }),
     };
 
+    mockNotifications = { sendNotification: jest.fn().mockResolvedValue({}) };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         FeedbackService,
@@ -44,6 +48,10 @@ describe('FeedbackService', () => {
         {
           provide: ConfigService,
           useValue: mockConfigService,
+        },
+        {
+          provide: NotificationsService,
+          useValue: mockNotifications,
         },
       ],
     }).compile();
@@ -173,5 +181,97 @@ describe('FeedbackService', () => {
         mediaPurged: true,
       }),
     );
+  });
+  it('notifies the sender when an admin replies, with a deep link to their screen', async () => {
+    mockFeedbackRepo.findOne.mockResolvedValue({
+      id: 'fb_5', userId: 'user_9', kind: 'bug', title: 'Sync stuck', status: 'open', adminNotes: null, resolvedAt: null,
+    });
+
+    await service.updateStatus('fb_5', 'investigating', undefined, 'Looking into it', true);
+
+    expect(mockNotifications.sendNotification).toHaveBeenCalledWith(
+      'user_9',
+      expect.objectContaining({
+        title: 'The Regent team replied to your report',
+        body: 'Looking into it',
+        type: 'feedback_update',
+        payload: expect.objectContaining({ feedbackId: 'fb_5', deepLink: 'regent://feedback/bug', status: 'investigating' }),
+      }),
+    );
+  });
+
+  it('tells the sender about a status change when there is no new reply', async () => {
+    mockFeedbackRepo.findOne.mockResolvedValue({
+      id: 'fb_6', userId: 'user_9', kind: 'feature', title: 'Split bills', status: 'open', adminNotes: 'Thanks!', resolvedAt: null,
+    });
+
+    await service.updateStatus('fb_6', 'in_progress', undefined, 'Thanks!', true);
+
+    expect(mockNotifications.sendNotification).toHaveBeenCalledWith(
+      'user_9',
+      expect.objectContaining({ title: 'Your idea is now in progress' }),
+    );
+  });
+
+  it('does not notify when notify is off or nothing the user sees changed', async () => {
+    mockFeedbackRepo.findOne.mockResolvedValue({
+      id: 'fb_7', userId: 'user_9', kind: 'bug', title: 'x', status: 'open', adminNotes: null, priority: 'low',
+    });
+    await service.updateStatus('fb_7', 'investigating', undefined, undefined, false);
+
+    mockFeedbackRepo.findOne.mockResolvedValue({
+      id: 'fb_7', userId: 'user_9', kind: 'bug', title: 'x', status: 'open', adminNotes: null, priority: 'low',
+    });
+    await service.updateStatus('fb_7', undefined, 'high', undefined, true);
+
+    expect(mockNotifications.sendNotification).not.toHaveBeenCalled();
+  });
+
+  it('keeps the update when the notification fails', async () => {
+    mockNotifications.sendNotification.mockRejectedValue(new Error('push down'));
+    mockFeedbackRepo.findOne.mockResolvedValue({
+      id: 'fb_8', userId: 'user_9', kind: 'bug', title: 'x', status: 'open', adminNotes: null,
+    });
+
+    const saved = await service.updateStatus('fb_8', 'fixed', undefined, undefined, true);
+
+    expect(saved.status).toBe('fixed');
+    expect(mockFeedbackRepo.save).toHaveBeenCalled();
+  });
+
+  it('attaches sender name, email and report count to the admin list', async () => {
+    const qb: any = {
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getManyAndCount: jest.fn().mockResolvedValue([[{ id: 'fb_1', userId: 'u1' }, { id: 'fb_2', userId: null }], 2]),
+    };
+    mockFeedbackRepo.createQueryBuilder.mockReturnValue(qb);
+    mockFeedbackRepo.query.mockResolvedValue([{ id: 'u1', name: 'Priya', email: 'p@example.com', avatar_url: null, report_count: 3 }]);
+
+    const res = await service.getAllFeedback({ kind: 'bug', search: '50%_off', limit: 500 });
+
+    expect(qb.andWhere).toHaveBeenCalledWith('fb.kind = :kind', { kind: 'bug' });
+    expect(qb.andWhere).toHaveBeenCalledWith(expect.stringContaining('ILIKE :like'), { like: '%50\\%\\_off%' });
+    expect(qb.take).toHaveBeenCalledWith(100);
+    expect(res.total).toBe(2);
+    expect(res.items[0].user).toEqual({ id: 'u1', name: 'Priya', email: 'p@example.com', avatarUrl: null, reportCount: 3 });
+    expect(res.items[1].user).toBeNull();
+  });
+
+  it('maps the stats query into counts', async () => {
+    mockFeedbackRepo.query.mockResolvedValue([{
+      total: 10, feature: 4, bug: 6, s_open: 3, s_investigating: 1, s_in_progress: 2, s_fixed: 2, s_resolved: 1, s_closed: 1,
+      awaiting: 4, oldest_awaiting: '1700000000000', critical_open: 1, fixed_7d: 2,
+    }]);
+
+    const stats = await service.getStats();
+
+    expect(stats).toEqual({
+      total: 10, feature: 4, bug: 6,
+      byStatus: { open: 3, investigating: 1, in_progress: 2, fixed: 2, resolved: 1, closed: 1 },
+      awaitingReply: 4, oldestAwaitingAt: 1700000000000, criticalOpen: 1, fixedLast7d: 2,
+    });
   });
 });

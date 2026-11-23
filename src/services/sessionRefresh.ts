@@ -161,5 +161,18 @@ async function authedFetch(url: string, input: any, init?: any): Promise<Respons
       }
     }
   }
+
+  // 3. The account hasn't accepted the Terms yet (e.g. a Google sign-up accepted on no device so
+  //    far): mark it, and the app shows the Terms screen over everything until it's accepted.
+  if (res.status === 403) {
+    const body = await res.clone().json().catch(() => ({}));
+    if (body?.code === 'TERMS_REQUIRED') {
+      try {
+        const { useAuthStore } = require('../store');
+        const state = useAuthStore.getState();
+        if (state.user?.termsAccepted !== false) state.updateUser({ termsAccepted: false, termsAcceptedAt: null });
+      } catch {}
+    }
+  }
   return res;
 }

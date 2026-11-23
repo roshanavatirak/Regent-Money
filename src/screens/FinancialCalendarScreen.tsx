@@ -4,8 +4,8 @@
 // bills coming up, the selected day, and your all-time records.
 
 import React, { useState, useMemo } from 'react';
-import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
-import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
+import { View, Text, StyleSheet, Pressable, ScrollView, useWindowDimensions } from 'react-native';
+import Animated, { FadeIn } from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Font from 'expo-font';
@@ -13,10 +13,14 @@ import { useCalendarAnalytics } from '../hooks/useCalendarAnalytics';
 import { useTheme } from '../store';
 import { CategoryIcon } from '../components/CategoryIcon';
 import { getCategory } from '../constants/categories';
+import { counterpartyName } from '../services/counterpartyService';
+import { MonthDial, DialKey, type DialDay } from '../features/calendar/MonthDial';
 
 const FOREST = '#0B3D2C';
 const LIME = '#B8F36B';
 const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+/** Height of the month-by-month chart. */
+const CHART_H = 200;
 
 interface FinancialCalendarScreenProps {
   navigation: any;
@@ -46,13 +50,15 @@ export const FinancialCalendarScreen: React.FC<FinancialCalendarScreenProps> = (
   const [browsing, setBrowsing] = useState(new Date());
   const [selectedKey, setSelectedKey] = useState(todayKey);
   const [masked, setMasked] = useState(false);
+  // The dial is the main view; the grid stays one tap away.
+  const [view, setView] = useState<'dial' | 'grid'>('dial');
+  const { width: windowWidth } = useWindowDimensions();
 
   const { dailyDataMap, createdDateKey, recurringBillsByDayOfMonth, salaryCycleStats, records, toggleExcludeRecordTx, isTxExcluded } =
     useCalendarAnalytics(browsing, route?.params?.userCreatedAt);
 
   const peakDay = records.peakDay as any;
   const peakWeek = records.peakWeek as any;
-  const bestMonth = records.bestSavingsMonth as any;
 
   const money = (v: number | null | undefined, sign = false) => {
     if (v === null || v === undefined || isNaN(v)) return '';
@@ -121,6 +127,58 @@ export const FinancialCalendarScreen: React.FC<FinancialCalendarScreenProps> = (
         ? { title: `${best - cur + 1} more no-spend day${best - cur + 1 === 1 ? '' : 's'}`, text: 'beats your best streak.' }
         : null;
 
+  /* ---------------- Dial ---------------- */
+
+  const dialDays: DialDay[] = cells.filter(Boolean);
+  const dialSize = Math.min(windowWidth - 48, 360);
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  // Payday shown on the dial only in the current month (a 31st payday lands on a 30-day month's last day).
+  const dialPayday = isThisMonth && salaryCycleStats.payday !== null ? Math.min(salaryCycleStats.payday, daysInMonth) : null;
+  // The grid marks payday this month and in months ahead.
+  const isAhead = year > new Date().getFullYear() || (year === new Date().getFullYear() && month > new Date().getMonth());
+  const gridPayday = salaryCycleStats.payday !== null && (isThisMonth || isAhead) ? Math.min(salaryCycleStats.payday, daysInMonth) : null;
+  const biggest = dialDays.reduce<DialDay | null>((b, d) => (d.tracked && d.debits > 0 && (!b || d.debits > b.debits) ? d : b), null);
+  const biggestShare = biggest && stats.spent > 0 ? Math.round((biggest.debits / stats.spent) * 100) : 0;
+
+  /* ---------------- Records ---------------- */
+
+  /** "2026-10-W2" reads as "8–14 Oct". */
+  const weekLabel = (key: string) => {
+    const m = /^(\d{4})-(\d{2})-W(\d)$/.exec(key);
+    if (!m) return '';
+    const y = Number(m[1]);
+    const mo = Number(m[2]) - 1;
+    const last = new Date(y, mo + 1, 0).getDate();
+    const from = (Number(m[3]) - 1) * 7 + 1;
+    const to = Math.min(from + 6, last);
+    return `${from}–${to} ${new Date(y, mo, 1).toLocaleDateString('en-IN', { month: 'short' })}`;
+  };
+  // Biggest week, day by day, for its little bar chart.
+  const weekBars = (() => {
+    const m = peakWeek?.weekKey ? /^(\d{4})-(\d{2})-W(\d)$/.exec(peakWeek.weekKey) : null;
+    if (!m) return [] as number[];
+    const y = Number(m[1]);
+    const mo = Number(m[2]) - 1;
+    const last = new Date(y, mo + 1, 0).getDate();
+    const from = (Number(m[3]) - 1) * 7 + 1;
+    const out: number[] = [];
+    for (let d = from; d <= Math.min(from + 6, last); d++) out.push(dailyDataMap.get(keyOf(new Date(y, mo, d)))?.debits || 0);
+    return out;
+  })();
+  const weekMax = Math.max(1, ...weekBars);
+
+  // Months oldest to newest (up to six) for the column chart.
+  const chartMonths = [...records.monthRows].reverse().slice(-6) as any[];
+  const maxMonthSpent = Math.max(1, ...chartMonths.map((r) => r.spent || 0));
+  const highest = (records.monthRows as any[]).reduce((h: any, r: any) => (!h || r.spent > h.spent ? r : h), null);
+  const avgMonth = chartMonths.length ? chartMonths.reduce((t, r) => t + (r.spent || 0), 0) / chartMonths.length : 0;
+  const thisMonthKey = keyOf(new Date()).slice(0, 7);
+  const curRow = chartMonths.find((r) => r.monthKey === thisMonthKey);
+  const prevRow = curRow ? chartMonths[chartMonths.indexOf(curRow) - 1] : undefined;
+  const vsPrev = curRow && prevRow ? curRow.spent - prevRow.spent : null;
+  const longMonth = (r: any) => new Date(`${r.monthKey}-01T00:00:00`).toLocaleDateString('en-IN', { month: 'long' });
+  const hasBests = best > 0 || peakDay?.amount > 0 || peakWeek?.spent > 0 || !!highest;
+
   /* ---------------- Theme ---------------- */
 
   const ink = colors.text;
@@ -147,15 +205,125 @@ export const FinancialCalendarScreen: React.FC<FinancialCalendarScreenProps> = (
         <Pressable onPress={goBack} style={[s.roundBtn, { backgroundColor: surface }]} accessibilityLabel="Back">
           <Feather name="arrow-left" size={20} color={ink} />
         </Pressable>
-        <Text style={[s.headerTitle, { color: ink }]}>Calendar</Text>
+        <View style={[s.switch, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#E7EEEA' }]}>
+          {(['dial', 'grid'] as const).map((v) => {
+            const on = view === v;
+            return (
+              <Pressable
+                key={v}
+                onPress={() => setView(v)}
+                style={[s.switchBtn, on && { backgroundColor: isDark ? LIME : FOREST }]}
+                accessibilityRole="button"
+                accessibilityState={{ selected: on }}
+              >
+                <Text style={[s.switchText, { color: on ? (isDark ? FOREST : '#FFFFFF') : muted }]}>{v === 'dial' ? 'Dial' : 'Grid'}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
         <Pressable onPress={() => setMasked((m) => !m)} style={[s.roundBtn, { backgroundColor: surface }]} accessibilityLabel={masked ? 'Show amounts' : 'Hide amounts'}>
           <Feather name={masked ? 'eye-off' : 'eye'} size={18} color={ink} />
         </Pressable>
       </View>
 
       <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 40 }} showsVerticalScrollIndicator={false}>
+        {/* Both views stay mounted and the switch only hides one: mounting a view on a switch was
+            leaving the green hero's contents invisible on Android. */}
+        <View style={view === 'dial' ? undefined : s.hidden}>
+        {/* Dial: the month as a ring of days */}
+        <View style={[s.dialCard, { backgroundColor: surface, borderColor: line }]}>
+          <View style={s.dialNav}>
+            <Pressable onPress={() => changeMonth(-1)} style={[s.navBtn, { backgroundColor: pageBg }]} accessibilityLabel="Previous month">
+              <Feather name="chevron-left" size={18} color={ink} />
+            </Pressable>
+            <Pressable onPress={jumpToday} accessibilityLabel="Go to today">
+              <Text style={[s.monthTitle, { color: ink, fontSize: 18 }, heading]}>{monthName}</Text>
+              {!isThisMonth && <Text style={[s.backToday, { color: green }]}>Back to today</Text>}
+            </Pressable>
+            <Pressable onPress={() => changeMonth(1)} style={[s.navBtn, { backgroundColor: pageBg }]} accessibilityLabel="Next month">
+              <Feather name="chevron-right" size={18} color={ink} />
+            </Pressable>
+          </View>
+          <View style={{ alignItems: 'center', marginTop: 6 }}>
+            <MonthDial
+              days={dialDays}
+              size={dialSize}
+              todayKey={todayKey}
+              selectedKey={selectedKey}
+              payday={dialPayday}
+              onSelect={setSelectedKey}
+              isDark={isDark}
+              label={(d) => `${d.day} ${monthName}${d.tracked && d.debits > 0 ? `, spent ${money(d.debits)}` : d.tracked ? ', no spend' : ''}`}
+            >
+              <Text style={[s.dialLabel, { color: muted }]}>{isThisMonth ? 'Spent so far' : 'Spent'}</Text>
+              <Text style={[s.dialAmount, { color: ink }, heading]} numberOfLines={1} adjustsFontSizeToFit>
+                {money(stats.spent)}
+              </Text>
+              <Text style={[s.dialSub, { color: muted }]}>{stats.elapsed > 0 ? `${money(stats.avg)} a day` : 'Nothing tracked yet'}</Text>
+              {stats.elapsed > 0 ? (
+                <View style={[s.dialChip, { backgroundColor: softGreen }]}>
+                  <Text style={[s.dialChipText, { color: green }]}>{`${stats.noSpendDays} no-spend day${stats.noSpendDays === 1 ? '' : 's'}`}</Text>
+                </View>
+              ) : null}
+            </MonthDial>
+          </View>
+          <DialKey color={muted} isDark={isDark} />
+        </View>
+
+        {biggest ? (
+          <Pressable
+            onPress={() => setSelectedKey(biggest.key)}
+            style={[s.bigDay, { backgroundColor: surface, borderColor: line }]}
+            accessibilityRole="button"
+            accessibilityLabel={`Biggest day, ${biggest.day} ${monthName}, ${money(biggest.debits)}`}
+          >
+            <View style={[s.bigDayBadge, { backgroundColor: isDark ? 'rgba(255,138,107,0.18)' : '#FFE1D6' }]}>
+              <Text style={[s.bigDayDow, { color: isDark ? '#FFB29E' : '#8A2A0E' }]}>
+                {dateOf(biggest.key).toLocaleDateString('en-IN', { weekday: 'short' }).toUpperCase()}
+              </Text>
+              <Text style={[s.bigDayNum, { color: isDark ? '#FFB29E' : '#8A2A0E' }, heading]}>{biggest.day}</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[s.bigDayTitle, { color: ink }]}>Your biggest day</Text>
+              <Text style={[s.bigDaySub, { color: muted }]}>
+                {biggestShare >= 20 ? `${biggestShare}% of the month in one day` : `${dateOf(biggest.key).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`}
+              </Text>
+            </View>
+            <Text style={[s.bigDayAmt, { color: red }, heading]}>{money(biggest.debits)}</Text>
+          </Pressable>
+        ) : null}
+
+        {isThisMonth && salaryCycleStats.payday !== null && salaryCycleStats.daysLeft !== null ? (
+          <View style={s.paydayCard}>
+            <View style={s.paydayRow}>
+              <Text style={s.paydayTitle}>
+                {salaryCycleStats.daysLeft === 0 ? 'Payday is today' : `${salaryCycleStats.daysLeft} day${salaryCycleStats.daysLeft === 1 ? '' : 's'} to payday`}
+              </Text>
+              {salaryCycleStats.dailyAllowance !== null ? <Text style={s.paydayRate}>{`${money(salaryCycleStats.dailyAllowance)} / day`}</Text> : null}
+            </View>
+            {salaryCycleStats.dailyAllowance !== null ? (
+              <Text style={s.paydayHint}>{`Spend under ${money(salaryCycleStats.dailyAllowance)} today to stay on track.`}</Text>
+            ) : null}
+          </View>
+        ) : null}
+
+        {/* Streak nudge */}
+        {streakNudge && isThisMonth && (
+          <Animated.View entering={FadeIn.duration(300)} style={[s.nudge, { backgroundColor: softGreen }]}>
+            <View style={s.nudgeIcon}>
+              <Feather name="shield" size={18} color={LIME} />
+            </View>
+            <Text style={[s.nudgeText, { color: ink }]}>
+              <Text style={{ fontWeight: '700' }}>{streakNudge.title} </Text>
+              {streakNudge.text}
+            </Text>
+          </Animated.View>
+        )}
+
+        </View>
+        <View style={view === 'grid' ? undefined : s.hidden}>
         {/* Hero */}
-        <Animated.View entering={FadeInDown.duration(380)} style={s.hero}>
+        <View style={s.hero}>
           <View pointerEvents="none" style={s.heroRing} />
           <Text style={s.heroLabel}>{isThisMonth ? `Spent in ${monthName} so far` : `Spent in ${monthName}`}</Text>
           <Text style={[s.heroAmount, heading]} numberOfLines={1} adjustsFontSizeToFit>{money(stats.spent)}</Text>
@@ -186,7 +354,7 @@ export const FinancialCalendarScreen: React.FC<FinancialCalendarScreenProps> = (
               </Text>
             </View>
           )}
-        </Animated.View>
+        </View>
 
         {/* Streak nudge */}
         {streakNudge && isThisMonth && (
@@ -231,10 +399,11 @@ export const FinancialCalendarScreen: React.FC<FinancialCalendarScreenProps> = (
               const isToday = c.key === todayKey;
               const hasSpend = c.debits > 0;
               const noSpend = c.tracked && !hasSpend;
+              const isPayday = c.day === gridPayday && !hasSpend;
               const alpha = hasSpend ? 0.14 + 0.6 * c.heat : 0;
               const strong = alpha > 0.5;
-              const bg = hasSpend ? `rgba(224,49,49,${alpha.toFixed(2)})` : noSpend ? softGreen : isDark ? 'rgba(255,255,255,0.03)' : '#FFFFFF';
-              const numColor = hasSpend ? (strong || isDark ? '#FFFFFF' : '#7A1D1D') : noSpend ? green : muted;
+              const bg = isPayday ? (isDark ? LIME : FOREST) : hasSpend ? `rgba(224,49,49,${alpha.toFixed(2)})` : noSpend ? softGreen : isDark ? 'rgba(255,255,255,0.03)' : '#FFFFFF';
+              const numColor = isPayday ? (isDark ? FOREST : LIME) : hasSpend ? (strong || isDark ? '#FFFFFF' : '#7A1D1D') : noSpend ? green : muted;
               return (
                 <View key={c.key} style={s.cellWrap}>
                   <Pressable
@@ -242,16 +411,18 @@ export const FinancialCalendarScreen: React.FC<FinancialCalendarScreenProps> = (
                     style={[
                       s.cell,
                       { backgroundColor: bg },
-                      !c.past && !hasSpend && { borderWidth: 1, borderColor: line },
+                      !c.past && !hasSpend && !isPayday && { borderWidth: 1, borderColor: line },
                       isToday && !isSel && { borderWidth: 2, borderColor: isDark ? LIME : FOREST },
                       isSel && { borderWidth: 2.5, borderColor: isDark ? LIME : FOREST },
                     ]}
                     accessibilityRole="button"
                     accessibilityState={{ selected: isSel }}
-                    accessibilityLabel={`${c.day} ${monthName}${hasSpend ? `, spent ${money(c.debits)}` : noSpend ? ', no spend' : ''}`}
+                    accessibilityLabel={`${c.day} ${monthName}${isPayday ? ', payday' : ''}${hasSpend ? `, spent ${money(c.debits)}` : noSpend ? ', no spend' : ''}`}
                   >
                     <Text style={[s.cellNum, { color: numColor }, (isToday || isSel) && { fontWeight: '800' }]}>{c.day}</Text>
-                    {hasSpend ? (
+                    {isPayday ? (
+                      <Text style={[s.payRupee, { color: numColor }]}>₹</Text>
+                    ) : hasSpend ? (
                       <Text style={[s.cellAmt, { color: numColor }]} numberOfLines={1}>{masked ? '••' : short(c.debits)}</Text>
                     ) : noSpend ? (
                       <View style={[s.noSpendDot, { backgroundColor: isDark ? LIME : '#16A34A' }]} />
@@ -282,7 +453,17 @@ export const FinancialCalendarScreen: React.FC<FinancialCalendarScreenProps> = (
               <View style={[s.creditDot, { position: 'relative', top: 0, right: 0, backgroundColor: isDark ? LIME : '#16A34A' }]} />
               <Text style={[s.legendText, { color: muted }]}>Money in</Text>
             </View>
+            {gridPayday !== null ? (
+              <View style={s.legendItem}>
+                <View style={[s.payCoin, { backgroundColor: isDark ? LIME : FOREST }]}>
+                  <Text style={[s.payCoinText, { color: isDark ? FOREST : LIME }]}>₹</Text>
+                </View>
+                <Text style={[s.legendText, { color: muted }]}>Payday</Text>
+              </View>
+            ) : null}
           </View>
+        </View>
+
         </View>
 
         {/* Selected day */}
@@ -307,7 +488,7 @@ export const FinancialCalendarScreen: React.FC<FinancialCalendarScreenProps> = (
                 <View key={tx.id || i} style={[s.txRow, i < selected.txs.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line }]}>
                   <CategoryIcon category={tx.category ? getCategory(tx.category).id : (isCredit ? 'money_received' : 'miscellaneous')} variant="soft" size={38} />
                   <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text style={[s.txName, { color: ink }]} numberOfLines={1}>{tx.merchant || (isCredit ? 'Money received' : 'Payment')}</Text>
+                    <Text style={[s.txName, { color: ink }]} numberOfLines={1}>{counterpartyName(tx) || tx.merchant || (isCredit ? 'Money received' : 'Payment')}</Text>
                     {!isCredit && (
                       <Pressable onPress={() => toggleExcludeRecordTx(tx.id)} hitSlop={6}>
                         <Text style={[s.txExclude, { color: excluded ? red : muted }]}>
@@ -357,47 +538,145 @@ export const FinancialCalendarScreen: React.FC<FinancialCalendarScreenProps> = (
           </>
         )}
 
-        {/* Records */}
-        <Text style={[s.section, { color: ink }]}>Your records</Text>
-        <View style={s.recordGrid}>
-          {[
-            { label: 'Longest no-spend streak', value: best > 0 ? `${best} day${best === 1 ? '' : 's'}` : null, sub: cur > 0 ? `${cur} going now` : undefined },
-            { label: 'Best savings month', value: bestMonth ? `${bestMonth.rate}%` : null, sub: bestMonth ? `${bestMonth.monthKey}, saved ${money(bestMonth.saved)}` : undefined },
-            { label: 'Biggest day', value: peakDay?.amount > 0 ? money(peakDay.amount) : null, sub: peakDay?.amount > 0 ? `${peakDay.date}${peakDay.tx?.merchant ? `, ${peakDay.tx.merchant}` : ''}` : undefined },
-            { label: 'Biggest week', value: peakWeek?.spent > 0 ? money(peakWeek.spent) : null, sub: peakWeek?.spent > 0 ? peakWeek.weekKey : undefined },
-          ].map((r, i) => (
-            <Animated.View key={r.label} entering={FadeInDown.delay(i * 60).duration(360)} style={[s.recordCard, { backgroundColor: surface, borderColor: line }]}>
-              <Text style={[s.recordLabel, { color: muted }]}>{r.label}</Text>
-              <Text style={[s.recordValue, { color: r.value ? ink : muted }, heading]} numberOfLines={1} adjustsFontSizeToFit>
-                {r.value || 'Not yet'}
-              </Text>
-              {r.sub ? <Text style={[s.recordSub, { color: muted }]} numberOfLines={2}>{r.sub}</Text> : null}
-            </Animated.View>
-          ))}
-        </View>
-
-        {/* Month by month */}
-        {records.monthRows.length > 0 && (
+        {/* Personal bests: a swipeable shelf, then the biggest week */}
+        {hasBests ? (
           <>
-            <Text style={[s.section, { color: ink }]}>Month by month</Text>
-            <View style={[s.listCard, { backgroundColor: surface, borderColor: line }]}>
-              {records.monthRows.map((row: any, i: number) => {
-                const rate = Math.max(0, Math.min(100, row.savingsRate || 0));
-                return (
-                  <View key={row.monthKey} style={[s.monthRowItem, i < records.monthRows.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: line }]}>
-                    <View style={s.monthRowTop}>
-                      <Text style={[s.monthRowName, { color: ink }]}>{row.monthLabel}</Text>
-                      <Text style={[s.monthRowRate, { color: rate >= 30 ? green : muted }]}>{row.savingsRate}% saved</Text>
+            <View style={s.sectionRow}>
+              <Text style={[s.section, { color: ink, marginTop: 0 }]}>Personal bests</Text>
+            </View>
+            {/* A 2×2 grid so every best is on screen at once. */}
+            <View style={s.bestGrid}>
+              {best > 0 ? (
+                <View style={[s.bestCard, { backgroundColor: FOREST }]}>
+                  <View pointerEvents="none" style={s.bestRing} />
+                  <View style={s.bestHead}>
+                    <View style={[s.bestIcon, { backgroundColor: LIME }]}>
+                      <Feather name="shield" size={15} color={FOREST} />
                     </View>
-                    <View style={[s.rateTrack, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#EDF2EF' }]}>
-                      <View style={[s.rateFill, { width: `${rate}%`, backgroundColor: isDark ? LIME : '#16A34A' }]} />
-                    </View>
-                    <Text style={[s.monthRowSub, { color: muted }]}>
-                      {money(row.spent)} out, {money(row.earned)} in
-                    </Text>
+                    <Text style={[s.bestLabel, { color: '#B5CEC1' }]}>No-spend streak</Text>
                   </View>
-                );
-              })}
+                  <View>
+                    <Text style={[s.bestValue, { color: '#FFFFFF' }, heading]}>
+                      {best} <Text style={s.bestUnit}>{best === 1 ? 'day' : 'days'}</Text>
+                    </Text>
+                    <View style={s.streakStrip}>
+                      {Array.from({ length: Math.min(best + 1, 10) }, (_, i) => (
+                        <View key={i} style={[s.streakCell, i < Math.min(best, 9) ? { backgroundColor: LIME } : { borderWidth: 1.5, borderStyle: 'dashed', borderColor: 'rgba(184,243,107,0.5)' }]} />
+                      ))}
+                    </View>
+                    <Text style={[s.bestSub, { color: '#B5CEC1' }]}>{cur > 0 ? `${cur} going now · ${best + 1} sets a new best` : `${best + 1} in a row sets a new best`}</Text>
+                  </View>
+                </View>
+              ) : null}
+              {peakDay?.amount > 0 ? (
+                <View style={[s.bestCard, { backgroundColor: isDark ? 'rgba(255,138,107,0.16)' : '#FFE7DE' }]}>
+                  <View style={s.bestHead}>
+                    <View style={[s.bestIcon, { backgroundColor: '#FF8A6B' }]}>
+                      <Feather name="arrow-up-right" size={15} color="#3A0D00" />
+                    </View>
+                    <Text style={[s.bestLabel, { color: isDark ? '#FFB29E' : '#8A2A0E' }]}>Biggest day</Text>
+                  </View>
+                  <View>
+                    <Text style={[s.bestValue, { color: isDark ? '#FFB29E' : '#8A2A0E' }, heading]} numberOfLines={1} adjustsFontSizeToFit>
+                      {money(peakDay.amount)}
+                    </Text>
+                    {peakDay.date ? (
+                      <View style={[s.bestChip, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#FFFFFF' }]}>
+                        <Text style={[s.bestChipText, { color: isDark ? '#FFB29E' : '#8A2A0E' }]}>
+                          {dateOf(peakDay.date).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
+              ) : null}
+              {highest && highest.spent > 0 ? (
+                <View style={[s.bestCard, { backgroundColor: surface, borderWidth: 1, borderColor: line }]}>
+                  <View style={s.bestHead}>
+                    <View style={[s.bestIcon, { backgroundColor: isDark ? 'rgba(255,138,107,0.2)' : '#FFE1D6' }]}>
+                      <Feather name="bar-chart-2" size={15} color={isDark ? '#FFB29E' : '#C2410C'} />
+                    </View>
+                    <Text style={[s.bestLabel, { color: muted }]}>Highest month</Text>
+                  </View>
+                  <View>
+                    <Text style={[s.bestValue, { color: ink }, heading]} numberOfLines={1} adjustsFontSizeToFit>
+                      {money(highest.spent)}
+                    </Text>
+                    <View style={[s.bestChip, { backgroundColor: pageBg }]}>
+                      <Text style={[s.bestChipText, { color: ink }]}>{`${longMonth(highest)} ${highest.monthKey.slice(0, 4)}`}</Text>
+                    </View>
+                  </View>
+                </View>
+              ) : null}
+              {peakWeek?.spent > 0 ? (
+                <View style={[s.bestCard, { backgroundColor: surface, borderWidth: 1, borderColor: line }]}>
+                  <View style={s.bestHead}>
+                    <View style={s.weekBars}>
+                      {weekBars.map((v, i) => (
+                        <View
+                          key={i}
+                          style={[s.weekBar, { height: Math.max(4, (v / weekMax) * 26), backgroundColor: v === weekMax ? '#E5533C' : isDark ? 'rgba(255,138,107,0.45)' : '#FFB59F' }]}
+                        />
+                      ))}
+                    </View>
+                  </View>
+                  <View>
+                    <Text style={[s.bestLabel, { color: muted }]}>Biggest week</Text>
+                    <Text style={[s.bestValue, { color: ink }, heading]} numberOfLines={1} adjustsFontSizeToFit>
+                      {money(peakWeek.spent)}
+                    </Text>
+                    <Text style={[s.bestSub, { color: muted, marginTop: 2 }]}>{weekLabel(peakWeek.weekKey)}</Text>
+                  </View>
+                </View>
+              ) : null}
+            </View>
+          </>
+        ) : null}
+
+        {/* Month by month: columns oldest to newest, with the average */}
+        {chartMonths.length > 0 && (
+          <>
+            <View style={s.sectionRow}>
+              <Text style={[s.section, { color: ink, marginTop: 0 }]}>Month by month</Text>
+            </View>
+            <View style={[s.chartCard, { backgroundColor: surface, borderColor: line }]}>
+              <View style={{ height: CHART_H }}>
+                {chartMonths.length > 1 ? (
+                  <View pointerEvents="none" style={[s.avgLine, { bottom: 22 + (avgMonth / maxMonthSpent) * (CHART_H - 52), borderColor: isDark ? 'rgba(255,255,255,0.25)' : '#C9D6CF' }]}>
+                    <Text style={[s.avgText, { color: muted, backgroundColor: surface }]}>{`avg ${masked ? '••' : short(avgMonth)}`}</Text>
+                  </View>
+                ) : null}
+                <View style={s.columns}>
+                  {chartMonths.map((r) => {
+                    const isCur = r.monthKey === thisMonthKey;
+                    const isTop = highest && r.monthKey === highest.monthKey;
+                    const h = Math.max(8, (r.spent / maxMonthSpent) * (CHART_H - 52));
+                    return (
+                      <View key={r.monthKey} style={s.column}>
+                        <Text style={[s.colAmt, { color: isCur ? green : isTop ? (isDark ? '#FFB29E' : '#C2410C') : muted }]} numberOfLines={1}>
+                          {masked ? '••' : short(r.spent)}
+                        </Text>
+                        <View
+                          style={[
+                            s.colBar,
+                            { height: h, backgroundColor: isCur ? (isDark ? LIME : FOREST) : isTop ? '#FFB59F' : isDark ? 'rgba(255,255,255,0.1)' : '#E7EEEA' },
+                          ]}
+                        >
+                          {isCur ? <View style={[s.colCap, { backgroundColor: isDark ? FOREST : LIME }]} /> : null}
+                        </View>
+                        <Text style={[s.colName, { color: isCur ? ink : muted }, isCur && { fontWeight: '800' }]}>{r.monthLabel.split(' ')[0]}</Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              </View>
+              {vsPrev !== null && vsPrev !== 0 && prevRow ? (
+                <View style={[s.chartNote, { backgroundColor: vsPrev < 0 ? softGreen : isDark ? 'rgba(255,138,107,0.16)' : '#FFE1D6' }]}>
+                  <Text style={[s.chartNoteText, { color: vsPrev < 0 ? green : isDark ? '#FFB29E' : '#8A2A0E' }]}>
+                    {`${longMonth(curRow)} is ${money(Math.abs(vsPrev))} ${vsPrev < 0 ? 'under' : 'over'} ${longMonth(prevRow)} so far`}
+                  </Text>
+                </View>
+              ) : null}
             </View>
           </>
         )}
@@ -410,6 +689,73 @@ const s = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 8, paddingBottom: 6 },
   roundBtn: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
   headerTitle: { fontSize: 16, fontWeight: '700' },
+  hidden: { display: 'none' },
+  sectionRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginTop: 26, marginBottom: 12 },
+  sectionHint: { fontSize: 12, fontWeight: '700' },
+  bestGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  bestCard: { width: '48.5%', minHeight: 168, borderRadius: 24, padding: 14, justifyContent: 'space-between', overflow: 'hidden' },
+  bestRing: { position: 'absolute', right: -40, top: -40, width: 140, height: 140, borderRadius: 70, borderWidth: 1.5, borderColor: 'rgba(184,243,107,0.18)' },
+  bestHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  bestIcon: { width: 30, height: 30, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  bestLabel: { fontSize: 12, fontWeight: '700', flexShrink: 1 },
+  bestValue: { fontSize: 28, letterSpacing: -0.8, lineHeight: 32, marginTop: 2 },
+  bestUnit: { fontSize: 15, letterSpacing: 0 },
+  bestSub: { fontSize: 12, fontWeight: '600', marginTop: 8 },
+  bestChip: { alignSelf: 'flex-start', marginTop: 10, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 },
+  bestChipText: { fontSize: 12, fontWeight: '800' },
+  streakStrip: { flexDirection: 'row', gap: 5, marginTop: 12 },
+  streakCell: { flex: 1, height: 8, borderRadius: 4 },
+  weekRow2: { flexDirection: 'row', alignItems: 'center', gap: 14, borderWidth: 1, borderRadius: 22, padding: 14, marginTop: 12 },
+  weekBars: { flexDirection: 'row', alignItems: 'flex-end', gap: 3, height: 34 },
+  weekBar: { width: 6, borderRadius: 2 },
+  chartCard: { borderWidth: 1, borderRadius: 24, paddingHorizontal: 16, paddingTop: 18, paddingBottom: 14 },
+  avgLine: { position: 'absolute', left: 0, right: 0, borderTopWidth: 1.5, borderStyle: 'dashed' },
+  avgText: { position: 'absolute', left: 0, top: -9, fontSize: 10.5, fontWeight: '700', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6, overflow: 'hidden' },
+  columns: { flex: 1, flexDirection: 'row', alignItems: 'flex-end', gap: 14, paddingHorizontal: 6 },
+  column: { flex: 1, alignItems: 'center', gap: 6 },
+  colAmt: { fontSize: 11.5, fontWeight: '800' },
+  colBar: { width: '100%', borderTopLeftRadius: 12, borderTopRightRadius: 12, borderBottomLeftRadius: 4, borderBottomRightRadius: 4, overflow: 'hidden' },
+  colCap: { height: 6, opacity: 0.7 },
+  colName: { fontSize: 12, fontWeight: '700' },
+  chartNote: { marginTop: 14, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 10 },
+  chartNoteText: { fontSize: 12.5, fontWeight: '700' },
+  recordRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
+  recordIcon: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  recordRowLabel: { fontSize: 14, fontWeight: '600' },
+  recordRowSub: { fontSize: 12, marginTop: 1 },
+  recordRowValue: { fontSize: 17 },
+  monthLine: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
+  monthLineName: { width: 44, fontSize: 14, fontWeight: '700' },
+  monthLineTrack: { flex: 1, height: 8, borderRadius: 4, overflow: 'hidden' },
+  monthLineFill: { height: 8, borderRadius: 4 },
+  monthLineAmt: { fontSize: 14, fontWeight: '700' },
+  monthLineSaved: { fontSize: 11.5, fontWeight: '700', marginTop: 1 },
+  payCoin: { width: 16, height: 16, borderRadius: 4, alignItems: 'center', justifyContent: 'center' },
+  payRupee: { fontSize: 13, fontWeight: '800', marginTop: 1 },
+  payCoinText: { fontSize: 10, fontWeight: '800', lineHeight: 12 },
+  switch: { flexDirection: 'row', borderRadius: 999, padding: 3 },
+  switchBtn: { height: 34, paddingHorizontal: 16, borderRadius: 999, alignItems: 'center', justifyContent: 'center' },
+  switchText: { fontSize: 13, fontWeight: '700' },
+
+  dialCard: { marginTop: 10, borderWidth: 1, borderRadius: 28, paddingTop: 14, paddingBottom: 16, paddingHorizontal: 8 },
+  dialNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 6 },
+  dialLabel: { fontSize: 12, fontWeight: '700' },
+  dialAmount: { fontSize: 32, letterSpacing: -1, marginTop: 2, maxWidth: 170, fontVariant: ['tabular-nums'] },
+  dialSub: { fontSize: 12.5, fontWeight: '600', marginTop: 1 },
+  dialChip: { marginTop: 8, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 },
+  dialChipText: { fontSize: 11.5, fontWeight: '800' },
+  bigDay: { flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderRadius: 22, padding: 14, marginTop: 12 },
+  bigDayBadge: { width: 46, height: 46, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  bigDayDow: { fontSize: 10, fontWeight: '800' },
+  bigDayNum: { fontSize: 17, lineHeight: 19 },
+  bigDayTitle: { fontSize: 14, fontWeight: '800' },
+  bigDaySub: { fontSize: 12.5, fontWeight: '600', marginTop: 1 },
+  bigDayAmt: { fontSize: 18 },
+  paydayCard: { backgroundColor: FOREST, borderRadius: 22, padding: 16, marginTop: 12 },
+  paydayRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  paydayTitle: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
+  paydayRate: { color: LIME, fontSize: 13, fontWeight: '800' },
+  paydayHint: { color: '#B5CEC1', fontSize: 12.5, fontWeight: '600', marginTop: 6 },
 
   hero: { marginTop: 10, borderRadius: 28, backgroundColor: FOREST, padding: 20, overflow: 'hidden' },
   heroRing: { position: 'absolute', width: 220, height: 220, borderRadius: 110, borderWidth: 1, borderColor: 'rgba(184,243,107,0.16)', right: -80, top: -100 },

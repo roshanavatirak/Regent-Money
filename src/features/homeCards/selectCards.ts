@@ -8,6 +8,8 @@ export interface CardContext {
   smsTrackingOn: boolean;
   hasCash: boolean;
   hasBudget: boolean;
+  /** Has opened voice entry at least once. */
+  usedVoice?: boolean;
   income: number;
   spent: number;
   firstName?: string;
@@ -43,6 +45,8 @@ function ruleMatches(card: HomeCard, ctx: CardContext): boolean {
       return ctx.income > 0 && !overspent;
     case 'no_budget':
       return !ctx.hasBudget;
+    case 'no_voice':
+      return ctx.usedVoice === false;
     case 'always':
       return true;
     default:

@@ -1,6 +1,6 @@
 {
   "name": "regent-money",
-  "version": "1.0.65",
+  "version": "1.0.67",
   "main": "index.ts",
   "dependencies": {
     "@expo-google-fonts/bricolage-grotesque": "^0.4.1",
@@ -79,6 +79,8 @@
     "web": "expo start --web",
     "postinstall": "node scripts/fix-gradle-jcenter.js && node scripts/fix-cmake.js && patch-package",
     "lint": "expo lint",
+    "update:production": "node scripts/eas-update.js production",
+    "update:preview": "node scripts/eas-update.js preview",
     "test:unit": "node --experimental-strip-types --no-warnings --import ./scripts/test/register.mjs --test \"src/**/*.test.ts\""
   },
   "private": true

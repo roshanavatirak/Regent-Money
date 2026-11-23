@@ -12,6 +12,8 @@ import * as Clipboard from 'expo-clipboard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { attributionService, MyInvite } from '../services/attributionService';
+import { useAuthStore } from '../store';
+import { buildInviteMessage } from '../utils/inviteMessage';
 import { FOREST, LIME, useFeedbackTheme, ff, k, FeedbackHeader } from '../components/FeedbackFormKit';
 
 const MIST = '#B5CEC1';
@@ -26,6 +28,7 @@ export const InviteFriendScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
   const { p, font } = useFeedbackTheme();
+  const userName = useAuthStore((s) => s.user?.name);
 
   const [invite, setInvite] = useState<MyInvite | null>(null);
   const [loading, setLoading] = useState(true);
@@ -59,7 +62,7 @@ export const InviteFriendScreen: React.FC = () => {
 
   const share = () => {
     if (!link) return;
-    Share.share({ message: `I track my money with Regent Money. Try it: ${link}` }).catch(() => {});
+    Share.share({ message: buildInviteMessage(link, userName) }).catch(() => {});
   };
 
   const copy = async () => {

@@ -6,6 +6,9 @@
 // IMPORTANT: have this wording reviewed by a lawyer before release, and keep it
 // true to how the app actually works.
 
+import { DEFAULT_CONTACT_INFO } from './contactInfo';
+import type { ContactInfo } from './contactInfo';
+
 export interface LegalPoint {
   title: string;
   text: string;
@@ -26,13 +29,17 @@ export interface LegalDocument {
   sections: LegalSection[];
 }
 
-export const LEGAL_CONTACT = 'roshanawatirak@gmail.com';
 export const LEGAL_PUBLISHER = 'Regent Money by Rao Dev Studios';
 export const PRIVACY_POLICY_URL = 'https://raodevstudios.in/privacy';
 export const TERMS_URL = 'https://raodevstudios.in/terms';
-export const DELETE_ACCOUNT_URL = 'https://raodevstudios.in/regent-money/delete-account';
+export const DELETE_ACCOUNT_URL = DEFAULT_CONTACT_INFO.deleteAccountUrl;
 
-export const TERMS: LegalDocument = {
+/**
+ * The Terms, with the current contact addresses filled in (see useContactInfo).
+ * TERMS is the same document with the built-in addresses.
+ */
+export function buildTerms(c: ContactInfo = DEFAULT_CONTACT_INFO): LegalDocument {
+  return {
   title: 'Terms of service',
   version: '2.3',
   effective: 'November 2026',
@@ -81,8 +88,8 @@ export const TERMS: LegalDocument = {
     {
       heading: 'Your data',
       paragraphs: [
-        `How we collect, use and protect your data is explained in our privacy policy (${PRIVACY_POLICY_URL}).`,
-        `To delete your account and its data, go to Settings, then Delete account, or email ${LEGAL_CONTACT} from your registered email address. Full steps: ${DELETE_ACCOUNT_URL}.`,
+        `How we collect, use and protect your data is explained in our privacy policy (${c.privacyUrl}).`,
+        `To delete your account and its data, go to Settings, then Delete account, or email ${c.privacy} from your registered email address. Full steps: ${c.deleteAccountUrl}.`,
       ],
     },
     {
@@ -93,12 +100,17 @@ export const TERMS: LegalDocument = {
     },
     {
       heading: 'Contact',
-      paragraphs: [`Questions about these terms: ${LEGAL_CONTACT}`],
+      paragraphs: [`Questions about these terms: ${c.support}`],
     },
   ],
-};
+  };
+}
 
-export const PRIVACY: LegalDocument = {
+export const TERMS = buildTerms();
+
+/** The Privacy policy, with the current contact addresses filled in. */
+export function buildPrivacy(c: ContactInfo = DEFAULT_CONTACT_INFO): LegalDocument {
+  return {
   title: 'Privacy policy',
   version: '2.6',
   effective: 'November 2026',
@@ -157,7 +169,7 @@ export const PRIVACY: LegalDocument = {
         { title: 'SMS access', text: 'Turn off auto-tracking for a bank in the app, or revoke SMS access any time in your phone’s settings.' },
         { title: 'Microphone', text: 'Allow it only if you want to speak instead of type. Revoke it any time in your phone’s settings; everything still works by typing.' },
         { title: 'Regent chat', text: 'Clear your conversation from Privacy in the app.' },
-        { title: 'Delete your account', text: `Go to Settings, then Delete account, or email ${LEGAL_CONTACT} from your registered email address. Your account and its data are permanently deleted after 7 days; signing back in before then cancels it.` },
+        { title: 'Delete your account', text: `Go to Settings, then Delete account, or email ${c.privacy} from your registered email address. Your account and its data are permanently deleted after 7 days; signing back in before then cancels it.` },
         { title: 'Your rights', text: 'Under India’s Digital Personal Data Protection Act, 2023, you can ask for a summary of your data, correct it, erase it, withdraw consent, and nominate someone to act for you.' },
       ],
     },
@@ -168,9 +180,12 @@ export const PRIVACY: LegalDocument = {
     {
       heading: 'Contact and grievances',
       paragraphs: [
-        `Privacy questions, requests or complaints: ${LEGAL_CONTACT}. Grievance Officer: Roshan Avatirak, RAO Dev Studios. We aim to reply within 30 days.`,
-        `Full policy: ${PRIVACY_POLICY_URL}`,
+        `Privacy questions and requests: ${c.privacy}. Complaints: ${c.grievance}. Grievance Officer: ${c.grievanceOfficer}. We aim to reply within 30 days.`,
+        `Full policy: ${c.privacyUrl}`,
       ],
     },
   ],
-};
+  };
+}
+
+export const PRIVACY = buildPrivacy();

@@ -133,8 +133,15 @@ class IntroView @JvmOverloads constructor(
     }
     private val labelPaint = textPaint(13.5f, 600, INK, Paint.Align.LEFT)
     private val amountPaint = textPaint(13.5f, 700, INK, Paint.Align.RIGHT)
-    private val fromPaint = textPaint(13f, 400, BODY, Paint.Align.CENTER).apply { letterSpacing = 0.4f / 13f }
-    private val studioPaint = textPaint(16f, 700, INK, Paint.Align.CENTER).apply { letterSpacing = 0.2f / 16f }
+    /* Credit: small, in the wordmark's font, the studio name in spaced capitals */
+    private val fromPaint = textPaint(10.5f, 400, BODY, Paint.Align.CENTER).apply {
+        typeface = brandFont
+        letterSpacing = 0.4f / 10.5f
+    }
+    private val studioPaint = textPaint(11.5f, 800, INK, Paint.Align.CENTER).apply {
+        typeface = brandFont
+        letterSpacing = 2.2f / 11.5f
+    }
 
     /* ---------------- shapes ---------------- */
 
@@ -359,7 +366,6 @@ class IntroView @JvmOverloads constructor(
         stroke.color = withAlpha(FOREST, 0.08f)
         canvas.drawCircle(L.W - 20f, 10f, 180f, stroke)
         canvas.drawCircle(L.W - 40f, 20f, 100f, stroke)
-        canvas.drawCircle(-20f, L.H - 20f, 150f, stroke)
     }
 
     private fun drawGlow(canvas: Canvas, tl: IntroTimeline, t: Float) {
@@ -523,7 +529,7 @@ class IntroView @JvmOverloads constructor(
         fromPaint.color = withAlpha(BODY, o)
         studioPaint.color = withAlpha(INK, o)
         canvas.drawText("from", L.W / 2f, fromBaseline, fromPaint)
-        canvas.drawText("RAO Dev Studios", L.W / 2f, studioBaseline, studioPaint)
+        canvas.drawText("RAO DEV STUDIOS", L.W / 2f, studioBaseline, studioPaint)
     }
 
     /* =================================================================== */

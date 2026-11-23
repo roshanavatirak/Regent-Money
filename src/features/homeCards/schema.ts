@@ -3,9 +3,9 @@
  * Pure TypeScript (no React Native imports) so it runs under `npm run test:unit`.
  */
 
-export const ART_KEYS = ['bank', 'sms', 'cash', 'regent', 'overspend', 'kept', 'budget', 'goal', 'bills', 'refer'] as const;
+export const ART_KEYS = ['bank', 'sms', 'cash', 'regent', 'overspend', 'kept', 'budget', 'goal', 'bills', 'refer', 'voice'] as const;
 export const PRESET_KEYS = ['lime', 'lilac', 'amber', 'coral', 'sky', 'forest'] as const;
-export const RULE_KEYS = ['always', 'no_bank', 'sms_off', 'no_cash', 'overspent', 'saved', 'no_budget'] as const;
+export const RULE_KEYS = ['always', 'no_bank', 'sms_off', 'no_cash', 'overspent', 'saved', 'no_budget', 'no_voice'] as const;
 export const ACTION_KEYS = [
   'add_bank',
   'setup_tracking',
@@ -17,6 +17,7 @@ export const ACTION_KEYS = [
   'open_calendar',
   'invite',
   'url',
+  'open_voice',
 ] as const;
 export const PLATFORM_KEYS = ['all', 'android', 'ios'] as const;
 
@@ -61,6 +62,7 @@ export const RULE_LABELS: Record<RuleKey, string> = {
   overspent: 'Spent more than earned',
   saved: 'Saved money this month',
   no_budget: 'No budget yet',
+  no_voice: 'Never used voice entry',
 };
 
 export const ACTION_LABELS: Record<ActionKey, string> = {
@@ -74,6 +76,7 @@ export const ACTION_LABELS: Record<ActionKey, string> = {
   open_calendar: 'Open calendar',
   invite: 'Share invite',
   url: 'Open a web link',
+  open_voice: 'Open voice entry',
 };
 
 export const PLATFORM_LABELS: Record<PlatformKey, string> = { all: 'Android and iOS', android: 'Android only', ios: 'iOS only' };

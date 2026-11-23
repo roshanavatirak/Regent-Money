@@ -687,7 +687,7 @@ export class EmailBroadcastService implements OnModuleInit {
     const senderEmail = (
       this.configService.get<string>('BREVO_BROADCAST_SENDER_EMAIL') ||
       this.configService.get<string>('BREVO_SENDER_EMAIL') ||
-      'updates@regentmoney.com'
+      'no-reply@raodevstudios.in'
     )
       ?.replace(/^["']|["']$/g, '')
       .trim();
@@ -710,6 +710,8 @@ export class EmailBroadcastService implements OnModuleInit {
       to: [{ email: options.toEmail, name: options.toName }],
       subject: options.subject,
       htmlContent: options.htmlContent,
+      // Replies reach a real inbox instead of the no-reply sender.
+      replyTo: { email: (await this.accounts.getContactEmails()).support, name: 'Regent Money Support' },
     };
 
     if (options.unsubscribeUrl) {
@@ -904,7 +906,7 @@ export class EmailBroadcastService implements OnModuleInit {
     label?: string | null;
     firstName: string;
     unsubscribeUrl: string | null;
-    links: { termsUrl: string | null; privacyUrl: string | null };
+    links: { termsUrl: string | null; privacyUrl: string | null; supportEmail?: string | null };
   }): string {
     const env = emailEnv((k) => this.configService.get<string>(k));
     const first = (p.firstName || '').trim().split(/\s+/)[0] || 'there';
@@ -923,6 +925,7 @@ export class EmailBroadcastService implements OnModuleInit {
       unsubscribeUrl: p.unsubscribeUrl,
       termsUrl: p.links.termsUrl,
       privacyUrl: p.links.privacyUrl,
+      supportEmail: p.links.supportEmail,
     });
   }
 }

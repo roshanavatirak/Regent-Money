@@ -22,7 +22,8 @@ export const INGEST_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 /** A blacklisted user's older access tokens are refused for at least as long as they could live. */
 const USER_DENY_MS = ACCESS_TOKEN_TTL_SECONDS * 1000 + 5 * MINUTE;
 
-export type TokenUser = { id: string; email?: string | null; role?: string | null };
+/** termsPending: the account hasn't accepted the Terms yet; its tokens carry `tp: 1` and the API refuses them. */
+export type TokenUser = { id: string; email?: string | null; role?: string | null; termsPending?: boolean };
 
 export interface TokenPair {
   accessToken: string;
@@ -85,14 +86,22 @@ export class TokenService implements OnModuleInit {
 
   private signAccess(user: TokenUser, familyId: string) {
     return this.jwt.sign(
-      { sub: user.id, email: user.email, role: user.role || 'user', typ: 'access', jti: randomUUID(), fid: familyId },
+      {
+        sub: user.id,
+        email: user.email,
+        role: user.role || 'user',
+        typ: 'access',
+        jti: randomUUID(),
+        fid: familyId,
+        ...(user.termsPending ? { tp: 1 } : {}),
+      },
       { expiresIn: ACCESS_TOKEN_TTL_SECONDS },
     );
   }
 
   private signIngest(user: TokenUser, familyId: string) {
     return this.jwt.sign(
-      { sub: user.id, email: user.email, role: user.role || 'user', typ: 'ingest', fid: familyId },
+      { sub: user.id, email: user.email, role: user.role || 'user', typ: 'ingest', fid: familyId, ...(user.termsPending ? { tp: 1 } : {}) },
       { expiresIn: INGEST_TOKEN_TTL_SECONDS },
     );
   }
@@ -159,7 +168,7 @@ export class TokenService implements OnModuleInit {
     }
 
     const users = await this.repo.query(
-      `SELECT id, email, role, is_banned, is_deleted, tokens_valid_after FROM core.users WHERE id = $1`,
+      `SELECT id, email, role, is_banned, is_deleted, tokens_valid_after, terms_accepted FROM core.users WHERE id = $1`,
       [row.userId],
     );
     const user = users?.[0];
@@ -178,7 +187,8 @@ export class TokenService implements OnModuleInit {
     row.lastUsedAt = now;
     await this.repo.save(row);
 
-    const tokenUser = { id: user.id, email: user.email, role: user.role };
+    // Read fresh each time, so the refresh right after accepting the Terms drops the mark.
+    const tokenUser = { id: user.id, email: user.email, role: user.role, termsPending: user.terms_accepted !== true };
     return {
       accessToken: this.signAccess(tokenUser, row.familyId),
       refreshToken: raw,

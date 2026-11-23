@@ -21,6 +21,15 @@ describe('email layout', () => {
     expect(html).toContain('<strong');
   });
 
+  it('adds the "Questions?" support line only for a usable address', () => {
+    const base = { logoUrl: 'https://x/logo.png', title: 'T', bodyHtml: '', footerReason: 'Why' };
+    expect(renderEmail({ ...base, supportEmail: 'support@raodevstudios.in' })).toContain(
+      'Questions? Write to <a href="mailto:support@raodevstudios.in"',
+    );
+    expect(renderEmail(base)).not.toContain('Questions?');
+    expect(renderEmail({ ...base, supportEmail: '"><script>' })).not.toContain('Questions?');
+  });
+
   it('shows the unsubscribe link only when one is given', () => {
     const base = { logoUrl: 'https://x/logo.png', title: 'T', bodyHtml: '', footerReason: 'Why' };
     expect(renderEmail({ ...base, unsubscribeUrl: 'https://x/u' })).toContain('Unsubscribe');

@@ -124,7 +124,6 @@ export const AllTransactionsScreen = () => {
         renderItem={({ item, index, section }) => {
           const first = index === 0;
           const last = index === section.data.length - 1;
-          const isCredit = item.type === 'credit';
           return (
             <View
               style={[
@@ -139,7 +138,7 @@ export const AllTransactionsScreen = () => {
                 bank={!isBankFilter && item.bankProfileId ? bankById.get(item.bankProfileId) : undefined}
                 divider={!last}
                 font={font}
-                meta={`${isCredit ? 'Money received' : getCategory(item.category || 'miscellaneous').label} · ${timeOf(
+                meta={`${getCategory(item.category || 'miscellaneous').label} · ${timeOf(
                   Number(item.timestamp),
                 )}`}
                 onPress={(tx) => navigation.navigate('TransactionDetail', { transaction: tx })}

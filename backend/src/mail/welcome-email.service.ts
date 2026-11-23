@@ -64,6 +64,7 @@ export function buildWelcomeEmail(p: {
   appUrl?: string;
   termsUrl?: string | null;
   privacyUrl?: string | null;
+  supportEmail?: string | null;
 }): { subject: string; html: string; text: string } {
   const first = (p.name || '').trim().split(/\s+/)[0] || 'there';
   const appUrl = p.appUrl || PLAY_STORE_URL;
@@ -99,6 +100,7 @@ export function buildWelcomeEmail(p: {
     footerReason: "You're receiving this one-time email because you created a Regent Money account.",
     termsUrl: p.termsUrl,
     privacyUrl: p.privacyUrl,
+    supportEmail: p.supportEmail,
   });
 
   const text = [

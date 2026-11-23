@@ -4,7 +4,7 @@
 // Computes FIFO allocations, unallocated surplus credits, and contact/global summaries
 // on the fly with zero mutable state or drift.
 
-import {
+import type {
   Paise,
   DateString,
   Contact,
@@ -88,7 +88,13 @@ export const computeAllocations = (
   });
 
   // 2. Sort remaining loans and repayments chronologically for auto-FIFO
+  // Loans still expected back come first: a repayment goes to them before it touches a loan
+  // marked "won't come back" (else Kartik's ₹2,800 paid off old let-go loans, and his open
+  // ₹5,500 still showed ₹0 back).
   const sortedLoans = [...activeLoans].sort((a, b) => {
+    const letGoA = a.notExpectedBack ? 1 : 0;
+    const letGoB = b.notExpectedBack ? 1 : 0;
+    if (letGoA !== letGoB) return letGoA - letGoB;
     if (a.date !== b.date) return a.date.localeCompare(b.date);
     return a.createdAt - b.createdAt;
   });
@@ -198,12 +204,21 @@ export const computeContactSummary = (
   const lentResult = computeAllocations(lentLoans, lentRepayments, storedManualAllocations, today);
   const borrowResult = computeAllocations(borrowLoans, borrowRepayments, storedManualAllocations, today);
 
-  const totalLentPending = lentResult.computedLoans.reduce((sum, l) => sum + l.pendingAmount, 0);
+  // Loans marked "not expected back" still take repayments (if money does come), but what's
+  // left on them isn't counted as owed: it's reported separately.
+  const expected = (l: ComputedLoan) => !l.entry.notExpectedBack;
+  const totalLentPending = lentResult.computedLoans.filter(expected).reduce((sum, l) => sum + l.pendingAmount, 0);
+  const notExpectedPending = lentResult.computedLoans.filter((l) => !expected(l)).reduce((sum, l) => sum + l.pendingAmount, 0);
   const totalBorrowedPending = borrowResult.computedLoans.reduce((sum, l) => sum + l.pendingAmount, 0);
+  // Only loans still open: a loan that's fully paid off is history, not part of "You lent"
+  const openLent = lentResult.computedLoans.filter((l) => expected(l) && l.pendingAmount > 0);
+  const openBorrowed = borrowResult.computedLoans.filter((l) => l.pendingAmount > 0);
+  const lentTotal = openLent.reduce((sum, l) => sum + l.originalAmount, 0);
+  const borrowedTotal = openBorrowed.reduce((sum, l) => sum + l.originalAmount, 0);
   const unallocatedCredit = lentResult.unallocatedCredit + borrowResult.unallocatedCredit;
 
   const allOpenLoans = [
-    ...lentResult.computedLoans.filter((l) => l.pendingAmount > 0),
+    ...lentResult.computedLoans.filter((l) => l.pendingAmount > 0 && expected(l)),
     ...borrowResult.computedLoans.filter((l) => l.pendingAmount > 0),
   ];
 
@@ -226,6 +241,11 @@ export const computeContactSummary = (
     contact,
     totalLentPending,
     totalBorrowedPending,
+    notExpectedPending,
+    lentTotal,
+    lentRepaid: openLent.reduce((sum, l) => sum + l.allocatedAmount, 0),
+    borrowedTotal,
+    borrowedRepaid: openBorrowed.reduce((sum, l) => sum + l.allocatedAmount, 0),
     unallocatedCredit,
     netPosition: totalLentPending - totalBorrowedPending,
     openLoansCount: allOpenLoans.length,
@@ -263,11 +283,23 @@ export const computeGlobalMetrics = (
   let totalBorrowedPending: Paise = 0;
   let overdueCount = 0;
   let unsettledContactsCount = 0;
+  let totalNotExpected: Paise = 0;
+  let totalLentExpected: Paise = 0;
+  let totalLentRepaid: Paise = 0;
+  let totalBorrowedOpen: Paise = 0;
+  let totalBorrowedOpenRepaid: Paise = 0;
+  let lentToCount = 0;
 
   contacts.forEach((c) => {
     const summary = computeContactSummary(c, entries, storedManualAllocations, today);
     totalLentPending += summary.totalLentPending;
     totalBorrowedPending += summary.totalBorrowedPending;
+    totalNotExpected += summary.notExpectedPending;
+    totalLentExpected += summary.lentTotal;
+    totalLentRepaid += summary.lentRepaid;
+    totalBorrowedOpen += summary.borrowedTotal;
+    totalBorrowedOpenRepaid += summary.borrowedRepaid;
+    if (summary.totalLentPending > 0) lentToCount += 1;
 
     if (summary.totalLentPending > 0 || summary.totalBorrowedPending > 0) {
       unsettledContactsCount += 1;
@@ -291,10 +323,10 @@ export const computeGlobalMetrics = (
     const lentLoans = contactEntries.filter((e) => e.kind === 'LEND');
     const lentRepayments = contactEntries.filter((e) => e.kind === 'REPAY_RECEIVED' || e.kind === 'FORGIVE_LENT');
     const res = computeAllocations(lentLoans, lentRepayments, storedManualAllocations, today);
-    overdueCount += res.computedLoans.filter((l) => l.isOverdue).length;
+    overdueCount += res.computedLoans.filter((l) => l.isOverdue && !l.entry.notExpectedBack).length;
   });
 
-  const totalLentSettled = Math.max(0, totalLentGross - totalLentPending);
+  const totalLentSettled = Math.max(0, totalLentGross - totalLentPending - totalNotExpected);
   const totalBorrowedSettled = Math.max(0, totalBorrowedGross - totalBorrowedPending);
   const pendingConfirmations = pendingSettlements.filter((p) => p.status === 'pending').length;
 
@@ -305,10 +337,45 @@ export const computeGlobalMetrics = (
     totalBorrowedGross,
     totalBorrowedSettled,
     totalBorrowedPending,
+    totalNotExpected,
+    totalLentExpected,
+    totalLentRepaid,
+    totalBorrowedOpen,
+    totalBorrowedOpenRepaid,
+    lentToCount,
     netBalance: totalLentPending - totalBorrowedPending,
     unsettledContactsCount,
     attentionCount: overdueCount + pendingConfirmations,
   };
+};
+
+/**
+ * How much of each repayment went to loans marked "let go" (repayment entry id → paise).
+ * Net worth history uses it to leave let-go money out the same way today's value does.
+ */
+export const repaidToLetGoLoans = (
+  entries: PeerEntry[],
+  storedManualAllocations: StoredAllocation[] = [],
+  today: DateString = ''
+): Map<string, Paise> => {
+  const out = new Map<string, Paise>();
+  const byContact = new Map<string, PeerEntry[]>();
+  for (const e of entries) {
+    if (e.deletedAt) continue;
+    const list = byContact.get(e.contactId) || [];
+    list.push(e);
+    byContact.set(e.contactId, list);
+  }
+  byContact.forEach((list) => {
+    const loans = list.filter((e) => e.kind === 'LEND');
+    if (!loans.some((l) => l.notExpectedBack)) return;
+    const letGo = new Set(loans.filter((l) => l.notExpectedBack).map((l) => l.id));
+    const repayments = list.filter((e) => e.kind === 'REPAY_RECEIVED' || e.kind === 'FORGIVE_LENT');
+    computeAllocations(loans, repayments, storedManualAllocations, today).allocations.forEach((a) => {
+      if (letGo.has(a.loanEntryId)) out.set(a.repaymentEntryId, (out.get(a.repaymentEntryId) || 0) + a.amount);
+    });
+  });
+  return out;
 };
 
 /**

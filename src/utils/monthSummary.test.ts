@@ -129,3 +129,19 @@ test('monthSummary never pairs same-amount debit and credit as a transfer by its
   assert.strictEqual(res.out, 2700);
   assert.strictEqual(res.in, 2500);
 });
+
+test('monthSummary leaves out spending and income from switched-off accounts alike', () => {
+  const monthStart = 1000000;
+  const txs = [
+    { id: '1', amount: 700, type: 'debit', category: 'food', timestamp: monthStart + 10, bankProfileId: 'hdfc' },
+    { id: '2', amount: 400, type: 'debit', category: 'food', timestamp: monthStart + 20, bankProfileId: 'old_sbi' },
+    { id: '3', amount: 100, type: 'debit', category: 'food', timestamp: monthStart + 30 },
+  ];
+  const incomes = [
+    { id: 'i1', amount: 5000, timestamp: monthStart + 5, bankProfileId: 'hdfc' },
+    { id: 'i2', amount: 3000, timestamp: monthStart + 6, bankProfileId: 'old_sbi' },
+  ];
+  const res = monthSummary(txs, incomes, monthStart, new Set(['hdfc']), false, dummyGetColor);
+  assert.strictEqual(res.out, 800);
+  assert.strictEqual(res.in, 5000);
+});

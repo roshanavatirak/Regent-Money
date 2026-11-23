@@ -21,7 +21,7 @@
 // A recording is sent once, never stored, and deleted from the phone straight after.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, Pressable, ActivityIndicator, StyleSheet, BackHandler, Linking, AppState } from 'react-native';
+import { View, Text, Pressable, ActivityIndicator, StyleSheet, BackHandler, AppState } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -58,6 +58,7 @@ import {
   resolveDraftAccount,
 } from '../services/voiceEntryService';
 import { isLocalVoiceAvailable, startLocalVoice } from '../services/voiceRecognizer';
+import { useVoiceDiscovery } from '../features/voice/voiceDiscovery';
 
 const FOREST = '#0B3D2C';
 const LIME = '#B8F36B';
@@ -144,8 +145,8 @@ const PROBLEMS: Record<ProblemKind, ProblemCopy> = {
   mic_blocked: {
     icon: 'mic-off',
     title: 'The microphone is turned off for Regent',
-    body: 'Turn it on in Settings, under Permissions, then come back here.',
-    primary: 'Open Settings',
+    body: 'Your phone stopped showing the microphone prompt after it was denied. You can type the transaction instead.',
+    primary: 'Try again',
   },
   mic_failed: {
     icon: 'alert-circle',
@@ -162,6 +163,8 @@ export const VoiceEntryScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
   const { colors, isDark } = useTheme();
+  // Opening voice entry once is enough: the hints that point here stop showing.
+  useEffect(() => useVoiceDiscovery.getState().markUsed(), []);
 
   const recorder = useAudioRecorder(RECORDING_OPTIONS);
   const rec = useAudioRecorderState(recorder, 100);
@@ -421,7 +424,9 @@ export const VoiceEntryScreen: React.FC = () => {
       go('starting');
       try {
         let perm = await getRecordingPermissionsAsync();
-        if (!perm.granted && perm.canAskAgain) perm = await requestRecordingPermissionsAsync();
+        // Always ask with the system dialog in the app, even when the saved state says
+        // "can't ask again" (it can be wrong before the first ask on some phones)
+        if (!perm.granted) perm = await requestRecordingPermissionsAsync();
         if (!isCurrent(myRun)) return;
         if (!perm.granted) {
           fail(perm.canAskAgain ? 'mic_denied' : 'mic_blocked');
@@ -546,8 +551,7 @@ export const VoiceEntryScreen: React.FC = () => {
 
   const onPrimary = () => {
     const kind = problem?.kind;
-    if (kind === 'mic_blocked') Linking.openSettings().catch(() => {});
-    else if (kind === 'limit') typeInstead();
+    if (kind === 'limit') typeInstead();
     else if (kind === 'signed_out') close();
     else start();
   };
@@ -598,7 +602,7 @@ export const VoiceEntryScreen: React.FC = () => {
   const copy = problem ? PROBLEMS[problem.kind] : null;
   const shownMs = listening ? Math.max(0, elapsedMs) : 0;
   const secondsLeft = Math.ceil((MAX_RECORDING_MS - shownMs) / 1000);
-  const canType = problem && !['signed_out', 'limit', 'mic_denied', 'mic_blocked'].includes(problem.kind);
+  const canType = problem && !['signed_out', 'limit', 'mic_denied'].includes(problem.kind);
 
   return (
     <View style={{ flex: 1, backgroundColor: pageBg, paddingTop: Math.max(insets.top, 12) + 4 }}>

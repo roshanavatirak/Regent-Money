@@ -75,6 +75,16 @@ export class AdminController {
     return this.adminService.setEmailFallback(req.user.id, req.user.role, dto?.enabled);
   }
 
+  @Get('emails/contacts')
+  getContactEmails() {
+    return this.adminService.getContactEmails();
+  }
+
+  @Post('emails/contacts')
+  setContactEmails(@Req() req: any, @Body() dto: Record<string, unknown>) {
+    return this.adminService.setContactEmails(req.user.id, req.user.role, dto);
+  }
+
   @Post('emails/test')
   sendTestEmail(@Req() req: any, @Body() dto: { type: 'primary' | 'broadcast'; email?: string }) {
     return this.adminService.sendTestEmail(req.user.id, req.user.role, dto.type, dto.email);

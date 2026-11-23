@@ -12,8 +12,6 @@ import {
   RefreshControl,
   Image,
   LayoutAnimation,
-  Platform,
-  UIManager,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
@@ -33,10 +31,6 @@ import {
   LIME,
   CORAL,
 } from './adminTheme';
-
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
 
 type QuickFilter = 'all' | 'active' | 'suspended' | 'admins';
 type SortKey = 'newest' | 'oldest' | 'name' | 'email';

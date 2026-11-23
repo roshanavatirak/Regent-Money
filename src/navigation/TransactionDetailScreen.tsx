@@ -1,7 +1,7 @@
 // src/navigation/TransactionDetailScreen.tsx
 //
 // One transaction at a glance: who, how much, when, which account.
-// Edit the amount, category or note in place. Fits on one screen, no scrolling.
+// Edit the amount, category, who it was with, or the note in place. Fits on one screen, no scrolling.
 
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
@@ -47,7 +47,19 @@ import { getCashProfile } from '../services/cashService';
 import { getCategory } from '../constants/categories';
 import { tagLearningService } from '../services/tagLearningService';
 import { AddBankModal } from './AddBankModal';
-import bankNamesJson from './banknames.json';
+import { PersonPickerSheet, Avatar } from '../components/PersonPickerSheet';
+import { LinkSimilarSheet, type SimilarItem } from '../components/LinkSimilarSheet';
+import {
+  useCounterpartyIndex,
+  getCounterpartyIndex,
+  linkRowToCounterparty,
+  linkRowsToCounterparty,
+  unlinkRowCounterparty,
+  createCounterparty,
+  allLedgerRows,
+} from '../services/counterpartyService';
+import { resolveCounterparty, findSimilarRows, countRecognisedRows, normalizeName } from '../services/counterpartyResolver';
+import { getBankCode } from '../constants/bankBrand';
 
 const BACKEND_URL = getBackendUrl();
 const FOREST = '#0B3D2C';
@@ -94,13 +106,6 @@ const formatWhen = (ts?: number) => {
   return format(d, sameYear ? 'd MMM, HH:mm' : 'd MMM yyyy, HH:mm');
 };
 
-const getBankCode = (bankName?: string) => {
-  if (!bankName) return '';
-  const entry = Object.entries(bankNamesJson as Record<string, string>).find(
-    ([, name]) => name.toLowerCase() === bankName.toLowerCase()
-  );
-  return entry ? entry[0] : '';
-};
 
 const sanitizeAmount = (text: string) => {
   let t = text.replace(/[^0-9.]/g, '');
@@ -194,6 +199,8 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
 
   const [amountStr, setAmountStr] = useState(originalAmount ? String(originalAmount) : '');
   const [category, setCategory] = useState(originalCategory);
+  // Optional return date picked when tagging Lent or Borrowed (undefined = not touched).
+  const [loanDue, setLoanDue] = useState<string | null | undefined>(undefined);
   const [note, setNote] = useState(originalNote);
   const [timestamp, setTimestamp] = useState<number>(originalTimestamp);
   const [rememberRule, setRememberRule] = useState<boolean>(initialHasActiveRule);
@@ -257,6 +264,16 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
     return () => sub.remove();
   }, [props.onBack, route?.params?.returnToBankId]);
 
+  // Who it was with. The stored row (not the route copy) carries the SMS key and any link.
+  const ledger: 'transaction' | 'income' = transaction?.type === 'credit' ? 'income' : 'transaction';
+  const storedTx = useTransactionStore((s) => (ledger === 'transaction' ? s.transactions.find((t: any) => t.id === transaction?.id) : undefined));
+  const storedInc = useIncomeStore((s) => (ledger === 'income' ? s.incomeRecords.find((r) => r.id === transaction?.id) : undefined));
+  const contacts = usePeerStore((s) => s.contacts);
+  const counterpartyIndex = useCounterpartyIndex();
+  const [whoSheet, setWhoSheet] = useState(false);
+  const [similar, setSimilar] = useState<{ contactId: string; items: SimilarItem[]; recognised: number } | null>(null);
+  const [linkNote, setLinkNote] = useState('');
+
   if (!transaction) {
     handleGoBack();
     return null;
@@ -299,6 +316,81 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
   const line = isDark ? colors.border : '#E1E9E4';
   const red = isDark ? '#FFA8A8' : '#C92A2A';
 
+  const row: any = { ...transaction, ...(storedTx || storedInc || {}) };
+  const who = resolveCounterparty(row, counterpartyIndex);
+  const whoContact = who ? contacts.find((c) => c.id === who.contactId) : undefined;
+  const printedName: string = row.merchant ?? row.source ?? '';
+  const keyText: string | undefined = row.counterpartyKey
+    ? String(row.counterpartyKey).startsWith('vpa:')
+      ? String(row.counterpartyKey).slice(4)
+      : `Account ••${String(row.counterpartyKey).slice(5)}`
+    : undefined;
+  // One name for the payment: the person or shop it belongs to, else what the note says.
+  // Only shown: the stored name stays as the bank printed it, so "Not Kartik" can still undo a
+  // wrong match (the bank's spelling is how the payment is told apart).
+  const shownName = whoContact?.displayName || niceName(note.trim() || transaction.merchant);
+
+  /** Link this payment, then offer other payments that look like the same person. */
+  const linkTo = (contactId: string) => {
+    try {
+      linkRowToCounterparty(row, ledger, contactId);
+    } catch (e: any) {
+      setErrorText(e?.message || 'Could not link this payment.');
+      return;
+    }
+    const contact = usePeerStore.getState().contacts.find((c) => c.id === contactId);
+    if (!contact) return;
+    syncService.flushOutbox().catch(() => {});
+    const index = getCounterpartyIndex();
+    const others = allLedgerRows().filter((r) => r.id !== row.id);
+    const recognised = countRecognisedRows(contactId, others, index);
+    const items = findSimilarRows(contact, others, index) as SimilarItem[];
+    if (items.length > 0) {
+      setLinkNote('');
+      // Let the picker finish closing before the next sheet slides up
+      setTimeout(() => setSimilar({ contactId, items, recognised }), 350);
+    } else {
+      setLinkNote(
+        recognised > 0
+          ? `${recognised} other payment${recognised > 1 ? 's' : ''} now show ${contact.displayName} too.`
+          : `Their next payment will show ${contact.displayName}.`,
+      );
+    }
+  };
+
+  /**
+   * Borrow & Lend side of a save. A loan goes to the person this payment is known to be with,
+   * not to whoever matches the printed name. When no one was known yet, the payment is linked
+   * to the person the loan was filed under, so their next payment is recognised.
+   * "Always tag" also remembers the category as this person's usual one.
+   */
+  const syncPeerLedger = (dateStr: string, payeeName: string) => {
+    const entry = usePeerStore.getState().syncWithTransactionTag(
+      transaction.id,
+      category,
+      parsedAmount,
+      dateStr,
+      payeeName,
+      {
+        ...(loanDue !== undefined ? { dueDate: loanDue } : {}),
+        ...(whoContact ? { contactId: whoContact.id } : {}),
+      },
+    );
+    const filedUnder = entry ? usePeerStore.getState().contacts.find((c) => c.id === entry.contactId) : undefined;
+    // Not the catch-all "Friend" a loan with no name goes to: that would claim strangers' UPI IDs
+    if (entry && !whoContact && filedUnder && normalizeName(filedUnder.displayName)) {
+      try {
+        linkRowToCounterparty(row, ledger, entry.contactId);
+      } catch {}
+    }
+    const usual = whoContact ?? (entry ? usePeerStore.getState().contacts.find((c) => c.id === entry.contactId) : undefined);
+    if (usual && rememberRule && usual.defaultTag !== category) {
+      usePeerStore.getState().updateContact(usual.id, { defaultTag: category });
+    } else if (usual && !rememberRule && initialHasActiveRule && usual.defaultTag === category) {
+      usePeerStore.getState().updateContact(usual.id, { defaultTag: undefined });
+    }
+  };
+
   /* ---------------- Actions ---------------- */
 
   const save = async () => {
@@ -333,21 +425,18 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
           },
         });
 
-        // Update local state immediately
-        const isPeer = category.startsWith('peer_');
+        // Update local state immediately. A credit tagged as a loan or repayment stays in the
+        // list with its new category (as it comes back from the server): removing it made the
+        // Borrow & Lend reconcile think the payment was deleted and drop the entry just made.
         if (isCredit) {
-          if (isPeer) {
-            useIncomeStore.getState().removeIncomeRecordState(transaction.id);
-          } else {
-            useIncomeStore.getState().updateIncomeRecordState(transaction.id, {
-              amount: parsedAmount,
-              category,
-              merchant: payeeName,
-              source: payeeName,
-              timestamp,
-              bankProfileId: selectedBankProfileId || null,
-            });
-          }
+          useIncomeStore.getState().updateIncomeRecordState(transaction.id, {
+            amount: parsedAmount,
+            category,
+            merchant: payeeName,
+            source: payeeName,
+            timestamp,
+            bankProfileId: selectedBankProfileId || null,
+          });
         } else {
           useTransactionStore.getState().updateTransactionState(transaction.id, {
             amount: parsedAmount,
@@ -359,13 +448,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
         }
 
         const dateStr = format(new Date(timestamp), 'yyyy-MM-dd');
-        usePeerStore.getState().syncWithTransactionTag(
-          transaction.id,
-          category,
-          parsedAmount,
-          dateStr,
-          payeeName,
-        );
+        syncPeerLedger(dateStr, payeeName);
 
         if (payeeName && rememberRule) {
           tagLearningService.saveLearnedTag(payeeName, category).catch(() => {});
@@ -421,19 +504,15 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
       }
 
       const payeeName = note.trim() || transaction.merchant || (transaction as any).source || (category.startsWith('peer_') ? 'Friend' : category);
-      const isPeer = category.startsWith('peer_');
+      // Kept with its new category, as above
       if (isCredit) {
-        if (isPeer) {
-          useIncomeStore.getState().removeIncomeRecordState(transaction.id);
-        } else {
-          useIncomeStore.getState().updateIncomeRecordState(transaction.id, {
-            amount: parsedAmount,
-            category,
-            merchant: payeeName,
-            source: payeeName,
-            timestamp,
-          });
-        }
+        useIncomeStore.getState().updateIncomeRecordState(transaction.id, {
+          amount: parsedAmount,
+          category,
+          merchant: payeeName,
+          source: payeeName,
+          timestamp,
+        });
       } else {
         useTransactionStore.getState().updateTransactionState(transaction.id, {
           amount: parsedAmount,
@@ -445,13 +524,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
 
       // Sync with Peer Ledger
       const dateStr = format(new Date(timestamp), 'yyyy-MM-dd');
-      usePeerStore.getState().syncWithTransactionTag(
-        transaction.id,
-        category,
-        parsedAmount,
-        dateStr,
-        payeeName
-      );
+      syncPeerLedger(dateStr, payeeName);
 
       if (payeeName && rememberRule) {
         await tagLearningService.saveLearnedTag(payeeName, category).catch(() => {});
@@ -586,7 +659,7 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
           </Animated.View>
 
           <Text style={[styles.payee, { color: ink }]} numberOfLines={1}>
-            {payee}
+            {shownName || payee}
           </Text>
 
           {/* Amount, tap to edit */}
@@ -718,28 +791,56 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
             <Feather name="chevron-right" size={16} color={muted} />
           </Pressable>
 
-          <View style={[styles.row, { borderBottomColor: line, borderBottomWidth: StyleSheet.hairlineWidth }]}>
-            <View style={[styles.noteIcon, { backgroundColor: pageBg }]}>
-              <Feather name="edit-3" size={16} color={muted} />
+          {/* Their payments usually get one category ("Always tag" on an earlier one) */}
+          {whoContact?.defaultTag && getCategory(whoContact.defaultTag).id !== getCategory(category).id ? (
+            <View style={[styles.row, { borderBottomColor: line, borderBottomWidth: StyleSheet.hairlineWidth, minHeight: 52 }]}>
+              <CategoryIcon category={whoContact.defaultTag} size={30} />
+              <Text style={[styles.ruleText, { color: ink }]} numberOfLines={2}>
+                {whoContact.displayName} is usually {getCategory(whoContact.defaultTag).label}
+              </Text>
+              <Pressable
+                onPress={() => {
+                  setCategory(getCategory(whoContact.defaultTag!).id);
+                  setRememberRule(true);
+                }}
+                hitSlop={8}
+                style={({ pressed }) => [styles.useChip, { backgroundColor: isDark ? LIME : FOREST }, pressed && { opacity: 0.8 }]}
+                accessibilityRole="button"
+                accessibilityLabel={`Use ${getCategory(whoContact.defaultTag).label}`}
+              >
+                <Text style={[styles.useChipText, { color: isDark ? FOREST : LIME }]}>Use</Text>
+              </Pressable>
             </View>
+          ) : null}
+
+          {/* The payment's name: pick a person or shop, or type a new one */}
+          <Pressable
+            onPress={() => setWhoSheet(true)}
+            style={({ pressed }) => [styles.row, { borderBottomColor: line, borderBottomWidth: StyleSheet.hairlineWidth }, pressed && { opacity: 0.7 }]}
+            accessibilityRole="button"
+            accessibilityLabel={shownName ? `Note: ${shownName}. Change` : 'Add a note'}
+          >
+            {whoContact ? (
+              <Avatar name={whoContact.displayName} kind={whoContact.kind} size={38} />
+            ) : (
+              <View style={[styles.noteIcon, { backgroundColor: pageBg }]}>
+                <Feather name="edit-3" size={16} color={muted} />
+              </View>
+            )}
             <View style={{ flex: 1 }}>
               <Text style={[styles.rowLabel, { color: muted }]}>Note</Text>
-              <TextInput
-                value={note}
-                onChangeText={setNote}
-                placeholder={isCredit ? 'Who sent it' : 'Where you paid'}
-                placeholderTextColor={muted}
-                maxLength={50}
-                style={[styles.noteInput, { color: ink }]}
-                accessibilityLabel="Note"
-              />
+              <Text style={[styles.rowValue, { color: shownName ? ink : muted }]} numberOfLines={1}>
+                {shownName || (isCredit ? 'Who sent it' : 'Where you paid')}
+              </Text>
             </View>
-          </View>
+            <Text style={[styles.rowAction, { color: muted }]}>Change</Text>
+            <Feather name="chevron-right" size={16} color={muted} />
+          </Pressable>
 
-          {note.trim() || transaction.merchant ? (
+          {shownName ? (
             <View style={styles.row}>
               <Text style={[styles.ruleText, { color: ink }]} numberOfLines={2}>
-                Always tag {firstWord(niceName(note.trim() || transaction.merchant))} as {catLabel}
+                Always tag {firstWord(shownName)} as {catLabel}
               </Text>
               <Switch
                 value={rememberRule}
@@ -751,6 +852,13 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
             </View>
           ) : null}
         </Animated.View>
+
+        {linkNote ? (
+          <Animated.View entering={FadeIn.duration(200)} style={styles.errorRow}>
+            <Feather name="check-circle" size={14} color={isDark ? LIME : '#0B6B3A'} />
+            <Text style={[styles.errorText, { color: muted }]}>{linkNote}</Text>
+          </Animated.View>
+        ) : null}
 
         {errorText ? (
           <Animated.View entering={FadeIn.duration(200)} style={styles.errorRow}>
@@ -800,7 +908,8 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
         visible={tagSheet}
         onClose={() => setTagSheet(false)}
         selectedTag={category}
-        onSelectTag={(tag, updateRule) => {
+        onSelectTag={(tag, updateRule, extra) => {
+          setLoanDue(extra ? extra.dueDate : undefined);
           setCategory(tag);
           if (updateRule !== undefined) {
             setRememberRule(Boolean(updateRule));
@@ -811,10 +920,56 @@ export const TransactionDetailScreen: React.FC<TransactionDetailScreenProps> = (
             setRememberRule(Boolean(matchesRule));
           }
         }}
-        merchantName={niceName(note.trim() || transaction.merchant) || undefined}
+        merchantName={shownName || undefined}
         transactionType={transaction.type}
         isDark={isDark}
         colors={colors}
+      />
+
+      <PersonPickerSheet
+        visible={whoSheet}
+        onClose={() => setWhoSheet(false)}
+        title={isCredit ? 'Who sent it?' : 'Where did you pay?'}
+        printedName={printedName}
+        printedDetail={keyText}
+        currentId={whoContact?.id ?? null}
+        defaultKind={isCredit || row.counterpartyKey ? 'person' : 'merchant'}
+        onPick={(c) => linkTo(c.id)}
+        onCreate={(name, kind) => {
+          try {
+            linkTo(createCounterparty(name, kind).id);
+          } catch (e: any) {
+            setErrorText(e?.message || 'Could not add them.');
+          }
+        }}
+        onUnlink={
+          whoContact
+            ? () => {
+                unlinkRowCounterparty(row, ledger, whoContact.id);
+                syncService.flushOutbox().catch(() => {});
+                setLinkNote('Back to the previous name.');
+              }
+            : undefined
+        }
+      />
+
+      <LinkSimilarSheet
+        visible={!!similar}
+        contact={similar ? contacts.find((c) => c.id === similar.contactId) ?? null : null}
+        items={similar?.items ?? []}
+        recognisedCount={similar?.recognised ?? 0}
+        onClose={() => setSimilar(null)}
+        onLink={(items) => {
+          if (!similar) return;
+          try {
+            linkRowsToCounterparty(items.map((it) => ({ row: it, ledger: it.ledger })), similar.contactId);
+            syncService.flushOutbox().catch(() => {});
+            const name = contacts.find((c) => c.id === similar.contactId)?.displayName || 'them';
+            setLinkNote(`Linked ${items.length} more payment${items.length > 1 ? 's' : ''} to ${name}.`);
+          } catch (e: any) {
+            setErrorText(e?.message || 'Could not link those payments.');
+          }
+        }}
       />
 
       <DateTimePickerSheet
@@ -986,6 +1141,8 @@ const styles = StyleSheet.create({
   noteIcon: { width: 38, height: 38, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
   noteInput: { fontSize: 15, fontWeight: '600', paddingVertical: 0, marginTop: 1, ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : {}) },
   ruleText: { flex: 1, fontSize: 14, fontWeight: '600', marginRight: 12 },
+  useChip: { height: 32, paddingHorizontal: 16, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  useChipText: { fontSize: 13.5, fontWeight: '700' },
 
   errorRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 20, marginTop: 12 },
   errorText: { fontSize: 13, fontWeight: '600', flex: 1 },

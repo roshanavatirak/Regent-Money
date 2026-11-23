@@ -292,7 +292,7 @@ export const smsCatchupService = {
         const existingTransactions = useTransactionStore.getState().transactions || [];
         const localLedger: any[] =
           parsed.type === 'credit' ? useIncomeStore.getState().incomeRecords || [] : existingTransactions;
-        const hasSameIdentity = localLedger.some((row: any) => {
+        const sameRow = localLedger.find((row: any) => {
           const rowSmsId = row.smsId ?? row.sms_id;
           const rowContentId = row.contentId ?? row.content_id;
           if (parsed.referenceId && (rowSmsId === `ref_${parsed.referenceId}` || row.referenceId === parsed.referenceId)) {
@@ -304,7 +304,9 @@ export const smsCatchupService = {
           // Same text at a different sent second is a second payment: leave that call to the server
           return textMatches && Math.abs(Number(row.timestamp || 0) - msgTimestamp) < 1000;
         });
-        if (hasSameIdentity) continue;
+        // Already recorded: skip, unless the stored row predates counterparty keys and this SMS
+        // has one. Sent once more, the server recognises it as the same SMS and only adds the key.
+        if (sameRow && !(parsed.counterpartyKey && !sameRow.counterpartyKey)) continue;
 
         // Looks-alike check, used only to avoid repeating a budget nudge for a spend already shown
         const normIncoming = (parsed.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -338,6 +340,7 @@ export const smsCatchupService = {
           referenceId: parsed.referenceId,
           smsId: candidateSmsId,
           contentId,
+          ...(parsed.counterpartyKey ? { counterpartyKey: parsed.counterpartyKey } : {}),
         });
 
         if (!isTxExisting) {
@@ -404,6 +407,12 @@ export const smsCatchupService = {
           let res = await post('/sync/sms-catchup');
           if (res.status === 404) {
             res = await post('/sync/ocr-sync');
+          }
+          // A server older than counterparty keys rejects the unknown field: send again without it
+          if (res.status === 400 && txList.some((t: any) => t.counterpartyKey)) {
+            bodyPayload.transactions = txList.map(({ counterpartyKey, ...t }: any) => t);
+            res = await post('/sync/sms-catchup');
+            if (res.status === 404) res = await post('/sync/ocr-sync');
           }
 
           if (res.ok) {

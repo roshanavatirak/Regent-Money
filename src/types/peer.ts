@@ -7,12 +7,40 @@
 export type Paise = number;         // Integer paise: ₹1,500.00 = 150000
 export type DateString = string;    // 'YYYY-MM-DD' calendar date (e.g., '2026-10-25')
 
+/**
+ * One way a bank has shown a person or merchant. Strongest first:
+ * - vpa: UPI ID ("rohit.c@okaxis"). One person, so a match links on its own.
+ * - acct: last 3–4 digits of their account ("4821"). Links on its own.
+ * - phone: E.164 number. Links on its own.
+ * - name: as the bank printed it, normalised ("rohit chunarkar"). Links only when the user
+ *   confirmed it (source 'user') or it matched the same person twice, and never when two
+ *   people share the name.
+ */
+export type CounterpartyKeyType = 'vpa' | 'acct' | 'phone' | 'name';
+
+export interface CounterpartyKey {
+  type: CounterpartyKeyType;
+  value: string;                    // Normalised (see services/counterpartyResolver.ts)
+  source: 'auto' | 'user';          // 'user': the user linked a transaction carrying it
+  hits?: number;                    // Transactions seen with this key
+  lastSeen?: number;
+}
+
 /** Contact represents a friend, family member, or counterparty */
 export interface Contact {
   id: string;
   displayName: string;              // Canonical display name: "Gitabai"
   aliases: string[];                // Cleaned aliases: ["Gitabai/Paytm", "Gitabai S"]
   upiIds: string[];                 // Normalized VPAs: ["gitabai@paytm"]
+  /** A person (default) or a shop/merchant. Borrow & Lend shows people only. */
+  kind?: 'person' | 'merchant';
+  /**
+   * Every way the bank has shown them, for recognising their transactions. `aliases`,
+   * `upiIds` and `phoneE164` still count as keys (older app versions only write those).
+   */
+  keys?: CounterpartyKey[];
+  /** Category this person or shop's payments usually get ("Always tag" on their payment). */
+  defaultTag?: string;
   phoneE164?: string;               // "+919876543210" (selected via OS single-contact picker)
   avatarColor?: string;
   notes?: string;
@@ -41,6 +69,11 @@ export interface PeerEntry {
   dueDate?: DateString;             // Optional due date: '2026-11-01'
   note?: string;                    // "Trip share", "Emergency rent"
   editedFromId?: string;            // Audit trail versioning
+  /**
+   * LEND only: the user doesn't expect this money back. It stays in the list (and in
+   * history) but is not counted as owed to you, in Borrow & Lend totals or net worth.
+   */
+  notExpectedBack?: boolean;
   deletedAt?: number;               // Soft-delete timestamp (undefined if active)
   createdAt: number;
   updatedAt: number;
@@ -94,6 +127,11 @@ export interface ContactLedgerSummary {
   contact: Contact;
   totalLentPending: Paise;
   totalBorrowedPending: Paise;
+  notExpectedPending: Paise;        // Lent, marked "not expected back": shown, not counted as owed
+  lentTotal: Paise;                 // Lent on loans still open (settled and let-go loans left out)
+  lentRepaid: Paise;                // Of lentTotal, how much came back (lentTotal - totalLentPending)
+  borrowedTotal: Paise;             // Borrowed on loans still open
+  borrowedRepaid: Paise;            // Of borrowedTotal, how much you paid back
   unallocatedCredit: Paise;         // Surplus repayments waiting for future loans
   netPosition: Paise;               // totalLentPending - totalBorrowedPending (+ve = owes you, -ve = you owe)
   openLoansCount: number;
@@ -109,6 +147,12 @@ export interface GlobalPeerMetrics {
   totalBorrowedGross: Paise;        // Lifetime borrowed (expandable history)
   totalBorrowedSettled: Paise;      // Lifetime repaid
   totalBorrowedPending: Paise;      // CURRENT PENDING (Hero)
+  totalNotExpected: Paise;          // Lent but marked "not expected back": listed, not counted
+  totalLentExpected: Paise;         // Lent on loans still open (sum of lentTotal)
+  totalLentRepaid: Paise;           // Of that, paid back (totalLentExpected - totalLentPending)
+  totalBorrowedOpen: Paise;         // Borrowed on loans still open
+  totalBorrowedOpenRepaid: Paise;   // Of that, paid back
+  lentToCount: number;              // People who still owe you
   netBalance: Paise;                // totalLentPending - totalBorrowedPending
   unsettledContactsCount: number;
   attentionCount: number;           // Overdue loans + unconfirmed settlements

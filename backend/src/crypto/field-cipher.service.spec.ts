@@ -63,7 +63,7 @@ describe('FieldCipherService (Repository Level Integration)', () => {
           return Promise.resolve(dbTransactions.filter((r) => r.enc_amount == null).slice(0, limit));
         }
         if (clean.includes('UPDATE finance.transactions SET enc_amount = $2')) {
-          const [id, encAmount, encMerchant, encNote, merchantIdx, rowVersion, expectedVer] = params;
+          const [id, encAmount, encMerchant, encNote, merchantIdx, rowVersion, expectedVer, encCounterparty] = params;
           const row = dbTransactions.find((r) => r.id === id && String(r.row_version) === String(expectedVer));
           if (row) {
             row.enc_amount = encAmount;
@@ -71,17 +71,19 @@ describe('FieldCipherService (Repository Level Integration)', () => {
             row.enc_note = encNote;
             row.merchant_idx = merchantIdx;
             row.row_version = BigInt(rowVersion);
+            if (params.length > 7) row.enc_counterparty = encCounterparty;
             return Promise.resolve([{ '?column?': 1 }]);
           }
           return Promise.resolve([]);
         }
-        if (clean.includes('SELECT id, amount, merchant, note, enc_amount, enc_merchant, enc_note, row_version FROM finance.transactions WHERE user_id = $1')) {
+        if (clean.includes('SELECT id, amount, merchant, note, enc_amount, enc_merchant, enc_note, enc_counterparty, row_version FROM finance.transactions WHERE user_id = $1')) {
           return Promise.resolve(dbTransactions.filter((r) => r.user_id === params[0] && r.enc_amount != null));
         }
         if (clean.includes('get_byte(enc_amount, 4)')) {
           const [userId, targetVer] = params;
+          const onVer = (env?: Buffer | null) => !!env && env.readUInt32BE(4) === targetVer;
           const foundTx = dbTransactions.some(
-            (r) => r.user_id === userId && r.enc_amount && r.enc_amount.readUInt32BE(4) === targetVer,
+            (r) => r.user_id === userId && (onVer(r.enc_amount) || onVer(r.enc_counterparty)),
           );
           return Promise.resolve(foundTx ? [{ '?column?': 1 }] : []);
         }
@@ -243,6 +245,43 @@ describe('FieldCipherService (Repository Level Integration)', () => {
     const decrypted = await service.decryptTransactionFields(testUserId, tx);
     expect(decrypted.amount).toBe(550);
     expect(decrypted.merchant).toBe('Uber Auto');
+  });
+
+  it('encrypts the counterparty key per row; an unreadable one reads as missing, never throws', async () => {
+    const env = await service.encryptCounterparty(testUserId, 'transactions', 'tx_cp_001', 'vpa:rohit.c@okaxis');
+    expect(env.toString('utf8')).not.toContain('rohit');
+    expect(await service.decryptCounterparty(testUserId, 'transactions', 'tx_cp_001', env)).toBe('vpa:rohit.c@okaxis');
+    // Bound to its row and table: copying it elsewhere doesn't decrypt
+    expect(await service.decryptCounterparty(testUserId, 'transactions', 'tx_cp_002', env)).toBeUndefined();
+    expect(await service.decryptCounterparty(testUserId, 'income', 'tx_cp_001', env)).toBeUndefined();
+    expect(await service.decryptCounterparty(testUserId, 'transactions', 'tx_cp_001', null)).toBeUndefined();
+  });
+
+  it('sweeps a counterparty key on an old key version even when the amount is already current', async () => {
+    const v1Counterparty = await service.encryptCounterparty(testUserId, 'transactions', 'tx_rotate_cp', 'acct:4821');
+    expect(v1Counterparty.readUInt32BE(4)).toBe(1);
+    await service.rotateUserKey(testUserId);
+
+    // The row was edited after the rotation: amount on v2, counterparty still on v1
+    const v2Fields = await service.encryptTransactionFields(testUserId, 'tx_rotate_cp', { amount: 900, merchant: 'Transfer XX4821' });
+    expect(v2Fields.encAmount.readUInt32BE(4)).toBe(2);
+    dbTransactions.push({
+      id: 'tx_rotate_cp',
+      user_id: testUserId,
+      enc_amount: v2Fields.encAmount,
+      enc_merchant: v2Fields.encMerchant,
+      enc_note: null,
+      enc_counterparty: v1Counterparty,
+      row_version: 1n,
+    });
+
+    const result = await service.sweepUserKeyRotation(testUserId);
+    expect(result.sweptTransactions).toBe(1);
+    const row = dbTransactions.find((r) => r.id === 'tx_rotate_cp');
+    expect(row.enc_counterparty.readUInt32BE(4)).toBe(2);
+    expect(await service.decryptCounterparty(testUserId, 'transactions', 'tx_rotate_cp', row.enc_counterparty)).toBe('acct:4821');
+    // Nothing is left on v1, so it is shredded only now that the counterparty moved off it
+    expect(savedKeys.find((k) => k.keyVersion === 1)?.status).toBe('destroyed');
   });
 
   it('computes blind index for merchant search queries', async () => {

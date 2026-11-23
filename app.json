@@ -3,12 +3,13 @@
     "name": "Regent Money",
     "slug": "regent-money",
     "scheme": "regentmoney",
-    "version": "1.0.65",
+    "version": "1.0.67",
+    "runtimeVersion": "1.0.67",
     "orientation": "default",
     "icon": "./assets/appicon.png",
     "notification": {
       "icon": "./assets/notification-icon.png",
-      "color": "#10B981"
+      "color": "#0B3D2C"
     },
     "userInterfaceStyle": "light",
     "splash": {
@@ -46,7 +47,7 @@
       ],
       "predictiveBackGestureEnabled": false,
       "package": "com.regentmoney",
-      "versionCode": 150,
+      "versionCode": 152,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#04190F"
@@ -56,6 +57,12 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/9dfdd6a4-7f59-4983-8722-0eaa4eb83e78",
+      "enabled": true,
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
     },
     "extra": {
       "eas": {

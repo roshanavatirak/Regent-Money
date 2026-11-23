@@ -443,6 +443,9 @@ export const syncService = {
           smsId: t.smsId ?? t.sms_id,
           isAnomaly: t.isAnomaly ?? t.is_anomaly,
           status: t.status,
+          // Who it was with: key from the SMS, and the person/merchant the user linked it to
+          counterpartyKey: t.counterpartyKey ?? undefined,
+          counterpartyId: t.counterpartyId ?? t.counterparty_id ?? undefined,
         });
       }
 
@@ -463,7 +466,15 @@ export const syncService = {
       );
       useTransactionStore.getState().setTransactions(finalTxs);
 
-      // Reconcile Borrow & Lend ledger with synced transactions (e.g. Lent to friend)
+      // Borrow & Lend: bring in the server copy first (after a sign-in this restores repayments,
+      // return dates and "won't come back" marks), then reconcile with synced transactions.
+      try {
+        const { syncPeerLedger, startPeerLedgerAutoSync } = require('./peerSyncService');
+        startPeerLedgerAutoSync();
+        await syncPeerLedger();
+      } catch (peerSyncErr) {
+        console.warn('[Sync] Borrow & Lend server sync notice:', peerSyncErr);
+      }
       try {
         const { usePeerStore } = require('../store/peerStore');
         usePeerStore.getState().reconcileWithTransactions(finalTxs);
@@ -538,6 +549,8 @@ export const syncService = {
         bankProfileId: inc.bankProfileId ?? inc.bank_profile_id ?? null,
         updatedAt: inc.updatedAt ? Number(inc.updatedAt) : undefined,
         type: 'credit' as const,
+        counterpartyKey: inc.counterpartyKey ?? undefined,
+        counterpartyId: inc.counterpartyId ?? inc.counterparty_id ?? undefined,
       }));
 
       // Preserve local pending offline income records not yet reflected on the server

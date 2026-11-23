@@ -6,6 +6,7 @@ import { FeedbackService } from './feedback.service';
 import { Feedback } from './entities/feedback.entity';
 import { AuthModule } from '../auth/auth.module';
 import { AdminModule } from '../admin/admin.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import { AdminModule } from '../admin/admin.module';
     ConfigModule,
     AuthModule,
     AdminModule,
+    NotificationsModule,
   ],
   controllers: [FeedbackController],
   providers: [FeedbackService],

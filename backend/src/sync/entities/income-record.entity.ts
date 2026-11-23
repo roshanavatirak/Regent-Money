@@ -64,6 +64,14 @@ export class IncomeRecord {
   @Column({ name: 'source_idx', type: 'bytea', nullable: true })
   sourceIdx?: Buffer | null;
 
+  /** Who it was with, from the bank SMS ("vpa:rohit.c@okaxis" / "acct:4821"), encrypted. */
+  @Column({ name: 'enc_counterparty', type: 'bytea', nullable: true })
+  encCounterparty?: Buffer | null;
+
+  /** The person or merchant the user linked this to on the phone (opaque id). */
+  @Column({ name: 'counterparty_id', type: 'text', nullable: true })
+  counterpartyId?: string | null;
+
   @Column({ name: 'row_version', type: 'bigint', default: 1, transformer: {
     to: (value: bigint | number) => value != null ? String(value) : '1',
     from: (value: string | number) => value != null ? BigInt(value) : 1n

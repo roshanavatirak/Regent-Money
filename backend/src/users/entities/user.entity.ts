@@ -71,6 +71,21 @@ export class User {
   @Column({ name: 'income_sources_count', type: 'int', default: 1, nullable: true })
   incomeSourcesCount?: number | null;
 
+  /** Day salary usually comes, 1–31 (31 = month end). 0 = not fixed. Null = not set. */
+  @Column({ name: 'salary_day', type: 'smallint', nullable: true })
+  salaryDay?: number | null;
+
+  /**
+   * Weekly / every 2 weeks / irregular pay, or a second monthly salary, as JSON:
+   * { kind, weekday?, anchor?, secondPayday?, secondLabel? }. Null = monthly on salaryDay.
+   */
+  @Column({ name: 'pay_schedule', type: 'text', nullable: true })
+  paySchedule?: string | null;
+
+  /** Yearly costs and "Salary received" marks as JSON (see users/money-cycle-data.ts). */
+  @Column({ name: 'money_cycle_data', type: 'text', nullable: true })
+  moneyCycleData?: string | null;
+
   @Column({ name: 'terms_accepted', type: 'boolean', default: false, nullable: true })
   termsAccepted?: boolean;
 

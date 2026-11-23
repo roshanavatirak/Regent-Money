@@ -38,6 +38,9 @@ import { getCategory } from '../constants/categories';
 import { BankIcon } from '../components/BankIcon';
 import { isCashProfile } from '../services/cashService';
 import { DateTimePickerSheet } from '../components/DateTimePickerSheet';
+import { VoiceMicButton } from '../features/voice/VoiceMicButton';
+import { openVoiceEntry } from '../features/voice/openVoiceEntry';
+import { useVoiceDiscovery } from '../features/voice/voiceDiscovery';
 import { format, isSameDay } from 'date-fns';
 
 const BACKEND_URL = getBackendUrl();
@@ -105,6 +108,8 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
   const [type, setType] = useState<TxType>(initialType);
   const [amountStr, setAmountStr] = useState('');
   const [category, setCategory] = useState(initialType === 'credit' ? 'salary' : 'food');
+  // Optional return date picked when tagging Lent or Borrowed.
+  const [loanDue, setLoanDue] = useState<string | null | undefined>(undefined);
   const [note, setNote] = useState('');
   const [when, setWhen] = useState<When>('today');
   const [customDate, setCustomDate] = useState<Date>(new Date());
@@ -298,6 +303,7 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
           parsedAmount,
           dateStr,
           label,
+          loanDue !== undefined ? { dueDate: loanDue } : undefined,
         );
 
         // 3. Background flush attempt (fire-and-forget; retries automatically if offline)
@@ -308,6 +314,7 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
         else if (typeof route?.params?.onSuccess === 'function') route.params.onSuccess(payload);
 
         setSuccess({ amount: parsedAmount, type });
+        useVoiceDiscovery.getState().queueNudge(`${inr(parsedAmount)} · ${label}`);
         setTimeout(handleGoBack, 1100);
         return;
       }
@@ -372,7 +379,8 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
           category,
           parsedAmount,
           dateStr,
-          note.trim() || defaultLabel
+          note.trim() || defaultLabel,
+          loanDue !== undefined ? { dueDate: loanDue } : undefined
         );
       }
 
@@ -381,6 +389,7 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
       else if (typeof route?.params?.onSuccess === 'function') route.params.onSuccess(payload);
 
       setSuccess({ amount: parsedAmount, type });
+      useVoiceDiscovery.getState().queueNudge(`${inr(parsedAmount)} · ${label}`);
       setTimeout(handleGoBack, 1100);
     } catch (err: any) {
       setErrorText(err?.message || 'Could not save this transaction. Try again.');
@@ -405,7 +414,7 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
                 <Feather name="arrow-left" size={20} color={ink} />
               </Pressable>
               <Text style={[styles.headerTitle, { color: ink }]}>Add transaction</Text>
-              <View style={{ width: 44 }} />
+              {navigation ? <VoiceMicButton onPress={() => openVoiceEntry(navigation)} /> : <View style={{ width: 44 }} />}
             </View>
 
             {/* Account pill */}
@@ -741,7 +750,10 @@ export const ManualTransactionScreen: React.FC<ManualTransactionScreenProps> = (
         visible={tagSheet}
         onClose={() => setTagSheet(false)}
         selectedTag={category}
-        onSelectTag={(tag) => setCategory(tag)}
+        onSelectTag={(tag, _rule, extra) => {
+          setCategory(tag);
+          setLoanDue(extra ? extra.dueDate : undefined);
+        }}
         transactionType={type}
         merchantName={note.trim() || undefined}
         isDark={isDark}

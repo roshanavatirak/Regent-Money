@@ -7,6 +7,7 @@ import { useAuthStore, useSidebarStore } from '../../store';
 
 const APP_ICON = require('../../../assets/appicon.png');
 import { adminService, AdminStats, AdminAuditLogItem } from '../../services/adminService';
+import { adminFeedbackService, FeedbackStats } from '../../services/adminFeedbackService';
 import {
   useAdminTheme,
   ff,
@@ -41,18 +42,21 @@ export const AdminDashboardTab: React.FC = () => {
   const [stats, setStats] = useState<AdminStats>({ totalUsers: 0, activeUsers: 0, bannedUsers: 0 });
   const [adminCount, setAdminCount] = useState<number | null>(null);
   const [recentLogs, setRecentLogs] = useState<AdminAuditLogItem[]>([]);
+  const [feedback, setFeedback] = useState<FeedbackStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
-      const [statsData, logsData, usersData] = await Promise.all([
+      const [statsData, logsData, usersData, feedbackData] = await Promise.all([
         adminService.getStats().catch(() => ({ totalUsers: 0, activeUsers: 0, bannedUsers: 0 })),
         adminService.getLogs(1, 4).catch(() => ({ logs: [], total: 0, page: 1, limit: 4, totalPages: 1 })),
         adminService.getUsers(1, 100).catch(() => null),
+        adminFeedbackService.stats().catch(() => null),
       ]);
       setStats(statsData);
       setRecentLogs(logsData.logs || []);
+      setFeedback(feedbackData);
       setAdminCount(
         usersData ? usersData.users.filter((u) => u.role === 'admin' || u.role === 'superadmin').length : null,
       );
@@ -170,6 +174,33 @@ export const AdminDashboardTab: React.FC = () => {
             </TouchableOpacity>
           ))}
         </View>
+
+        {/* Suggestions & reports */}
+        <TouchableOpacity
+          onPress={() => navigation.navigate('AdminFeedback')}
+          activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel="Open suggestions and reports"
+          style={[styles.card, styles.feedbackCard, { backgroundColor: p.card, borderColor: p.line }]}
+        >
+          <IconTile tint={p.tint.coral} size={48} radius={16}>
+            <Feather name="message-square" size={21} color={p.tint.coral.fg} />
+          </IconTile>
+          <View style={{ flex: 1 }}>
+            <Text style={[{ fontSize: 16, color: p.text }, ff(font.displayBold, '700')]}>Suggestions & reports</Text>
+            <Text style={[{ fontSize: 13, color: p.sub, marginTop: 2 }, ff(font.body, '500')]} numberOfLines={1}>
+              {feedback
+                ? feedback.awaitingReply > 0
+                  ? `${feedback.awaitingReply} waiting for a reply`
+                  : 'All caught up'
+                : 'Read, reply and update status'}
+            </Text>
+          </View>
+          {feedback && feedback.criticalOpen > 0 ? (
+            <Pill tint={p.tint.coral} dot={CORAL} label={`${feedback.criticalOpen} critical`} font={font} small />
+          ) : null}
+          <Feather name="chevron-right" size={20} color={p.muted} />
+        </TouchableOpacity>
 
         {/* Platform health */}
         <View style={[styles.card, { backgroundColor: p.card, borderColor: p.line }]}>
@@ -302,5 +333,6 @@ const styles = StyleSheet.create({
   card: { marginTop: 18, borderRadius: 24, borderWidth: 1, padding: 18 },
   healthGrid: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 16, rowGap: 16 },
   healthItem: { width: '50%', flexDirection: 'row', alignItems: 'center', gap: 10, paddingRight: 8 },
+  feedbackCard: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   logRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14 },
 });

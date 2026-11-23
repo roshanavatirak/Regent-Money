@@ -38,7 +38,7 @@ import {
   Figtree_600SemiBold,
   Figtree_700Bold,
 } from '@expo-google-fonts/figtree';
-import { useTheme, useSyncStatusStore, useBudgetStore } from '../store';
+import { useTheme, useSyncStatusStore, useBudgetStore, useAuthStore } from '../store';
 import { HomeCardFace } from '../features/homeCards/HomeCardView';
 import { useHomeCardsStore } from '../features/homeCards/homeCardsStore';
 import { localDay, selectCards } from '../features/homeCards/selectCards';
@@ -50,7 +50,9 @@ import { CategoryIcon } from '../components/CategoryIcon';
 import { ActivityFilterChips, ActivityRow } from '../components/ActivityFeed';
 import { SpendingPetalCard } from '../components/SpendingPetalCard';
 import { attributionService } from '../services/attributionService';
+import { buildInviteMessage } from '../utils/inviteMessage';
 import { ActivityBank, ActivityFilter, ActivityItem, filterActivity } from '../hooks/useActivityFeed';
+import { counterpartyName } from '../services/counterpartyService';
 
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
@@ -90,8 +92,26 @@ export interface HomeDashboardProps {
   /** Linked accounts shown as bank-wise filter chips (logo + masked number). */
   banks: ActivityBank[];
   categories: DashboardCategory[];
-  /** Total spend over the same elapsed days last month. */
+  /** Total spend over the same elapsed days last month (or last salary cycle). */
   previousSpentSamePeriod?: number;
+  /** Fills "Spent in …": a month name, or "this salary cycle". Defaults to the current month. */
+  periodLabel?: string;
+  /** Fills "… vs …": last month's short name, or "last cycle". */
+  previousPeriodLabel?: string;
+  /** One line about the salary cycle under Money in / Money out. */
+  cycleCaption?: string | null;
+  /** Opens the salary day setting from the caption. */
+  onPressCycleCaption?: () => void;
+  /** Income without bonuses and other one-offs, for "you kept X%" cards. Defaults to `income`. */
+  regularIncome?: number;
+  /** Spending without yearly costs (school fees, insurance), for the same cards. Defaults to `spent`. */
+  regularSpent?: number;
+  /** "cycle" turns card titles' "this month" into "this cycle"; "rolling" into "in the last 30 days". */
+  periodWord?: 'month' | 'cycle' | 'rolling';
+  /** The payday question card, shown under the hero until the user answers it. */
+  paydayQuestion?: React.ReactNode;
+  /** "Salary received" button (salary late or due, not seen as a credit), or its undo. */
+  salaryMark?: { kind: 'mark' | 'undo'; what?: string; onPress: () => void } | null;
   hasBanks: boolean;
   /** True once the cash wallet exists; until then a banner offers to set it up. */
   hasCash?: boolean;
@@ -112,6 +132,10 @@ export interface HomeDashboardProps {
   onOpenInvite?: () => void;
   onOpenGoals: () => void;
   onOpenCash?: () => void;
+  /** Opens voice entry, for the voice card. */
+  onOpenVoice?: () => void;
+  /** Has opened voice entry before; the voice card shows only until then. */
+  usedVoice?: boolean;
   onOpenRegent: () => void;
   onSetupTracking: () => void;
   onOpenTransaction?: (tx: DashboardTx) => void;
@@ -479,12 +503,6 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
   const netWorthWhole = Math.floor(abs).toLocaleString('en-IN');
   const netWorthPaise = (abs % 1).toFixed(2).slice(1);
 
-  const delta = useMemo(() => {
-    if (!previousNetWorth || previousNetWorth <= 0) return null;
-    const pct = ((netWorth - previousNetWorth) / previousNetWorth) * 100;
-    return { pct, up: pct >= 0 };
-  }, [netWorth, previousNetWorth]);
-
   const spark = useMemo(
     () => buildSparkPath(netWorthHistory, heroWidth, 64),
     [netWorthHistory, heroWidth]
@@ -515,7 +533,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
       if (!slot) return;
       const amt = toNumber(tx.amount);
       slot.point.total += amt;
-      const m = tx.merchant || 'Other';
+      const m = counterpartyName(tx) || tx.merchant || 'Other';
       slot.merchants[m] = (slot.merchants[m] || 0) + amt;
     });
 
@@ -593,6 +611,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
       add_bank: props.onAddBank,
       setup_tracking: props.onSetupTracking,
       open_cash: props.onOpenCash,
+      open_voice: props.onOpenVoice,
       open_regent: props.onOpenRegent,
       breakdown: scrollToBreakdown,
       open_budgets: props.onOpenBudgets,
@@ -604,7 +623,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
         try {
           const link = (await attributionService.getMyInvite())?.link;
           if (link) {
-            Share.share({ message: `I track my money with Regent Money. Try it: ${link}` }).catch(() => {});
+            Share.share({ message: buildInviteMessage(link, useAuthStore.getState().user?.name) }).catch(() => {});
             return;
           }
         } catch {
@@ -621,19 +640,27 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
       smsTrackingOn,
       hasCash: !!props.hasCash,
       hasBudget,
-      income,
-      spent,
+      usedVoice: props.usedVoice,
+      // A bonus would make "you kept X%" look better than a normal cycle really is.
+      income: props.regularIncome ?? income,
+      // A yearly payment would make a normal cycle look overspent.
+      spent: props.regularSpent ?? spent,
       firstName: userName,
       today: localDay(now),
       monthName: now.toLocaleDateString('en-IN', { month: 'long' }),
     });
     // A card whose screen this build can't open (e.g. no cash wallet handler) is skipped
-    const canOpen = (a: ActionKey) => a !== 'open_cash' || !!props.onOpenCash;
+    const canOpen = (a: ActionKey) => (a !== 'open_cash' || !!props.onOpenCash) && (a !== 'open_voice' || !!props.onOpenVoice);
     return visible
       .filter(({ card }) => canOpen(card.action))
       .map(({ card, title, shownAs }) => ({
         key: card.id,
-        title,
+        title:
+          props.periodWord === 'cycle'
+            ? title.replace(/\bthis month\b/gi, 'this cycle')
+            : props.periodWord === 'rolling'
+              ? title.replace(/\bthis month\b/gi, 'in the last 30 days')
+              : title,
         cta: card.cta,
         art: card.art,
         theme: themeFor(card, shownAs ?? undefined),
@@ -661,6 +688,11 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
     props.onOpenGoals,
     props.onOpenCalendar,
     props.onOpenInvite,
+    props.regularIncome,
+    props.regularSpent,
+    props.onOpenVoice,
+    props.usedVoice,
+    props.periodWord,
   ]);
 
 
@@ -747,19 +779,6 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
               )}
             </View>
 
-            {delta && (
-              <View style={[styles.deltaPill, !delta.up && { backgroundColor: CORAL }]}>
-                <Feather
-                  name={delta.up ? 'arrow-up-right' : 'arrow-down-right'}
-                  size={13}
-                  color={delta.up ? FOREST : '#3A0D00'}
-                />
-                <Text style={[styles.deltaText, !delta.up && { color: '#3A0D00' }]}>
-                  {Math.abs(delta.pct).toFixed(1)}% since {previousMonthLabel || 'last month'}
-                </Text>
-              </View>
-            )}
-
             {spark.d ? (
               <Svg width="100%" height={64} style={{ marginTop: 10 }}>
                 <Path d={spark.d} stroke={LIME} strokeWidth={2.5} fill="none" strokeLinecap="round" />
@@ -790,9 +809,40 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
                 <Text style={styles.flowValue}>{money(animatedSpent)}</Text>
               </View>
             </View>
+
+            {props.cycleCaption ? (
+              <Pressable
+                onPress={props.onPressCycleCaption}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel={`${props.cycleCaption} Change salary day`}
+                style={styles.cycleRow}
+              >
+                <Feather name="calendar" size={12} color={MIST} />
+                <Text style={styles.cycleText}>{props.cycleCaption}</Text>
+                <Feather name="chevron-right" size={14} color={MIST} />
+              </Pressable>
+            ) : null}
+
+            {props.salaryMark ? (
+              <Pressable
+                onPress={props.salaryMark.onPress}
+                hitSlop={6}
+                accessibilityRole="button"
+                style={({ pressed }) => [styles.markBtn, pressed && { opacity: 0.8 }]}
+              >
+                <Feather name={props.salaryMark.kind === 'mark' ? 'check-circle' : 'rotate-ccw'} size={14} color={FOREST} />
+                <Text style={styles.markText}>
+                  {props.salaryMark.kind === 'mark' ? `${props.salaryMark.what ?? 'Salary'} came in cash or another account? Mark it received` : `${props.salaryMark.what ?? 'Salary'} marked received today. Undo`}
+                </Text>
+              </Pressable>
+            ) : null}
           </View>
         </PressableScale>
       </Animated.View>
+
+      {/* "When does your salary come?" until answered */}
+      {props.paydayQuestion ?? null}
 
       {/* Banner carousel: its own component, so its timer doesn't redraw the whole dashboard */}
       <Animated.View>
@@ -946,8 +996,8 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = (props) => {
             onSelect={setCategoryFilter}
             onOpenBudgets={props.onOpenBudgets}
             hidden={hidden}
-            monthLabel={new Date().toLocaleDateString('en-IN', { month: 'long' })}
-            previousMonthShort={new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1).toLocaleDateString('en-IN', { month: 'short' })}
+            monthLabel={props.periodLabel || new Date().toLocaleDateString('en-IN', { month: 'long' })}
+            previousMonthShort={props.previousPeriodLabel || new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1).toLocaleDateString('en-IN', { month: 'short' })}
             previousTotal={props.previousSpentSamePeriod}
             font={font}
           />
@@ -1134,23 +1184,6 @@ const getStyles = (
       fontWeight: font.displayBold ? undefined : '700',
       marginLeft: 2,
     },
-    deltaPill: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      alignSelf: 'flex-start',
-      gap: 6,
-      marginTop: 12,
-      backgroundColor: LIME,
-      borderRadius: 999,
-      paddingHorizontal: 10,
-      paddingVertical: 5,
-    },
-    deltaText: {
-      fontSize: 12,
-      color: FOREST,
-      fontFamily: font.bodyBold,
-      fontWeight: font.bodyBold ? undefined : '700',
-    },
     flowRow: {
       flexDirection: 'row',
       gap: 8,
@@ -1187,6 +1220,38 @@ const getStyles = (
       fontFamily: font.displayBold,
       fontWeight: font.displayBold ? undefined : '700',
       fontVariant: ['tabular-nums'],
+    },
+    cycleRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: 6,
+      marginTop: 10,
+    },
+    markBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      alignSelf: 'flex-start',
+      marginTop: 10,
+      minHeight: 36,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: 999,
+      backgroundColor: LIME,
+    },
+    markText: {
+      fontSize: 12,
+      color: FOREST,
+      fontFamily: font.bodyBold,
+      fontWeight: font.bodyBold ? undefined : '700',
+      flexShrink: 1,
+    },
+    cycleText: {
+      flex: 1,
+      fontSize: 12,
+      lineHeight: 16,
+      color: MIST,
+      fontFamily: font.body,
     },
 
     // Banners

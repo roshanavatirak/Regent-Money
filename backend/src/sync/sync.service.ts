@@ -24,6 +24,8 @@ interface SmsLedgerItem extends SmsCandidate {
   isSalary?: boolean;
   /** The SMS text, used only to pick a tag (never stored). */
   body?: string;
+  /** Who it was with ("vpa:rohit.c@okaxis" / "acct:4821"), see counterparty.util.ts. Stored encrypted. */
+  counterpartyKey?: string;
 }
 
 /**
@@ -32,6 +34,7 @@ interface SmsLedgerItem extends SmsCandidate {
  */
 type SmsOutcome = 'recorded' | 'already_recorded' | 'review' | 'review_pending';
 import { BankProfile } from './entities/bank-profile.entity';
+import { cleanCounterpartyKey, COUNTERPARTY_ID_PATTERN } from './counterparty.util';
 import { Transaction } from './entities/transaction.entity';
 import { BudgetDeclaration } from './entities/budget-declaration.entity';
 import { SavingsGoal } from './entities/savings-goal.entity';
@@ -133,6 +136,7 @@ const ENTITIES = {
       timestamp: 'timestamp',
       bankProfileId: 'bank_profile_id',
       status: 'status',
+      counterpartyId: 'counterparty_id',
     },
   },
   income: {
@@ -145,6 +149,7 @@ const ENTITIES = {
       source: 'source',
       timestamp: 'timestamp',
       bankProfileId: 'bank_profile_id',
+      counterpartyId: 'counterparty_id',
     },
   },
 } as const;
@@ -527,6 +532,22 @@ export class SyncService implements OnModuleInit {
         CREATE INDEX IF NOT EXISTS idx_income_records_user_source_idx
         ON finance.income_records (user_id, source_idx);
       `);
+      // Counterparty (see migration AddCounterparty1730000013000)
+      for (const table of ['finance.transactions', 'finance.income_records']) {
+        await this.dataSource.query(`
+          ALTER TABLE ${table}
+            ADD COLUMN IF NOT EXISTS enc_counterparty BYTEA,
+            ADD COLUMN IF NOT EXISTS counterparty_id  TEXT;
+        `);
+      }
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_transactions_user_counterparty
+        ON finance.transactions (user_id, counterparty_id) WHERE counterparty_id IS NOT NULL;
+      `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_income_records_user_counterparty
+        ON finance.income_records (user_id, counterparty_id) WHERE counterparty_id IS NOT NULL;
+      `);
 
       this.logger.log('BankProfile, SavingsGoal, Budget, Exclusion, AppliedOps & EncryptionAtRest schema checks completed successfully.');
     } catch (e: any) {
@@ -735,6 +756,7 @@ export class SyncService implements OnModuleInit {
           const dec = await this.fieldCipherService.readTransactionDualRun(userId, tx);
           tx.amount = dec.amount;
           if (dec.merchant) tx.merchant = dec.merchant;
+          await this.exposeCounterparty(userId, 'transactions', tx);
         } catch (e: any) {
           this.logger.error(`Tampering alert: Failed to decrypt transaction row ${tx.id}`, e.stack);
         }
@@ -752,6 +774,7 @@ export class SyncService implements OnModuleInit {
           const dec = await this.fieldCipherService.readIncomeDualRun(userId, inc);
           inc.amount = dec.amount;
           if (dec.source) inc.source = dec.source;
+          await this.exposeCounterparty(userId, 'income', inc);
         } catch (e: any) {
           this.logger.error(`Tampering alert: Failed to decrypt income row ${inc.id}`, e.stack);
         }
@@ -808,6 +831,7 @@ export class SyncService implements OnModuleInit {
           const dec = await this.fieldCipherService.readIncomeDualRun(userId, inc);
           inc.amount = dec.amount;
           if (dec.source) inc.source = dec.source;
+          await this.exposeCounterparty(userId, 'income', inc);
         } catch (e: any) {
           this.logger.error(`Tampering alert: Failed to decrypt income row ${inc.id}`, e.stack);
         }
@@ -870,6 +894,7 @@ export class SyncService implements OnModuleInit {
           const dec = await this.fieldCipherService.readTransactionDualRun(userId, tx);
           tx.amount = dec.amount;
           if (dec.merchant) tx.merchant = dec.merchant;
+          await this.exposeCounterparty(userId, 'transactions', tx);
         } catch (e: any) {
           this.logger.error(`Tampering alert: Failed to decrypt transaction row ${tx.id}`, e.stack);
         }
@@ -1032,6 +1057,18 @@ export class SyncService implements OnModuleInit {
     });
   }
 
+  /**
+   * For the app: puts the readable counterparty key on a row ("vpa:rohit.c@okaxis") and drops
+   * the encrypted copy. A row whose key can't be read simply goes without it.
+   */
+  private async exposeCounterparty(userId: string, ledger: 'transactions' | 'income', row: any): Promise<void> {
+    if (row.encCounterparty) {
+      const key = await this.fieldCipherService.decryptCounterparty(userId, ledger, row.id, row.encCounterparty);
+      if (key) row.counterpartyKey = key;
+    }
+    delete row.encCounterparty;
+  }
+
   async getIncomeRecords(userId: string) {
     this.logger.log(`Fetching income records for user: ${userId}`);
     const records = await this.incomeRecordRepository.find({
@@ -1047,6 +1084,7 @@ export class SyncService implements OnModuleInit {
           const dec = await this.fieldCipherService.readIncomeDualRun(userId, inc);
           inc.amount = dec.amount;
           if (dec.source) inc.source = dec.source;
+          await this.exposeCounterparty(userId, 'income', inc);
         } catch (e: any) {
           this.logger.error(`Tampering alert: Failed to decrypt income row ${inc.id}`, e.stack);
         }
@@ -2686,7 +2724,7 @@ export class SyncService implements OnModuleInit {
 
     // Oldest first, so each SMS claims its own legacy row before a later look-alike can
     const order = rawItems.map((item, idx) => ({ item, idx })).sort((a, b) => a.item.timestamp - b.item.timestamp);
-    const { rows } = await this.loadSmsLedgerRows(userId, ledger, rawItems);
+    const { rows, entities } = await this.loadSmsLedgerRows(userId, ledger, rawItems);
     const claimed = new Set<string>();
     const outcomes: SmsOutcome[] = new Array(rawItems.length);
     const inserted: (Transaction | IncomeRecord)[] = [];
@@ -2700,9 +2738,20 @@ export class SyncService implements OnModuleInit {
       if (match.kind === 'same' || match.kind === 'legacy') {
         claimed.add(match.row.id);
         // Write the SMS identity onto the row so future scans match it directly
-        const patch: { smsId?: string; contentId?: string } = {};
+        const patch: { smsId?: string; contentId?: string; encCounterparty?: Buffer } = {};
         if (item.contentId && !match.row.contentId) patch.contentId = item.contentId;
         if (item.smsId && !isSmsIdentity(match.row.smsId)) patch.smsId = item.smsId;
+        // Rows saved before the parser kept who it was with get it from a re-scan of the same SMS
+        const stored = entities.get(match.row.id);
+        if (item.counterpartyKey && stored && !stored.encCounterparty) {
+          patch.encCounterparty = await this.fieldCipherService.encryptCounterparty(
+            userId,
+            ledger,
+            match.row.id,
+            item.counterpartyKey,
+          );
+          stored.encCounterparty = patch.encCounterparty;
+        }
         if (Object.keys(patch).length > 0) {
           await repo.update({ id: match.row.id, userId }, patch);
           if (patch.contentId) match.row.contentId = patch.contentId;
@@ -2791,6 +2840,9 @@ export class SyncService implements OnModuleInit {
         updatedAt: Date.now(),
         isDeleted,
       });
+      if (item.counterpartyKey) {
+        tx.encCounterparty = await this.fieldCipherService.encryptCounterparty(userId, 'transactions', txId, item.counterpartyKey);
+      }
       return tx;
     }
 
@@ -2799,7 +2851,7 @@ export class SyncService implements OnModuleInit {
       amount: item.amount,
       source: item.merchant || 'Direct Credit',
     });
-    return this.incomeRecordRepository.create({
+    const income = this.incomeRecordRepository.create({
       id: incId,
       userId,
       amount: null as any,
@@ -2819,6 +2871,10 @@ export class SyncService implements OnModuleInit {
       updatedAt: Date.now(),
       isDeleted,
     });
+    if (item.counterpartyKey) {
+      income.encCounterparty = await this.fieldCipherService.encryptCounterparty(userId, 'income', incId, item.counterpartyKey);
+    }
+    return income;
   }
 
   /** "Did you pay twice?" for a second, distinct SMS that matches an existing payment. */
@@ -2888,6 +2944,7 @@ export class SyncService implements OnModuleInit {
           smsId: t.smsId || (ref ? `ref_${ref}` : t.contentId),
           contentId: t.contentId,
           bankProfileId,
+          counterpartyKey: cleanCounterpartyKey(t.counterpartyKey),
         };
       };
       const items = data.transactions.map(toItem).filter((i): i is SmsLedgerItem => !!i);
@@ -3025,6 +3082,7 @@ export class SyncService implements OnModuleInit {
       smsId: directSmsId,
       contentId,
       bankProfileId: matchedBank ? matchedBank.id : null,
+      counterpartyKey: cleanCounterpartyKey(parsed.counterpartyKey),
     };
 
     if (!matchedBank) {
@@ -3903,6 +3961,16 @@ export class SyncService implements OnModuleInit {
         throw new RejectOp('bad_bank_profile');
       }
       out.bankProfileId = p.bankProfileId;
+    }
+    // The person or merchant the user linked this row to; null unlinks it
+    if ('counterpartyId' in p) {
+      if (
+        p.counterpartyId !== null &&
+        (typeof p.counterpartyId !== 'string' || !COUNTERPARTY_ID_PATTERN.test(p.counterpartyId))
+      ) {
+        throw new RejectOp('bad_counterparty');
+      }
+      out.counterpartyId = p.counterpartyId;
     }
     return out;
   }

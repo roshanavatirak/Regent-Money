@@ -126,11 +126,45 @@ export interface EmailFallbackSettings {
   available: boolean;
   /** Sign-in emails the primary account always keeps for itself. */
   signInReserve: number;
+  /** Sender order for each kind of email: first is its own sender, the rest are tried when it is full. */
+  chains?: Record<'auth' | 'broadcast' | 'welcome', EmailChainStep[]>;
+}
+
+export interface EmailChainStep {
+  account: 'primary' | 'broadcast' | 'welcome';
+  senderEmail: string;
+  /** False when this sender is not set up, or is the same Brevo account as an earlier step. */
+  usable: boolean;
+  /** Emails this sender keeps for itself when it is borrowed (0 = none). */
+  reserve: number;
+}
+
+export interface WelcomeEmailStats {
+  /** Everything the welcome sender sent today, including emails it sent for other kinds. */
+  sentToday: number;
+  remainingToday: number;
+  dailyLimit: number;
+  /** Welcome emails sent today, through any sender. */
+  welcomesSentToday: number;
+  /** Welcome emails waiting to be sent. */
+  queued: number;
+  queueConfigured?: boolean;
+  senderEmail: string;
+  isConfigured: boolean;
+}
+
+export interface AdminContactEmails {
+  support: string;
+  contact: string;
+  privacy: string;
+  grievance: string;
+  grievanceOfficer: string;
 }
 
 export interface EmailSystemOverview {
   primary: PrimaryEmailStats;
   broadcast: BroadcastEmailStats;
+  welcome?: WelcomeEmailStats;
   fallback?: EmailFallbackSettings;
 }
 
@@ -432,6 +466,25 @@ export const adminService = {
     if (!res.ok) {
       throw new Error(json.message || `Couldn't save the setting (${res.status})`);
     }
+    return json;
+  },
+
+  /** Public contact addresses (support, contact, privacy, grievance) shown in the app and emails. */
+  async getContactEmails(): Promise<AdminContactEmails> {
+    const res = await apiFetch('/admin/emails/contacts');
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json.message || `Couldn't load contact addresses (${res.status})`);
+    return json;
+  },
+
+  async setContactEmails(value: AdminContactEmails): Promise<AdminContactEmails> {
+    const res = await apiFetch('/admin/emails/contacts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(value),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json.message || `Couldn't save contact addresses (${res.status})`);
     return json;
   },
 

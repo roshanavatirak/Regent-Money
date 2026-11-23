@@ -60,8 +60,7 @@ import Animated, {
   runOnJS,
 } from 'react-native-reanimated';
 import { KeyboardAvoidingView, useKeyboardHandler } from 'react-native-keyboard-controller';
-import { CartesianChart, Area, Line } from 'victory-native';
-import { Canvas, LinearGradient, vec, Group, Path, Skia } from '@shopify/react-native-skia';
+import { Canvas, Group, Path, Skia } from '@shopify/react-native-skia';
 
 import { mmkvStorage } from '../db/mmkv';
 import { useSyncDb } from '../services/useSyncDb';
@@ -78,7 +77,10 @@ import { PrivacyPolicyModal } from '../components/PrivacyPolicyModal';
 import { smsPermissionService } from '../services/smsPermissionService';
 import { updateService, UpdateInfo } from '../services/updateService';
 import { getExecutiveGreeting, getSessionGreeting } from '../constants/aiGreetings';
-import { isExcludedFromBudget } from '../services/budgetService';
+import { isExcludedFromBudget, budgetService, recurringBillsFrom } from '../services/budgetService';
+import { spendableBalance } from '../services/moneyCycleService';
+import { attributedTime, billsDueBetween } from '../utils/recurringBills';
+import { safeToSpend } from '../utils/billPacing';
 import {
   EXECUTIVE_PROMPT_SETS,
   getWeeklySetIndex,
@@ -88,11 +90,22 @@ import { QuickActionsRow } from '../components/QuickActionsRow';
 import { FinancialCalendarScreen } from '../screens/FinancialCalendarScreen';
 import { BorrowLendScreen } from '../screens/BorrowLendScreen';
 import { PersonDetailScreen } from '../screens/PersonDetailScreen';
+import { NetWorthScreen } from '../screens/NetWorthScreen';
+import { useNetWorth } from '../hooks/useNetWorth';
+import { fromMinor } from '../utils/money';
 import { ReviewTransactionsModal } from './ReviewTransactionsModal';
 import { AdminDashboardScreen } from '../features/admin/AdminDashboardScreen';
 import { AdminTabNavigator } from '../features/admin/AdminTabNavigator';
 import { useMonthStart } from '../hooks/useMonthStart';
 import { monthSummary } from '../utils/monthSummary';
+import { useMoneyCycle } from '../hooks/useMoneyCycle';
+import { useMoneyCycleSync } from '../hooks/useMoneyCycleSync';
+import { samePointLastCycle, usualWindows, upcomingSecondSalary, isTransitionCycle } from '../utils/moneyCycle';
+import { useMoneyCycleStore } from '../store/moneyCycleStore';
+import { PaydayQuestionCard, paydayQuestionSnoozed } from '../components/PaydayQuestionCard';
+import { isPensioner } from '../constants/occupations';
+import { yearlyMatcher, setAsidePerDay, setAsidePerMonth, yearlyDueSoon, monthLabel } from '../utils/yearlyCosts';
+import { describeCycle } from '../utils/cycleLabels';
 
 import {
   useTransactionStore,
@@ -123,10 +136,12 @@ import { BiometricLockOverlay } from '../components/BiometricLockOverlay';
 import { AppSidebarDrawer } from '../components/AppSidebarDrawer';
 import { AdminEmailConfigScreen } from '../features/admin/AdminEmailConfigScreen';
 import { AdminHomeCardsScreen } from '../features/admin/AdminHomeCardsScreen';
+import { AdminFeedbackScreen } from '../features/admin/feedback/AdminFeedbackScreen';
+import { AdminFeedbackDetailScreen } from '../features/admin/feedback/AdminFeedbackDetailScreen';
 import { DashboardSkeleton } from '../components/DashboardSkeleton';
 import { BrandWordmark } from '../components/BrandWordmark';
 import { RegentTreeIcon } from '../components/RegentTreeIcon';
-import { ProfileQuickSheet } from '../components/ProfileQuickSheet';
+import { ProfileQuickSheetHost, useProfileQuickSheetStore } from '../components/ProfileQuickSheet';
 import { StatusBar } from 'expo-status-bar';
 import { authService } from '../services/authService';
 import { notificationService } from '../services/notificationService';
@@ -141,10 +156,13 @@ import { BanksScreen } from './BanksScreen';
 import { AddBankModal } from './AddBankModal';
 import { ProfileScreen } from './ProfileScreen';
 import { EditProfileScreen } from './EditProfileScreen';
+import { YearlyCostsScreen } from '../screens/YearlyCostsScreen';
 import { EditBankScreen } from './EditBankScreen';
 import { LinkDebitCardScreen } from './LinkDebitCardScreen';
 import { ManualTransactionScreen } from './ManualTransactionScreen';
-import { requireOptionalNativeModule } from 'expo';
+import { openVoiceEntry } from '../features/voice/openVoiceEntry';
+import { useVoiceDiscovery } from '../features/voice/voiceDiscovery';
+import { RegentVoiceBadge, VoiceTabOverlay } from '../features/voice/TabVoiceHints';
 import { TransactionDetailScreen } from './TransactionDetailScreen';
 import { SettingsScreen } from './SettingsScreen';
 import { PrivacyCenterScreen } from './PrivacyCenterScreen';
@@ -168,6 +186,7 @@ import {
   ChatMessage
 } from '../services/aiService';
 import { sanitizeTransactions } from '../services/sanitizer';
+import { counterpartyName } from '../services/counterpartyService';
 
 // Route React Native alerts to Regent Money's luxury GlobalConfirmModal across all platforms
 Alert.alert = (title: string, message?: string, buttons?: any[]) => {
@@ -238,48 +257,9 @@ const TypingIndicator = () => {
 
 
 
-
-
-
-
 // ----------------------------------------------------
 // Web-Safe Chart Fallbacks (Skia is not bundled on Web)
 // ----------------------------------------------------
-const WebNetWorthChart = ({ data, color = '#2dba4e' }: { data: any[]; color?: string }) => {
-  if (!data || data.length === 0) return null;
-  const values = data.map((d) => d.netWorth || 0);
-  const minVal = Math.min(...values);
-  const maxVal = Math.max(...values);
-  const range = maxVal - minVal || 1;
-
-  return (
-    <View style={{ flex: 1, justifyContent: 'flex-end', paddingBottom: 10, paddingTop: 10 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', height: 120 }}>
-        {data.map((item, idx) => {
-          const heightPct = Math.max(15, Math.round(((item.netWorth - minVal) / range) * 80 + 15));
-          return (
-            <View key={idx} style={{ flex: 1, alignItems: 'center', height: '100%', justifyContent: 'flex-end', paddingHorizontal: 3 }}>
-              <View
-                style={{
-                  width: '70%',
-                  maxWidth: 24,
-                  height: `${heightPct}%`,
-                  backgroundColor: color,
-                  borderRadius: 6,
-                  opacity: idx === data.length - 1 ? 1 : 0.65,
-                }}
-              />
-              <Text style={{ color: 'rgba(250, 251, 252, 0.5)', fontSize: 10, marginTop: 6 }} numberOfLines={1}>
-                {item.monthLabel}
-              </Text>
-            </View>
-          );
-        })}
-      </View>
-    </View>
-  );
-};
-
 const WebProjectionChart = ({ data }: { data: any[] }) => {
   if (!data || data.length === 0) return null;
   const sampled = data.length > 8
@@ -704,348 +684,6 @@ const SpendingDonutChart: React.FC<SpendingDonutChartProps> = ({
   );
 };
 
-interface NetWorthDetailsModalProps {
-  visible: boolean;
-  onClose: () => void;
-  snapshots: any[];
-  liveNetWorth: number;
-  loading?: boolean;
-}
-
-const NetWorthDetailsModal = ({ visible, onClose, snapshots, liveNetWorth, loading = false }: NetWorthDetailsModalProps) => {
-  const { colors, isDark } = useTheme();
-  const styles = getStyles(colors);
-  const navStyles = getNavStyles(colors);
-
-  const [range, setRange] = useState<'3M' | '6M' | '1Y'>('6M');
-
-  // Compute filtered snapshots and table list items
-  const { chartData, listItems, changeAmount, changePercent, isPositive } = useMemo(() => {
-    let monthsToKeep = 6;
-    if (range === '3M') monthsToKeep = 3;
-    if (range === '6M') monthsToKeep = 6;
-    if (range === '1Y') monthsToKeep = 12;
-
-    // Filter snapshots based on range
-    let filtered = [...snapshots];
-    filtered.sort((a, b) => b.timestamp - a.timestamp);
-    filtered = filtered.slice(0, monthsToKeep);
-    filtered.sort((a, b) => a.timestamp - b.timestamp);
-
-    // Compute month-end last days
-    const tableData = filtered.map((s) => {
-      const dateObj = new Date(s.timestamp);
-      const y = dateObj.getFullYear();
-      const m = dateObj.getMonth();
-      const lastDay = new Date(y, m + 1, 0); // last day of that month
-      return {
-        timestamp: s.timestamp,
-        netWorth: s.netWorth,
-        monthLabel: dateObj.toLocaleDateString('en-IN', { month: 'short' }),
-        lastDayLabel: `${lastDay.getDate()} ${lastDay.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })}`,
-        displayMonth: dateObj.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }),
-        isLive: false,
-      };
-    });
-
-    const currentLiveItem = {
-      timestamp: Date.now(),
-      netWorth: liveNetWorth,
-      monthLabel: new Date().toLocaleDateString('en-IN', { month: 'short' }),
-      lastDayLabel: 'Today (Live)',
-      displayMonth: new Date().toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }),
-      isLive: true,
-    };
-
-    // Newest first for list
-    const listItems = [currentLiveItem, ...[...tableData].reverse()];
-
-    // Chronological order for chart
-    const chartData = [
-      ...tableData,
-      {
-        timestamp: Date.now(),
-        netWorth: liveNetWorth,
-        monthLabel: new Date().toLocaleDateString('en-IN', { month: 'short' }),
-        isLive: true,
-      }
-    ];
-
-    // Compute trend metrics
-    const startVal = tableData.length > 0 ? tableData[0].netWorth : liveNetWorth;
-    const changeAmt = liveNetWorth - startVal;
-    const changePct = startVal > 0 ? (changeAmt / startVal) * 100 : 0;
-
-    return {
-      chartData,
-      listItems,
-      changeAmount: changeAmt,
-      changePercent: changePct,
-      isPositive: changeAmt >= 0,
-    };
-  }, [snapshots, liveNetWorth, range]);
-
-  const trendColor = isPositive ? '#2dba4e' : '#cf222e';
-
-  return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="slide"
-      onRequestClose={onClose}
-    >
-      <View style={styles.modalOverlayFull}>
-        <View style={[styles.modalCardFull, { height: '90%' }]}>
-          {/* Header */}
-          <View style={navStyles.modalHeader}>
-            <View>
-              <Text style={navStyles.modalTitle}>Net Worth Analytics</Text>
-              <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
-                Live wealth tracker & trends
-              </Text>
-            </View>
-            <TouchableOpacity
-              onPress={onClose}
-              style={navStyles.closeBtn}
-              activeOpacity={0.7}
-            >
-              <Feather name="x" size={20} color="#8E8E9F" />
-            </TouchableOpacity>
-          </View>
-
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 30 }}>
-            {/* Live Summary block */}
-            <View style={{ marginVertical: 10, alignItems: 'flex-start' }}>
-              <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                Current Net Worth
-              </Text>
-              <Text style={{ color: colors.text, fontSize: 32, fontWeight: '900', marginTop: 4 }}>
-                ₹{liveNetWorth.toLocaleString('en-IN')}
-              </Text>
-
-              {/* Trend Badge */}
-              <View style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                backgroundColor: isPositive ? 'rgba(45, 186, 78, 0.12)' : 'rgba(207, 34, 46, 0.12)',
-                paddingHorizontal: 8,
-                paddingVertical: 4,
-                borderRadius: 8,
-                marginTop: 6
-              }}>
-                <Feather
-                  name={isPositive ? "arrow-up-right" : "arrow-down-left"}
-                  size={14}
-                  color={trendColor}
-                  style={{ marginRight: 4 }}
-                />
-                <Text style={{ color: trendColor, fontSize: 12, fontWeight: '800' }}>
-                  {isPositive ? '+' : ''}₹{Math.abs(changeAmount).toLocaleString('en-IN')} ({isPositive ? '+' : ''}{changePercent.toFixed(1)}%)
-                </Text>
-                <Text style={{ color: colors.textSecondary, fontSize: 11, marginLeft: 6 }}>
-                  last {range === '3M' ? '3 months' : range === '6M' ? '6 months' : '1 year'}
-                </Text>
-              </View>
-            </View>
-
-            {/* Timeframe selector */}
-            <View style={{
-              flexDirection: 'row',
-              backgroundColor: colors.isDark ? '#1a1a24' : '#edf0f2',
-              borderRadius: 12,
-              padding: 4,
-              marginVertical: 16
-            }}>
-              {(['3M', '6M', '1Y'] as const).map((r) => {
-                const active = range === r;
-                return (
-                  <TouchableOpacity
-                    key={r}
-                    style={{
-                      flex: 1,
-                      paddingVertical: 10,
-                      alignItems: 'center',
-                      backgroundColor: active ? (colors.isDark ? '#2b2b3b' : '#ffffff') : 'transparent',
-                      borderRadius: 8,
-                      borderWidth: active ? 1 : 0,
-                      borderColor: active ? colors.border : 'transparent',
-                      shadowColor: active ? '#000000' : 'transparent',
-                      shadowOffset: { width: 0, height: 1 },
-                      shadowOpacity: 0.1,
-                      shadowRadius: 2,
-                      elevation: active ? 2 : 0,
-                    }}
-                    onPress={() => setRange(r)}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={{
-                      color: active ? trendColor : colors.textSecondary,
-                      fontWeight: '800',
-                      fontSize: 13
-                    }}>
-                      {r === '3M' ? '3 Months' : r === '6M' ? '6 Months' : '1 Year'}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            {/* GPU Stock Chart */}
-            <View style={{
-              backgroundColor: colors.isDark ? '#12121a' : '#ffffff',
-              borderWidth: 1,
-              borderColor: colors.border,
-              borderRadius: 16,
-              padding: 12,
-              height: 220,
-              marginBottom: 20,
-              shadowColor: colors.shadowColor,
-              shadowOffset: { width: 0, height: 4 },
-              shadowOpacity: 0.05,
-              shadowRadius: 8,
-              elevation: 2,
-            }}>
-              <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '700', marginBottom: 8, textTransform: 'uppercase' }}>
-                Wealth Performance Curve
-              </Text>
-
-              {chartData.length > 1 ? (
-                <View style={{ flex: 1 }}>
-                  {Platform.OS !== 'web' ? (
-                    <CartesianChart
-                      data={chartData}
-                      xKey="monthLabel"
-                      yKeys={["netWorth"]}
-                    >
-                      {({ points, chartBounds }) => (
-                        <>
-                          <Area
-                            points={points.netWorth}
-                            y0={chartBounds.bottom}
-                            animate={{ type: "timing", duration: 300 }}
-                          >
-                            <LinearGradient
-                              start={vec(0, chartBounds.top)}
-                              end={vec(0, chartBounds.bottom)}
-                              colors={[trendColor, "rgba(45, 186, 78, 0)"]}
-                            />
-                          </Area>
-                          <Line
-                            points={points.netWorth}
-                            color={trendColor}
-                            strokeWidth={2.5}
-                            animate={{ type: "timing", duration: 300 }}
-                          />
-                        </>
-                      )}
-                    </CartesianChart>
-                  ) : (
-                    <WebNetWorthChart data={chartData} color={trendColor} />
-                  )}
-                </View>
-              ) : loading ? (
-                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                  <ActivityIndicator size="small" color={trendColor} />
-                </View>
-              ) : (
-                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 16 }}>
-                  <Feather name="bar-chart-2" size={24} color={colors.textTertiary} style={{ marginBottom: 6 }} />
-                  <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '600' }}>
-                    No historical trend data found
-                  </Text>
-                  <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 4, textAlign: 'center', lineHeight: 16 }}>
-                    Historical snapshots will record automatically as your bank balances change.
-                  </Text>
-                </View>
-              )}
-            </View>
-
-            {/* Month-wise list header */}
-            <Text style={{
-              color: colors.text,
-              fontSize: 14,
-              fontWeight: '800',
-              marginBottom: 10,
-              letterSpacing: 0.5,
-            }}>
-              Month-end History
-            </Text>
-
-            {/* Monthly record rows */}
-            {listItems.map((item, idx) => {
-              return (
-                <View
-                  key={idx}
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    backgroundColor: colors.inputBackground,
-                    borderWidth: 1,
-                    borderColor: item.isLive ? colors.accent : colors.border,
-                    borderRadius: 14,
-                    paddingHorizontal: 16,
-                    height: 64,
-                    marginVertical: 4,
-                    shadowColor: colors.shadowColor,
-                    shadowOffset: { width: 0, height: 2 },
-                    shadowOpacity: 0.03,
-                    shadowRadius: 4,
-                    elevation: 1,
-                  }}
-                >
-                  <View style={{
-                    width: 36,
-                    height: 36,
-                    borderRadius: 18,
-                    backgroundColor: item.isLive ? colors.accentMuted : (colors.isDark ? '#1e1e2c' : '#f0f4f8'),
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    marginRight: 12,
-                  }}>
-                    {item.isLive ? (
-                      <Ionicons name="pulse" size={18} color={colors.accent} />
-                    ) : (
-                      <Feather name="calendar" size={16} color={colors.textSecondary} />
-                    )}
-                  </View>
-
-                  <View style={{ flex: 1 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                      <Text style={{ color: colors.text, fontSize: 14, fontWeight: '700' }}>
-                        {item.displayMonth}
-                      </Text>
-                      {item.isLive && (
-                        <View style={{
-                          backgroundColor: 'rgba(45, 186, 78, 0.12)',
-                          paddingHorizontal: 6,
-                          paddingVertical: 2,
-                          borderRadius: 6,
-                          marginLeft: 8
-                        }}>
-                          <Text style={{ color: '#2dba4e', fontSize: 9, fontWeight: '900', letterSpacing: 0.5 }}>
-                            LIVE
-                          </Text>
-                        </View>
-                      )}
-                    </View>
-                    <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 2 }}>
-                      {item.lastDayLabel}
-                    </Text>
-                  </View>
-
-                  <Text style={{ color: colors.text, fontSize: 14, fontWeight: '800' }}>
-                    ₹{item.netWorth.toLocaleString('en-IN')}
-                  </Text>
-                </View>
-              );
-            })}
-          </ScrollView>
-        </View>
-      </View>
-    </Modal>
-  );
-};
-
 interface NotificationsModalProps {
   visible: boolean;
   onClose: () => void;
@@ -1360,7 +998,8 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
               justifyContent: 'center',
             }}
           >
-            <Ionicons name={style.icon} size={19} color={tileFg} />
+            {/* Regent's own insights carry the Regent tree, like the Regent tab. */}
+            {item.kind === 'insight' ? <RegentTreeIcon size={20} color={tileFg} filled /> : <Ionicons name={style.icon} size={19} color={tileFg} />}
           </View>
 
           <View style={{ flex: 1, minWidth: 0 }}>
@@ -1665,7 +1304,7 @@ const NotificationsModal = ({ visible, onClose }: NotificationsModalProps) => {
                   <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                       <View style={{ width: 28, height: 28, borderRadius: 9, backgroundColor: LIME, alignItems: 'center', justifyContent: 'center' }}>
-                        <Ionicons name="sparkles" size={14} color={FOREST} />
+                        <RegentTreeIcon size={16} color={FOREST} filled />
                       </View>
                       <Text style={{ color: LIME, fontSize: 12, fontWeight: '700' }}>Latest from Regent</Text>
                     </View>
@@ -1948,7 +1587,7 @@ const TransactionRowItem = React.memo(({ tx, styles }: { tx: any; styles: any })
         />
         <View style={styles.txMeta}>
           <Text style={styles.merchantName} numberOfLines={1} ellipsizeMode="tail">
-            {tx.merchant || 'Unknown Merchant'}
+            {counterpartyName(tx) || tx.merchant || 'Unknown Merchant'}
           </Text>
           <Text style={styles.txDate} numberOfLines={1}>
             {new Date(tx.timestamp).toLocaleDateString('en-IN')}
@@ -1990,7 +1629,6 @@ const DashboardScreen = () => {
 
   const [refreshing, setRefreshing] = useState(false);
   const [addBankModalVisible, setAddBankModalVisible] = useState(false);
-  const [netWorthModalVisible, setNetWorthModalVisible] = useState(false);
   const [notificationsVisible, setNotificationsVisible] = useState(false);
   const [isSmsPermissionActive, setIsSmsPermissionActive] = useState(true);
   const [initialWaitTimedOut, setInitialWaitTimedOut] = useState(false);
@@ -2040,28 +1678,105 @@ const DashboardScreen = () => {
     }
   }, [sync]);
 
+  // Calendar month start: the net worth "since last month" pill stays on calendar months.
   const monthStart = useMonthStart();
+  // Spending is measured per Money Cycle: salary to salary when a salary day is set.
+  const { cycle, salaryDay, suggestedPayday, credits } = useMoneyCycle();
+  // Yearly costs and "Salary received" marks follow the user to a new phone.
+  useMoneyCycleSync();
   const activeBankIds = useMemo(() => new Set(bankProfiles.map((b) => b.id)), [bankProfiles]);
+  // Rent, EMI, SIP and other fixed monthly bills seen in past spending.
+  const bills = useMemo(() => recurringBillsFrom(transactions), [transactions]);
 
-  const summary = useMemo(
-    () => monthSummary(transactions, incomeRecords, monthStart, activeBankIds, isDark, getSpendingCategoryColor),
-    [transactions, incomeRecords, monthStart, activeBankIds, isDark],
+  // Salary mode compares with the median of the last 3 normal cycles at the same point ("your usual").
+  const prevWindows = useMemo(
+    () => (cycle.mode !== 'calendar' ? usualWindows(cycle, Date.now(), credits) : []),
+    [cycle, credits]
   );
 
-  const currentMonthExpenses = summary.out;
+  // Yearly costs (school fees, insurance): set aside monthly, kept out of comparisons.
+  const yearlyCosts = useMoneyCycleStore((s) => s.yearlyCosts);
+  const salaryMarks = useMoneyCycleStore((s) => s.salaryMarks);
+  const isYearly = useMemo(() => yearlyMatcher(yearlyCosts), [yearlyCosts]);
+
+  const summary = useMemo(() => {
+    if (cycle.mode === 'calendar') {
+      return monthSummary(transactions, incomeRecords, cycle.start, activeBankIds, isDark, getSpendingCategoryColor, isYearly ? { isYearly } : undefined);
+    }
+    return monthSummary(transactions, incomeRecords, cycle.start, activeBankIds, isDark, getSpendingCategoryColor, {
+      prevWindows: prevWindows.length > 0 ? prevWindows : [samePointLastCycle(cycle, Date.now())],
+      hideComparison: cycle.dayOfCycle <= 1,
+      // A bill paid a few days early counts in the cycle it's for.
+      timeOf: (tx) => attributedTime(tx, bills),
+      isYearly,
+    });
+  }, [transactions, incomeRecords, cycle, activeBankIds, isDark, prevWindows, bills, isYearly]);
+
+  // Safe to spend per day until next pay, after bills due before it and the yearly set-aside.
+  const safe = useMemo(() => {
+    if (cycle.mode === 'calendar' || cycle.mode === 'rolling' || cycle.daysLeft <= 0) return null;
+    const today = new Date(new Date().setHours(0, 0, 0, 0)).getTime();
+    const dues = billsDueBetween(bills, transactions, today, cycle.nextPayday - 1);
+    const s = safeToSpend(spendableBalance(bankProfiles), dues, cycle.daysLeft);
+    const aside = setAsidePerDay(yearlyCosts);
+    return { ...s, perDay: s.perDay === null ? null : Math.max(0, Math.floor(s.perDay - aside)) };
+  }, [cycle, bills, transactions, bankProfiles, yearlyCosts]);
+
+  const cyclePeriod = useMemo(() => {
+    const now = Date.now();
+    // Last cycle much longer or shorter than usual: left out of "your usual".
+    const lastLength = Math.round((cycle.start - cycle.prevStart) / 86_400_000);
+    return describeCycle(cycle, salaryDay, suggestedPayday, new Date(now), {
+      safePerDay: safe?.perDay ?? null,
+      billsBeforeSalary: safe?.billsBeforeSalary ?? 0,
+      yearlySetAsideMonthly: setAsidePerMonth(yearlyCosts),
+      regularIn: summary.in - summary.windfallIn,
+      out: summary.out,
+      comparedCycles: prevWindows.length,
+      alsoComing: upcomingSecondSalary(cycle, credits, now),
+      yearlyDue: yearlyDueSoon(yearlyCosts, transactions, now).map((d) => ({
+        name: d.cost.name,
+        amount: d.cost.amount,
+        monthName: monthLabel(d.cost.month),
+        daysAway: d.daysAway,
+      })),
+      yearlyPaidOut: summary.yearlyOut,
+      lastCycleOdd: cycle.mode === 'salary' && isTransitionCycle('salary', lastLength),
+    });
+  }, [cycle, salaryDay, suggestedPayday, safe, summary, prevWindows, credits, yearlyCosts, transactions]);
+
+  // Ask how they're paid until they answer (or snooze), so salary mode isn't hidden in settings.
+  const [paydayQuestionHidden, setPaydayQuestionHidden] = useState(() => paydayQuestionSnoozed());
+  const askPayday =
+    !paydayQuestionHidden &&
+    (salaryDay === null || salaryDay === undefined) &&
+    !user?.paySchedule &&
+    // Only once they've told us what they do and how much comes in.
+    !!user?.occupation &&
+    Number(user?.currentIncome) > 0;
+
+  // "Salary received": for salary paid in cash or into an account the app can't see.
+  const todayKey = new Date().toDateString();
+  const salaryMarkToday = salaryMarks.find((m) => new Date(m).toDateString() === todayKey) ?? null;
+  const paidPeriodically = cycle.mode === 'salary' || cycle.mode === 'weekly' || cycle.mode === 'fortnightly';
+  const offerSalaryMark = paidPeriodically && !salaryMarkToday && (cycle.lateDays > 0 || cycle.daysLeft <= 1);
+  const payWord = cycle.mode === 'salary' ? 'Salary' : 'Payout';
+
+  // A new salary cycle carries the budget forward (no-op in calendar mode).
+  useEffect(() => {
+    budgetService.renewSalaryCycleBudgets(cycle).catch(() => {});
+  }, [cycle]);
+
+  // Money out shows everything that went out, yearly costs included.
+  const currentMonthExpenses = summary.out + summary.yearlyOut;
   const incomeCurrentMonth = summary.in;
   const categories = summary.categories;
   const previousSpentSamePeriod = summary.previousSpentSamePeriod;
 
-  const liveNetWorth = useMemo(() => {
-    if (bankProfiles.length > 0) {
-      return bankProfiles.reduce((sum, bank) => sum + (Number(bank.currentBalance) || 0), 0);
-    }
-    if (snapshots.length > 0) {
-      return snapshots[snapshots.length - 1].netWorth;
-    }
-    return 0;
-  }, [bankProfiles, snapshots]);
+  // Same numbers the Net Worth screen shows: accounts + money lent − money borrowed.
+  const { model: netWorthModel } = useNetWorth();
+  const liveNetWorth = fromMinor(netWorthModel.liveMinor);
+  const usedVoice = useVoiceDiscovery((st) => st.usedVoice);
 
   // Month-end snapshot from before this month, for the "since last month" pill
   const previousSnapshot = useMemo(() => {
@@ -2108,6 +1823,28 @@ const DashboardScreen = () => {
         banks={activityBanks}
         categories={categories}
         previousSpentSamePeriod={previousSpentSamePeriod}
+        periodLabel={cyclePeriod.label}
+        previousPeriodLabel={cyclePeriod.previousLabel}
+        regularIncome={summary.in - summary.windfallIn}
+        regularSpent={summary.out}
+        paydayQuestion={
+          askPayday ? (
+            <PaydayQuestionCard
+              suggestedPayday={suggestedPayday}
+              pension={isPensioner(user?.occupation)}
+              onMore={() => navigation.navigate('EditProfile', { focus: 'salaryDay' })}
+              onDone={() => setPaydayQuestionHidden(true)}
+            />
+          ) : null
+        }
+        salaryMark={
+          salaryMarkToday
+            ? { kind: 'undo', what: payWord, onPress: () => useMoneyCycleStore.getState().undoSalaryMark(salaryMarkToday) }
+            : offerSalaryMark
+              ? { kind: 'mark', what: payWord, onPress: () => useMoneyCycleStore.getState().markSalaryReceived() }
+              : null
+        }
+        periodWord={cycle.mode === 'calendar' ? 'month' : cycle.mode === 'rolling' ? 'rolling' : 'cycle'}
         hasBanks={bankAccountsOnly(bankProfiles).length > 0}
         hasCash={!!getCashProfile(bankProfiles)}
         smsTrackingOn={isSmsPermissionActive}
@@ -2116,7 +1853,7 @@ const DashboardScreen = () => {
         onRefresh={onRefresh}
         onOpenMenu={() => useSidebarStore.getState().openSidebar()}
         onOpenNotifications={() => setNotificationsVisible(true)}
-        onOpenNetWorth={() => setNetWorthModalVisible(true)}
+        onOpenNetWorth={() => navigation.navigate('NetWorth')}
         onAddBank={() => setAddBankModalVisible(true)}
         onAddExpense={handleAddExpense}
         onOpenCalendar={() => navigation.navigate('FinancialCalendar', { userCreatedAt: user?.createdAt })}
@@ -2125,6 +1862,8 @@ const DashboardScreen = () => {
         onOpenInvite={() => navigation.navigate('InviteFriend')}
         onOpenGoals={() => navigation.navigate('Goals')}
         onOpenCash={() => navigation.navigate('CashWallet')}
+        onOpenVoice={() => openVoiceEntry(navigation)}
+        usedVoice={usedVoice}
         onOpenRegent={() => navigation.navigate('Regent')}
         onSetupTracking={() => navigation.navigate('AutoTrackingSetup')}
         onOpenTransaction={(tx) => navigation.navigate('TransactionDetail', { transaction: tx })}
@@ -2143,14 +1882,6 @@ const DashboardScreen = () => {
           setAddBankModalVisible(false);
           await sync();
         }}
-      />
-
-      <NetWorthDetailsModal
-        visible={netWorthModalVisible}
-        onClose={() => setNetWorthModalVisible(false)}
-        snapshots={snapshots}
-        liveNetWorth={liveNetWorth}
-        loading={false}
       />
     </View>
   );
@@ -2416,7 +2147,6 @@ const CustomBottomTabBar = ({ state, navigation, position }: MaterialTopTabBarPr
   const [measuredWidth, setMeasuredWidth] = useState(0);
   const [labelWidths, setLabelWidths] = useState<Record<string, number>>({});
   // Holding the Profile tab opens a quick sheet: profile row + one-tap log out
-  const [profileSheetOpen, setProfileSheetOpen] = useState(false);
 
   useEffect(() => {
     const showSub = Keyboard.addListener(
@@ -2494,6 +2224,11 @@ const CustomBottomTabBar = ({ state, navigation, position }: MaterialTopTabBarPr
   // Tap targets follow the settled layout of the current tab.
   const restFrame = tabBarFrame(state.index, geometry);
 
+  // Where the Regent tab sits across the full width, for the voice tip's pointer.
+  const regentIndex = state.routes.findIndex((r) => r.name === 'Regent');
+  const regentX =
+    regentIndex >= 0 ? (availableWidth - barWidth) / 2 + BORDER + BAR_PADDING + restFrame.lefts[regentIndex] + restFrame.widths[regentIndex] / 2 : -1;
+
   const bottomOffset = Platform.OS === 'web'
     ? 18
     : Math.max(insets.bottom + (Platform.OS === 'ios' ? 4 : 8), 16);
@@ -2518,6 +2253,15 @@ const CustomBottomTabBar = ({ state, navigation, position }: MaterialTopTabBarPr
         transform: [{ translateY: isKeyboardVisible ? 120 : 0 }],
       }}
     >
+      {regentX >= 0 ? (
+        <VoiceTabOverlay
+          x={regentX}
+          width={availableWidth}
+          bottom={barHeight + 12}
+          onHome={state.routes[state.index]?.name === 'Home'}
+          onTry={() => openVoiceEntry(navigation as never)}
+        />
+      ) : null}
       <View
         style={{
           width: barWidth,
@@ -2565,6 +2309,12 @@ const CustomBottomTabBar = ({ state, navigation, position }: MaterialTopTabBarPr
                   <RNAnimated.View style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, alignItems: 'center', justifyContent: 'center', opacity: slot.iconOnPill }}>
                     <TabIcon {...iconProps} color={activeFg} active ringColor={activeFg} />
                   </RNAnimated.View>
+                  {/* Fades out as the selected pill covers the icon: the arcs are for when another tab is selected. */}
+                  {route.name === 'Regent' ? (
+                    <RNAnimated.View pointerEvents="none" style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, opacity: slot.iconOffPill }}>
+                      <RegentVoiceBadge color={isDark ? NAV_LIME : '#4FA37A'} />
+                    </RNAnimated.View>
+                  ) : null}
                 </RNAnimated.View>
                 <RNAnimated.View
                   pointerEvents="none"
@@ -2612,18 +2362,11 @@ const CustomBottomTabBar = ({ state, navigation, position }: MaterialTopTabBarPr
             const onLongPress = () => {
               navigation.emit({ type: 'tabLongPress', target: route.key });
               if (route.name === 'Settings') {
-                setProfileSheetOpen(true);
+                useProfileQuickSheetStore.getState().setOpen(true);
                 return;
               }
               // Holding Regent opens voice entry: say a transaction instead of typing it
-              if (route.name === 'Regent') {
-                // An app installed before voice entry existed has no recorder built in
-                if (requireOptionalNativeModule('ExpoAudio') && requireOptionalNativeModule('ExpoHaptics')) {
-                  navigation.navigate('VoiceEntry' as never);
-                } else {
-                  Alert.alert('Update Regent Money', 'Voice entry needs the latest version of the app. Update it from the Play Store to add transactions by speaking.');
-                }
-              }
+              if (route.name === 'Regent') openVoiceEntry(navigation as never);
             };
 
             return (
@@ -2645,11 +2388,6 @@ const CustomBottomTabBar = ({ state, navigation, position }: MaterialTopTabBarPr
           })}
         </View>
       </View>
-      <ProfileQuickSheet
-        visible={profileSheetOpen}
-        onClose={() => setProfileSheetOpen(false)}
-        onOpenProfile={() => navigation.navigate('Settings' as never)}
-      />
     </View>
   );
 };
@@ -3082,11 +2820,17 @@ export default function AppNavigator() {
   useEffect(() => {
     if (!splashFinished || isLoading || !user || !user.termsAccepted || Platform.OS === 'web' || user.role === 'admin' || user.role === 'superadmin') return;
 
-    const syncGrantedPermissions = async () => {
+    // App open: register the token if already allowed, otherwise ask if due (never asked,
+    // or refused 7+ days ago). Back to the front: only the "ask if due" part, so the token
+    // isn't fetched and uploaded again every time the user switches apps.
+    const syncGrantedPermissions = async (onResume: boolean) => {
       try {
-        // If notification permission was already granted previously, register push token silently
-        const isNotificationGranted = await notificationService.isPermissionGranted();
-        if (isNotificationGranted) {
+        if (await notificationService.isPermissionGranted()) {
+          if (!onResume) await notificationService.registerForPushNotifications();
+          return;
+        }
+        if (!(await notificationService.isAskDue())) return;
+        if (await notificationService.requestPermission()) {
           await notificationService.registerForPushNotifications();
         }
       } catch (e) {
@@ -3094,7 +2838,12 @@ export default function AppNavigator() {
       }
     };
 
-    syncGrantedPermissions();
+    syncGrantedPermissions(false);
+    // Phones keep the app in memory for days, so check again each time it comes to the front
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') syncGrantedPermissions(true);
+    });
+    return () => sub.remove();
   }, [splashFinished, isLoading, user]);
 
   // Record once, in the background, how this install arrived (invite link, campaign or organic).
@@ -3306,6 +3055,16 @@ export default function AppNavigator() {
                     options={sidebarAwareOptions('slide_from_right')}
                   />
                   <Stack.Screen
+                    name="AdminFeedback"
+                    component={AdminFeedbackScreen}
+                    options={sidebarAwareOptions('slide_from_right')}
+                  />
+                  <Stack.Screen
+                    name="AdminFeedbackDetail"
+                    component={AdminFeedbackDetailScreen}
+                    options={sidebarAwareOptions('slide_from_right')}
+                  />
+                  <Stack.Screen
                     name="AdminReferrals"
                     component={AdminReferralsScreen}
                     options={sidebarAwareOptions('slide_from_right')}
@@ -3324,6 +3083,7 @@ export default function AppNavigator() {
                       headerShown: false,
                     }}
                   />
+                  <Stack.Screen name="YearlyCosts" component={YearlyCostsScreen} options={sidebarAwareOptions('slide_from_right')} />
                   <Stack.Screen
                     name="AppSettings"
                     component={SettingsScreen}
@@ -3357,6 +3117,7 @@ export default function AppNavigator() {
                       headerShown: false,
                     }}
                   />
+                  <Stack.Screen name="YearlyCosts" component={YearlyCostsScreen} options={sidebarAwareOptions('slide_from_right')} />
                   <Stack.Screen
                     name="EditBank"
                     component={EditBankScreen}
@@ -3398,6 +3159,15 @@ export default function AppNavigator() {
                   <Stack.Screen
                     name="CashWallet"
                     component={CashWalletScreen}
+                    options={{
+                      presentation: 'card',
+                      animation: 'slide_from_right',
+                      headerShown: false,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="NetWorth"
+                    component={NetWorthScreen}
                     options={{
                       presentation: 'card',
                       animation: 'slide_from_right',
@@ -3502,6 +3272,7 @@ export default function AppNavigator() {
         <GlobalConfirmModal />
         <BiometricLockOverlay />
         <AppSidebarDrawer />
+        <ProfileQuickSheetHost />
         <UpdateModal
           updateInfo={updateInfo}
           visible={updateModalVisible}
